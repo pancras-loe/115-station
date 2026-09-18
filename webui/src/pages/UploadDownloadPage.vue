@@ -68,7 +68,10 @@ async function submit() {
     message.warning('请填写链接')
     return
   }
-  const isShare = raw.includes('115.com/s/')
+  // 与后端 classifyLink 保持一致，避免备用分享域名误走离线下载。
+  const isShare = ['115.com/s/', '115cdn.com/s/', 'anxia.com/s/'].some((domain) =>
+    raw.toLowerCase().includes(domain),
+  )
   let url = raw
   let pwd = code.value.trim()
 

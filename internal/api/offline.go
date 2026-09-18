@@ -32,7 +32,7 @@ func (h *Handler) offlineSubmitCore(rawURL, target string, organize bool) (int, 
 		return http.StatusBadRequest, "不支持的链接类型（仅支持磁力/ed2k/HTTP/FTP）"
 	}
 	if linkType == "share" {
-		return http.StatusBadRequest, "115 分享链接不支持离线下载，请使用「分享转存」功能（或把链接发给机器人自动转存）"
+		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「上传下载 → 转存下载 → 提交链接」中提交（或把链接发给机器人自动转存）"
 	}
 
 	cookie, err := h.get115Cookie()
