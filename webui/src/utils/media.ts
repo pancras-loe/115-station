@@ -10,8 +10,3 @@ export function posterUrl(path?: string | null): string | null {
 export function embyImageUrl(path: string, maxWidth = 200): string {
   return `/api/embyimg?path=${encodeURIComponent(path)}&maxWidth=${maxWidth}`
 }
-
-/** 观影门户跑在独立端口 6688（见 internal/api/portal.go） */
-export function openPortal() {
-  window.open(`${location.protocol}//${location.hostname}:6688`, '_blank', 'noopener')
-}

@@ -129,13 +129,11 @@ type MediaLibrary struct {
 	OriginalTitle string    `json:"original_title" gorm:"size:255"`
 	Year          string    `json:"year" gorm:"size:10"`
 	MediaType     string    `json:"media_type" gorm:"size:20;index"` // movie, tv
-	Category      string    `json:"category" gorm:"size:50;index"`   // 仪表盘/门户按分类聚合高频查询
+	Category      string    `json:"category" gorm:"size:50;index"`   // 仪表盘按分类聚合高频查询
 	TargetPath    string    `json:"target_path" gorm:"size:500"`
 	OrigLanguage  string    `json:"original_language" gorm:"size:20"`
 	OrigCountry   string    `json:"origin_country" gorm:"size:100"`
-	PosterPath    string    `json:"poster_path" gorm:"size:255"`   // TMDB 海报路径（观影门户）
-	BackdropPath  string    `json:"backdrop_path" gorm:"size:255"` // TMDB 背景图（门户详情页沉浸头图）
-	Genres        string    `json:"genres" gorm:"size:500"`        // TMDB 类型名（逗号分隔，zh-CN）
+	PosterPath    string    `json:"poster_path" gorm:"size:255"` // TMDB 海报路径
 	VoteAverage   float64   `json:"vote_average"`
 	Overview      string    `json:"overview" gorm:"type:text"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -195,23 +193,6 @@ type OfflinePlay struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// PortalStat 观影门户播放统计（排行榜数据源）：每部影视一行，
-// 周/月/年计数在跨期时自动清零重计（不用明细表，单行 upsert 无膨胀）
-type PortalStat struct {
-	ID         uint      `json:"id" gorm:"primaryKey"`
-	Key        string    `json:"key" gorm:"uniqueIndex;size:500"` // 标题目录 key（台账 4 段路径）
-	MediaType  string    `json:"media_type" gorm:"size:20"`
-	Title      string    `json:"title" gorm:"size:255"`
-	Views      int64     `json:"views"`      // 累计播放
-	WeekViews  int64     `json:"week_views"` // 本周播放（ISO 周）
-	WeekStart  string    `json:"week_start" gorm:"size:10"`
-	MonthViews int64     `json:"month_views"`
-	MonthStart string    `json:"month_start" gorm:"size:7"`
-	YearViews  int64     `json:"year_views"`
-	YearStart  string    `json:"year_start" gorm:"size:4"`
-	LastAt     time.Time `json:"last_at"`
-}
-
 // MediaEnrich 补全任务：文件名缺分辨率/编码等信息，用 ffprobe 探测
 // 115 直链头部后按模板重新命名（蜘蛛侠.2016.mkv → 规范名）
 type MediaEnrich struct {
@@ -248,7 +229,6 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&CategoryRule{},
 		&WashRule{},
 		&MediaEnrich{},
-		&PortalStat{},
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},

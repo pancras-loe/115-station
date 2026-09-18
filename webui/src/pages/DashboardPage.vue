@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { NButton, NSkeleton, NTag } from 'naive-ui'
+import { NSkeleton, NTag } from 'naive-ui'
 import {
   Clapperboard,
   Cpu,
-  ExternalLink,
   FileVideo,
   MemoryStick,
   RefreshCw,
@@ -19,7 +18,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import WeeklyChart from '@/components/ui/WeeklyChart.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import { bytes, num, percent } from '@/utils/format'
-import { embyImageUrl, openPortal, posterUrl } from '@/utils/media'
+import { embyImageUrl, posterUrl } from '@/utils/media'
 import { toastError } from '@/composables/useFeedback'
 
 const data = ref<Dashboard | null>(null)
@@ -184,20 +183,13 @@ const recent = computed(() => data.value?.recent_media ?? [])
     </div>
 
     <!-- ==== 我的媒体库 ==== -->
-    <SectionCard title="我的媒体库" hint="点击卡片打开观影门户">
-      <template #extra>
-        <NButton size="small" quaternary @click="openPortal()">
-          <template #icon><ExternalLink :size="15" /></template>
-          观影门户
-        </NButton>
-      </template>
+    <SectionCard title="我的媒体库">
       <div v-if="categories.length" class="cats">
-        <button
+        <div
           v-for="c in categories"
           :key="c.name"
           class="cat"
           :title="c.name + ' · ' + c.count + ' 部'"
-          @click="openPortal()"
         >
           <div class="collage">
             <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" />
@@ -206,7 +198,7 @@ const recent = computed(() => data.value?.recent_media ?? [])
             <span class="cat-name">{{ c.name }}</span>
             <NTag size="small" :bordered="false">{{ num(c.count) }}</NTag>
           </div>
-        </button>
+        </div>
       </div>
       <EmptyState v-else text="暂无入库记录 · 整理或同步后这里会显示分类卡片" />
     </SectionCard>
@@ -313,13 +305,7 @@ const recent = computed(() => data.value?.recent_media ?? [])
   gap: 14px;
 }
 .cat {
-  all: unset;
-  cursor: pointer;
   border-radius: var(--radius);
-  transition: transform 0.15s;
-}
-.cat:hover {
-  transform: translateY(-2px);
 }
 .collage {
   display: grid;

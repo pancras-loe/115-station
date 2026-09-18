@@ -383,7 +383,7 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 	// 以台账标题目录为刮削单位（每片一条，目录真实存在于 115/本地）。
 	// 不用 MediaLibrary.TargetPath：剧集行记录的是"每集文件路径"，
 	// 拿它当目录会在本地造出 <集名>.mkv/ 的假目录
-	entries := portalScanLedgerCached()
+	entries := scanLedgerTitlesCached()
 	type scrapeTarget struct {
 		key, kind, title, year string
 		tmdbID                 int
@@ -395,7 +395,7 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 		}
 		if e.TmdbID > 0 {
 			targets = append(targets, scrapeTarget{key: e.Key, kind: "movie", title: e.Title, year: e.Year, tmdbID: int(e.TmdbID)})
-			if e.MediaType == "剧集" {
+			if e.MediaType == "tv" {
 				targets[len(targets)-1].kind = "tv"
 			}
 			continue

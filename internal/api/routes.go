@@ -40,7 +40,7 @@ var (
 )
 
 // loginGuardCheck 防爆破闸门：命中锁定返回剩余时间，未锁定返回 0。
-// key 由调用方区分来源（后台登录用 IP，门户登录加 "portal:" 前缀）
+// key 使用客户端 IP，避免伪造反代头绕过登录限制。
 func loginGuardCheck(key string) time.Duration {
 	loginGuardMu.Lock()
 	defer loginGuardMu.Unlock()
@@ -348,7 +348,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		RegisterOfflinePlayRoutes(r, h)
 		// RE0 OAuth 回调（浏览器地址栏跳转，无鉴权头，必须公开；靠 state 防 CSRF）
 		r.GET("/re0/oauth/callback", h.Re0OAuthCallback)
-		// TMDB 海报代理（仪表盘媒体库卡片/最新入库海报墙；与门户同款缓存逻辑）
+		// TMDB 海报代理（仪表盘媒体库卡片/最新入库海报墙）
 		r.GET("/poster/*path", func(c *gin.Context) { serveTMDBPoster(c, h.Config.DataDir) })
 		// Emby 图片代理（仪表盘：服务端注入 api_key，避免密钥出现在前端 URL）
 		r.GET("/embyimg", func(c *gin.Context) { h.EmbyImageProxy(c) })

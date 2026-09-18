@@ -69,14 +69,13 @@
 | **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` | 全量 / 增量（生活事件）/ 分享转存 / 上传与监控回传 |
 | **整理流水线** | `organize.go` `org115.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移；`resource.go` 是文件名结构化解析的核心 |
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
-| **观影门户** | `portal.go` `portalemby.go` `portalstream.go` | 6688 端口独立门户 + ffmpeg remux → HLS |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
 | **其他** | `dashboard.go` `cron.go` `offline.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、定时任务、离线下载、媒体库封面生成、115 签到、容器内自更新 |
 
 ### 数据模型（`internal/model/model.go`）
 
-16 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
+15 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
 `MediaLibrary`、`UploadMark`。
 

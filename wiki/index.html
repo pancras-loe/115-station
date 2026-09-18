@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>StrmHub 使用文档 · 完整版</title>
-<meta name="description" content="StrmHub 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、画质补全、Emby 对接、观影门户、企微/TG 机器人、自更新——部署、配置、排障全覆盖">
+<meta name="description" content="StrmHub 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、画质补全、Emby 对接、企微/TG 机器人、自更新——部署、配置、排障全覆盖">
 <style>
 :root{
   --bg:#f6f7fb; --card:#ffffff; --text:#1d2129; --text2:#4e5969; --text3:#86909c;
@@ -115,7 +115,6 @@ details[open] summary{margin-bottom:8px}
   <a href="#wash">洗版策略</a>
   <a href="#enrich">媒体补全</a>
   <div class="sec">播放与通知</div>
-  <a href="#portal">观影门户</a>
   <a href="#emby">Emby 对接</a>
   <a href="#message">消息与机器人</a>
   <a href="#transfer">离线下载与转存</a>
@@ -132,8 +131,8 @@ details[open] summary{margin-bottom:8px}
 
 <div class="doc-hero">
   <h1>StrmHub 完整使用文档</h1>
-  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带海报墙观影门户、企微/TG 机器人与应用内自更新。</p>
-  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>观影门户</span><span>企业微信机器人</span><span>应用内更新</span></div>
+  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带企微/TG 机器人与应用内自更新。</p>
+  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>企业微信机器人</span><span>应用内更新</span></div>
 </div>
 
 <!-- ============================================================ 1 -->
@@ -154,7 +153,6 @@ details[open] summary{margin-bottom:8px}
     <tr><td>自动整理</td><td>目录/散文件两级识别；TMDB（含 GPT 兜底提取片名）；模板重命名；二级分类；字幕跟随；广告过滤</td></tr>
     <tr><td>去重与洗版</td><td>云端目标目录 SHA1 直比（不依赖缓存表）；优先级规则洗版，旧版自动归档</td></tr>
     <tr><td>画质补全</td><td>ffprobe 探测直链头部拿真实分辨率/编码/音轨，规范命名；八情形决策矩阵可配</td></tr>
-    <tr><td>观影门户</td><td>6688 端口海报墙/分类/搜索/继续观看；三级播放引擎（直连→Emby→ffmpeg 转封装）；倍速/音轨/字幕；账号密码登录（与管理后台相同）</td></tr>
     <tr><td>Emby 对接</td><td>入库自动刷新；路径映射；302 DirectPlay；6086 反代支持转码场景；Webhook 播放通知</td></tr>
     <tr><td>消息机器人</td><td>企微图文通知（带海报）+ 双向机器人；TG 通知；批量入库聚合防抖</td></tr>
     <tr><td>离线/转存</td><td>磁力/ed2k/HTTP 离线下载、115 分享转存，完成自动整理闭环；失败告警</td></tr>
@@ -239,7 +237,7 @@ details[open] summary{margin-bottom:8px}
   <h3>前置要求</h3>
   <table>
     <tr><th>项目</th><th>要求</th></tr>
-    <tr><td>服务器</td><td>任意能跑 Docker 的 Linux（1C1G 起步够用；转码播放门户时 CPU 要求高些）</td></tr>
+    <tr><td>服务器</td><td>任意能跑 Docker 的 Linux（1C1G 起步够用）</td></tr>
     <tr><td>网络</td><td>能访问 115 与 <code>api.themoviedb.org</code>（国内服务器在后台配代理即可，TMDB 识别会自动走全局代理）</td></tr>
     <tr><td>软件</td><td>Docker ≥ 20 + Docker Compose v2</td></tr>
     <tr><td>账号</td><td>115 网盘账号（VIP 时间更稳）；TMDB 免费 API Key</td></tr>
@@ -258,7 +256,7 @@ details[open] summary{margin-bottom:8px}
     ports:
       - "6060:6060"   # 管理后台（你自己用）
       - "6086:6086"   # 302 直链代理 + Emby 反代 + 企微回调（播放器/Emby/企微服务器访问）
-      - "6688:6688"   # 观影门户（你与家人；账号密码登录）
+    volumes:
     volumes:
       - ./config:/config           # ★ 全部配置：setting.yaml / auth.yaml(管理员) /
                                     #   jwt.key / 115-cookie.txt
@@ -274,7 +272,7 @@ details[open] summary{margin-bottom:8px}
 
   <h4>docker run 等价命令</h4>
   <pre><code>docker run -d --name strmhub --restart unless-stopped --stop-grace-period 20s \
-  -p 6060:6060 -p 6086:6086 -p 6688:6688 \
+  -p 6060:6060 -p 6086:6086 \
   -v $(pwd)/config:/config -v $(pwd)/data:/data \
   -v $(pwd)/media:/media -v $(pwd)/logs:/logs \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -286,7 +284,6 @@ details[open] summary{margin-bottom:8px}
     <tr><th>变量</th><th>默认</th><th>说明</th></tr>
     <tr><td>PORT</td><td>6060</td><td>管理后台监听端口</td></tr>
     <tr><td>PROXY_PORT</td><td>6086</td><td>302 直链代理 / Emby 反代 / 企微回调端口</td></tr>
-    <tr><td>PORTAL_PORT</td><td>6688</td><td>观影门户端口（不要用 6665–6669 其他值，浏览器会拦）</td></tr>
     <tr><td>DATA_DIR / CONFIG_DIR</td><td>/data / /config</td><td>一般不改</td></tr>
     <tr><td>TZ</td><td>—</td><td>时区，建议 Asia/Shanghai（影响 cron 与日志时间）</td></tr>
     <tr><td>AUTH_USER / AUTH_PASSWORD</td><td>自动生成</td><td><b>管理员账号</b>。compose 里显式配置（推荐）；两者都未配置且无历史账号时，首启自动生成随机密码并打印在容器日志。改环境变量即改密码（重启生效）</td></tr>
@@ -309,17 +306,14 @@ details[open] summary{margin-bottom:8px}
 
   <h3>启动验证</h3>
   <ol class="steps">
-    <li><code>docker logs -f strmhub</code>，看到 <code>StrmHub 管理后台: http://localhost:6060</code>、<code>观影门户启动</code> 即正常</li>
+    <li><code>docker logs -f strmhub</code>，看到 <code>StrmHub 管理后台: http://localhost:6060</code> 即正常</li>
     <li>浏览器开 <code>http://服务器IP:6060</code> → 用环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 配置的账号登录（未配置时首启自动生成随机密码，<code>docker logs strmhub</code> 查看）</li>
-    <li>云服务器记得放行三个端口的安全组/防火墙规则</li>
+    <li>云服务器记得放行两个端口的安全组/防火墙规则</li>
   </ol>
 
   <h3>可选：反向代理（HTTPS）</h3>
-  <p>给管理后台/门户套域名与 HTTPS 时，把三个端口分别反代即可。Caddy 示例：</p>
-  <pre><code>portal.example.com {
-    reverse_proxy 127.0.0.1:6688
-}
-admin.example.com {
+  <p>给管理后台套域名与 HTTPS 时，把两个端口分别反代即可。Caddy 示例：</p>
+  <pre><code>admin.example.com {
     reverse_proxy 127.0.0.1:6060
 }
 emby302.example.com {           # 播放器/Emby 用的 302 域名（配到 STRM 直连域名里）
@@ -335,10 +329,7 @@ emby302.example.com {           # 播放器/Emby 用的 302 域名（配到 STRM
     <tr><th style="width:70px">端口</th><th style="width:190px">服务</th><th>访问者 / 说明</th></tr>
     <tr><td>6060</td><td>管理后台</td><td>你。登录保护（JWT，30 天有效）；所有配置、监控、日志都在这</td></tr>
     <tr><td>6086</td><td>302 直链代理 + Emby 反代 + 企微回调</td><td>播放器与 Emby（直链短链）；Emby 客户端（反代 <code>/emby</code> 路径，用于需要转码的场景）；企业微信服务器回调 <code>/wecom/callback</code>。<strong>不能暴露给公网随意访问</strong>的部分只有回调路径，其余公开无碍</td></tr>
-    <tr><td>6688</td><td>观影门户</td><td>你与家人。海报墙/搜索/网页播放；<strong>账号密码登录</strong>（与管理后台 AUTH_USER/AUTH_PASSWORD 相同）</td></tr>
   </table>
-  <h3>为什么门户不能用 6666</h3>
-  <p>Chromium 系浏览器维护着一份「不安全端口」黑名单（历史上被各类服务占用过），6665–6669 中除 6688 外全部在列——访问会直接报 <code>ERR_UNSAFE_PORT</code>，与你的部署无关。所以门户固定用 <strong>6688</strong>。</p>
 </section>
 
 <!-- ============================================================ 6 -->
@@ -752,51 +743,10 @@ tv:
     <li>直链偶发风控——探测失败的文件保留原名，下次整理/扫描会自动重试（失败任务自动复活重试最多 3 次）</li>
   </ul>
 </section>
+
 <!-- ============================================================ 18 -->
-<section id="portal">
-  <h2><span class="num">18</span>观影门户</h2>
-  <p>地址 <code>http://服务器IP:6688</code>——手机/电脑浏览器直接看片，不用装任何 App。</p>
-
-  <h3>页面导览</h3>
-  <table class="tw">
-    <tr><th style="width:110px">页面</th><th>内容</th></tr>
-    <tr><td>首页</td><td>最近入库、继续观看（上次看到哪自动续播）、评分最高三行横条</td></tr>
-    <tr><td>分类</td><td>按媒体类型+二级分类聚合的完整海报墙</td></tr>
-    <tr><td>搜索</td><td>顶栏搜索框，片名关键词即搜即出</td></tr>
-    <tr><td>详情</td><td>海报/评分/简介/集数列表（长剧集自动分页）</td></tr>
-    <tr><td>播放页</td><td>播放器 + 右侧选集列表（含每集观看进度百分比）</td></tr>
-  </table>
-
-  <h3>播放引擎（自动三级降级）</h3>
-  <table class="tw">
-    <tr><th style="width:150px">引擎</th><th>何时用</th><th>特点</th></tr>
-    <tr><td>① 浏览器直连</td><td>mp4 / webm / m4v / mov</td><td>302 直链零服务器消耗，最流畅</td></tr>
-    <tr><td>② Emby 引擎</td><td>浏览器放不了的格式且已配 Emby 并匹配到条目</td><td>拖进度秒跳、内嵌音轨/字幕切换、不兼容编码自动转码</td></tr>
-    <tr><td>③ ffmpeg 转封装</td><td>无 Emby 或未匹配时的兜底</td><td>MKV 无损转 HLS 直串流；H.265 自动转 H.264（浏览器能播）</td></tr>
-  </table>
-
-  <h3>播放器功能</h3>
-  <ul>
-    <li><strong>倍速</strong> 0.5x–3x（按钮或 <kbd>+</kbd>/<kbd>-</kbd> 键）；<strong>音轨/字幕菜单</strong>支持内嵌多轨与外挂字幕切换</li>
-    <li>进度条<strong>点击+拖动</strong>；<kbd>空格</kbd> 播放/暂停、<kbd>←</kbd>/<kbd>→</kbd> 快退/快进 10 秒、<kbd>↑</kbd>/<kbd>↓</kbd> 音量</li>
-    <li><strong>进度记忆</strong>：看到哪存在本地，跨设备继续观看</li>
-    <li>iOS 支持原生全屏；手机端控制条自动收纳次要按钮</li>
-    <li>播放失败时给出直链与「复制」按钮——可粘到 PotPlayer/VLC/nPlayer 等本地播放器看（支持内嵌轨道）</li>
-    <li>调试：地址加 <code>?debug=1</code> 显示播放计时面板（引擎选择/出画耗时等，排障利器）</li>
-  </ul>
-
-  <h3>登录保护</h3>
-  <ol class="steps">
-    <li>打开 6688 先出登录页——<strong>账号密码与管理后台相同</strong>（compose 里的 AUTH_USER / AUTH_PASSWORD）</li>
-    <li>登录后 30 天内免输；修改环境变量密码后门户需重新登录</li>
-    <li>家人使用同一对账号即可</li>
-  </ol>
-  <div class="warn"><b>⚠️</b><span>公网部署务必设置强密码——门户转码播放占用服务器 CPU/带宽，并发会话数有上限保护（默认 4）。</span></div>
-</section>
-
-<!-- ============================================================ 19 -->
 <section id="emby">
-  <h2><span class="num">19</span>Emby 对接</h2>
+  <h2><span class="num">18</span>Emby 对接</h2>
 
   <h3>服务端配置（系统配置 → EMBY管理）</h3>
   <table class="tw">
@@ -839,9 +789,9 @@ tv:
   </ul>
 </section>
 
-<!-- ============================================================ 20 -->
+<!-- ============================================================ 19 -->
 <section id="message">
-  <h2><span class="num">20</span>消息与机器人</h2>
+  <h2><span class="num">19</span>消息与机器人</h2>
 
   <h3>企业微信 · 服务端应用配置</h3>
   <ol class="steps">
@@ -889,9 +839,9 @@ tv:
   </table>
 </section>
 
-<!-- ============================================================ 21 -->
+<!-- ============================================================ 20 -->
 <section id="transfer">
-  <h2><span class="num">21</span>离线下载与转存</h2>
+  <h2><span class="num">20</span>离线下载与转存</h2>
 
   <h3>入口与支持类型</h3>
   <table class="tw">
@@ -919,9 +869,9 @@ tv:
   </ul>
 </section>
 
-<!-- ============================================================ 22 -->
+<!-- ============================================================ 21 -->
 <section id="monitor">
-  <h2><span class="num">22</span>监控上传</h2>
+  <h2><span class="num">21</span>监控上传</h2>
   <p>反向同步 Emby 的劳动成果：Emby 刮削会在本地生成海报/演员图/NFO，<strong>监控上传</strong>把这些回传到 115 对应目录——网盘侧也有一套完整元数据，未来重建本地库或分享都不丢刮削。</p>
   <ul>
     <li><strong>配置</strong>：上传下载页 → 监控上传 Tab → 监控目录填本地媒体库根（如 <code>/media</code>）</li>
@@ -930,9 +880,9 @@ tv:
   </ul>
 </section>
 
-<!-- ============================================================ 23 -->
+<!-- ============================================================ 22 -->
 <section id="update">
-  <h2><span class="num">23</span>应用内更新</h2>
+  <h2><span class="num">22</span>应用内更新</h2>
 
   <h3>更新入口与徽章</h3>
   <p>后台左下角版本号即更新中心（点击可随时手动检查）。徽章由 <strong>GitHub Actions 构建状态</strong>驱动：</p>
@@ -957,9 +907,9 @@ tv:
   <pre><code>docker compose pull && docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 </section>
 
-<!-- ============================================================ 24 -->
+<!-- ============================================================ 23 -->
 <section id="backup">
-  <h2><span class="num">24</span>备份与迁移</h2>
+  <h2><span class="num">23</span>备份与迁移</h2>
 
   <h3>一键备份</h3>
   <p>仪表盘「快捷操作」→「⬇ 备份」得到 zip，内容：</p>
@@ -983,9 +933,9 @@ tv:
   <div class="tip"><b>💡</b><span>等价做法：直接打包宿主机的 <code>config/</code> + <code>data/</code> 两个目录。建议每周或大调整前备份一次。</span></div>
 </section>
 
-<!-- ============================================================ 25 -->
+<!-- ============================================================ 24 -->
 <section id="logs">
-  <h2><span class="num">25</span>日志与排障</h2>
+  <h2><span class="num">24</span>日志与排障</h2>
 
   <h3>日志页</h3>
   <ul>
@@ -1011,7 +961,6 @@ tv:
   <h3>排障决策树</h3>
   <details><summary>症状：播放失败 / 一直转圈</summary>
     <ol>
-      <li>门户播 → 看 <code>?debug=1</code> 计时面板卡在哪一步（取链/播放列表/首分片）</li>
       <li>「取直链失败」→ 6086 可达性 + 115 账号诊断（账号页「连接诊断」）</li>
       <li>格式不支持 → 用 Emby 引擎（转码）或复制直链给本地播放器</li>
       <li>Emby 播放 → 播放端能否访问服务器 6086；反代场景检查直连域名</li>
@@ -1042,9 +991,9 @@ tv:
   </details>
 </section>
 
-<!-- ============================================================ 26 -->
+<!-- ============================================================ 25 -->
 <section id="faq">
-  <h2><span class="num">26</span>常见问题</h2>
+  <h2><span class="num">25</span>常见问题</h2>
 
   <details open><summary>必须用 VIP 账号吗？</summary><p>不强制，但离线下载/高频 API 对免费账号限制更严，风控也更敏感。重度使用建议 VIP。</p></details>
   <details><summary>STRM 会占多少本地空间？</summary><p>单个 strm 只有几十字节（一行 URL）。附属文件（字幕/封面/NFO）是实体，视库大小一般几百 MB 以内。</p></details>
@@ -1055,7 +1004,6 @@ tv:
   <details><summary>网盘手动改了名，本地 STRM 会更新吗？</summary><p>会——增量同步的「改名/移动」事件会删旧建新；没开增量就跑一次全量+清理孤儿。</p></details>
   <details><summary>整理后字幕没挂上？</summary><p>字幕必须与视频<strong>同基名</strong>（语言后缀保留，如 <code>片名.chs.srt</code>）。整理会自动跟随改名；自己后放的字幕注意命名要与视频一致。</p></details>
   <details><summary>画质补全探测失败有害吗？</summary><p>没有——失败保留原名继续入库。常见原因是 moov 在文件尾的 MP4 拿不到头部元数据；任务会自动重试 3 次。</p></details>
-  <details><summary>门户 6666 打不开？</summary><p>浏览器不安全端口黑名单，门户固定用 6688。</p></details>
   <details><summary>更新后要求重新登录？</summary><p>升级到「JWT 密钥随机化」版本时会重新生成密钥，旧登录态失效一次——重新登录即可，之后不再发生。</p></details>
   <details><summary>机器人菜单没出现？</summary><p>保存消息配置会自动生成；企微客户端有缓存，退出该会话重进一次。</p></details>
   <details><summary>识别失败的文件去哪了？</summary><p>「冗余」目录。人工把文件/目录改成更规范的名字（带片名+年份）再丢回待整理即可重试；网络原因失败的会留在待整理自动重试。</p></details>
@@ -1063,12 +1011,12 @@ tv:
   <details><summary>忘记管理员密码 / 想改密码？</summary>
     <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec strmhub ./strmhub --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
   <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec strmhub ./strmhub --reset-admin</code> 后重启重建。</p></details>
-  <details><summary>多个人能用吗？</summary><p>管理后台单管理员（个人工具定位）；观影门户全家共用（建议设 PIN）；Emby 侧多用户由 Emby 自己管理。</p></details>
+  <details><summary>多个人能用吗？</summary><p>管理后台单管理员（个人工具定位）；Emby 侧多用户由 Emby 自己管理。</p></details>
 </section>
 
-<!-- ============================================================ 27 -->
+<!-- ============================================================ 26 -->
 <section id="glossary">
-  <h2><span class="num">27</span>术语表</h2>
+  <h2><span class="num">26</span>术语表</h2>
   <dl class="glossary">
     <dt>STRM</dt><dd>只含一行 URL 的文本文件（扩展名 .strm）。播放器把它当作「重定向到该 URL 的媒体」播放——Emby/Jellyfin/Kodi 原生支持。</dd>
     <dt>302 直链 / 短链</dt><dd>StrmHub 代理地址（<code>6086/d/&lt;pick_code&gt;</code>）。播放器请求它，服务端即时换取 115 真实直链并返回 HTTP 302 重定向。好处：STRM 内容永不过期、播放流量不过服务器、直链按请求端 UA 正确签发。</dd>

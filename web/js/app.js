@@ -2662,7 +2662,7 @@ async function loadDashboard() {
     } else {
       setTxt('dash-cpu-pct', '-');
     }
-    /* ---- 我的媒体库分类卡（点击打开观影门户；Emby 源时 = Emby 媒体库） ---- */
+    /* ---- 我的媒体库分类卡（Emby 源时 = Emby 媒体库） ---- */
     const em = d.emby || {};
     let cats = d.categories || [];
     if (em.libraries && em.libraries.length) {
@@ -2681,18 +2681,18 @@ async function loadDashboard() {
         } else {
           inner = '<div class="cat-placeholder">' + esc((c.name || '?').slice(0, 4)) + '</div>';
         }
-        return '<div class="dash-cat" title="' + esc(c.name) + ' · ' + c.count + ' 部（点击打开观影门户）" onclick="openPortal()">' + inner
+        return '<div class="dash-cat" title="' + esc(c.name) + ' · ' + c.count + ' 部">' + inner
           + '<div class="cat-name">' + esc(c.name) + '</div>'
           + '<div class="cat-count">' + fmtN(c.count) + '</div></div>';
       }).join('');
     } else {
       cb.innerHTML = '<div class="dash-empty">暂无入库记录 · 整理或同步后这里会显示分类卡片</div>';
     }
-    /* ---- 最新入库海报墙（Emby 源时 = Emby 最新入库，点击打开观影门户） ---- */
+    /* ---- 最新入库海报墙（Emby 源时 = Emby 最新入库） ---- */
     const pb = document.getElementById('dash-posters');
     if (em.recent && em.recent.length) {
       pb.innerHTML = em.recent.map(m =>
-        '<div class="dash-poster" title="' + esc(m.name + ' ' + (m.year || '')) + '（点击打开观影门户）" onclick="openPortal()">'
+        '<div class="dash-poster" title="' + esc(m.name + ' ' + (m.year || '')) + '">'
         + '<img src="/api/embyimg?path=' + encodeURIComponent('Items/' + m.id + '/Images/Primary') + '&maxWidth=200" loading="lazy">'
         + '<div class="p-title">' + esc(m.name) + '</div></div>').join('');
     } else if (recent.length) {
@@ -2721,10 +2721,6 @@ function menuNetworkTest() {
 // 账号菜单动作：新标签打开使用文档
 function menuDocs() {
   window.open('https://strmhub.rth1.xyz/', '_blank');
-}
-// 新标签页打开观影门户（同主机 6688 端口）
-function openPortal() {
-  window.open(location.protocol + '//' + location.hostname + ':6688', '_blank');
 }
 function setBar(id, pct) {
   const el = document.getElementById(id);

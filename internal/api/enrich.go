@@ -49,13 +49,10 @@ type probeResult struct {
 // probeMediaInfo 用镜像内置的 ffprobe 读直链头部，解析主视频流与主音轨
 // probeFileNow 按 pick_code 立即探测（整理内联补全用，包级函数不依赖 Handler）。
 // 直链获取走双通道（OpenAPI 优先，Cookie 回退），并把签发 UA 与 CDN 要求的
-// 请求头（如 Set-Cookie 回带）原样传给 ffprobe——与门户 ffmpeg 拉流同一套路。
+// 请求头（如 Set-Cookie 回带）原样传给 ffprobe，避免 CDN 拒绝探测。
 func probeFileNow(pickCode string) (*probeResult, string) {
 	ua := ua115Download
-	cfg := portalCfg
-	if cfg == nil { // 门户协程尚未就绪时的兜底（自动整理可能在启动早期触发）
-		cfg = config.Load()
-	}
+	cfg := config.Load()
 	u, headers, err := proxyDownloadURLFull(model.DB, cfg, pickCode, ua)
 	if err != nil || u == "" {
 		if err == nil {
@@ -221,8 +218,8 @@ func probeTag(tags map[string]string, key string) string {
 }
 
 func probeMediaInfo(directURL string, headers map[string]string) (*probeResult, error) {
-	// 直链与签发 UA 绑定且 CDN 可能要求回带 Set-Cookie；与门户 ffmpeg
-	// 拉流同一套路：-user_agent + -headers 原样携带（必须在输入 URL 之前）
+	// 直链与签发 UA 绑定且 CDN 可能要求回带 Set-Cookie；探测时需要
+	// 使用 -user_agent + -headers 原样携带（必须在输入 URL 之前）
 	args := append([]string{"-v", "quiet"},
 		ffmpegHeaderArgs(headers)...)
 	args = append(args,
@@ -632,4 +629,20 @@ func stripToken(s, token string) string {
 	}
 	re := regexp.MustCompile(`(?i)[.\s_-]*` + regexp.QuoteMeta(token) + `[.\s_-]*`)
 	return re.ReplaceAllString(s, ".")
+}
+
+// ffmpegHeaderArgs 把必需头转成 ffmpeg/ffprobe 参数（-user_agent + -headers）
+func ffmpegHeaderArgs(headers map[string]string) []string {
+	args := []string{"-user_agent", headers["User-Agent"]}
+	others := []string{}
+	for k, v := range headers {
+		if k == "User-Agent" {
+			continue
+		}
+		others = append(others, k+": "+v)
+	}
+	if len(others) > 0 {
+		args = append(args, "-headers", strings.Join(others, "\r\n")+"\r\n")
+	}
+	return args
 }

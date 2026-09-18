@@ -271,9 +271,6 @@ func main() {
 	// 启动302代理（独立端口）
 	go api.StartProxy(db, cfg)
 
-	// 启动观影门户（6688：海报墙 + 网页播放）
-	go api.StartPortal(cfg)
-
 	// 企微聊天底栏菜单默认自动生成（自动整理 / 增量同步）
 	go api.WecomMenuAutoEnsure()
 

@@ -37,7 +37,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main
 
 # 运行阶段：最小镜像
 FROM alpine:latest
-# ffmpeg：观影门户服务端转封装（MKV→HLS 无损直串流）、内嵌轨道识别与媒体信息探测；
+# ffmpeg：内嵌轨道识别与媒体信息探测；
 # ca-certificates（TLS）、tzdata（时区）
 RUN apk add --no-cache ffmpeg ca-certificates tzdata
 
@@ -50,8 +50,8 @@ COPY --from=webbuilder /webui/dist ./webui/dist
 # 旧前端保留：WEBUI=legacy 时回退用，新前端出问题可立刻切回
 COPY --from=builder /build/web ./web
 
-# 6060 管理后台 / 6086 302直链代理 / 6688 观影门户
-EXPOSE 6060 6086 6688
+# 6060 管理后台 / 6086 302直链代理
+EXPOSE 6060 6086
 
 VOLUME ["/config", "/data", "/media", "/logs"]
 

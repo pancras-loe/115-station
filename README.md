@@ -94,7 +94,7 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 | [ECharts](https://echarts.apache.org/)（`strmhub-proposal/_shared/js/`） | 方案文档图表 | Apache-2.0 |
 | [Mermaid](https://mermaid.js.org/)（`strmhub-proposal/_shared/js/`） | 方案文档流程图 | MIT |
 | 思源黑体 Source Han Sans（`internal/api/assets/`） | 媒体库封面生成字体 | SIL OFL 1.1 |
-| FFmpeg（运行镜像内） | 媒体信息探测、门户转封装 | LGPL / GPL（Alpine 包） |
+| FFmpeg（运行镜像内） | 媒体信息探测 | LGPL / GPL（Alpine 包） |
 
 ---
 
@@ -122,7 +122,6 @@ services:
     ports:
       - "6060:6060"   # 管理后台
       - "6086:6086"   # 302 直链代理
-      - "6688:6688"   # 观影门户
     volumes:
       - ./config:/config
       - ./data:/data
@@ -181,9 +180,6 @@ docker compose up -d
 - **一键建库插件**：扫描本地媒体二层目录（如 `/media/电影/国产剧`），库名 = 目录名，自动配置中文元数据、NFO/图片本地保存、媒体路径（含路径映射）
 - **媒体库封面生成**：按二级分类聚合入库记录，合成带库名的 1280×720 封面并推送到 Emby
 
-### 观影门户（6688）
-独立于管理后台的公开门户：海报墙 + 分类浏览 + 网页直接播放；浏览器解不了的 MKV 由服务端 ffmpeg 转封装成 HLS 无损直串流。
-
 ### 消息与机器人
 - **企业微信双向机器人**：直接发链接即触发——磁力 / ed2k 提交离线下载、115 分享（连同提取码）自动转存整理；另支持 `状态` / `搜索` / `整理` / `同步` / `补全` / `帮助` 指令，AES 加密验签
 - **Emby Webhook 通知**：Emby 入库 / 删除 / 播放事件经本服务转发到企微 / TG（自动生成鉴权 token 的接收地址，剧集自动拼剧集名与季数）
@@ -206,7 +202,6 @@ docker compose up -d
 |---|---|
 | 6060 | 管理后台（网页） |
 | 6086 | 302 直链代理（Emby 播放走这里，含 `/emby` 反代） |
-| 6688 | 观影门户（海报墙 + 网页播放） |
 
 | 容器目录 | 用途 |
 |---|---|
