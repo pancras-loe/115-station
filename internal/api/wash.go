@@ -233,15 +233,10 @@ func washStrategyCache() []washStrategy {
 	return washCacheVal
 }
 
-// lookupMediaRecord 查库内整理记录（命中返回记录）。
-// source：空=115（历史行 source 为空），cd2=CloudDrive2——两来源记录隔离
+// lookupMediaRecord 查库内整理记录（命中返回记录）
 func lookupMediaRecord(media *TmdbMedia) (*model.MediaLibrary, bool) {
-	return lookupMediaRecordSrc(media, "")
-}
-
-func lookupMediaRecordSrc(media *TmdbMedia, source string) (*model.MediaLibrary, bool) {
 	var rec model.MediaLibrary
-	if err := model.DB.Where("tmdb_id = ? AND media_type = ? AND source = ?", media.TmdbID, media.MediaType, source).First(&rec).Error; err != nil {
+	if err := model.DB.Where("tmdb_id = ? AND media_type = ?", media.TmdbID, media.MediaType).First(&rec).Error; err != nil {
 		return nil, false
 	}
 	return &rec, true

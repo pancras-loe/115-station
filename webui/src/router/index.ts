@@ -41,12 +41,6 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '115 账号同步', desc: '全量 / 增量 / 分享同步', icon: 'sync' },
       },
       {
-        path: 'cd2',
-        name: 'cd2',
-        component: () => import('@/pages/Cd2Page.vue'),
-        meta: { title: 'CloudDrive2', desc: '多云盘聚合 · 跨网盘整理', icon: 'cloud' },
-      },
-      {
         path: 'organize',
         name: 'organize',
         component: () => import('@/pages/OrganizePage.vue'),

@@ -837,13 +837,11 @@ func cloudPathExistsCk(cookie, absPath string) bool {
 	return ok
 }
 
-// recordMedia 记录已整理的媒体到数据库
-// recordMedia 落整理记录（洗版查记录用）。source：空=115，cd2=CloudDrive2，
-// 同 tmdb_id 各来源独立一条，互不覆盖
-func recordMedia(media *TmdbMedia, category, targetPath, source string) {
-	// 同一部影视同来源只留一条记录（重复整理时更新而非新增）
+// recordMedia 落整理记录（洗版查记录用）
+func recordMedia(media *TmdbMedia, category, targetPath string) {
+	// 同一部影视只留一条记录（重复整理时更新而非新增）
 	var existing model.MediaLibrary
-	if model.DB.Where("tmdb_id = ? AND media_type = ? AND source = ?", media.TmdbID, media.MediaType, source).First(&existing).Error == nil {
+	if model.DB.Where("tmdb_id = ? AND media_type = ?", media.TmdbID, media.MediaType).First(&existing).Error == nil {
 		existing.Category = category
 		existing.TargetPath = targetPath
 		existing.Title = media.Title
@@ -861,7 +859,6 @@ func recordMedia(media *TmdbMedia, category, targetPath, source string) {
 		MediaType:     media.MediaType,
 		Category:      category,
 		TargetPath:    targetPath,
-		Source:        source,
 		OrigLanguage:  media.OrigLanguage,
 		OrigCountry:   strings.Join(media.OrigCountry, ","),
 		PosterPath:    media.PosterPath,
@@ -1639,7 +1636,7 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 	}
 
 	// 记录到数据库
-	recordMedia(media, category, targetDir+"/"+pathBase(newPath), "")
+	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
 
 	// 入库成功通知：TMDB 封面 + 重命名信息 + 详情链接（企微图文卡 / TG 图片）
 	// 入库文件统计（视频+字幕+NFO/封面；垃圾文件已移冗余不计）
@@ -1951,7 +1948,7 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 	newBase := baseName(pathBase(newPath))
 	moveSiblingAttachments(ops, cfg.Pending, oldBase, newBase, targetCid, true, onLog)
 
-	recordMedia(media, category, targetDir+"/"+pathBase(newPath), "")
+	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
 	result.Category = category
 	result.TargetDir = targetDir
 	result.Status = "success"

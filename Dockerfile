@@ -15,7 +15,7 @@ RUN npm run build
 # --platform=$BUILDPLATFORM 让 builder 始终以宿主原生架构运行（CI 上是 amd64），
 # 所有 RUN 不经过 QEMU；配合 GOARCH=$TARGETARCH 交叉编译出目标架构二进制。
 # 若不固定 BUILDPLATFORM，arm64 构建的 RUN 会在 QEMU 模拟的 arm64 容器里执行，极慢
-# golang 1.25：依赖链（tls-client 等）要求 go >= 1.24，go.mod 已升到 1.25
+# golang 1.25：go.mod 声明 go 1.25.0，构建镜像的工具链不得低于该版本
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 # buildx 多架构构建时自动注入目标架构（amd64/arm64）

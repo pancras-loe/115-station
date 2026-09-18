@@ -3,7 +3,6 @@ import {
   Rss,
   UserRoundCog,
   RefreshCcw,
-  CloudCog,
   Wand2,
   ArrowDownUp,
   Download,
@@ -33,7 +32,6 @@ export const navItems: NavItem[] = [
 
   { name: 'accounts', label: '账号管理', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: '账号同步', icon: RefreshCcw },
-  { name: 'cd2', label: 'CloudDrive2', icon: CloudCog },
   { name: 'organize', label: '自动整理', icon: Wand2 },
 
   { name: 'upload-download', label: '上传下载', icon: ArrowDownUp, group: '传输' },

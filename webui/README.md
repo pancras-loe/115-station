@@ -98,7 +98,6 @@ src/
 | 订阅管理 | `/subscriptions` | — |
 | 账号管理 | `/accounts` | — |
 | 账号同步 | `/sync` | — |
-| CloudDrive2 | `/cd2` | — |
 | 自动整理 | `/organize` | 9 |
 | 上传下载 | `/upload-download` | 2 |
 | 影视转存 | `/media-transfer` | 4 |

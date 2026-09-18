@@ -34,10 +34,9 @@
 | ORM / DB | GORM + SQLite（纯 Go 驱动 `glebarez/sqlite`，`CGO_ENABLED=0`） |
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
-| TLS 指纹 | `bogdanfinn/tls-client`（部分站点反爬需要） |
 | 前端（现役） | Vue 3 + TypeScript + Vite + Naive UI（`webui/`），详见 [webui/README.md](webui/README.md) |
 | 前端（已停用·保留备查） | 原生 HTML/CSS/JS（`web/`），`WEBUI=legacy` 可切回 |
-| 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 CloudDrive2（gRPC）、可选 Emby/Jellyfin |
+| 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 Emby/Jellyfin |
 
 ---
 
@@ -48,14 +47,12 @@
 ├── main.go                     # 启动、日志轮转、Gin 装配、TLS 明文自动跳转、优雅退出
 ├── internal/
 │   ├── api/                    # 全部业务逻辑（~33k 行，41 个测试文件）
-│   ├── cd2/                    # CloudDrive2 gRPC 客户端 + 生成的 protobuf
 │   ├── config/                 # 环境变量配置、配置文件读写、TLS 自签证书
 │   └── model/                  # GORM 实体与建表/默认数据初始化
 ├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + Naive UI）
 ├── web/                        # 管理后台前端·旧版，已停用，保留供对照实现（WEBUI=legacy 可切回）
 ├── wiki/index.html             # 完整版使用 Wiki（单文件）
 ├── strmhub-proposal/           # 方案设计文档（单文件 HTML + 内嵌 echarts/mermaid）
-├── .tools/protogen/            # 独立 module：生成 cd2 protobuf
 ├── .github/workflows/docker.yml# CI：测试门禁 → 多架构镜像构建
 ├── Dockerfile                  # 多阶段交叉编译 → alpine + ffmpeg
 └── docker-compose.yml
@@ -74,7 +71,6 @@
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **观影门户** | `portal.go` `portalemby.go` `portalstream.go` | 6688 端口独立门户 + ffmpeg remux → HLS |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
-| **CloudDrive2** | `cd2.go` `cd2org.go` | 跨网盘整理引擎（定位是整理，不是播放） |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
 | **其他** | `dashboard.go` `cron.go` `offline.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、定时任务、离线下载、媒体库封面生成、115 签到、容器内自更新 |
 

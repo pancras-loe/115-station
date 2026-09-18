@@ -5,19 +5,18 @@ import { ChevronRight, CornerLeftUp, Folder } from '@lucide/vue'
 import { storageApi } from '@/api'
 import type { DirEntry } from '@/api/storage'
 
-export type PickerMode = '115' | 'local' | 'cd2'
+export type PickerMode = '115' | 'local'
 
 const props = defineProps<{ show: boolean; mode: PickerMode }>()
 const emit = defineEmits<{
   'update:show': [boolean]
-  /** 115 模式回传 { cid, path }，local/cd2 只回传 path */
+  /** 115 模式回传 { cid, path }，local 只回传 path */
   pick: [{ cid: string; path: string }]
 }>()
 
 const TITLES: Record<PickerMode, string> = {
   '115': '选择 115 目录',
   local: '选择本地目录',
-  cd2: '选择 CD2 目录',
 }
 
 const items = ref<DirEntry[]>([])
@@ -80,22 +79,6 @@ async function loadLocal(p: string) {
   }
 }
 
-async function loadCd2(p: string) {
-  loading.value = true
-  note.value = ''
-  try {
-    const data = await storageApi.cd2Dirs(p)
-    path.value = data.path || p || '/'
-    currentLabel.value = path.value
-    items.value = data.data ?? []
-  } catch (e) {
-    items.value = []
-    note.value = e instanceof Error ? e.message : '加载失败'
-  } finally {
-    loading.value = false
-  }
-}
-
 function reset() {
   items.value = []
   note.value = ''
@@ -105,13 +88,11 @@ function reset() {
   history.value = []
   path.value = ''
   if (props.mode === '115') load115('0')
-  else if (props.mode === 'cd2') loadCd2('/')
   else loadLocal('')
 }
 
 function enter(it: DirEntry) {
   if (props.mode === '115') load115(it.cid ?? '0', { enter: it.name })
-  else if (props.mode === 'cd2') loadCd2(it.path ?? '/')
   else loadLocal(it.path ?? '')
 }
 
@@ -126,10 +107,6 @@ function goUp() {
     const prev = history.value.pop()
     if (!prev) return // 已在根目录
     load115(prev.cid, { restore: prev.trail })
-  } else if (props.mode === 'cd2') {
-    const parts = (path.value || '/').replace(/\/+$/, '').split('/').filter(Boolean)
-    parts.pop()
-    loadCd2('/' + parts.join('/'))
   } else {
     loadLocal(parentPath(path.value))
   }
@@ -154,8 +131,6 @@ async function jump() {
       items.value = []
       note.value = e instanceof Error ? e.message : '路径无法解析'
     }
-  } else if (props.mode === 'cd2') {
-    loadCd2(v.startsWith('/') ? v : '/' + v)
   } else {
     loadLocal(v)
   }
@@ -165,7 +140,7 @@ function confirm() {
   if (props.mode === '115') {
     emit('pick', { cid: cid.value, path: trail.value.length ? '/' + trail.value.join('/') : '' })
   } else {
-    emit('pick', { cid: '', path: path.value || (props.mode === 'cd2' ? '/' : '/media') })
+    emit('pick', { cid: '', path: path.value || '/media' })
   }
   emit('update:show', false)
 }

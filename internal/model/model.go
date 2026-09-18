@@ -130,7 +130,6 @@ type MediaLibrary struct {
 	Year          string    `json:"year" gorm:"size:10"`
 	MediaType     string    `json:"media_type" gorm:"size:20;index"` // movie, tv
 	Category      string    `json:"category" gorm:"size:50;index"`   // 仪表盘/门户按分类聚合高频查询
-	Source        string    `json:"source" gorm:"size:20;index"`     // 整理来源：空=115，cd2=CloudDrive2（洗版查记录时隔离）
 	TargetPath    string    `json:"target_path" gorm:"size:500"`
 	OrigLanguage  string    `json:"original_language" gorm:"size:20"`
 	OrigCountry   string    `json:"origin_country" gorm:"size:100"`

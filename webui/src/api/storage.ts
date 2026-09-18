@@ -41,7 +41,7 @@ export const qrStatus = (
 // ---- 目录浏览 ----
 
 export interface DirEntry {
-  /** 115 目录用 cid 标识，本地/CD2 用 path */
+  /** 115 目录用 cid 标识，本地用 path */
   cid?: string
   name: string
   path?: string
@@ -55,8 +55,6 @@ export interface DirListResult {
   origin?: string
   /** 本地：目录过大时只返回前 1000 个 */
   truncated?: boolean
-  /** CD2：后端归一化后的当前路径 */
-  path?: string
 }
 
 export const dirs115 = (cid: string) => http.get<DirListResult>('/storage/115/dirs', { params: { cid } })
@@ -66,7 +64,5 @@ export const resolve115 = (path: string) =>
   http.get<{ cid?: string }>('/storage/115/resolve', { params: { path } })
 
 export const localDirs = (path: string) => http.get<DirListResult>('/storage/local/dirs', { params: { path } })
-
-export const cd2Dirs = (path: string) => http.get<DirListResult>('/cd2/dirs', { params: { path: path || '/' } })
 
 export const diagnose115 = () => http.get('/storage/115/diagnose')

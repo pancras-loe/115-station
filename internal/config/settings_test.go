@@ -21,7 +21,7 @@ func TestSaveSettingCorruptFileNoOverwrite(t *testing.T) {
 	if err := os.WriteFile(c.SettingFile(), []byte(corrupt), 0644); err != nil {
 		t.Fatal(err)
 	}
-	err := c.SaveSetting("cd2", `{"a":1}`)
+	err := c.SaveSetting("demo", `{"a":1}`)
 	if err == nil {
 		t.Fatal("损坏文件上保存应报错")
 	}
@@ -40,14 +40,14 @@ func TestSaveSettingKeepsOtherKeys(t *testing.T) {
 	if err := c.SaveSetting("org-basic", `{"pending":"1"}`); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SaveSetting("cd2", `{"endpoint":"h"}`); err != nil {
+	if err := c.SaveSetting("demo", `{"endpoint":"h"}`); err != nil {
 		t.Fatal(err)
 	}
 	if v := c.GetSetting("org-basic"); v != `{"pending":"1"}` {
 		t.Errorf("org-basic 丢失: %q", v)
 	}
-	if v := c.GetSetting("cd2"); v != `{"endpoint":"h"}` {
-		t.Errorf("cd2 丢失: %q", v)
+	if v := c.GetSetting("demo"); v != `{"endpoint":"h"}` {
+		t.Errorf("demo 丢失: %q", v)
 	}
 	// 文件不存在时首存成功
 	c2 := &Config{ConfigDir: filepath.Join(t.TempDir()), DataDir: ""}

@@ -45,7 +45,6 @@
       <div class="menu-item" data-page="tgsub"><span class="icon">✦</span><span>订阅管理</span></div>
       <div class="menu-item" data-page="config-accounts"><span class="icon">◈</span><span>账号管理</span></div>
       <div class="menu-item" data-page="sync"><span class="icon">⇄</span><span>账号同步</span></div>
-      <div class="menu-item" data-page="cd2"><span class="icon">☁</span><span>CloudDrive2</span></div>
       <div class="menu-item" data-page="organize"><span class="icon">⚙</span><span>自动整理</span></div>
       <div class="menu-item" data-page="upload-download"><span class="icon">⇅</span><span>上传下载</span></div>
       <div class="menu-item" data-page="media-transfer"><span class="icon">⇣</span><span>影视转存</span></div>
@@ -136,31 +135,6 @@
 
 
       
-    </div>
-
-    <!-- CloudDrive2（多云盘聚合：只做整理，STRM/播放走项目原生 115 链路） -->
-    <div class="page" id="page-cd2">
-      <div class="card">
-        <div class="alert alert-info" style="margin-bottom:10px">CloudDrive2（CD2）接入：把 CD2 挂载的任意网盘（115/百度等）当作「跨网盘整理引擎」的入口——监控目录里出现新内容时自动识别、改名、分类并搬运进 115 媒体库，由项目原生生成 STRM。目录全部自动识别，无需在 CD2 侧单独配置。<i class="help-tip" tabindex="0">?<span class="tip-bubble">详细链路：监控目录新视频 → 识别（TMDB/目录名兜底）→ 重命名模板改名 → 二级分类归位并跨网盘搬运到 115 媒体库（CD2 挂载路径）→ 自动触发增量同步生成 /d/ STRM → 通知 Emby。播放完全走项目原生直链，不经过 CD2；识别失败的留在原地等重试。</span></i></div>
-        <div class="form-row"><div class="label">服务地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">CD2 的服务地址（与网页管理端同地址同端口，默认 19798）。支持 IP/域名，可带 http(s):// 前缀。StrmHub 服务器必须能直接访问该地址（Docker 部署时填宿主机可达的 IP，不要填 127.0.0.1）。</span></i></div><div class="control"><input type="text" id="cd2-endpoint" placeholder="如 192.168.1.10:19798" class="inline-input" style="max-width:320px"></div></div>
-        <div class="form-row"><div class="label">账号密码<i class="help-tip" tabindex="0">?<span class="tip-bubble">CD2 本地账号，即登录 CD2 网页管理端用的用户名和密码（不是网盘账号）。token 过期会自动重新登录；账号若开启了两步验证暂不支持。</span></i></div><div class="control"><div class="form-inline-group"><input type="text" id="cd2-username" placeholder="用户名" class="inline-input"><input type="password" id="cd2-password" placeholder="密码" class="inline-input"></div></div></div>
-        <div class="form-row"><div class="label">连接测试<i class="help-tip" tabindex="0">?<span class="tip-bubble">测试连接会先用当前表单内容保存配置，再实际登录 CD2 列一次根目录（根目录即各网盘挂载点），成功会显示检测到的网盘列表。</span></i></div><div class="control"><div class="form-inline-group"><button class="btn btn-success" onclick="cd2Test(this)">测试连接</button><span id="cd2-test-result" style="font-size:12.5px;margin-left:8px"></span></div></div></div>
-        <div style="height:1px;background:var(--border);margin:14px 0"></div>
-        <div class="form-row"><div class="label">实时监控整理<i class="help-tip" tabindex="0">?<span class="tip-bubble">订阅 CD2 文件变更推送：监控目录里出现新视频时自动识别 → 按重命名模板改名 → 按二级分类跨网盘搬运到 115 媒体库 → 自动触发增量同步生成原生 STRM 并推送通知。开关保存后约 10 秒内生效；同目录文件静默 8 秒后才开始整理（批量转存等文件陆续到位）。</span></i></div><div class="control">
-          <div class="form-inline-group">
-            <div class="segmented-control" id="cd2-org-switch">
-              <div class="seg-item active" data-value="true" onclick="setCd2Org(true)">开启</div>
-              <div class="seg-item" data-value="false" onclick="setCd2Org(false)">关闭</div>
-            </div>
-            <button class="btn btn-success" onclick="cd2OrgRun(this)">立即整理</button>
-          </div>
-        </div></div>
-        <div class="form-row"><div class="label">目录（全自动）<i class="help-tip" tabindex="0">?<span class="tip-bubble">无需填写任何目录：整理目标根自动探测 CD2 里的 115 媒体库挂载；监控/已存在目录自动取「自动整理 → 基础配置」里 115 的对应目录映射到 CD2 侧。在 115 那边改目录，这里自动跟随。</span></i></div><div class="control">
-          <div id="cd2-derived-dirs" style="font-size:12.5px;color:var(--text-2);line-height:1.8;background:var(--border);border-radius:8px;padding:8px 12px;min-width:280px">未识别（保存并开启后自动探测）</div>
-        </div></div>
-        <div class="form-row"><div class="label">监控状态</div><div class="control"><div class="form-inline-group"><span id="cd2-watch-status" style="font-size:12.5px">未加载</span></div></div></div>
-        <div class="form-row"><div class="label"></div><div class="control"><button class="btn btn-primary" onclick="cd2Save(this)">保存配置</button></div></div>
-      </div>
     </div>
 
     <!-- 自动整理 -->

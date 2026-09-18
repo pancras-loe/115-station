@@ -277,9 +277,6 @@ func main() {
 	// 企微聊天底栏菜单默认自动生成（自动整理 / 增量同步）
 	go api.WecomMenuAutoEnsure()
 
-	// CD2 实时监控整理（PushMessage 文件变更流 → 识别/重命名/分类/移动/STRM）
-	go api.StartCd2Watcher(db, cfg)
-
 	// 优雅退出：docker stop / 自更新收尾发 SIGTERM——直接杀进程会把
 	// 「115 已搬移、台账未写」的中间态留在云端（下次去重/洗版判定失据），
 	// 防抖队列里的入库通知也全部丢失。停 worker → 冲刷通知 → 留收尾窗口

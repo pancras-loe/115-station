@@ -112,7 +112,6 @@ const PAGE_TITLES = {
   'config-extension': ['扩展功能', '签到 / TG 搜索 / 封面生成等插件'],
   'tgsub': ['订阅管理', 'TG 频道关键词订阅 / 命中通知 / 自动转存'],
   'logs': ['实时日志', '同步与整理操作的服务端与本地日志'],
-  'cd2': ['CloudDrive2', '多云盘聚合 · 跨网盘整理'],
 };
 
 // ==================== 前端路由（真实路径，与后端 NoRoute 回退 index.html 配合） ====================
@@ -129,7 +128,6 @@ const PAGE_PATHS = {
   'logs': '/logs',
   'config-extension': '/plugins',
   'tgsub': '/subscriptions',
-  'cd2': '/cd2',
 };
 const PATH_PAGES = Object.fromEntries(Object.entries(PAGE_PATHS).map(([p, path]) => [path, p]));
 
@@ -187,7 +185,6 @@ function showPage(id) {
   if (id === 'upload-download') { loadConfigs(); startOfflineTasksPoll(); }
   else stopOfflineTasksPoll();
   if (id === 'media-transfer') { gyLoadPage(); pansouLoadPage(); mukakuLoadPage(); re0LoadPage(); }
-  if (id === 'cd2') cd2LoadUI();
   if (id === 'tgsub') tgSubLoadPage();
   if (id === 'config-message') loadConfigs();
   if (id === 'dashboard') loadGuide();
@@ -625,12 +622,6 @@ function openLocalDirPicker(targetId) {
   showDirPicker('选择本地目录');
   loadLocalDirs('');
 }
-function openCd2DirPicker(targetId) {
-  dirPickerTarget = targetId || 'cd2-root';
-  dirPicker = { mode: 'cd2', path: '/', history: [] };
-  showDirPicker('选择 CD2 目录');
-  loadCd2Dirs('/');
-}
 
 // load115Dirs 加载 115 目录；opts.enter = 进入的目录名，opts.restore = 上级恢复的 {cid, trail}
 async function load115Dirs(cid, opts) {
@@ -671,19 +662,6 @@ async function loadLocalDirs(path) {
     list.innerHTML = '<div class="dir-empty">' + esc(e.message || '加载失败') + '</div>';
   }
 }
-async function loadCd2Dirs(path) {
-  const list = document.getElementById('dir-picker-list');
-  list.innerHTML = '<div class="dir-empty">加载中...</div>';
-  try {
-    const data = await api('/cd2/dirs?path=' + encodeURIComponent(path || '/'));
-    dirPicker.path = data.path || path || '/';
-    document.getElementById('dir-picker-path').textContent = dirPicker.path;
-    renderDirList(data.data || [], dirPicker.path, '');
-  } catch (e) {
-    list.innerHTML = '<div class="dir-empty">' + esc(e.message || '加载失败') + '</div>';
-  }
-}
-
 // 手动输入路径/cid 直接跳转（115 支持 "/路径/跳转" 和纯数字 cid 两种写法）
 async function dirPickerJump() {
   const input = document.getElementById('dir-picker-input');
@@ -705,8 +683,6 @@ async function dirPickerJump() {
       document.getElementById('dir-picker-list').innerHTML =
         '<div class="dir-empty">' + esc(e.message || '路径无法解析') + '</div>';
     }
-  } else if (dirPicker.mode === 'cd2') {
-    loadCd2Dirs(v.startsWith('/') ? v : '/' + v);
   } else {
     loadLocalDirs(v);
   }
@@ -728,8 +704,6 @@ function renderDirList(items, current, note) {
       const it = items[parseInt(el.dataset.index)];
       if (dirPicker.mode === '115') {
         load115Dirs(it.cid, { enter: it.name });
-      } else if (dirPicker.mode === 'cd2') {
-        loadCd2Dirs(it.path);
       } else {
         loadLocalDirs(it.path);
       }
@@ -742,10 +716,6 @@ function dirPickerUp() {
     const prev = dirPicker.history.pop();
     if (!prev) return; // 已在根目录
     load115Dirs(prev.cid, { restore: prev.trail });
-  } else if (dirPicker.mode === 'cd2') {
-    const parts = (dirPicker.path || '/').replace(/\/+$/, '').split('/').filter(Boolean);
-    parts.pop();
-    loadCd2Dirs('/' + parts.join('/'));
   } else {
     loadLocalDirs(parentPath(dirPicker.path || ''));
   }
@@ -769,8 +739,6 @@ function confirmDirPicker() {
       target.value = dirPicker.trail.length ? '/' + dirPicker.trail.join('/') : '';
       target.placeholder = '根目录';
     }
-  } else if (dirPicker.mode === 'cd2') {
-    if (target) target.value = dirPicker.path || '/';
   } else {
     if (target) target.value = dirPicker.path || '/media';
     // 本地目录选择即时生效：监控目录这类"选完即用"的配置自动保存，
@@ -1438,118 +1406,6 @@ function syncRenamePresetUI() {
 function autoResizeTextarea(el) {
   el.style.height = 'auto';
   el.style.height = el.scrollHeight + 'px';
-}
-
-
-// ==================== CloudDrive2（多云盘聚合：只做整理） ====================
-// 独立菜单页（连接账号 + 实时监控整理）；STRM 由项目原生增量同步生成，
-// 播放走 /d/ 直链，CD2 不在播放路径上
-
-let cd2OrgEnabled = false;
-
-function cd2Gather() {
-  return {
-    endpoint: val('cd2-endpoint').trim(),
-    username: val('cd2-username').trim(),
-    password: val('cd2-password').trim(),
-    org_enabled: cd2OrgEnabled,
-    // 三个目录均自动派生：目标根探测 CD2 的 115 挂载，
-    // 监控/已存在取「自动整理 → 基础配置」映射
-  };
-}
-
-function setCd2Org(v) {
-  cd2OrgEnabled = v;
-  document.querySelectorAll('#cd2-org-switch .seg-item').forEach(n => {
-    n.classList.toggle('active', n.dataset.value === String(v));
-  });
-}
-
-let cd2StatusTimer = null;
-
-async function cd2WatchStatus() {
-  const el = document.getElementById('cd2-watch-status');
-  if (!el) return;
-  try {
-    const d = await api('/cd2/org/status');
-    const s = d.data || {};
-    if (!s.enabled) {
-      el.textContent = '○ 未开启';
-      el.style.color = 'var(--text-3)';
-    } else if (s.running) {
-      el.textContent = '● 监控中（已整理 ' + (s.organized || 0) + ' 个单元' +
-        (s.last_event ? '，最近事件 ' + s.last_event : '') + '）';
-      el.style.color = '#1f8a4c';
-    } else {
-      el.textContent = '● 启动中…' + (s.last_err ? '（' + s.last_err + '）' : '');
-      el.style.color = 'var(--warning)';
-    }
-  } catch (e) {
-    el.textContent = '状态加载失败';
-    el.style.color = 'var(--danger)';
-  }
-}
-
-async function cd2LoadUI() {
-  try {
-    const d = await api('/cd2/config');
-    const c = d.data || {};
-    setVal('cd2-endpoint', c.endpoint || '');
-    setVal('cd2-username', c.username || '');
-    setVal('cd2-password', c.password || '');
-    setCd2Org(!!c.org_enabled);
-    const dd = document.getElementById('cd2-derived-dirs');
-    if (dd) {
-      if (c.root_path) {
-        dd.innerHTML = '整理目标根：<b>' + esc(c.root_path) + '</b><br>监控目录：' + esc(c.org_pending || '（识别中…）')
-          + '<br>已存在目录：' + esc(c.org_existing || '（识别中…）');
-      } else {
-        dd.textContent = '未识别（保存并开启后自动探测 CD2 的 115 媒体库挂载）';
-      }
-    }
-  } catch (e) { /* 首次为空 */ }
-  cd2WatchStatus();
-  // 状态自动刷新（离开页面后元素不在即空转，重新进入会重置定时器）
-  clearInterval(cd2StatusTimer);
-  cd2StatusTimer = setInterval(cd2WatchStatus, 15000);
-}
-
-async function cd2Save(btn) {
-  btn.disabled = true;
-  try {
-    const d = await api('/cd2/config', { method: 'POST', body: JSON.stringify(cd2Gather()) });
-    toast(d.message || '配置已保存');
-    cd2LoadUI(); // 刷新派生目录显示（保存时后端会按 115 目录刷新）
-  } catch (e) { toast('保存失败：' + e.message); }
-  btn.disabled = false;
-}
-
-async function cd2Test(btn) {
-  // 先保存再测试：测试用的是服务端已保存的凭证
-  const result = document.getElementById('cd2-test-result');
-  btn.disabled = true;
-  result.textContent = '测试中…';
-  result.style.color = 'var(--text-3)';
-  try {
-    await api('/cd2/config', { method: 'POST', body: JSON.stringify(cd2Gather()) });
-    const d = await api('/cd2/test', { method: 'POST' });
-    result.textContent = '✓ ' + (d.message || '连接成功');
-    result.style.color = '#1f8a4c';
-  } catch (e) {
-    result.textContent = '✗ ' + e.message;
-    result.style.color = 'var(--danger)';
-  }
-  btn.disabled = false;
-}
-
-async function cd2OrgRun(btn) {
-  if (!confirm('立即整理监控目录下所有待处理内容？')) return;
-  btn.disabled = true;
-  try {
-    const d = await api('/cd2/org/run', { method: 'POST' });
-    toast(d.message || '整理已开始');
-  } catch (e) { toast(e.message); }
-  btn.disabled = false;
 }
 
 // ==================== 媒体库封面生成 ====================

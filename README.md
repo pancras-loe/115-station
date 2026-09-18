@@ -89,7 +89,7 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 
 | 组件 | 用途 | 许可证 |
 |---|---|---|
-| Go 依赖（见 [`go.mod`](go.mod)） | Gin、GORM、115driver、tls-client、jwt 等 | 各依赖自有许可证 |
+| Go 依赖（见 [`go.mod`](go.mod)） | Gin、GORM、115driver、jwt 等 | 各依赖自有许可证 |
 | [CodeMirror 5](https://codemirror.net/5/)（`web/vendor/cm5/`） | YAML 配置编辑器 | MIT |
 | [ECharts](https://echarts.apache.org/)（`strmhub-proposal/_shared/js/`） | 方案文档图表 | Apache-2.0 |
 | [Mermaid](https://mermaid.js.org/)（`strmhub-proposal/_shared/js/`） | 方案文档流程图 | MIT |
@@ -166,7 +166,6 @@ docker compose up -d
 - **SHA1 查重**：转存整理前比对已入库文件指纹，重复内容直接跳过
 - **广告清理**：自动识别并批量移动宣传文件，文件名清洗（去域名 / 水印前缀）
 - **批量重命名**：整理前先在 115 端批量改名，避免逐个请求触发风控
-- **CloudDrive2 实时整理**：订阅 CD2 的 PushMessage 文件变更流，新文件落盘即触发识别 / 重命名 / 分类 / 搬运 / 生成 STRM
 
 ### 媒体信息补全
 - 内置 ffmpeg/ffprobe，对命名不规范的文件做**头部分析**（只读文件头，不下载全文件）

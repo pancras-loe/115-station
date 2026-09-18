@@ -434,14 +434,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/115checkin/config", h.Checkin115SaveConfig)
 		protected.POST("/115checkin/run", h.Checkin115Run)
 
-		// CloudDrive2（多云盘聚合，gRPC）：只做整理，STRM 由原生增量同步生成
-		protected.GET("/cd2/config", h.Cd2GetConfig)
-		protected.POST("/cd2/config", h.Cd2SaveConfig)
-		protected.POST("/cd2/test", h.Cd2Test)
-		protected.GET("/cd2/dirs", h.Cd2Dirs)
-		protected.GET("/cd2/org/status", h.Cd2OrgStatus)
-		protected.POST("/cd2/org/run", h.Cd2OrgRun)
-
 		// 媒体库封面生成（分类聚合 TMDB 海报 → 合成封面 → 推送 Emby）
 		protected.GET("/covergen/config", h.CoverGenGetConfig)
 		protected.POST("/covergen/config", h.CoverGenSaveConfig)

@@ -1,6 +1,5 @@
 export { http, request, ApiError, tokenStorage, setUnauthorizedHandler } from './client'
 export * as authApi from './auth'
-export * as cd2Api from './cd2'
 export * as configApi from './config'
 export * as dashboardApi from './dashboard'
 export * as organizeApi from './organize'
