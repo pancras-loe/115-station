@@ -35,7 +35,8 @@
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
 | TLS 指纹 | `bogdanfinn/tls-client`（部分站点反爬需要） |
-| 前端 | 原生 HTML/CSS/JS，无构建步骤（`web/`），YAML 编辑器用 CodeMirror 5 |
+| 前端（现役） | Vue 3 + TypeScript + Vite + Naive UI（`webui/`），详见 [webui/README.md](webui/README.md) |
+| 前端（已停用·保留备查） | 原生 HTML/CSS/JS（`web/`），`WEBUI=legacy` 可切回 |
 | 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 CloudDrive2（gRPC）、可选 Emby/Jellyfin |
 
 ---
@@ -50,7 +51,8 @@
 │   ├── cd2/                    # CloudDrive2 gRPC 客户端 + 生成的 protobuf
 │   ├── config/                 # 环境变量配置、配置文件读写、TLS 自签证书
 │   └── model/                  # GORM 实体与建表/默认数据初始化
-├── web/                        # 管理后台前端（index.html / css / js / vendor）
+├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + Naive UI）
+├── web/                        # 管理后台前端·旧版，已停用，保留供对照实现（WEBUI=legacy 可切回）
 ├── wiki/index.html             # 完整版使用 Wiki（单文件）
 ├── strmhub-proposal/           # 方案设计文档（单文件 HTML + 内嵌 echarts/mermaid）
 ├── .tools/protogen/            # 独立 module：生成 cd2 protobuf
@@ -120,8 +122,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 - Gin handler 挂在 `*Handler` 上（`h.DB` / `h.Config`），注册集中在 `routes.go` 的 `SetupRoutes`。
 - 路由分三档：`/api/auth/*`（公开）、`/api/*`（JWT 保护的 `protected` 组）、若干无鉴权但带 token 校验的回调端点（Emby webhook、OAuth callback、302 直链）。
 - 配置读取顺序：**数据库 `Setting` 表优先，环境变量兜底**（如 115 请求间隔）。
-- 前端无构建：直接改 `web/js/app.js` / `web/css/style.css`；静态资源走协商缓存（`no-cache` + Last-Modified），不要再手工加 `?v=N`。
-  例外：`web/index.html` 里的 `style.css` link 标签会在启动时被整体内联替换，改动该标签需同步更新 `main.go` 的 `indexHTMLMarker` 常量。
+- **前端已重写完成**（见 §8）。改页面一律改 `webui/`；`web/` 是停用的旧实现，只作对照，**不要再往里加功能**。
+- 前端有构建：`cd webui && npm run typecheck && npm run build`，产物是单个 `webui/dist/index.html`（不提交进仓库）。
+- 颜色只能从 `webui/src/styles/main.css` 的设计令牌取，组件里写死色值必然漏暗色模式。
+- **API Key / Secret / token 一律用 `SecretInput` 组件**，不要直接写 `<NInput type="password">`——
+  浏览器会把本站保存的管理员密码自动填进去（见 `webui/src/utils/autofill.ts`）。
 
 ---
 
@@ -156,4 +161,47 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashRules` |
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
-| 改前端页面 | `web/index.html`（`data-page` / `data-tab`）+ `web/js/app.js` |
+| 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
+| 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
+
+---
+
+## 8. 前端（`webui/`）
+
+`web/` 的原生实现已被 `webui/`（Vue 3 + TypeScript + Vite + Naive UI）**整体替换**，
+动因是原生版本没有暗色模式、228 个内联 `onclick` 导致无法安全重构，且视觉停留在早期
+企业后台风格。13 个页面全部迁移完成。
+
+### 运行与构建
+
+```bash
+# 开发：Vite :5173，/api 代理到后端 :6060
+cd webui && npm install && npm run dev
+#   后端端口改过：BACKEND=http://127.0.0.1:xxxx npm run dev
+
+# 构建：产物是单个 webui/dist/index.html
+cd webui && npm run typecheck && npm run build
+```
+
+Go 默认服务 `webui/dist/index.html`；产物不存在时打日志自动回退旧前端，不会启动失败。
+
+### 旧前端为什么还留着
+
+`web/` 已停用但**刻意保留在仓库里**：新前端出问题时可以 `WEBUI=legacy` 立刻切回，
+排查「旧版这里是怎么做的」也不必翻 git 历史。它不再接收任何新功能。
+
+```bash
+WEBUI=legacy ./strmhub     # PowerShell: $env:WEBUI="legacy"; .\strmhub.exe
+```
+
+确认新前端稳定后可以整体删除 `web/`、`main.go` 的 `inlinedIndexHTML` / `indexHTMLMarker`
+与三个 `r.Static`，以及 Dockerfile 里那行 `COPY --from=builder /build/web ./web`。
+
+### 三条不要动的约定
+
+1. **路由路径**（`/sync`、`/plugins`、`/subscriptions` …）沿用旧版，用户可能已收藏，
+   改成「更规整」的命名会直接 404。
+2. **`api/client.ts` 的超时与重试策略**：默认 60s 超时 + GET 网络层失败重试一次，
+   是旧版在跨境明文链路上踩出来的，注释里写了来由。
+3. **单文件打包**（`vite-plugin-singlefile`）：一次请求拿完整个前端。这不是图省事，
+   是旧版「启动时把 style.css 内联进 HTML」那套优化的替代品，见 webui/README.md。

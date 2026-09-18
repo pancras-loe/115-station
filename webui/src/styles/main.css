@@ -1,0 +1,176 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   设计令牌（明暗双主题）
+   规则：所有颜色只从这里取，组件里不写字面色值——否则暗色模式必漏。
+   暗色不是把亮色反相：背景用低饱和冷灰做层级（base < elevated < raised），
+   主色在暗底上提亮一档，否则 #165DFF 在 #0F1115 上对比度不足。
+   ============================================================ */
+@theme {
+  --font-sans: 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace;
+}
+
+:root {
+  /* 品牌色：沿用 Arco 蓝，老用户零认知成本 */
+  --c-primary: #165dff;
+  --c-primary-hover: #3d7bff;
+  --c-primary-active: #0e42d2;
+  --c-primary-soft: #e8f3ff;
+  --c-primary-border: #bedaff;
+
+  --c-success: #00b42a;
+  --c-success-soft: #e8ffea;
+  --c-warning: #ff7d00;
+  --c-warning-soft: #fff7e8;
+  --c-danger: #f53f3f;
+  --c-danger-soft: #ffece8;
+  --c-info: #86909c;
+
+  /* 背景层级：页面 → 卡片 → 卡片内凸起 */
+  --c-bg-base: #f5f6f8;
+  --c-bg-elevated: #ffffff;
+  --c-bg-raised: #f7f8fa;
+  --c-bg-hover: #f2f3f5;
+  --c-bg-active: #e8eaed;
+  --c-bg-inverse: #1d2129;
+
+  --c-border: #e4e6eb;
+  --c-border-strong: #d0d3d9;
+
+  --c-text-1: #1a1d21;
+  --c-text-2: #4a5159;
+  --c-text-3: #8a929c;
+  --c-text-4: #b7bdc6;
+  --c-text-inverse: #ffffff;
+
+  /* 阴影：暗色下阴影不可见，改用边框承担层级，故暗色主题把它们调到近乎透明 */
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
+  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --sidebar-w: 236px;
+  --topbar-h: 60px;
+
+  color-scheme: light;
+}
+
+html.dark {
+  --c-primary: #4c8dff;
+  --c-primary-hover: #6ea3ff;
+  --c-primary-active: #2f74f0;
+  --c-primary-soft: #16233d;
+  --c-primary-border: #2a4577;
+
+  --c-success: #3fc35a;
+  --c-success-soft: #12271a;
+  --c-warning: #ff9a3d;
+  --c-warning-soft: #2b1d0d;
+  --c-danger: #ff6b6b;
+  --c-danger-soft: #2e1618;
+  --c-info: #8a929c;
+
+  --c-bg-base: #0f1115;
+  --c-bg-elevated: #171a1f;
+  --c-bg-raised: #1c2027;
+  --c-bg-hover: #212632;
+  --c-bg-active: #2a303c;
+  --c-bg-inverse: #e8eaed;
+
+  --c-border: #262b33;
+  --c-border-strong: #343b45;
+
+  --c-text-1: #e8eaed;
+  --c-text-2: #a8afb8;
+  --c-text-3: #6f7780;
+  --c-text-4: #4d545d;
+  --c-text-inverse: #0f1115;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  color-scheme: dark;
+}
+
+/* 把令牌暴露成 Tailwind 工具类（bg-surface / text-muted / border-line …） */
+@theme inline {
+  --color-primary: var(--c-primary);
+  --color-primary-hover: var(--c-primary-hover);
+  --color-primary-soft: var(--c-primary-soft);
+  --color-success: var(--c-success);
+  --color-warning: var(--c-warning);
+  --color-danger: var(--c-danger);
+
+  --color-base: var(--c-bg-base);
+  --color-surface: var(--c-bg-elevated);
+  --color-raised: var(--c-bg-raised);
+  --color-hover: var(--c-bg-hover);
+
+  --color-line: var(--c-border);
+  --color-line-strong: var(--c-border-strong);
+
+  --color-fg: var(--c-text-1);
+  --color-muted: var(--c-text-2);
+  --color-subtle: var(--c-text-3);
+  --color-faint: var(--c-text-4);
+}
+
+/* ===== 基础 ===== */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg-base);
+  color: var(--c-text-1);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5715;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 主题切换时整页过渡，避免明暗互换的闪烁感 */
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: var(--c-primary);
+  color: #fff;
+}
+
+/* 滚动条：默认样式在暗色下是亮色的，必须接管 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--c-text-4);
+}
+
+/* 键盘可达性：只在键盘导航时显示焦点环 */
+:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}

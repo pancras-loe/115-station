@@ -32,6 +32,26 @@ jobs:
       - name: Test
         run: go test ./... -count=1
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: webui
+
+      # 前端类型检查同样是门禁：Vue 模板里的类型错误只有 vue-tsc 能抓到
+      - name: Typecheck frontend
+        run: npm run typecheck
+        working-directory: webui
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: webui
+
   docker:
     runs-on: ubuntu-latest
     needs: test

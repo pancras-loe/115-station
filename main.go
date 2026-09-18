@@ -35,6 +35,11 @@ var BuildSHA = "dev"
 // 内联读取失败不影响启动：nil 回退，CSS 仍走外链
 var indexHTMLMarker = `<link rel="stylesheet" href="/css/style.css?v=32">`
 
+// nextIndexPath 新前端产物（Vite 单文件打包，JS/CSS 已内联进 HTML，
+// 所以不需要下面那套启动时内联 style.css 的处理）。
+// 下面的 inlinedIndexHTML / indexHTMLMarker 只服务于 WEBUI=legacy 的旧前端。
+const nextIndexPath = "./webui/dist/index.html"
+
 func inlinedIndexHTML() []byte {
 	inlinedOnce.Do(func() {
 		html, err := os.ReadFile("./web/index.html")
@@ -227,13 +232,33 @@ func main() {
 	r.Static("/js", "./web/js")
 	r.Static("/vendor", "./web/vendor") // CodeMirror 等第三方前端库
 	r.StaticFile("/cms-115.png", "./web/cms-115.png")
-	// index.html 禁用启发式缓存：升级后浏览器总是重新校验，避免页面拿到旧 HTML 搭配新 ?v= 资产。
-	// CSS 内联进 HTML：跨境明文 HTTP 下首条连接（HTML 文档）几乎总能成功，
-	// 而后续并行拉的静态资源大概率被连接重置（ERR_CONNECTION_RESET）——
-	// 样式随 HTML 同一条连接送达，页面不再出现"结构在、样式丢"的裸版；
-	// CodeMirror 改为用到时才加载（首屏请求从 7 个减到 2 个）
+	// index.html 禁用启发式缓存：升级后浏览器总是重新校验，避免页面拿到旧 HTML
+	// 搭配新资产。新前端是 Vite 单文件产物（JS/CSS 已内联进 HTML），一次请求
+	// 拿完整个前端——跨境明文 HTTP 下首条连接（HTML 文档）几乎总能成功，而并行
+	// 拉取的静态资源大概率被连接重置（ERR_CONNECTION_RESET）。
+	//
+	// WEBUI=legacy 回退到旧前端（./web）。旧实现刻意保留在仓库里备查，
+	// 新前端出问题时可以立刻切回去对照，不必翻 git 历史。
+	useLegacy := os.Getenv("WEBUI") == "legacy"
+	if !useLegacy {
+		if _, err := os.Stat(nextIndexPath); err != nil {
+			log.Printf("[前端] ✗ %s 不存在（需先 cd webui && npm run build），本次回退旧前端", nextIndexPath)
+			useLegacy = true
+		}
+	}
+	if useLegacy {
+		log.Printf("[前端] ○ 使用旧前端 ./web（WEBUI=legacy 或新前端产物缺失）")
+	} else {
+		log.Printf("[前端] ✓ 使用新前端 %s", nextIndexPath)
+	}
 	serveIndex := func(c *gin.Context) {
 		c.Header("Cache-Control", "no-cache")
+		if !useLegacy {
+			// 用 c.File 而非 c.Data：http.ServeContent 会带上 Last-Modified，
+			// 配合 no-cache 拿到 304，弱网下刷新只传几十字节
+			c.File(nextIndexPath)
+			return
+		}
 		if inlined := inlinedIndexHTML(); inlined != nil {
 			c.Data(http.StatusOK, "text/html; charset=utf-8", inlined)
 			return

@@ -8,3 +8,9 @@ data/
 emby-pulse-main/
 .tmp-*.py
 reference-projects/
+
+# 前端：依赖与产物都在镜像内的 webbuilder 阶段现装现构建，
+# 拷贝宿主机的 node_modules 只会拖慢构建上下文并带进错误架构的二进制依赖
+webui/node_modules/
+webui/dist/
+webui/dist-mock/

@@ -1,4 +1,17 @@
-# 多阶段构建：编译 Go 二进制
+# 多阶段构建：前端（Node）+ Go 二进制
+#
+# 前端阶段同样固定 BUILDPLATFORM：产物是与架构无关的静态 HTML，
+# 没有任何理由让它在 QEMU 模拟的 arm64 里跑 npm。
+FROM --platform=$BUILDPLATFORM node:22-alpine AS webbuilder
+WORKDIR /webui
+# 先装依赖再拷源码，改前端代码不会让 npm ci 缓存失效
+COPY webui/package.json webui/package-lock.json ./
+RUN npm ci
+COPY webui/ ./
+# 产物是单个 dist/index.html（JS/CSS 全部内联）
+RUN npm run build
+
+# 编译 Go 二进制
 # --platform=$BUILDPLATFORM 让 builder 始终以宿主原生架构运行（CI 上是 amd64），
 # 所有 RUN 不经过 QEMU；配合 GOARCH=$TARGETARCH 交叉编译出目标架构二进制。
 # 若不固定 BUILDPLATFORM，arm64 构建的 RUN 会在 QEMU 模拟的 arm64 容器里执行，极慢
@@ -32,7 +45,9 @@ WORKDIR /app
 
 # 复制编译好的二进制
 COPY --from=builder /build/strmhub .
-# 复制前端静态资源
+# 新前端产物（默认服务的就是它）
+COPY --from=webbuilder /webui/dist ./webui/dist
+# 旧前端保留：WEBUI=legacy 时回退用，新前端出问题可立刻切回
 COPY --from=builder /build/web ./web
 
 # 6060 管理后台 / 6086 302直链代理 / 6688 观影门户
