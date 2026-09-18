@@ -1,0 +1,19 @@
+services:
+  strmhub:
+    image: ghcr.io/daisyyijin/strmhub:latest
+    container_name: strmhub
+    restart: unless-stopped
+    stop_grace_period: 20s   # 优雅退出窗口：SIGTERM 后程序需要 ~3 秒收尾（停 worker、冲刷通知）
+    ports:
+      - "6060:6060"   # 管理后台
+      - "6086:6086"   # 302 直链代理
+      - "6688:6688"   # 观影门户（6666 在浏览器不安全端口黑名单，不可用）
+    volumes:
+      - ./config:/config
+      - ./data:/data
+      - ./media:/media
+      - ./logs:/logs
+    environment:
+      - TZ=Asia/Shanghai
+      - AUTH_USER=admin              # 管理后台账号（环境变量管理，网页注册已移除）
+      - AUTH_PASSWORD=change-me      # 改成强密码后 up -d 重启生效

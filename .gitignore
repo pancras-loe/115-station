@@ -1,0 +1,48 @@
+# 二进制文件
+*.exe
+strmhub
+strmhub.exe
+
+# 数据文件
+data/
+*.db
+*.db-journal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 参考项目（不需要上传）
+reference-projects/
+
+# Trae 临时文件
+.trae-html-share-packages/
+
+# 日志
+*.log
+
+# 本地测试构建产物
+strmhub-test.exe
+*.exe~
+
+
+# 仓库卫生：参考项目不入库（5.7MB，且与构建无关）
+emby-pulse-main/
+# 临时脚本
+.tmp-*.py
+*.tmp
+tmp_cms/
+tmp_p115/
+tmp_re0/
+
+# 本地测试实例（含测试凭证，绝不入库）
+.localtest/
+
+# 第三方参考源码
+StrmAssistant-main/

@@ -1,0 +1,10 @@
+reference-projects/
+.trae-html-share-packages/
+data/
+*.exe
+*.db
+*.log
+.git/
+emby-pulse-main/
+.tmp-*.py
+reference-projects/
