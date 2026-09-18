@@ -1,7 +1,8 @@
 services:
-  strmhub:
-    image: ghcr.io/daisyyijin/strmhub:latest
-    container_name: strmhub
+  station:
+    # 本仓库不发布预构建镜像，先本地构建：docker build -t 115-station:local .
+    image: 115-station:local
+    container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s   # 优雅退出窗口：SIGTERM 后程序需要 ~3 秒收尾（停 worker、冲刷通知）
     ports:

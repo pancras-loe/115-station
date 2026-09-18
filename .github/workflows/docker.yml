@@ -2,16 +2,16 @@ name: Build Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [master]
 
 env:
-  IMAGE_NAME: strmhub
+  IMAGE_NAME: 115-station
 
 jobs:
-  # 测试门禁：构建/vet/测试全过才允许出镜像（坏提交拦在 main 之外）
+  # 测试门禁：构建/vet/测试全过才允许出镜像（坏提交拦在 master 之外）
   test:
     runs-on: ubuntu-latest
     steps:
