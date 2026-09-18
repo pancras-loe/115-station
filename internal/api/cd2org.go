@@ -6,7 +6,7 @@ package api
 // 挂载的任意网盘）里出现新视频时防抖合并（同目录文件视为同一部影视），
 // 然后走与 115 整理同源的策略链：
 //
-//	识别（AV 番号 → TMDB 文件名 → 目录名兜底 → MetaTube 标题）
+//	识别（TMDB 文件名 → 目录名兜底）
 //	→ 重命名模板（buildNewNameWithTemplate，含 Season 目录）
 //	→ 二级分类（classifyMedia + mediaTypeCategory）
 //	→ CD2 写操作（Rename 原地改名 → MoveFile 移到 整理目标根/分类/片目目录）
@@ -662,12 +662,10 @@ func (h *Handler) cd2OrganizeUnitCore(unitDir, focusFile string, notify bool) {
 
 	log.Printf("[CD2整理] ▶ 整理 %s（样本: %s）", truncateStr(dirName, 50), truncateStr(mainVideo.Name, 50))
 
-	// ===== 识别（与 115 引擎同源的顺序：AV 番号 → 文件名 → 目录名 → MetaTube） =====
+	// ===== 识别（与 115 引擎同源的顺序：文件名 → 目录名） =====
 	var media *TmdbMedia
 	mainParsed := parseFileName(name)
-	if avNum := detectAVNumber(dirName, mainVideo.Name); avNum != "" {
-		media = &TmdbMedia{Title: avNum, MediaType: "av"}
-	} else {
+	{
 		tc, err := loadTmdbClient()
 		if err != nil {
 			log.Printf("[CD2整理] ○ TMDB 不可用（%v），%s 留在监控目录下轮重试", err, dirName)
@@ -709,13 +707,8 @@ func (h *Handler) cd2OrganizeUnitCore(unitDir, focusFile string, notify bool) {
 			return
 		}
 		if media == nil {
-			// 无番号 AV 标题兜底（MetaTube）
-			if avMedia, num := metatubeSearchTitle(dirName); avMedia != nil && num != "" {
-				media = &TmdbMedia{Title: num, MediaType: "av"}
-			} else {
-				log.Printf("[CD2整理] ○ %s 未识别到影视信息，留在监控目录", truncateStr(dirName, 50))
-				return
-			}
+			log.Printf("[CD2整理] ○ %s 未识别到影视信息，留在监控目录", truncateStr(dirName, 50))
+			return
 		}
 	}
 

@@ -104,7 +104,6 @@ const PAGE_TITLES = {
   'sync': ['115 账号同步', '全量 / 增量 / 分享同步'],
   'organize': ['自动整理', '基础配置 / 识别规则 / 分类策略 / 洗版 / 重命名'],
   'upload-download': ['上传下载', '监控上传 / 转存下载'],
-  'playback': ['播放账号', '小号播放 / 多端播放 / 账号池'],
   'media-transfer': ['影视转存', '观影种子搜索 / 115 离线下载'],
   'dashboard': ['总览面板', '容量 / STRM / 整理 / 任务总览'],
   'config-accounts': ['账号管理', '管理各云盘账号配置'],
@@ -189,7 +188,6 @@ function showPage(id) {
   else stopOfflineTasksPoll();
   if (id === 'media-transfer') { gyLoadPage(); pansouLoadPage(); mukakuLoadPage(); re0LoadPage(); }
   if (id === 'cd2') cd2LoadUI();
-  if (id === 'playback') pbLoadPage();
   if (id === 'tgsub') tgSubLoadPage();
   if (id === 'config-message') loadConfigs();
   if (id === 'dashboard') loadGuide();
@@ -401,33 +399,7 @@ tv:
   # 未匹配以上分类，则命名为未分类
   电视剧/未分类:
 
-# 配置AV的分类策略（按番号前缀或制作商分类）
-av:
-  # ==================== AV 分类使用说明 ====================
-  # 分类名 = 网盘里实际创建的目录名，可随意改（中文/英文都行）
-  # num_prefix = 该分类包含的番号前缀列表，逗号分隔、不区分大小写。
-  #   番号归一化后与列表比对（start-622 / START622 / start622 等价），
-  #   前缀命中即归入该分类。想加新厂牌直接往列表里追加即可。
-  # builtin = 绑定程序内置识别库（可选，双保险）：
-  #   uncensored = 内置无码库 / domestic = 内置国产库
-  #   作用：即使 num_prefix 列表漏了某个厂牌，绑定后仍会被内置库识别；
-  #   不写 builtin 时按分类名含"无码/国产"自动匹配（兼容旧配置）。
-  # 兜底规则：最后一个 num_prefix 留空且未绑定 builtin 的分类，
-  #   承接所有未命中内容（有码厂牌数千个，无需逐一枚举）。
-  # 关键词辅助：目录/文件名含 无码/破解/uncensored → 归名字带"无码"的分类；
-  #   含 国产/麻豆/探花 → 归名字带"国产"的分类。
-  # 判定顺序：num_prefix → builtin 内置库 → 关键词 → 留空兜底分类 → 未分类
-  # ========================================================
-  无码:
-    num_prefix: 'FC2,HEYZO,N10,10MU,1PON,CARIB,PACO,MURA,KIN8,C0930,H0930,SCUTE,XXXAV,AV9898,GACHI,MESU'
-    builtin: uncensored
-  国产:
-    num_prefix: 'MD,MDX,MDT,PMC,JD,TZ,MT,91,CHARU,MKY,MSN'
-    builtin: domestic
-  # 有码：兜底分类——以上都未命中的番号自动归入这里
-  有码:
-    num_prefix: ''
-  未分类:`;
+`;
 
 function resetCategory(btn) {
   resetConfig('category', btn);
@@ -630,7 +602,7 @@ async function loadGuide() {
 }
 
 // ==================== 目录选择器 ====================
-let dirPicker = { mode: '115', cid: '0', path: '', trail: [], history: [], altID: '' }; // trail: 115 逐级目录名；altID 非空 = 浏览小号目录
+let dirPicker = { mode: '115', cid: '0', path: '', trail: [], history: [] }; // trail: 115 逐级目录名
 let dirPickerTarget = 'full-cid'; // 选择后回填的输入框 id
 
 function showDirPicker(title) {
@@ -647,14 +619,6 @@ function open115DirPicker(targetId) {
   showDirPicker('选择 115 目录');
   load115Dirs('0');
 }
-function openAltDirPicker(altId) {
-  const a = (pbCfg.alts || []).find(x => String(x.id) === String(altId));
-  dirPickerTarget = 'pb-alt-root';
-  dirPicker = { mode: '115', cid: '0', path: '', trail: [], history: [], altID: String(altId) };
-  showDirPicker('选择「' + ((a && a.name) || '小号') + '」的镜像目录');
-  load115Dirs('0');
-}
-
 function openLocalDirPicker(targetId) {
   dirPickerTarget = targetId || 'full-local';
   dirPicker = { mode: 'local', cid: '0', path: '', history: [] };
@@ -681,8 +645,7 @@ async function load115Dirs(cid, opts) {
     } else {
       dirPicker.trail = []; // 根目录 / 手动跳转
     }
-    const acct = dirPicker.altID ? ('&account_id=' + encodeURIComponent(dirPicker.altID)) : '';
-    const data = await api('/storage/115/dirs?cid=' + encodeURIComponent(cid) + acct);
+    const data = await api('/storage/115/dirs?cid=' + encodeURIComponent(cid));
     dirPicker.cid = cid;
     document.getElementById('dir-picker-path').textContent = dirPicker.trail.length ? '/' + dirPicker.trail.join('/') : '根目录';
     const items = data.data || [];
@@ -797,15 +760,6 @@ function parentPath(p) {
 
 function confirmDirPicker() {
   const target = document.getElementById(dirPickerTarget);
-  if (dirPicker.mode === '115' && dirPickerTarget === 'pb-alt-root') {
-    // 小号镜像目录：选完即时保存到账号池配置
-    api('/playback/alt/root', {
-      method: 'POST',
-      body: JSON.stringify({ id: dirPicker.altID, cid: dirPicker.cid }),
-    }).then(r => { toast(r.message || '镜像目录已保存'); pbLoadPage(); }).catch(e => toast(e.message));
-    closeDirPicker();
-    return;
-  }
   if (dirPicker.mode === '115') {
     if (target) {
       // 输入框显示可读路径，真实 cid 存 dataset 供同步/保存使用；
@@ -1221,11 +1175,7 @@ function startQrCodePolling(uid, time, sign) {
 }
 
 function closeQrCode() {
-  // 小号扫码复用本弹窗：关闭时一并停掉它们的轮询（否则空转刷后台）
-  if (typeof pbQrTimer !== 'undefined' && pbQrTimer) {
-    pbQrTimer = null;  // 小号扫码轮询会话作废
-  }
-  qrcodeTimer = null;  // 停止主号轮询
+  qrcodeTimer = null;  // 停止轮询
   document.getElementById('qrcode-modal').style.display = 'none';
 }
 
@@ -1375,19 +1325,7 @@ const RENAME_VARS = {
   '{video_encode}': 'H265.10bit',
   '{audio_encode}': 'TrueHD.7.1',
   '{resource_team}': 'TnT',
-  '{num}': 'ABC-123',
-  '{av_title}': '真夏の夜',
-  '{av_year}': '2022',
-  '{actor}': '相沢みなみ',
-  '{actors}': '相沢みなみ、天使もえ',
 };
-// AV 模板的示例值：{title}/{first_letter} 在 AV 流程 = 番号/首字母，
-// 不能沿用电影样本（钢铁侠），否则示例误导
-const RENAME_VARS_AV = Object.assign({}, RENAME_VARS, {
-  '{title}': 'ABC-123',
-  '{first_letter}': 'A',
-  '{year}': '2022',
-});
 
 function renderRenameExample(rule, vars) {
   const V = vars || RENAME_VARS;
@@ -1431,18 +1369,16 @@ function updateRenameExample() {
     ['rename-movie-file', 'ex-movie-file'],
     ['rename-tv-folder', 'ex-tv-folder'],
     ['rename-tv-file', 'ex-tv-file'],
-    ['rename-av-folder', 'ex-av-folder'],
-    ['rename-av-file', 'ex-av-file'],
   ];
   pairs.forEach(([inputId, exId]) => {
     const input = document.getElementById(inputId);
     const ex = document.getElementById(exId);
-    if (input && ex) ex.textContent = renderRenameExample(input.value, inputId.indexOf('rename-av-') === 0 ? RENAME_VARS_AV : null);
+    if (input && ex) ex.textContent = renderRenameExample(input.value);
   });
   syncRenamePresetUI();
 }
 
-// ==================== 重命名命名规范预设（电影/剧集/AV） ====================
+// ==================== 重命名命名规范预设（电影/剧集） ====================
 // 手动改过模板后与预设不再一致 → 按钮全部弹起（自定义状态），不自动套用
 const RENAME_PRESETS = {
   movie: {
@@ -1473,23 +1409,6 @@ const RENAME_PRESETS = {
       file: '{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}><{custom_regex_match}><[tmdb{tmdb_id}]{ext}',
     },
   },
-  // AV 命名规范 = 番号 + AV 标题（"ABC-123 XXXXXX"），不带画质等附加信息；
-  // {av_title} 未识别（未配置 MetaTube 或搜不到）时 <> 块整体省略退回纯番号。
-  // 详细与默认同款输出（规范固定），精简 = 纯番号
-  av: {
-    default: {
-      folder: '{first_letter}-{num}',
-      file: '{num}< {av_title}>{ext}',
-    },
-    lite: {
-      folder: '{num}',
-      file: '{num}{ext}',
-    },
-    full: {
-      folder: '{first_letter}-{num}',
-      file: '{num}< {av_title}>{ext}',
-    },
-  },
 };
 
 function applyRenamePreset(type, key) {
@@ -1503,7 +1422,7 @@ function applyRenamePreset(type, key) {
 
 // 当前值与哪个预设一致就点亮对应按钮；都不一致 = 自定义（全部弹起）
 function syncRenamePresetUI() {
-  for (const type of ['movie', 'tv', 'av']) {
+  for (const type of ['movie', 'tv']) {
     const folder = (val('rename-' + type + '-folder') || '').trim();
     const file = (val('rename-' + type + '-file') || '').trim();
     let hit = '';
@@ -1985,34 +1904,6 @@ async function testTmdb() {
   }
 }
 
-// ==================== MetaTube 配置 ====================
-let metatubeEnabledVal = false;
-function setMetatubeEnabled(val) {
-  metatubeEnabledVal = val;
-  document.querySelectorAll('#metatube-enabled-switch .seg-item').forEach(i => i.classList.toggle('active', i.dataset.value === String(val)));
-}
-
-async function testMetatube() {
-  const btn = document.getElementById('metatube-test-btn');
-  const result = document.getElementById('metatube-test-result');
-  btn.disabled = true;
-  btn.textContent = '测试中...';
-  showTestPending(result, '正在请求 MetaTube…');
-  try {
-    const data = await api('/metatube/check', { method: 'POST', body: JSON.stringify({
-      url: val('metatube-url').trim(),
-      token: val('metatube-token'),
-    }) });
-    if (data.success) showTestResult(result, true, 'MetaTube 连接成功', data.message || undefined);
-    else showTestResult(result, false, 'MetaTube 连接失败', data.error || '请检查服务器地址');
-  } catch (e) {
-    showTestResult(result, false, 'MetaTube 连接失败', e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '测试连接';
-  }
-}
-
 // EMBY 入库刷新
 let embyStyleVal = 'unix';
 let embyEnabledVal = true;
@@ -2262,13 +2153,6 @@ function collectConfig(key) {
   if (key === 'proxy') {
     return { url: document.getElementById('proxy-url').value };
   }
-  if (key === 'metatube') {
-    return {
-      url: val('metatube-url').trim(),
-      token: val('metatube-token'),
-      enabled: metatubeEnabledVal,
-    };
-  }
   if (key === 'emby-notify') {
     return { token: embyNotifyToken };
   }
@@ -2319,8 +2203,6 @@ function collectConfig(key) {
       movie_file: val('rename-movie-file'),
       tv_folder: val('rename-tv-folder'),
       tv_file: val('rename-tv-file'),
-      av_folder: val('rename-av-folder'),
-      av_file: val('rename-av-file'),
     };
   }
   if (key === 'emby') {
@@ -2364,10 +2246,6 @@ function applyConfig(key, v) {
     updateStrmExample();
   } else if (key === 'proxy') {
     if (v.url !== undefined) document.getElementById('proxy-url').value = v.url;
-  } else if (key === 'metatube') {
-    setVal('metatube-url', v.url || '');
-    setVal('metatube-token', v.token || '');
-    if (v.enabled !== undefined) setMetatubeEnabled(v.enabled === true || v.enabled === 'true');
   } else if (key === 'emby-notify') {
     applyEmbyNotify(v);
   } else if (key === 'message') {
@@ -2432,8 +2310,6 @@ function applyConfig(key, v) {
     setVal('rename-movie-file', v.movie_file);
     setVal('rename-tv-folder', v.tv_folder);
     setVal('rename-tv-file', v.tv_file);
-    setVal('rename-av-folder', v.av_folder);
-    setVal('rename-av-file', v.av_file);
     updateRenameExample();
   } else if (key === 'emby') {
     setVal('emby-server-url', v.server_url);
@@ -2601,8 +2477,6 @@ const DEFAULT_CONFIGS = {
     movie_file: '{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
     tv_folder: '{first_letter}-{title}-{year}-[tmdb={tmdb_id}]',
     tv_file: '{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',
-    av_folder: '{first_letter}-{num}',
-    av_file: '{num}< {av_title}>{ext}',
   },
   'monitor': { dir: '', target: '' },
   'message': { wecom: { corp_id: '', secret: '', agent_id: '', api_url: 'https://qyapi.weixin.qq.com', token: '', encoding_aes_key: '', enabled: false }, tg: { token: '', chat_id: '', enabled: false }, feishu: { webhook: '', secret: '', enabled: false }, qq_onebot: { url: '', token: '', target_type: 'group', target: '', admin: '', event_token: '', enabled: false }, qq_official: { app_id: '', secret: '', group_id: '', enabled: false } },
@@ -2610,7 +2484,6 @@ const DEFAULT_CONFIGS = {
   'incr': { cron: '*/10 8-23 * * *' },
   'share': { folder: '' },
   'tmdb': { api_key: '', api_url: 'https://api.tmdb.org', image_url: 'https://image.tmdb.org', language: 'zh-CN' },
-  'metatube': { url: '', token: '', enabled: false },
 };
 
 async function doResetConfig(key, btn) {
@@ -2661,7 +2534,7 @@ function closeConfirmBubbleOnOutside(e) {
 async function loadConfigs() {
   migratedEmbyEnabled = false;
   migratedEmbyStyle = false;
-  const keys = ['emby', 'full', 'strm', 'proxy', 'metatube', 'emby-notify', 'org-basic', 'org-recognize', 'org-gpt', 'org-rename', 'message', 'incr', 'share', 'monitor'];
+  const keys = ['emby', 'full', 'strm', 'proxy', 'emby-notify', 'org-basic', 'org-recognize', 'org-gpt', 'org-rename', 'message', 'incr', 'share', 'monitor'];
   // 并行拉取，避免逐个等待导致 cid 等字段迟迟不回填
   await Promise.all(keys.map(async (key) => {
     try {
@@ -3567,7 +3440,6 @@ async function scrapeLoadPage() {
     scrapeOpts = {
       write_nfo: cfg.write_nfo !== false,
       write_images: cfg.write_images !== false,
-      write_av: cfg.write_av !== false,
       force: !!cfg.force,
       auto_after_organize: !!cfg.auto_after_organize,
     };
@@ -3575,11 +3447,11 @@ async function scrapeLoadPage() {
   } catch (e) { console.error('[刮削] 配置回填失败:', e.message); }
 }
 
-let scrapeOpts = { write_nfo: true, write_images: true, write_av: true, force: false, auto_after_organize: false };
+let scrapeOpts = { write_nfo: true, write_images: true, force: false, auto_after_organize: false };
 
 function setScrapeOpt(key, v) {
   scrapeOpts[key] = v;
-  const map = { write_nfo: 'scrape-nfo-switch', write_images: 'scrape-img-switch', write_av: 'scrape-av-switch', force: 'scrape-force-switch', auto_after_organize: 'scrape-auto-switch' };
+  const map = { write_nfo: 'scrape-nfo-switch', write_images: 'scrape-img-switch', force: 'scrape-force-switch', auto_after_organize: 'scrape-auto-switch' };
   document.querySelectorAll('#' + map[key] + ' .seg-item').forEach(el => {
     el.classList.toggle('active', el.dataset.value === String(v));
   });
@@ -3615,205 +3487,6 @@ async function scrapeRun(btn) {
 async function scrapeStop() {
   try { await api('/scrape/stop', { method: 'POST' }); toast('已请求停止'); }
   catch (e) { toast(e.message); }
-}
-
-
-
-// ==================== 播放加速（小号播放/多端播放） ====================
-// 主号只做整理同步，播放取直链走小号账号池；按设备绑定或轮询分摊，
-// 多端并发时流量与风控隔离。内容经「分享+秒传」镜像到小号。
-
-let pbCfg = { mode: 'main', routing: 'device', alts: [] };
-
-async function pbLoadPage() {
-  try {
-    const d = await api('/playback/config');
-    pbCfg = d.cfg || pbCfg;
-    pbRenderMode();
-    pbRenderAlts();
-    pbLoadDevices();
-  } catch (e) { console.error('[播放账号] 配置回填失败:', e.message); }
-}
-
-function pbRenderMode() {
-  document.querySelectorAll('#pb-mode-switch .seg-item').forEach(el =>
-    el.classList.toggle('active', el.dataset.value === pbCfg.mode));
-  document.querySelectorAll('#pb-routing-switch .seg-item').forEach(el =>
-    el.classList.toggle('active', el.dataset.value === pbCfg.routing));
-}
-
-async function pbSaveMode(kind) {
-  const body = {};
-  if (kind === 'mode') body.mode = document.querySelector('#pb-mode-switch .seg-item.active').dataset.value;
-  if (kind === 'routing') body.routing = document.querySelector('#pb-routing-switch .seg-item.active').dataset.value;
-  try {
-    const r = await api('/playback/mode', { method: 'POST', body: JSON.stringify(body) });
-    toast(r.message || '已保存');
-    pbLoadPage();
-  } catch (e) { toast(e.message); pbLoadPage(); }
-}
-
-function pbRenderAlts() {
-  const box = document.getElementById('pb-alt-list');
-  const alts = pbCfg.alts || [];
-  if (!alts.length) {
-    box.innerHTML = '<div class="dash-empty">账号池为空：粘贴小号 Cookie 添加。添加后点「镜像同步」把主号媒体库秒传镜像到小号。</div>';
-    return;
-  }
-  box.innerHTML = '<div class="otk">' + alts.map(a => {
-    const st = a.last_err
-      ? '<span style="color:var(--danger)">✗ ' + esc(a.last_err.slice(0, 40)) + '</span>'
-      : '<span style="color:#00874a">✓ 正常</span>';
-    const meta = [a.nick || '', '覆盖 ' + (a.covered || 0) + ' 文件',
-      a.missing > 0 ? '<span style="color:#b26a00">缺 ' + a.missing + '</span>' : '已全覆盖', st]
-      .filter(Boolean).join('<span class="otk-dot">·</span>');
-    return '<div class="otk-row"' + (a.enabled ? '' : ' style="opacity:.55"') + '>'
-      + '<span class="otag" style="background:#e8f1ff;color:#1c64d9">小号</span>'
-      + '<div class="otk-main"><div class="otk-name">' + esc(a.name || '小号#' + a.id) + '</div>'
-      + '<div class="otk-sub">' + meta + '</div>'
-      + '<div style="font-size:11.5px;color:var(--text-3);margin-top:3px">镜像目录：<span id="pb-root-' + a.id + '">' + esc(a.root_path || a.root_cid || '自动（strmhub_media_alt）') + '</span>'
-      + ' <a href="javascript:void(0)" style="color:var(--primary)" onclick="openAltDirPicker(' + a.id + ')">选择</a></div></div>'
-      + '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:12px" onclick="event.stopPropagation()">'
-      + '<input type="checkbox" ' + (a.enabled ? 'checked' : '') + ' onchange="pbToggleAlt(' + a.id + ',this.checked)">'
-      + (a.enabled ? '启用' : '停用') + '</label>'
-      + '<button class="btn btn-outline" style="padding:3px 10px;font-size:12px" onclick="pbDelAlt(' + a.id + ')">删除</button>'
-      + '</div>';
-  }).join('') + '</div>';
-}
-
-// 小号扫码登录：复用扫码弹窗；轮询 /playback/alt/qrcode/status，
-// 成功后 Cookie 自动入账号池（后端已做主号判重）
-let pbQrTimer = null;
-
-async function pbScanLogin() {
-  document.getElementById('qrcode-modal').style.display = 'flex';
-  document.getElementById('qrcode-img').innerHTML = '二维码加载中...';
-  document.getElementById('qrcode-status').textContent = '正在获取登录二维码...';
-  let session = {};
-  pbQrTimer = session;
-  let refresh = 0;
-  const fetchQr = async () => {
-    document.getElementById('qrcode-img').innerHTML = '二维码加载中...';
-    const data = await api('/playback/alt/qrcode', { method: 'POST', body: JSON.stringify({ type: '115', device: 'web' }) });
-    if (data.qrcode) {
-      document.getElementById('qrcode-img').innerHTML = '<img src="' + data.qrcode + '" style="width:170px;height:170px">';
-      document.getElementById('qrcode-status').textContent = '请用【小号】的 115 手机 App 扫码（别用主号扫）';
-      poll(data.uid, data.time, data.sign);
-    } else {
-      document.getElementById('qrcode-status').textContent = data.error || '获取失败，请稍后重试';
-    }
-  };
-  const poll = async (uid, time, sign) => {
-    if (pbQrTimer !== session) return;
-    try {
-      const data = await api('/playback/alt/qrcode/status', { method: 'POST', body: JSON.stringify({ uid, time, sign }) });
-      if (pbQrTimer !== session) return;
-      if (data.status === 'scanned') {
-        document.getElementById('qrcode-status').textContent = '已扫码，请在手机上确认登录...';
-        poll(uid, time, sign);
-      } else if (data.status === 'success') {
-        document.getElementById('qrcode-status').textContent = '登录成功！小号已加入账号池';
-        setTimeout(() => { closeQrCode(); toast('小号「' + (data.name || '') + '」已加入账号池'); pbLoadPage(); }, 900);
-      } else if (data.status === 'expired' || data.status === 'cancelled') {
-        if (data.status === 'expired' && refresh < 3) {
-          refresh++;
-          document.getElementById('qrcode-status').textContent = '二维码已过期，自动刷新（第 ' + refresh + '/3 次）...';
-          fetchQr();
-          return;
-        }
-        document.getElementById('qrcode-status').textContent = data.status === 'expired' ? '二维码已过期，请重新扫码' : '已取消登录';
-      } else {
-        poll(uid, time, sign);
-      }
-    } catch (e) {
-      if (pbQrTimer !== session) return;
-      if (e instanceof TypeError) {
-        setTimeout(() => poll(uid, time, sign), 2000);
-      } else {
-        pbQrTimer = null;
-        document.getElementById('qrcode-status').textContent = e.message || '登录失败';
-      }
-    }
-  };
-  closeQrCode(); // 清理可能残留的轮询
-  pbQrTimer = session;
-  fetchQr().catch(e => {
-    document.getElementById('qrcode-status').textContent = e.message || '获取失败';
-  });
-}
-
-async function pbAddAlt(btn) {
-  const cookie = document.getElementById('pb-alt-cookie').value.trim();
-  if (!cookie) { toast('请粘贴小号 Cookie'); return; }
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '验证中…'; }
-  try {
-    const r = await api('/playback/alt/add', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: document.getElementById('pb-alt-name').value.trim(),
-        cookie: cookie,
-      }),
-    });
-    toast(r.message || '已添加');
-    document.getElementById('pb-alt-cookie').value = '';
-    document.getElementById('pb-alt-name').value = '';
-    pbLoadPage();
-  } catch (e) { toast(e.message); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = orig; } }
-}
-
-async function pbDelAlt(id) {
-  if (!confirm('移除该小号？其镜像映射将一并清理。')) return;
-  try {
-    await api('/playback/alt/del', { method: 'POST', body: JSON.stringify({ id }) });
-    toast('已移除');
-    pbLoadPage();
-  } catch (e) { toast(e.message); }
-}
-
-async function pbToggleAlt(id, on) {
-  try {
-    await api('/playback/alt/toggle', { method: 'POST', body: JSON.stringify({ id: id, enabled: on }) });
-    pbLoadPage();
-  } catch (e) { toast(e.message); pbLoadPage(); }
-}
-
-async function pbSync(btn) {
-  const orig = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
-  try {
-    const r = await api('/playback/sync', { method: 'POST' });
-    toast(r.message || '同步已开始');
-    // 30 秒后刷新一次覆盖数
-    setTimeout(pbLoadPage, 30000);
-  } catch (e) { toast(e.message); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = orig; } }
-}
-
-async function pbLoadDevices() {
-  const box = document.getElementById('pb-device-list');
-  if (!box) return;
-  try {
-    const d = await api('/playback/devices');
-    const devices = d.data || [];
-    if (!devices.length) {
-      box.innerHTML = '<div class="dash-empty">还没有设备记录：小号池启用并播放一次后，设备会出现在这里。</div>';
-      return;
-    }
-    box.innerHTML = '<div class="otk">' + devices.map(d => {
-      const name = (d.ua || '').replace(/\([^)]*\)/g, '').split(/\s+/).filter(Boolean).slice(-2).join(' ') || d.ua_hash;
-      const seen = (d.last_seen || '').replace('T', ' ').slice(0, 16);
-      return '<div class="otk-row">'
-        + '<span class="otag" style="background:var(--fill-2);color:var(--text-2)">设备</span>'
-        + '<div class="otk-main"><div class="otk-name">' + esc(name) + '</div>'
-        + '<div class="otk-sub">最近播放 ' + esc(seen) + '</div></div>'
-        + '<span class="otag" style="background:#e8f6ee;color:#1f8a4c">' + esc(d.alt_name || '主号') + '</span>'
-        + '</div>';
-    }).join('') + '</div>';
-  } catch (e) {
-    box.innerHTML = '<span style="color:var(--danger)">加载失败：' + esc(e.message) + '</span>';
-  }
 }
 
 // ==================== 影视转存 · 盘搜（PanSou 聚合） ====================

@@ -112,7 +112,6 @@ details[open] summary{margin-bottom:8px}
   <a href="#recognize">识别规则与 GPT</a>
   <a href="#rename">重命名模板</a>
   <a href="#category">二级分类策略</a>
-  <a href="#av">AV 整理</a>
   <a href="#wash">洗版策略</a>
   <a href="#enrich">媒体补全</a>
   <div class="sec">播放与通知</div>
@@ -502,8 +501,7 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
 ├── 已存在/     ← 重复内容自动去向
 ├── 冗余/       ← 无法识别/广告/洗版旧版本去向
 ├── 电影/       ← 整理产出（二级分类策略决定子级）
-├── 电视剧/
-└── (AV 分类)/  ← AV 整理产出（按番号前缀自动分类）</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
+└── 电视剧/</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
   <p>「一个目录一部片」效果最好（目录名带片名/年份识别更准）；散文件（无目录的直接文件）也支持，靠文件名识别、同前缀的多集共享识别结果。</p>
 
   <h3>识别与判定全流程</h3>
@@ -583,7 +581,7 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
 <!-- ============================================================ 13 -->
 <section id="rename">
   <h2><span class="num">13</span>重命名模板</h2>
-  <p>电影 / 剧集 / AV 三套，各含「目录模板 + 文件模板」，编辑时下方<strong>实时示例</strong>即时预览。</p>
+  <p>电影 / 剧集两套，各含「目录模板 + 文件模板」，编辑时下方<strong>实时示例</strong>即时预览。</p>
 
   <h3>两种语法</h3>
   <h4>① 变量 <code>{xxx}</code></h4>
@@ -623,7 +621,6 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
     <tr><td>{video_encode}</td><td>H265.10bit</td><td>视频编码</td></tr>
     <tr><td>{audio_encode}</td><td>TrueHD.7.1</td><td>音频编码</td></tr>
     <tr><td>{resource_team}</td><td>TnT</td><td>发布组</td></tr>
-    <tr><td>{num}</td><td>ABC-123</td><td>AV 番号（仅 AV 模板）</td></tr>
     <tr><td>{custom_regex_match}</td><td>自定义</td><td>识别配置里自定义正则的捕获组</td></tr>
   </table>
 
@@ -633,8 +630,7 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
 电影文件：{title}.{year}&lt;.{resource_pix}&gt;&lt;.{fps}&gt;&lt;.{resource_version}&gt;&lt;.{resource_source}&gt;&lt;.{resource_type}&gt;&lt;.{resource_effect}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}
 剧集目录：{first_letter}-{title}-{year}-[tmdb={tmdb_id}]
 剧集文件：{title} - {season_episode}&lt;.{resource_pix}&gt;&lt;.{fps}&gt;&lt;.{resource_version}&gt;&lt;.{resource_source}&gt;&lt;.{resource_type}&gt;&lt;.{resource_effect}&gt;&lt;.{video_encode}&gt;&lt;.{audio_encode}&gt;&lt;-{resource_team}&gt;{ext}
-AV 目录：{first_letter}-{title}
-AV 文件：{title}&lt;.{resource_pix}&gt;&lt;.{resource_type}&gt;{ext}</code></pre>
+</code></pre>
   </details>
   <details><summary>极简风（只要 标题 (年份)）</summary>
     <pre><code>电影目录：{title} ({year})
@@ -672,19 +668,6 @@ tv:
     <li>分类名即网盘目录名，<code>/</code> 分隔可多级（如 <code>电影/华語/港台</code>）</li>
     <li>可用条件：<code>genre_ids</code>（TMDB 类型）、<code>original_language</code>（语言码）；多条件为「与」关系</li>
     <li>常用 genre_ids：<code>16</code>=动画 <code>35</code>=喜剧 <code>28</code>=动作 <code>27</code>=恐怖 <code>99</code>=纪录</li>
-  </ul>
-</section>
-
-<!-- ============================================================ 15 -->
-<section id="av">
-  <h2><span class="num">15</span>AV 整理</h2>
-  <p>识别到<strong>番号</strong>（如 <code>ABC-123</code>、<code>FC2-PPV-1234567</code>）的内容走独立流程：跳过 TMDB，按番号入库，用 AV 专属模板（<code>{num}</code> 变量可用），目录按番号前缀自动分类（无码/有码等内置前缀表）。</p>
-  <ul>
-    <li><strong>番号识别</strong>：目录名与文件名都会尝试；FC2 七位数字有专属规则；连字符差异（<code>START622</code>/<code>START-622</code>）容错</li>
-    <li><strong>分类</strong>：在「二级分类策略」YAML 的 <code>av:</code> 段配置。内置常见<strong>无码</strong>（FC2/HEYZO/Tokyo Hot/10Musume/1Pondo/Caribbean 等）与<strong>国产</strong>（MD/MDX/MDT/PMC/JD/TZ 等）前缀库自动识别，无需枚举上千个有码厂牌——自定义 <code>num_prefix</code> 优先，<code>num_prefix</code> 留空的分类作兜底；文件名含 无码/破解/国产/麻豆 等字样也会辅助归类</li>
-    <li><strong>广告过滤</strong>：清洗后仍含发布站域名、或正文不带番号的文件视为引流视频 → 冗余</li>
-    <li><strong>字幕跟随</strong>：与正片同名的 <code>.chs/.cht/.eng</code> 字幕随行改名（保留语言后缀）</li>
-    <li>洗版/去重同样适用于 AV（按目标目录 SHA1）</li>
   </ul>
 </section>
 

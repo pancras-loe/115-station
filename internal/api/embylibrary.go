@@ -84,7 +84,7 @@ func (h *Handler) scanLibCandidates() ([]embyLibCandidate, error) {
 	log.Printf("[插件] ○ Emby 建库扫描媒体根: %s", local)
 
 	var candidates []embyLibCandidate
-	// 第一层（电影/剧集/AV…）
+	// 第一层（电影/剧集）
 	l1, err := os.ReadDir(local)
 	if err != nil {
 		return nil, fmt.Errorf("读取媒体根失败: %v", err)

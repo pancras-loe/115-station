@@ -8,16 +8,13 @@ package api
 // 局网客户端无需访问 TMDB。
 
 import (
-	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -880,32 +877,6 @@ func portalPoster(c *gin.Context) {
 
 // serveTMDBPoster TMDB 海报服务端代理（带 7 天磁盘缓存；portalCfg 来自门户，
 // 管理后台仪表盘复用同一逻辑，DataDir 由调用方传入）
-// ipIsPublic 公网地址判定（回环/私网/链路本地/组播/未指定全拒）
-func ipIsPublic(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
-		ip.IsInterfaceLocalMulticast())
-}
-
-// avCoverClient AV 封面专用客户端：DialContext 在连接层校验目标 IP 为
-// 公网地址——DNS 解析后的实际连接目标才作数（防 DNS rebinding 式 SSRF），
-// 重定向的每一跳同样经过该 Transport
-var avCoverClient = &http.Client{
-	Timeout: 15 * time.Second,
-	Transport: &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			if ip := net.ParseIP(host); ip != nil && !ipIsPublic(ip) {
-				return nil, fmt.Errorf("SSRF 防护：拒绝内网地址 %s", host)
-			}
-			d := net.Dialer{Timeout: 10 * time.Second}
-			return d.DialContext(ctx, network, addr)
-		},
-	},
-}
 
 func serveTMDBPoster(c *gin.Context, dataDir string) {
 	p := strings.TrimPrefix(c.Param("path"), "/")
@@ -915,43 +886,6 @@ func serveTMDBPoster(c *gin.Context, dataDir string) {
 	}
 	cacheDir := filepath.Join(dataDir, "posters")
 	_ = os.MkdirAll(cacheDir, 0755)
-	// ---- AV 封面分支（MetaTube 刮削结果，PosterPath = "av:<完整URL>"）----
-	// 直接代理原始封面 URL（只缓存到 /data/posters，不写媒体目录），规则与 TMDB 相同。
-	// 本端点无鉴权（门户海报），SSRF 防护：仅 http(s) + 连接层校验目标为公网地址
-	if strings.HasPrefix(p, "av:") {
-		coverURL := strings.TrimPrefix(p, "av:")
-		if u, err := url.Parse(coverURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			avPosterPlaceholder(c)
-			return
-		}
-		ah := sha1.Sum([]byte(p))
-		avCache := filepath.Join(cacheDir, hex.EncodeToString(ah[:8])+filepath.Ext(coverURL))
-		if st, err := os.Stat(avCache); err == nil && st.Size() > 0 && time.Since(st.ModTime()) < 7*24*time.Hour {
-			c.Header("Cache-Control", "public, max-age=604800")
-			c.File(avCache)
-			return
-		}
-		resp, err := avCoverClient.Get(coverURL)
-		if err != nil {
-			log.Printf("[海报] ✗ AV 封面拉取失败 %s: %v", coverURL, err)
-		} else {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && len(body) > 100 {
-				_ = os.WriteFile(avCache, body, 0644)
-				ct := resp.Header.Get("Content-Type")
-				if ct == "" {
-					ct = "image/jpeg"
-				}
-				c.Header("Cache-Control", "public, max-age=604800")
-				c.Data(http.StatusOK, ct, body)
-				return
-			}
-			log.Printf("[海报] ✗ AV 封面拉取失败 HTTP %d: %s", resp.StatusCode, coverURL)
-		}
-		avPosterPlaceholder(c)
-		return
-	}
 	h := sha1.Sum([]byte(p))
 	cacheFile := filepath.Join(cacheDir, hex.EncodeToString(h[:8])+filepath.Ext(p))
 	if st, err := os.Stat(cacheFile); err == nil && st.Size() > 0 && time.Since(st.ModTime()) < 7*24*time.Hour {
@@ -1015,12 +949,6 @@ func serveTMDBPoster(c *gin.Context, dataDir string) {
 	}
 	c.Header("Cache-Control", "public, max-age=604800")
 	c.Data(http.StatusOK, lastCT, data)
-}
-
-// avPosterPlaceholder AV 封面占位图（1x1 透明 GIF，避免卡片裂图）
-func avPosterPlaceholder(c *gin.Context) {
-	c.Header("Cache-Control", "no-store")
-	c.Data(http.StatusOK, "image/gif", []byte("GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;"))
 }
 
 // portalSub 字幕文本代理：服务端按 pick_code 取 115 直链拉字幕并加 CORS 头返回

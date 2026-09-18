@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+// AV1/AVC 是普通视频编码，移除成人影片功能后仍应参与影视重命名。
+func TestMovieRenamePreservesVideoCodecs(t *testing.T) {
+	for _, tc := range []struct{ codec, want string }{{"AV1", "AV1"}, {"AVC", "H264"}} {
+		t.Run(tc.codec, func(t *testing.T) {
+			name := "Example.2024.1080p." + tc.codec + ".mkv"
+			media := &TmdbMedia{Title: "示例电影", Year: "2024", MediaType: "movie", TmdbID: 123}
+			ctx := buildRenameContext(media, parseFileName(name), name)
+			got := ctx.ApplyTemplate("{title}.{year}<.{resource_pix}><.{video_encode}>{ext}")
+			want := "示例电影.2024.1080p." + tc.want + ".mkv"
+			if got != want {
+				t.Fatalf("影视重命名结果 = %q，期望 %q", got, want)
+			}
+		})
+	}
+}
+
 // 回归：iTunes WEB-DL HDR10+ Atmos 命名（曾出现 WEB.WEB-DL 重复、ATMOS 重复、
 // 7.1 丢失、HDR10+ 丢加号、iTunes 被丢弃等解析缺陷）
 func TestResourceParseiTunesWEBDL(t *testing.T) {

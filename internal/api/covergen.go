@@ -139,25 +139,6 @@ func (h *Handler) coverSortItems(items []model.MediaLibrary, strategy string) {
 // ==================== 海报下载与绘制 ====================
 
 func coverFetchPoster(path string) image.Image {
-	// AV 真实封面（/av:<完整URL>）：优先海报缓存，未命中直连下载
-	if strings.HasPrefix(path, "/av:") {
-		coverURL := strings.TrimPrefix(path, "/av:")
-		if data := readPosterCache(coverURL); len(data) > 0 {
-			if im, _, err := image.Decode(bytes.NewReader(data)); err == nil {
-				return im
-			}
-		}
-		resp, err := (&http.Client{Timeout: 15 * time.Second}).Get(coverURL)
-		if err != nil {
-			return nil
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return nil
-		}
-		im, _, err := image.Decode(resp.Body)
-		return im
-	}
 	u := tmdbImageBase() + "/t/p/w300" + path
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(u)
 	if err != nil {

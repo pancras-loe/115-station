@@ -411,8 +411,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/guanying/config", h.GyGetConfig)
 		protected.GET("/guanying/check", h.GyCheck)
 
-		// MetaTube AV 元数据刮削（自部署 metatube-server）
-		protected.POST("/metatube/check", h.MetatubeCheck)
 		protected.POST("/guanying/config", h.GySaveConfig)
 		protected.POST("/guanying/login", h.GyLogin)
 		protected.POST("/guanying/logout", h.GyLogout)
@@ -469,18 +467,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/mukaku/login", h.MukakuLogin)
 		protected.GET("/mukaku/search", h.MukakuSearch)
 		protected.GET("/mukaku/resources", h.MukakuResources)
-
-		// 播放加速（多端播放/小号播放）：小号账号池 + 镜像同步 + 播放路由
-		protected.GET("/playback/config", h.PlaybackGetConfig)
-		protected.POST("/playback/alt/add", h.PlaybackAddAlt)
-		protected.POST("/playback/alt/del", h.PlaybackDelAlt)
-		protected.POST("/playback/alt/toggle", h.PlaybackToggleAlt)
-		protected.POST("/playback/mode", h.PlaybackSaveMode)
-		protected.POST("/playback/sync", h.PlaybackSync)
-		protected.POST("/playback/alt/root", h.PlaybackSetAltRoot)
-		protected.POST("/playback/alt/qrcode", h.CreateQrCode)               // 取码与主号同源
-		protected.POST("/playback/alt/qrcode/status", h.PlaybackAltQrStatus) // 轮询成功入池不落主号
-		protected.GET("/playback/devices", h.PlaybackDevices)
 
 		// 影视转存 · PanSou 网盘聚合搜索（开源项目公开实例，免认证）
 		protected.GET("/pansou/config", h.PansouGetConfig)

@@ -227,30 +227,6 @@ type MediaEnrich struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// AVMeta AV 番号元数据缓存（MetaTube 刮削结果）。
-// ok / not_found 都落库：同一番号二次整理不再请求刮削源，
-// not_found 带 TTL（见 metatube.go）过期后自动重试
-type AVMeta struct {
-	ID            uint      `json:"id" gorm:"primaryKey"`
-	Num           string    `json:"num" gorm:"uniqueIndex;size:64;not null"` // 归一化番号（FC2PPV123）
-	Status        string    `json:"status" gorm:"size:20;default:pending"`   // ok / not_found
-	Provider      string    `json:"provider" gorm:"size:50"`
-	ProviderID    string    `json:"provider_id" gorm:"size:100"`
-	Title         string    `json:"title" gorm:"size:500"`
-	OriginalTitle string    `json:"original_title" gorm:"size:500"`
-	Year          string    `json:"year" gorm:"size:10"`
-	ReleaseDate   string    `json:"release_date" gorm:"size:20"`
-	Runtime       int       `json:"runtime"`
-	Director      string    `json:"director" gorm:"size:255"`
-	Publisher     string    `json:"publisher" gorm:"size:255"`
-	Plot          string    `json:"plot" gorm:"type:text"`
-	Score         float64   `json:"score"`
-	CoverURL      string    `json:"cover_url" gorm:"size:500"`
-	ActorsJSON    string    `json:"actors" gorm:"type:text"` // JSON 字符串数组
-	GenresJSON    string    `json:"genres" gorm:"type:text"` // JSON 字符串数组
-	UpdatedAt     time.Time `json:"updated_at"`
-}
-
 var DB *gorm.DB
 
 func InitDB(dbPath string) (*gorm.DB, error) {
@@ -273,16 +249,12 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&CategoryRule{},
 		&WashRule{},
 		&MediaEnrich{},
-		&AVMeta{},
 		&PortalStat{},
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},
 		&OfflinePlay{},
 		&UploadMark{},
-		&PlaybackAltFile{},
-		&PlaybackCopy{},
-		&PlaybackDevice{},
 	); err != nil {
 		return nil, err
 	}
@@ -367,36 +339,4 @@ func InitDefaultWashRules(db *gorm.DB) error {
 		},
 	}
 	return db.Create(&defaults).Error
-}
-
-// PlaybackAltFile 播放小号的文件映射：台账 rel_path → 小号侧 pickcode
-// （小号秒传镜像主号媒体库后，播放取直链用小号 pickcode）
-type PlaybackAltFile struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	AccountID   int64     `json:"account_id" gorm:"index;not null"`  // 小号 id（playback 配置）
-	RelPath     string    `json:"rel_path" gorm:"size:500;not null"` // 与台账一致的相对路径
-	AltPickCode string    `json:"alt_pick_code" gorm:"size:64;not null"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-// PlaybackDevice 已知播放设备（多端播放展示：设备→小号绑定）
-type PlaybackDevice struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	UAHash    string    `json:"ua_hash" gorm:"uniqueIndex;size:32"` // UA 的 fnv 哈希（稳定绑定键）
-	UA        string    `json:"ua" gorm:"size:200"`
-	AltID     int64     `json:"alt_id"`
-	AltName   string    `json:"alt_name" gorm:"size:100"`
-	FirstSeen time.Time `json:"first_seen"`
-	LastSeen  time.Time `json:"last_seen"`
-}
-
-// PlaybackCopy 设备副本映射：设备 → 主号文件 → 副本 pickcode（多端播放）
-type PlaybackCopy struct {
-	ID           uint      `json:"id" gorm:"primaryKey"`
-	DeviceKey    string    `json:"device_key" gorm:"uniqueIndex:idx_dev_pick;size:40;not null"`
-	MainPickCode string    `json:"main_pick_code" gorm:"uniqueIndex:idx_dev_pick;size:64;not null"`
-	CopyPickCode string    `json:"copy_pick_code" gorm:"size:64"`
-	RelPath      string    `json:"rel_path" gorm:"size:500"`
-	LastPlayed   time.Time `json:"last_played"`
-	UpdatedAt    time.Time `json:"updated_at"`
 }

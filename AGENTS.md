@@ -12,7 +12,7 @@
 同步 / 整理 / 洗版 / 重命名 / 元数据回传 / 消息机器人的闭环。
 
 **本仓库是 [DaisyYijin/STRMhub](https://github.com/DaisyYijin/STRMhub) 的二次开发版本。**
-唯一的功能性改动是：**移除 123 云盘、夸克网盘、阿里云盘支持**，只保留 115 链路。
+功能性改动包括：**移除 123 云盘、夸克网盘、阿里云盘支持**，只保留 115 链路；**移除 MetaTube、成人影片番号识别及其专属分类、刮削、重命名和通知功能**（AV1、AVC 等普通视频编码支持保留）；**移除播放账号功能**（小号播放 / 多端播放 / 账号池），播放统一走主号直链。
 
 ### ⚠️ 许可证约束（改动前必读）
 
@@ -68,8 +68,8 @@
 | **路由与认证** | `routes.go` | `Handler{DB, Config}` + 全部路由注册 + 登录防爆破 + 备份/日志接口 |
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` | 全量 / 增量（生活事件）/ 分享转存 / 上传与监控回传 |
-| **整理流水线** | `organize.go` `org115.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `metatube.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移；`resource.go` 是文件名结构化解析的核心 |
-| **播放链路** | `proxy.go` `playback.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、播放账号池、边下边播、Emby 反代与建库 |
+| **整理流水线** | `organize.go` `org115.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移；`resource.go` 是文件名结构化解析的核心 |
+| **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **观影门户** | `portal.go` `portalemby.go` `portalstream.go` | 6688 端口独立门户 + ffmpeg remux → HLS |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **CloudDrive2** | `cd2.go` `cd2org.go` | 跨网盘整理引擎（定位是整理，不是播放） |
@@ -78,9 +78,9 @@
 
 ### 数据模型（`internal/model/model.go`）
 
-20 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
+16 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
-`MediaLibrary`、`UploadMark`、`PlaybackAltFile` / `PlaybackDevice` / `PlaybackCopy`。
+`MediaLibrary`、`UploadMark`。
 
 ---
 
@@ -109,7 +109,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 
 测试集中在 `internal/api/*_test.go`（41 个文件），全部是纯单元测试，不需要网络或 115 账号。
 测试数据在 `internal/api/testdata/`。改动识别 / 重命名 / 解析逻辑时，**务必先跑一遍对应测试**——
-这部分逻辑边界条件极多（剧集区间、括号嵌套、番号、拼音、洗版匹配等），测试是唯一的安全网。
+这部分逻辑边界条件极多（剧集区间、括号嵌套、拼音、洗版匹配等），测试是唯一的安全网。
 
 ---
 

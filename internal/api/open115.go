@@ -1016,14 +1016,6 @@ func proxyDownloadURL(db *gorm.DB, cfg *config.Config, pickcode, ua string) (str
 // proxyDownloadURLFull 同 proxyDownloadURL，但一并返回直链要求的请求头
 // （含必须绑定的 User-Agent，服务端中转拉流时使用）
 func proxyDownloadURLFull(db *gorm.DB, cfg *config.Config, pickcode, ua string) (string, map[string]string, error) {
-	// 小号播放路由（多端播放/小号播放开启时优先走小号池）：
-	// main pickcode → 台账 rel_path → 小号 pickcode → 小号 Cookie 取直链。
-	// 未启用/映射未命中/取链失败一律 errPlaybackSkip 回退主号，播放不中断
-	if u, hdrs, err := playbackResolve(db, cfg, pickcode, ua); err == nil {
-		return u, hdrs, nil
-	} else if err != errPlaybackSkip {
-		log.Printf("[播放账号] ○ 小号路由异常，回退主号: %v", err)
-	}
 	// OpenAPI 通道（失败不直接报错——回退 Cookie 通道；OpenAPI 撞限流/额度
 	// 时 302 与补全探测不能整体失败，而 Cookie 明明可用）
 	if oc := open115FromDB(db, cfg); oc != nil && oc.authorized() {

@@ -33,15 +33,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"regexp"
-
-	"strmhub/internal/model"
+	"strings"
 )
 
 // RenameContext 重命名上下文（包含模板引擎需要的全部数据）
 type RenameContext struct {
-	Num         string // AV 番号（{num} 变量；AV 流程由 detectAVNumber 填充）
 	OriginalName string
 	Ext          string
 	Media        *TmdbMedia
@@ -51,11 +48,6 @@ type RenameContext struct {
 	SeasonYear   string
 	EpisodeName  string
 	CustomRegex  string
-	// MetaTube AV 元数据（缓存直读，绝不触发网络；整理流程已提前刮好入库）
-	AvTitle string // 真实标题 {av_title}
-	AvYear  string // 发行年份 {av_year}
-	Actor   string // 第一主演 {actor}
-	Actors  string // 全部主演（、连接）{actors}
 }
 
 // buildRenameContext 构建重命名上下文
@@ -66,28 +58,6 @@ func buildRenameContext(media *TmdbMedia, parsed *ParsedName, originalName strin
 		Media:        media,
 		Parsed:       parsed,
 		Resource:     ParseResourceInfo(originalName),
-	}
-	// AV 流程：番号就是 media.Title（detectAVNumber 的产出），供 {num} 使用
-	if media.MediaType == "av" {
-		ctx.Num = media.Title
-		// MetaTube 刮削结果只从缓存读：整理流程在进模板前已通过
-		// metatubeFetchCached 提前刮好入库；预览等场景查不到就保持空值，
-		// 不发起网络请求
-		if model.DB != nil {
-			var av model.AVMeta
-			if model.DB.Where("num = ? AND status = ?", normalizeAVNum(media.Title), "ok").First(&av).Error == nil {
-				// 真实标题会进文件名，必须过 sanitizeName（日文标题常含 / : 等非法字符）
-				ctx.AvTitle = sanitizeName(av.Title)
-				ctx.AvYear = av.Year
-				if actors := avMetaActors(&av); len(actors) > 0 {
-					ctx.Actor = sanitizeName(actors[0])
-					for i, a := range actors {
-						actors[i] = sanitizeName(a)
-					}
-					ctx.Actors = strings.Join(actors, "、")
-				}
-			}
-		}
 	}
 	return ctx
 }
@@ -198,16 +168,15 @@ func processBlocks(template string, replacements map[string]string) string {
 func (ctx *RenameContext) allReplacements() map[string]string {
 	return map[string]string{
 		// 原始文件信息
-		"{original_name}":     ctx.OriginalName,
-		"{ext}":              ctx.Ext,
+		"{original_name}":      ctx.OriginalName,
+		"{ext}":                ctx.Ext,
 		"{custom_regex_match}": ctx.CustomRegex,
-		"{num}":              ctx.Num,
 
 		// TMDB 信息
-		"{title}":       ctx.Media.Title,
-		"{en_title}":    ctx.Media.OriginalTitle,
-		"{year}":        ctx.Media.Year,
-		"{tmdb_id}":     fmt.Sprintf("%d", ctx.Media.TmdbID),
+		"{title}":        ctx.Media.Title,
+		"{en_title}":     ctx.Media.OriginalTitle,
+		"{year}":         ctx.Media.Year,
+		"{tmdb_id}":      fmt.Sprintf("%d", ctx.Media.TmdbID),
 		"{first_letter}": titleFirstLetter(ctx.Media.Title),
 
 		// 资源信息
@@ -229,12 +198,6 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 		"{season_name}":    ctx.SeasonName,
 		"{season_year}":    ctx.SeasonYear,
 		"{episode_name}":   ctx.EpisodeName,
-
-		// AV 元数据（MetaTube 刮削；未刮到时为空，配合 <> 块语法使用）
-		"{av_title}": ctx.AvTitle,
-		"{av_year}":  ctx.AvYear,
-		"{actor}":    ctx.Actor,
-		"{actors}":   ctx.Actors,
 	}
 }
 
@@ -252,13 +215,10 @@ func (ctx *RenameContext) seasonEpisode() string {
 // LoadRenameTemplates 从配置加载重命名模板（yaml 优先，DB 回退）
 func (h *Handler) LoadRenameTemplates() *RenameConfig {
 	cfg := &RenameConfig{
-		MovieFolder:   "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
+		MovieFolder: "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
 		MovieFile:   "{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
-		TVFolder:   "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
-		TVFile:   "{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
-		// AV 命名规范 = 番号 + AV 标题（"ABC-123 XXXXXX"），不带画质附加信息
-		AVFolder:   "{first_letter}-{num}",
-		AVFile:   "{num}< {av_title}>{ext}",
+		TVFolder:    "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
+		TVFile:      "{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
 	}
 
 	v := h.getSettingValue("org-rename")
@@ -280,12 +240,6 @@ func (h *Handler) LoadRenameTemplates() *RenameConfig {
 		if saved.TVFile != "" {
 			cfg.TVFile = saved.TVFile
 		}
-		if saved.AVFolder != "" {
-			cfg.AVFolder = saved.AVFolder
-		}
-		if saved.AVFile != "" {
-			cfg.AVFile = saved.AVFile
-		}
 	}
 	return cfg
 }
@@ -304,23 +258,11 @@ func (h *Handler) BuildPathWithTemplate(media *TmdbMedia, parsed *ParsedName, or
 	case "tv":
 		folder = ctx.ApplyTemplate(tpl.TVFolder)
 		file = ctx.ApplyTemplate(tpl.TVFile)
-	default: // AV 等
-		folder = ctx.ApplyTemplate(tpl.AVFolder)
-		file = ctx.ApplyTemplate(tpl.AVFile)
+	default:
+		return ""
 	}
 
-	return collapseDuplicateAVNum(folder+"/"+file, ctx.Num)
-}
-
-// collapseDuplicateAVNum AV 兜底：番号在结果中背靠背重复（如历史模板
-// {num}-{title} 渲染出 "ABC-123-ABC-123"）时折叠为单个。AV 流程里
-// {num} 与 {title} 同值，模板同用两个变量必产生重复
-func collapseDuplicateAVNum(s, num string) string {
-	if num == "" || !strings.Contains(s, num) {
-		return s
-	}
-	q := regexp.QuoteMeta(num)
-	return regexp.MustCompile(`(` + q + `)[-_. ]?` + q).ReplaceAllString(s, num)
+	return folder + "/" + file
 }
 
 // sanitizePath 清理路径中的空段和连续分隔符

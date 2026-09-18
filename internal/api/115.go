@@ -316,7 +316,7 @@ func (h *Handler) QrCodeStatus(c *gin.Context) {
 
 // fetchAndSaveCookie 调用 login/qrcode 获取 Cookie 并写入 Storage 表
 // 返回的 warning 非空表示 Cookie 可用性存疑（如非网页端会话无法激活 webapi）
-// fetchQrLoginCookie 扫码成功后取 Cookie（不落盘——主号/小号两个消费方）：
+// fetchQrLoginCookie 扫码成功后取 Cookie（不落盘，由调用方决定如何消费）：
 // 返回 (cookie, username, device, warning, error)
 func (h *Handler) fetchQrLoginCookie(uid string) (string, string, string, string, error) {
 	qrMu.RLock()

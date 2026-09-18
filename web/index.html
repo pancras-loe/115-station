@@ -49,7 +49,6 @@
       <div class="menu-item" data-page="organize"><span class="icon">⚙</span><span>自动整理</span></div>
       <div class="menu-item" data-page="upload-download"><span class="icon">⇅</span><span>上传下载</span></div>
       <div class="menu-item" data-page="media-transfer"><span class="icon">⇣</span><span>影视转存</span></div>
-      <div class="menu-item" data-page="playback"><span class="icon">▶</span><span>播放账号</span></div>
       <div class="menu-item" data-page="config-system"><span class="icon">⚙</span><span>系统配置</span></div>
       <div class="menu-item" data-page="config-message"><span class="icon">✉</span><span>消息配置</span></div>
       <div class="menu-item" data-page="config-extension"><span class="icon">＋</span><span>扩展功能</span></div>
@@ -142,7 +141,7 @@
     <!-- CloudDrive2（多云盘聚合：只做整理，STRM/播放走项目原生 115 链路） -->
     <div class="page" id="page-cd2">
       <div class="card">
-        <div class="alert alert-info" style="margin-bottom:10px">CloudDrive2（CD2）接入：把 CD2 挂载的任意网盘（115/百度等）当作「跨网盘整理引擎」的入口——监控目录里出现新内容时自动识别、改名、分类并搬运进 115 媒体库，由项目原生生成 STRM。目录全部自动识别，无需在 CD2 侧单独配置。<i class="help-tip" tabindex="0">?<span class="tip-bubble">详细链路：监控目录新视频 → 识别（AV 番号/TMDB/目录名兜底）→ 重命名模板改名 → 二级分类归位并跨网盘搬运到 115 媒体库（CD2 挂载路径）→ 自动触发增量同步生成 /d/ STRM → 通知 Emby。播放完全走项目原生直链，不经过 CD2；识别失败的留在原地等重试。</span></i></div>
+        <div class="alert alert-info" style="margin-bottom:10px">CloudDrive2（CD2）接入：把 CD2 挂载的任意网盘（115/百度等）当作「跨网盘整理引擎」的入口——监控目录里出现新内容时自动识别、改名、分类并搬运进 115 媒体库，由项目原生生成 STRM。目录全部自动识别，无需在 CD2 侧单独配置。<i class="help-tip" tabindex="0">?<span class="tip-bubble">详细链路：监控目录新视频 → 识别（TMDB/目录名兜底）→ 重命名模板改名 → 二级分类归位并跨网盘搬运到 115 媒体库（CD2 挂载路径）→ 自动触发增量同步生成 /d/ STRM → 通知 Emby。播放完全走项目原生直链，不经过 CD2；识别失败的留在原地等重试。</span></i></div>
         <div class="form-row"><div class="label">服务地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">CD2 的服务地址（与网页管理端同地址同端口，默认 19798）。支持 IP/域名，可带 http(s):// 前缀。StrmHub 服务器必须能直接访问该地址（Docker 部署时填宿主机可达的 IP，不要填 127.0.0.1）。</span></i></div><div class="control"><input type="text" id="cd2-endpoint" placeholder="如 192.168.1.10:19798" class="inline-input" style="max-width:320px"></div></div>
         <div class="form-row"><div class="label">账号密码<i class="help-tip" tabindex="0">?<span class="tip-bubble">CD2 本地账号，即登录 CD2 网页管理端用的用户名和密码（不是网盘账号）。token 过期会自动重新登录；账号若开启了两步验证暂不支持。</span></i></div><div class="control"><div class="form-inline-group"><input type="text" id="cd2-username" placeholder="用户名" class="inline-input"><input type="password" id="cd2-password" placeholder="密码" class="inline-input"></div></div></div>
         <div class="form-row"><div class="label">连接测试<i class="help-tip" tabindex="0">?<span class="tip-bubble">测试连接会先用当前表单内容保存配置，再实际登录 CD2 列一次根目录（根目录即各网盘挂载点），成功会显示检测到的网盘列表。</span></i></div><div class="control"><div class="form-inline-group"><button class="btn btn-success" onclick="cd2Test(this)">测试连接</button><span id="cd2-test-result" style="font-size:12.5px;margin-left:8px"></span></div></div></div>
@@ -161,60 +160,6 @@
         </div></div>
         <div class="form-row"><div class="label">监控状态</div><div class="control"><div class="form-inline-group"><span id="cd2-watch-status" style="font-size:12.5px">未加载</span></div></div></div>
         <div class="form-row"><div class="label"></div><div class="control"><button class="btn btn-primary" onclick="cd2Save(this)">保存配置</button></div></div>
-      </div>
-    </div>
-
-    <!-- 播放加速（多端播放/小号播放） -->
-    <div class="page" id="page-playback">
-      <div class="tabs">
-        <div class="tab active" data-tab="pb-alt">小号播放</div>
-        <div class="tab" data-tab="pb-multi">多端播放</div>
-      </div>
-
-      <!-- 小号播放 -->
-      <div class="tab-panel active" data-panel="pb-alt">
-        <div class="card">
-          <div class="form-row"><div class="label">播放通道</div><div class="control">
-            <div class="segmented-control" id="pb-mode-switch">
-              <div class="seg-item active" data-value="main" onclick="pbSaveMode('mode')">主号</div>
-              <div class="seg-item" data-value="alt" onclick="pbSaveMode('mode')">小号池</div>
-            </div>
-            <div style="font-size:12px;color:var(--text-3);margin-top:4px">小号池模式：播放取直链走小号，主号只做整理/同步——播放风控与主号隔离。需先完成镜像同步。</div>
-          </div></div>
-          <div class="form-row"><div class="label">设备分配</div><div class="control">
-            <div class="segmented-control" id="pb-routing-switch">
-              <div class="seg-item active" data-value="device" onclick="pbSaveMode('routing')">按设备绑定</div>
-              <div class="seg-item" data-value="round" onclick="pbSaveMode('routing')">轮询分摊</div>
-            </div>
-            <div style="font-size:12px;color:var(--text-3);margin-top:4px">按设备绑定=同一设备固定用同一小号（直链缓存更稳）；轮询=每次播放轮流用，流量分摊更均匀。</div>
-          </div></div>
-        </div>
-        <div class="card">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-            <span style="font-weight:600">小号账号池</span>
-            <span style="font-size:12px;color:var(--text-3)">小号需有网盘空间（镜像主号媒体库）；秒传不耗下载流量</span>
-            <span style="flex:1"></span>
-            <button class="btn btn-success" style="padding:4px 14px" onclick="pbSync(this)">镜像同步</button>
-          </div>
-          <div class="form-row"><div class="label">添加小号</div><div class="control">
-            <div class="form-inline-group">
-              <input type="text" id="pb-alt-name" placeholder="备注名（可空）" class="inline-input" style="max-width:140px">
-              <input type="text" id="pb-alt-cookie" placeholder="粘贴小号 Cookie（UID=...;CID=...;SEID=...;KID=...）" class="inline-input" style="flex:1" autocomplete="off">
-              <button class="btn btn-primary" onclick="pbAddAlt(this)">验证并添加</button>
-              <button class="btn btn-outline" onclick="pbScanLogin()">扫码登录</button>
-            </div>
-            <div style="font-size:12px;color:var(--text-3);margin-top:4px">扫码更方便：用小号的 115 手机 App 扫码，Cookie 自动入池（注意别用主号 App 扫）。</div>
-          </div></div>
-          <div id="pb-alt-list"></div>
-        </div>
-      </div>
-
-      <!-- 多端播放 -->
-      <div class="tab-panel" data-panel="pb-multi">
-        <div class="card">
-          <div style="font-size:12.5px;color:var(--text-2);line-height:1.8;margin-bottom:12px">多端播放：家庭多设备同时播放时，按设备绑定小号分摊流量与风控（小号播放 tab 选择「按设备绑定」后自动生效）。下表是最近播过且小号池启用时接入的设备。</div>
-          <div id="pb-device-list"></div>
-        </div>
       </div>
     </div>
 
@@ -267,13 +212,6 @@
             <div class="seg-item active" data-value="true" onclick="setScrapeOpt('write_images', true)">生成</div>
             <div class="seg-item" data-value="false" onclick="setScrapeOpt('write_images', false)">跳过</div>
           </div></div></div>
-        <div class="form-row"><div class="label">AV 番号</div><div class="control">
-          <div class="segmented-control" id="scrape-av-switch">
-            <div class="seg-item active" data-value="true" onclick="setScrapeOpt('write_av', true)">刮削</div>
-            <div class="seg-item" data-value="false" onclick="setScrapeOpt('write_av', false)">跳过</div>
-          </div>
-          <div style="font-size:12px;color:var(--text-3);margin-top:4px">无 tmdb 标记、目录名可识别番号的片目走 MetaTube</div>
-        </div></div>
         <div class="form-row"><div class="label">覆盖模式</div><div class="control">
           <div class="segmented-control" id="scrape-force-switch">
             <div class="seg-item active" data-value="false" onclick="setScrapeOpt('force', false)">只补缺失</div>
@@ -383,16 +321,7 @@ tv:
   # 未匹配以上分类，则命名为未分类
   电视剧/未分类:
 
-# 配置AV的分类策略（按番号前缀或制作商分类）
-av:
-  无码:
-    # 匹配番号前缀（无码番号通常含这些前缀）
-    num_prefix: 'ABC,DEF'
-  有码:
-    # 兜底分类
-    num_prefix: ''
-  # 未匹配以上分类
-  未分类:</textarea>
+</textarea>
         <div style="margin-top:12px"><button class="btn btn-primary" onclick="saveCategory()">保存配置</button> <button class="btn btn-warning" onclick="resetCategory(this)" style="position:relative">重置配置</button></div>
       </div>
     </div>
@@ -406,7 +335,6 @@ av:
           <div class="var-item"><code>original_language</code><span class="var-desc">语言代码（zh=中文, ja=日语, ko=韩语）</span></div>
           <div class="var-item"><code>origin_country</code><span class="var-desc">国家代码（CN, HK, JP, KR, US）</span></div>
           <div class="var-item"><code>ext</code><span class="var-desc">文件后缀（如 iso 原盘分类）</span></div>
-          <div class="var-item"><code>num_prefix</code><span class="var-desc">AV 番号前缀（仅 av 分类）</span></div>
         </div>
       </div>
       <div class="card">
@@ -414,7 +342,7 @@ av:
           <div class="var-item"><span class="badge badge-blue">顺序匹配</span><span class="var-desc">从上到下，先匹配到的先停止</span></div>
           <div class="var-item"><span class="badge badge-blue">多条件</span><span class="var-desc">同分类下多个条件为<b>且</b>关系</span></div>
           <div class="var-item"><span class="badge badge-amber">兜底分类</span><span class="var-desc">最后一条无需条件，自动归入</span></div>
-          <div class="var-item"><span class="badge badge-green">movie / tv / av</span><span class="var-desc">三类独立配置，互不干扰</span></div>
+          <div class="var-item"><span class="badge badge-green">movie / tv</span><span class="var-desc">两类独立配置，互不干扰</span></div>
           <div class="var-item"><span class="badge badge-green">自动建目录</span><span class="var-desc">115 中不存在时自动创建</span></div>
         </div>
       </div>
@@ -464,16 +392,6 @@ av:
         </div>
       </div>
       <div class="card">
-        <div class="var-section">
-          <div class="var-section-title">AV 番号前缀（num_prefix 可用，内置库自动识别，无需全部手填）</div>
-          <div class="var-card">
-            <div class="var-item"><span class="badge badge-green">无码</span><span class="var-desc">FC2 · HEYZO · N10（Tokyo Hot）· 10MU（10Musume）· 1PON（1Pondo）· CARIB（Caribbean）· PACO（Pacopacomama）· MURA（Muramura）· KIN8（Kin8tengoku）· C0930 / H0930 · SCUTE（S-Cute）· XXXAV · AV9898 · GACHI · MESU</span></div>
-            <div class="var-item"><span class="badge badge-green">国产</span><span class="var-desc">MD · MDX · MDT · PMC · JD · TZ · MT · 91 · CHARU · MKY · MSN</span></div>
-            <div class="var-item"><span class="badge badge-blue">有码</span><span class="var-desc">厂牌数千个，由 num_prefix 留空的兜底分类自动承接（如「有码」），无需枚举</span></div>
-            <div class="var-item"><span class="badge badge-amber">关键词辅助</span><span class="var-desc">目录/文件名含 无码 · 破解 · uncensored → 归入名字带「无码」的分类；含 国产 · 麻豆 · 探花 → 归入名字带「国产」的分类</span></div>
-            <div class="var-item"><span class="badge badge-blue">判定顺序</span><span class="var-desc">num_prefix 自定义前缀 → 内置前缀库（builtin: uncensored / domestic 绑定）→ 文件名关键词 → num_prefix 留空的兜底分类</span></div>
-          </div>
-        </div>
         <div class="var-section">
           <div class="var-section-title">亚洲</div>
           <div class="var-card">
@@ -691,7 +609,7 @@ av:
             </span>
           </div>
           <div class="form-row"><div class="label">文件夹命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">入库后的文件夹名模板，支持 {first_letter}/{title}/{year}/{tmdb_id} 等变量，详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-movie-folder" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{first_letter}-{title}-{year}-[tmdb={tmdb_id}]</textarea><div class="rename-example-box">示例：<code id="ex-movie-folder" class="rename-example"></code></div></div></div>
-          <div class="form-row"><div class="label">文件命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">入库后的文件名模板，<xxx> 块内变量为空时整块省略，详见「重命名规则」页。AV 流程中 {num} 与 {title} 都是番号，二者选一，同用会重复。</span></i></div><div class="control control-wide"><textarea id="rename-movie-file" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}></textarea><div class="rename-example-box">示例：<code id="ex-movie-file" class="rename-example"></code></div></div></div>
+          <div class="form-row"><div class="label">文件命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">入库后的文件名模板，<xxx> 块内变量为空时整块省略，详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-movie-file" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}></textarea><div class="rename-example-box">示例：<code id="ex-movie-file" class="rename-example"></code></div></div></div>
         </div>
 
         <div class="rename-group">
@@ -705,19 +623,6 @@ av:
           </div>
           <div class="form-row"><div class="label">文件夹命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">入库后的文件夹名模板，支持 {first_letter}/{title}/{year}/{tmdb_id} 等变量，详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-tv-folder" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{first_letter}-{title}-{year}-[tmdb={tmdb_id}]</textarea><div class="rename-example-box">示例：<code id="ex-tv-folder" class="rename-example"></code></div></div></div>
           <div class="form-row"><div class="label">文件命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">入库后的文件名模板，<xxx> 块内变量为空时整块省略，详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-tv-file" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{title}.{season_episode}<.{resource_pix}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}></textarea><div class="rename-example-box">示例：<code id="ex-tv-file" class="rename-example"></code></div></div></div>
-        </div>
-
-        <div class="rename-group">
-          <div class="rename-group-title"><span class="badge badge-amber">AV</span>
-            <span class="rn-presets" id="rn-presets-av">
-              <span style="font-size:12px;color:var(--text-3)">命名规范：</span>
-              <button class="rn-preset" data-p="default" onclick="applyRenamePreset('av','default')">默认</button>
-              <button class="rn-preset" data-p="lite" onclick="applyRenamePreset('av','lite')">精简</button>
-              <button class="rn-preset" data-p="full" onclick="applyRenamePreset('av','full')">详细</button>
-            </span>
-          </div>
-          <div class="form-row"><div class="label">文件夹命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">AV 命名规范 = 番号 + AV 标题（如 ABC-123 XXXXXX），不带画质等附加信息。{av_title} 需配置 MetaTube 识别，未识别时整块省略退回纯番号。详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-av-folder" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{first_letter}-{num}</textarea><div class="rename-example-box">示例：<code id="ex-av-folder" class="rename-example"></code></div></div></div>
-          <div class="form-row"><div class="label">文件命名规则<i class="help-tip" tabindex="0">?<span class="tip-bubble">AV 命名规范 = 番号 + AV 标题（如 ABC-123 XXXXXX.mp4），不带画质等附加信息。<xxx> 块内变量为空时整块省略；{av_title} 需 MetaTube 识别。详见「重命名规则」页。</span></i></div><div class="control control-wide"><textarea id="rename-av-file" class="auto-resize" rows="1" oninput="updateRenameExample();autoResizeTextarea(this)">{num}< {av_title}>{ext}</textarea><div class="rename-example-box">示例：<code id="ex-av-file" class="rename-example"></code></div></div></div>
         </div>
 
         <div class="form-row"><div class="label"></div><div class="control"><button class="btn btn-primary" onclick="saveConfig('org-rename')">保存配置</button> <button class="btn btn-warning" onclick="resetConfig('org-rename', this)" style="position:relative">重置配置</button></div></div>
@@ -791,11 +696,6 @@ av:
         <div class="var-section">
           <div class="var-section-title">其他</div>
           <div class="var-card">
-            <div class="var-item"><code>{num}</code><span class="var-desc">AV 番号</span><span class="var-ex">ABC-123</span></div>
-            <div class="var-item"><code>{av_title}</code><span class="var-desc">AV 真实标题（MetaTube 刮削，需配置启用）</span><span class="var-ex">高校教師</span></div>
-            <div class="var-item"><code>{av_year}</code><span class="var-desc">AV 发行年份（MetaTube）</span><span class="var-ex">2023</span></div>
-            <div class="var-item"><code>{actor}</code><span class="var-desc">AV 第一位主演（MetaTube）</span><span class="var-ex">三上悠亜</span></div>
-            <div class="var-item"><code>{actors}</code><span class="var-desc">AV 全部主演（、连接）</span><span class="var-ex">三上悠亜、天使もえ</span></div>
           </div>
         </div>
       </div>
@@ -1028,7 +928,6 @@ av:
 <div class="tabs">
         <div class="tab active" data-tab="strm">STRM配置</div>
         <div class="tab" data-tab="tmdb">TMDB配置</div>
-        <div class="tab" data-tab="metatube">MetaTube</div>
         <div class="tab" data-tab="proxy">代理配置</div>
         <div class="tab" data-tab="emby-manage">EMBY管理</div>
       </div>
@@ -1054,17 +953,6 @@ av:
           <div class="form-row"><div class="label">语言<i class="help-tip" tabindex="0">?<span class="tip-bubble">中文优先返回中文片名与简介；英文返回原名。</span></i></div><div class="control"><div class="segmented-control" id="tmdb-language-switch"><div class="seg-item active" data-value="zh-CN" onclick="setTmdbLang('zh-CN')">中文</div><div class="seg-item" data-value="en-US" onclick="setTmdbLang('en-US')">英文</div></div></div></div>
           <div class="form-row"><div class="label"></div><div class="control"><div class="btn-row"><button class="btn btn-primary" onclick="saveTmdb()">保存配置</button><button class="btn btn-outline" id="tmdb-test-btn" onclick="testTmdb()">测试连接</button><button class="btn btn-warning" onclick="resetConfig('tmdb', this)" style="position:relative">重置配置</button></div><span id="tmdb-test-result" class="test-result"></span></div></div>
         </div>
-      </div>
-
-      <!-- MetaTube 配置 -->
-      <div class="tab-panel" data-panel="metatube">
-        <div class="card">
-          <div class="form-row"><div class="label">启用识别<i class="help-tip" tabindex="0">?<span class="tip-bubble">启用后 AV 整理时自动按番号识别真实标题、演员等信息，供重命名模板与面板展示使用；未启用或识别失败时退回纯番号入库，互不影响。</span></i></div><div class="control"><div class="segmented-control" id="metatube-enabled-switch"><div class="seg-item active" data-value="true" onclick="setMetatubeEnabled(true)">启用</div><div class="seg-item" data-value="false" onclick="setMetatubeEnabled(false)">禁用</div></div></div></div>
-          <div class="form-row"><div class="label"><span class="required-mark">*</span> 服务器地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">自部署 metatube-server 的访问地址。同宿主机 Docker 部署填 http://172.17.0.1:8080，跨机填实际 IP。</span></i></div><div class="control"><input type="text" id="metatube-url" placeholder="如 http://172.17.0.1:8080"></div></div>
-          <div class="form-row"><div class="label">Token<i class="help-tip" tabindex="0">?<span class="tip-bubble">服务端设置了 MT_TOKEN 时必填，否则留空。</span></i></div><div class="control"><input type="password" id="metatube-token" autocomplete="off" title="双击显示/隐藏明文" placeholder="可留空"></div></div>
-          <div class="form-row"><div class="label"></div><div class="control"><div class="btn-row"><button class="btn btn-primary" onclick="saveConfig('metatube')">保存配置</button><button class="btn btn-outline" id="metatube-test-btn" onclick="testMetatube()">测试连接</button><button class="btn btn-warning" onclick="resetConfig('metatube', this)" style="position:relative">重置配置</button></div><span id="metatube-test-result" class="test-result"></span></div></div>
-        </div>
-        <div class="alert alert-info">MetaTube 是 AV 番号识别后端（需自行部署，一条命令：<code>docker run -d --name metatube --restart unless-stopped -p 8080:8080 ghcr.io/metatube-community/metatube-server run -r 0.0.0.0:8080</code>）。启用后 AV 整理流程：番号提取 → 自动识别真实标题/演员（结果缓存，同番号只查一次）→ 按重命名模板整理入库。识别结果只用于重命名与面板展示，不会向媒体目录写元数据文件。重命名模板可用新变量 <code>{av_title}</code>（真实标题）、<code>{av_year}</code>、<code>{actor}</code>、<code>{actors}</code>，不使用则维持番号命名不变。</div>
       </div>
 
       <!-- 代理配置 -->
@@ -1210,7 +1098,7 @@ av:
             <label style="font-size:13px"><input type="radio" name="tgsub-etype" value="source" onchange="tgSubEditTypeSwitch()"> TG群</label>
           </div></div>
           <div id="tgsub-edit-item">
-            <div class="form-row"><div class="label"><i style="color:var(--danger)">*</i> 关键词</div><div class="control"><input type="text" id="tgsub-e-keyword" placeholder="片名 / 番号" class="inline-input"></div></div>
+            <div class="form-row"><div class="label"><i style="color:var(--danger)">*</i> 关键词</div><div class="control"><input type="text" id="tgsub-e-keyword" placeholder="片名" class="inline-input"></div></div>
             <div class="form-row"><div class="label">指定频道</div><div class="control"><textarea id="tgsub-e-channels" class="auto-resize" rows="2" placeholder="留空使用全部TG群；如：@channel1&#10;@channel2"></textarea></div></div>
             <div class="form-row"><div class="label">自动转存</div><div class="control"><label style="font-size:13px;display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="tgsub-e-auto"> 命中后自动转存/离线</label></div></div>
           </div>

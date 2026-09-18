@@ -34,14 +34,13 @@ type scrapeCfg struct {
 	LocalRoot   string `json:"local_root"`
 	WriteNFO    bool   `json:"write_nfo"`
 	WriteImages bool   `json:"write_images"`
-	WriteAV     bool   `json:"write_av"` // AV（MetaTube 番号元数据 + 封面）
-	Force       bool   `json:"force"`    // 覆盖已存在的元数据文件
+	Force       bool   `json:"force"` // 覆盖已存在的元数据文件
 
 	AutoAfterOrganize bool `json:"auto_after_organize"` // 增量同步动过媒体库后自动开始刮削
 }
 
 func loadScrapeCfg() scrapeCfg {
-	c := scrapeCfg{WriteNFO: true, WriteImages: true, WriteAV: true}
+	c := scrapeCfg{WriteNFO: true, WriteImages: true}
 	if v := settingValueCompat("scrape"); v != "" {
 		_ = json.Unmarshal([]byte(v), &c)
 	}
@@ -388,7 +387,6 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 	type scrapeTarget struct {
 		key, kind, title, year string
 		tmdbID                 int
-		num                    string // 非空 = AV（MetaTube）
 	}
 	var targets []scrapeTarget
 	for _, e := range entries {
@@ -401,12 +399,6 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 				targets[len(targets)-1].kind = "tv"
 			}
 			continue
-		}
-		// 无 tmdb 标记：目录名可识别番号 → AV 目标（MetaTube）
-		if cfg.WriteAV {
-			if num := detectAVNumber(e.Title, ""); num != "" {
-				targets = append(targets, scrapeTarget{key: e.Key, kind: "av", title: e.Title, num: num})
-			}
 		}
 	}
 	sort.Slice(targets, func(i, j int) bool { return targets[i].key < targets[j].key })
@@ -432,77 +424,11 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 			scrapeMu.Unlock()
 			continue
 		}
-		if t.kind == "av" {
-			h.scrapeAVOne(cfg, dir, t.num, t.key)
-		} else {
-			h.scrapeOne(tc, cfg, dir, t.key, t.kind, t.title, t.year, t.tmdbID)
-		}
+		h.scrapeOne(tc, cfg, dir, t.key, t.kind, t.title, t.year, t.tmdbID)
 		scrapeMu.Lock()
 		scrapeSt.Done++
 		scrapeMu.Unlock()
-		time.Sleep(150 * time.Millisecond) // TMDB/MetaTube 限速保护
-	}
-}
-
-// nfoAV JAV/Kodi 元数据（番号/标题/演员/厂牌/日期/封面）
-type nfoAV struct {
-	XMLName       xml.Name     `xml:"movie"`
-	Title         string       `xml:"title"`
-	OriginalTitle string       `xml:"originaltitle"`
-	Num           string       `xml:"num"`
-	UniqueNum     string       `xml:"uniqueid"`
-	Premiered     string       `xml:"premiered"`
-	Runtime       int          `xml:"runtime"`
-	Studio        string       `xml:"studio"`
-	Director      string       `xml:"director"`
-	Actors        []nfoActor   `xml:"actor"`
-	Plot          string       `xml:"plot"`
-	Set           string       `xml:"set"`
-	Fileinfo      *nfoFileInfo `xml:"fileinfo,omitempty"`
-}
-
-// scrapeAVOne AV 条目：MetaTube 元数据 → <番号>.nfo + poster.jpg（含轨道信息）
-func (h *Handler) scrapeAVOne(cfg scrapeCfg, dir, num, key string) {
-	meta := metatubeFetchCached(num)
-	if meta == nil || meta.Status != "ok" {
-		scrapeAddErr("%s: MetaTube 未命中（未配置或未收录）", num)
-		return
-	}
-	actors := avMetaActors(meta)
-	if cfg.WriteNFO {
-		nfo := nfoAV{
-			Title:         meta.Title,
-			OriginalTitle: meta.OriginalTitle,
-			Num:           meta.Num,
-			UniqueNum:     meta.Num,
-			Premiered:     meta.ReleaseDate,
-			Runtime:       meta.Runtime,
-			Studio:        meta.Publisher,
-			Director:      meta.Director,
-			Plot:          meta.Plot,
-		}
-		for _, a := range actors {
-			nfo.Actors = append(nfo.Actors, nfoActor{Name: a})
-		}
-		if rows := scrapeDirVideoRows(key); len(rows) > 0 {
-			if probe, perr := probeFileNow(rows[0].PickCode); perr == "" {
-				nfo.Fileinfo = nfoFileInfoFrom(probe)
-			}
-		}
-		if b, err := marshalNFO(nfo); err == nil {
-			if _, err := writeMetaFile(dir, meta.Num+".nfo", b, cfg.Force); err != nil {
-				scrapeAddErr("%s: 写 %s.nfo 失败 %v", num, meta.Num, err)
-			}
-		}
-	}
-	if cfg.WriteImages && meta.CoverURL != "" {
-		if data, err := metatubeFetchCoverBytes(meta); err == nil {
-			if _, err := writeMetaFile(dir, "poster.jpg", data, cfg.Force); err != nil {
-				scrapeAddErr("%s: 写 poster.jpg 失败 %v", num, err)
-			}
-		} else {
-			scrapeAddErr("%s: 封面拉取失败 %v", num, err)
-		}
+		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
 	}
 }
 
