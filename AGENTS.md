@@ -2,6 +2,7 @@
 
 面向 AI 编码助手与新加入的开发者。阅读本文即可掌握项目定位、目录结构、关键约定与雷区。
 用户向文档见 [README.md](README.md) 与 [USAGE.md](USAGE.md)。
+**动 115 接口前先看 [REFERENCES.md](REFERENCES.md)** —— 外部参考项目清单与已验证的接口事实。
 
 ---
 
@@ -158,6 +159,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
+| 查某个 115 接口怎么调 | [REFERENCES.md](REFERENCES.md) 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
+| 做同步/整理类功能 | [REFERENCES.md](REFERENCES.md) 的「STRM 同步类项目」，里面有五个项目的策略对比 |
 
 ---
 
