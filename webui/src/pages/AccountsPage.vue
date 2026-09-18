@@ -111,21 +111,32 @@ async function check() {
   }
 }
 
-async function save() {
+/** 启用 OpenAPI 但没填 AppID 时后端会当作未启用，静默回落 Cookie——先在这里拦住 */
+function validate(): boolean {
+  if (form.value.openapi_enabled && !form.value.app_id.trim()) {
+    message.error('启用 OPENAPI 必须填写开放平台 AppID；没有 AppID 请选择「禁用」，Cookie 通道功能完整')
+    return false
+  }
+  return true
+}
+
+async function save(): Promise<boolean> {
+  if (!validate()) return false
   saving.value = true
   try {
     await storageApi.save({ name: '115主号', type: '115', ...form.value })
     message.success('保存成功')
+    return true
   } catch (e) {
     toastError(e, '保存失败')
+    return false
   } finally {
     saving.value = false
   }
 }
 
 async function saveAndScan() {
-  await save()
-  qrShow.value = true
+  if (await save()) qrShow.value = true
 }
 
 function reset() {
@@ -178,16 +189,18 @@ onMounted(load)
 
       <FieldRow
         label="启用 OPENAPI"
-        tip="强烈推荐！使用 115 官方开放平台接口，无 UA 风控、无“服务器开小差”，token 自动续期。Cookie 通道作为回退保留。"
+        tip="需先在 115 开放平台（open.115.com）申请应用拿到 AppID。没有 AppID 请保持「禁用」——Cookie 通道功能完整，且全量同步可用「快速模式」。"
       >
         <NRadioGroup v-model:value="form.openapi_enabled">
-          <NRadioButton :value="true">启用（推荐）</NRadioButton>
-          <NRadioButton :value="false">禁用</NRadioButton>
+          <NRadioButton :value="true">启用</NRadioButton>
+          <NRadioButton :value="false">禁用（默认）</NRadioButton>
         </NRadioGroup>
       </FieldRow>
 
       <FieldRow
+        v-if="form.openapi_enabled"
         label="开放平台 AppID"
+        required
         tip="在 115 开放平台（open.115.com）申请应用后获取。填入后点击“保存并扫码授权”，用 115 App 扫码完成 OAuth 授权。"
       >
         <NInputGroup>

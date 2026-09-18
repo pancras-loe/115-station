@@ -139,6 +139,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		VideoExt  []string `json:"video_ext"`
 		ImageExt  []string `json:"image_ext"`
 		DataExt   []string `json:"data_ext"`
+		Mode      string   `json:"mode"` // normal(默认) / fast
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Cid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：请填写 115 媒体库 cid"})
@@ -177,7 +178,8 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 
 	// 获取媒体库根目录名（如"俱乐部"），作为 STRM 路径的第一层
 	libName := ""
-	if cookie, err := h.get115Cookie(); err == nil {
+	cookie, _ := h.get115Cookie()
+	if cookie != "" {
 		if info, err := get115DirInfo(cookie, req.Cid); err == nil {
 			libName = info.n
 		}
@@ -188,16 +190,43 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 	skipCids, slots := h.orgSkipCids(req.Cid)
 	vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
 
-	// 递归遍历，basePath 加上库名使 STRM 路径包含该层
-	SetTaskProgress("正在遍历 115 媒体库（已发现视频可在日志查看）…")
+	// 取清单（模式见 collectSyncFiles）；libName 作为 STRM 路径第一层
 	var videos, assets []remoteFile
-	if err := walk115Dir(ops, req.Cid, libName, &videos, &assets, filter, skipCids); err != nil {
+	modeUsed, complete, err := h.collectSyncFiles(ops, cookie, req.Mode, req.Cid, libName, &videos, &assets, filter, skipCids, SetTaskProgress)
+	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "遍历 115 目录失败: " + err.Error()})
 		return
 	}
 
 	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
 	strmCreated, downloaded, skipped, failed := applySyncResults(h.DB, ops, videos, assets, req.LocalPath, domain, format, keepExt, skipExist, "")
+
+	// 孤儿标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
+	// 三个前提缺一不可——用户开了开关、清单完整、拿得到库名（台账按库名前缀分区）。
+	// 只打标不删，删除由用户在同步页看过预览后手动触发
+	orphanTotal := 0
+	if h.orphanDetectEnabled() {
+		switch {
+		case !complete:
+			log.Printf("[同步] ○ 本次清单不完整，跳过孤儿标记（避免把没取全的文件误判成已删除）")
+		case libName == "":
+			log.Printf("[同步] ○ 取不到媒体库根目录名，跳过孤儿标记（台账按库名前缀区分不同媒体库）")
+		default:
+			seen := make(map[string]bool, len(videos)+len(assets))
+			for _, f := range videos {
+				seen[f.Fid] = true
+			}
+			for _, f := range assets {
+				seen[f.Fid] = true
+			}
+			marked, cleared, total := markOrphans(h.DB, libName, seen)
+			orphanTotal = total
+			if marked+cleared+total > 0 {
+				log.Printf("[同步] ○ 孤儿标记：新增 %d，恢复 %d，当前共 %d 个待清理（同步页确认后删除）",
+					marked, cleared, total)
+			}
+		}
+	}
 
 	totalNew := strmCreated + downloaded
 	if totalNew > 0 {
@@ -213,11 +242,15 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		}
 	}
 	SetTaskProgress("")
-	log.Printf("[同步] 全量同步完成：视频 %d 个（生成 STRM %d），附属文件下载 %d 个，用时 %s",
+	log.Printf("[同步] 全量同步完成（%s模式）：视频 %d 个（生成 STRM %d），附属文件下载 %d 个，用时 %s",
+		map[string]string{"fast": "快速", "normal": "标准"}[modeUsed],
 		len(videos), strmCreated, downloaded, time.Since(fullStart).Truncate(time.Second))
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":           "全量同步完成",
+		"mode_used":         modeUsed,
+		"scan_complete":     complete,
+		"orphans":           orphanTotal,
 		"elapsed":           time.Since(fullStart).Truncate(time.Second).String(),
 		"total":             len(videos),
 		"created":           strmCreated,
@@ -299,13 +332,6 @@ func (h *Handler) RelaxedMediaPerms() {
 			log.Printf("[系统] ○ 媒体目录宽松权限已应用: %d 个目录 / %d 个文件（Emby 可写入 poster/nfo）", dirs, files)
 		}
 	}()
-}
-
-// orphanSafeExts 孤儿清理只碰这些后缀（strm 与附属），其他文件一律不动
-var orphanSafeExts = map[string]bool{
-	".strm": true, ".srt": true, ".ass": true, ".ssa": true, ".sub": true,
-	".vtt": true, ".smi": true, ".nfo": true, ".jpg": true, ".jpeg": true,
-	".png": true, ".webp": true,
 }
 
 // orgSkipCids 整理工作区（待整理/已存在/冗余/转存目录）的 cid 集合，

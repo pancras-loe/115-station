@@ -166,15 +166,20 @@ type SyncEvent struct {
 
 // SyncedFile 已同步到本地的文件台账（ strm 与附属文件），供 move/delete 事件精确定位
 type SyncedFile struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	FileID    string    `json:"file_id" gorm:"uniqueIndex;size:64;not null"` // 115 文件 id
-	PickCode  string    `json:"pick_code" gorm:"size:64"`
-	Sha1      string    `json:"sha1" gorm:"index;size:40"`               // 文件 sha1（整理去重用）
-	RelPath   string    `json:"rel_path" gorm:"size:500;not null;index"` // 相对本地库根的路径（含文件名）
-	Kind      string    `json:"kind" gorm:"size:10;index"`               // video / asset
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	FileID   string `json:"file_id" gorm:"uniqueIndex;size:64;not null"` // 115 文件 id
+	PickCode string `json:"pick_code" gorm:"size:64"`
+	Sha1     string `json:"sha1" gorm:"index;size:40"`               // 文件 sha1（整理去重用）
+	RelPath  string `json:"rel_path" gorm:"size:500;not null;index"` // 相对本地库根的路径（含文件名）
+	Kind     string `json:"kind" gorm:"size:10;index"`               // video / asset
+	Size     int64  `json:"size"`
+	// OrphanAt 最近一次「完整」全量扫描中该文件在网盘上已不存在的时刻。
+	// 非空即为孤儿候选：本地 strm/附属还在，源文件没了（网页版手动删除、
+	// 增量同步停机期间的变动等生活事件漏掉的情况）。只做标记不自动删除，
+	// 由用户在同步页看过预览后手动触发清理
+	OrphanAt  *time.Time `json:"orphan_at" gorm:"index"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // OfflinePlay 按需离线（边下边播）登记：ed2k/磁力链接 ↔ 播放端点 id。

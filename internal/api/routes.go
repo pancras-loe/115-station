@@ -298,6 +298,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/sync/tasks/:id/logs", h.GetSyncLogs)
 		protected.POST("/sync/full", h.RunFullSync)
 		protected.POST("/sync/incremental", h.RunIncrementalSync)
+		// 快速模式是否可用（规则在后端，前端不自行按通道推断）
+		protected.GET("/sync/capabilities", h.SyncCapabilities)
+		// 孤儿（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
+		protected.GET("/sync/orphans", h.ListOrphans)
+		protected.POST("/sync/orphans/clean", h.CleanOrphans)
 
 		// Cron 未来运行时间预览（校验表达式是否正确）
 		protected.POST("/sync/cron-preview", func(c *gin.Context) {
@@ -625,6 +630,12 @@ func (h *Handler) CreateStorage(c *gin.Context) {
 	var storage model.Storage
 	if err := c.ShouldBindJSON(&storage); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	// 启用 OpenAPI 必须带 AppID：缺了 open115FromDB 会当作未启用静默回落 Cookie，
+	// 用户以为自己在走开放平台，实际不是——这种「配了但没生效」最难自查，直接拒
+	if storage.OpenapiEnabled && strings.TrimSpace(storage.AppID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "启用 OPENAPI 必须填写开放平台 AppID；没有 AppID 请选择「禁用」，Cookie 通道功能完整"})
 		return
 	}
 	// upsert：按 type 去重，存在则更新（保留已有 Cookie 和账号名）

@@ -417,7 +417,7 @@ func enrichPendingCount() int64 {
 	return n
 }
 
-// executeEnrichScan 扫描媒体库入队（HTTP 与企微指令共用），返回 (视频总数, 入队数, 错误)
+// executeEnrichScan 扫描媒体库入队（企微「补全」指令触发），返回 (视频总数, 入队数, 错误)
 func (h *Handler) executeEnrichScan() (int, int, error) {
 	orgCfg, err := h.loadOrgConfig()
 	if err != nil {
@@ -434,12 +434,17 @@ func (h *Handler) executeEnrichScan() (int, int, error) {
 	skipCids, _ := h.orgSkipCids(orgCfg.Library)
 	var videos []remoteFile
 	libName := ""
-	if cookie, err := h.get115Cookie(); err == nil {
+	cookie, _ := h.get115Cookie()
+	if cookie != "" {
 		if info, err := get115DirInfo(cookie, orgCfg.Library); err == nil {
 			libName = info.n
 		}
 	}
-	if err := walk115Dir(ops, orgCfg.Library, libName, &videos, nil, filter, skipCids); err != nil {
+	// 沿用全量同步卡上选的模式：这里没有独立开关，也不该背着用户偷偷换通道
+	// progress 传 nil：本扫描不持有任务状态槽，不能覆盖别处正在展示的进度
+	// 完整性标志只有孤儿清理用得上，补全扫描不关心
+	mode, _, err := h.collectSyncFiles(ops, cookie, h.fullSyncMode(), orgCfg.Library, libName, &videos, nil, filter, skipCids, nil)
+	if err != nil {
 		return 0, 0, err
 	}
 	queued := 0
@@ -453,7 +458,8 @@ func (h *Handler) executeEnrichScan() (int, int, error) {
 			queued++
 		}
 	}
-	log.Printf("[补全] ▶ 存量扫描完成: 共 %d 个视频，%d 个缺画质信息已入队", len(videos), queued)
+	log.Printf("[补全] ▶ 存量扫描完成（%s模式）: 共 %d 个视频，%d 个缺画质信息已入队",
+		map[string]string{"fast": "快速", "normal": "标准"}[mode], len(videos), queued)
 	return len(videos), queued, nil
 }
 
