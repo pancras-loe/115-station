@@ -31,7 +31,7 @@ export const navItems: NavItem[] = [
   { name: 'tgsub', label: '订阅管理', icon: Rss },
 
   { name: 'accounts', label: '账号管理', icon: UserRoundCog, group: '媒体库' },
-  { name: 'sync', label: '账号同步', icon: RefreshCcw },
+  { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
 
   { name: 'upload-download', label: '上传下载', icon: ArrowDownUp, group: '传输' },

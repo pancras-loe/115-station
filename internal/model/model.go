@@ -174,7 +174,7 @@ type SyncedFile struct {
 	Kind     string `json:"kind" gorm:"size:10;index"`               // video / asset
 	Size     int64  `json:"size"`
 	// OrphanAt 最近一次「完整」全量扫描中该文件在网盘上已不存在的时刻。
-	// 非空即为孤儿候选：本地 strm/附属还在，源文件没了（网页版手动删除、
+	// 非空即为失效 STRM 候选：本地 strm/附属还在，源文件没了（网页版手动删除、
 	// 增量同步停机期间的变动等生活事件漏掉的情况）。只做标记不自动删除，
 	// 由用户在同步页看过预览后手动触发清理
 	OrphanAt  *time.Time `json:"orphan_at" gorm:"index"`

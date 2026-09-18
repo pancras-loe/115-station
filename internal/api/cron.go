@@ -1,9 +1,16 @@
 package api
 
-// ==================== 增量同步 Cron 调度器 ====================
+// ==================== 同步 Cron 调度器 ====================
 //
 // 支持标准 5 字段 cron（分 时 日 月 周），字段支持 * 、*/n 、a-b 、逗号列表。
-// 每分钟检查一次，命中且无同步任务运行时触发一次增量同步（CMS lift_sync_task 模式）。
+// 每分钟检查一次，命中且无同步任务运行时触发。两条独立的调度线：
+//
+//   - 增量（incr.cron）：「自动整理 → 增量同步」流水线，日常入库主力，高频
+//   - 全量（full.cron）：整库扫描，服务于失效 STRM 检测——生活事件有窗口，
+//     网页版批量删除、停机期间的删除都会漏掉，只有整库差集能查出来。低频即可
+//
+// 全量整库扫描请求量大（115 风控敏感），所以它只在用户开了失效 STRM 检测时
+// 才有意义：检测关着的时候定时全量纯属白跑一趟，前后端都直接当没开。
 
 import (
 	"strmhub/internal/model"
@@ -77,35 +84,74 @@ func (h *Handler) loadIncrCron() string {
 	return strings.TrimSpace(cfg.Cron)
 }
 
-// incrParamsFromConfig 从已保存的 full 配置组装增量参数
-func (h *Handler) incrParamsFromConfig() incrParams {
-	v := h.Config.GetSetting("full")
-	p := incrParams{Cid: "0", LocalPath: defaultLocalPath, Limit: 1000}
-	if v != "" {
-		var cfg struct {
-			Cid       string   `json:"cid"`
-			Path      string   `json:"path"`
-			LocalPath string   `json:"local_path"`
-			VideoExt  []string `json:"video_ext"`
-			ImageExt  []string `json:"image_ext"`
-			DataExt   []string `json:"data_ext"`
-		}
-		if json.Unmarshal([]byte(v), &cfg) == nil {
-			if cfg.Cid != "" {
-				p.Cid = cfg.Cid
-			}
-			if cfg.LocalPath != "" {
-				p.LocalPath = cfg.LocalPath
-			}
-			p.VideoExt, p.ImageExt, p.DataExt = cfg.VideoExt, cfg.ImageExt, cfg.DataExt
-		}
+// fullSyncCfg 全量同步的持久化配置（setting "full"，与前端「全量同步」页签同构）
+type fullSyncCfg struct {
+	Cid           string   `json:"cid"`
+	LocalPath     string   `json:"local_path"`
+	VideoExt      []string `json:"video_ext"`
+	ImageExt      []string `json:"image_ext"`
+	DataExt       []string `json:"data_ext"`
+	Mode          string   `json:"mode"`
+	DetectOrphans bool     `json:"detect_orphans"`
+	CronEnabled   bool     `json:"cron_enabled"`
+	Cron          string   `json:"cron"`
+}
+
+// loadFullSyncCfg 读取 full 配置（解析失败返回零值，调用方按「没配」处理）。
+// 走 getSettingValue 而不是 Config.GetSetting：失效 STRM 那侧的
+// orphanDetectEnabled 也是这么读的，两处读法不一致会出现
+// 「检测开着但调度器认为没开」这类只在某种部署形态下复现的偏差
+func (h *Handler) loadFullSyncCfg() fullSyncCfg {
+	var cfg fullSyncCfg
+	_ = json.Unmarshal([]byte(h.getSettingValue("full")), &cfg)
+	return cfg
+}
+
+// loadFullCron 全量同步的 cron 表达式，未启用时返回空。
+// DetectOrphans 是硬前提：定时全量的用途就是刷新失效 STRM 标记，检测关掉后
+// 前端连开关都不显示——后台若还在每天跑整库扫描，用户在界面上根本看不出来
+func (h *Handler) loadFullCron() string {
+	cfg := h.loadFullSyncCfg()
+	if !cfg.CronEnabled || !cfg.DetectOrphans {
+		return ""
+	}
+	return strings.TrimSpace(cfg.Cron)
+}
+
+// fullParamsFromConfig 从已保存的 full 配置组装全量同步参数
+func (h *Handler) fullParamsFromConfig() fullParams {
+	cfg := h.loadFullSyncCfg()
+	p := fullParams{
+		Cid: cfg.Cid, LocalPath: cfg.LocalPath, Mode: cfg.Mode,
+		VideoExt: cfg.VideoExt, ImageExt: cfg.ImageExt, DataExt: cfg.DataExt,
+	}
+	if p.LocalPath == "" {
+		p.LocalPath = defaultLocalPath
 	}
 	return p
 }
 
-// StartIncrScheduler 启动分钟级调度器：incr 配置的 cron 命中时自动执行
-// 「自动整理 → 增量同步」流水线（CMS 主任务模式；全量同步仅供手动触发，不参与调度）
-func StartIncrScheduler(h *Handler) {
+// incrParamsFromConfig 从已保存的 full 配置组装增量参数
+func (h *Handler) incrParamsFromConfig() incrParams {
+	cfg := h.loadFullSyncCfg()
+	p := incrParams{Cid: "0", LocalPath: defaultLocalPath, Limit: 1000}
+	if cfg.Cid != "" {
+		p.Cid = cfg.Cid
+	}
+	if cfg.LocalPath != "" {
+		p.LocalPath = cfg.LocalPath
+	}
+	p.VideoExt, p.ImageExt, p.DataExt = cfg.VideoExt, cfg.ImageExt, cfg.DataExt
+	return p
+}
+
+// StartSyncScheduler 启动分钟级调度器：
+//   - full 配置的 cron 命中 → 定时全量同步（刷新失效 STRM 标记）
+//   - incr 配置的 cron 命中 → 「自动整理 → 增量同步」流水线（CMS 主任务模式）
+//
+// 两者同一分钟同时命中时只跑全量：整库扫描本来就会覆盖增量那点事件，
+// 且全量跑完会把事件窗口标记为已覆盖，紧接着再跑一次增量纯属重复请求 115
+func StartSyncScheduler(h *Handler) {
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -116,18 +162,55 @@ func StartIncrScheduler(h *Handler) {
 				return
 			}
 			h.pruneSyncEvents()
+			now := time.Now()
+
+			if cron := h.loadFullCron(); cron != "" && CronMatch(cron, now) {
+				h.runScheduledFullSync()
+				continue
+			}
 
 			cron := h.loadIncrCron()
 			if cron == "" {
 				continue // 未配置调度
 			}
-			if !CronMatch(cron, time.Now()) {
+			if !CronMatch(cron, now) {
 				continue
 			}
 			h.runScheduledTick(cron)
 		}
 	}()
-	log.Println("[调度] 调度器已启动（cron 触发 自动整理+增量同步；全量同步仅手动）")
+	log.Println("[调度] 调度器已启动（cron 触发 自动整理+增量同步 / 全量同步）")
+}
+
+// runScheduledFullSync 单轮定时全量同步。defer 解锁 + recover 的理由同 runScheduledTick。
+// 只标记失效 STRM 不删除——定时任务没人盯着，误判一次就是真丢文件，
+// 清理仍然只能由用户在 Strm 管理页确认后触发
+func (h *Handler) runScheduledFullSync() {
+	p := h.fullParamsFromConfig()
+	if p.Cid == "" || p.Cid == "0" {
+		log.Printf("[定时] ○ 全量同步已开启定时，但未配置媒体库 cid，本轮跳过")
+		return
+	}
+	if !fullSyncMu.TryLock() {
+		log.Printf("[定时] ○ 已有任务运行中，本轮全量同步跳过")
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[定时] ✗ 全量同步 panic 已恢复: %v", r)
+		}
+		endTask()
+		fullSyncMu.Unlock()
+	}()
+	beginTask("定时全量同步")
+
+	sum, err := h.executeFullSync(p)
+	if err != nil {
+		log.Printf("[定时] ✗ 全量同步失败: %v", err)
+		return
+	}
+	log.Printf("[定时] ✅ 全量同步完成（%s）：视频 %d，生成 STRM %d，附属下载 %d，失效 STRM %d 个待清理",
+		sum.Elapsed, sum.Total, sum.Created, sum.AssetsDownloaded, sum.Orphans)
 }
 
 // runScheduledTick 单轮定时任务（独立函数保证 defer 在本轮结束即执行——

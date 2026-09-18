@@ -233,7 +233,7 @@ docker compose up -d
 
 1. 浏览器打开 `http://IP:6060`，用 compose 里配置的 `AUTH_USER` / `AUTH_PASSWORD` 登录
 2. **账号管理**：扫码或 OpenAPI 授权登录 115
-3. **账号同步**：配置网盘根目录与本地 `/media`，执行全量同步
+3. **Strm 管理**：`STRM 配置` 填直链域名，`全量同步` 配置网盘根目录与本地 `/media` 后跑一次全量
 4. Emby 添加媒体库指向 `/media`（可用插件中心「一键创建 Emby 媒体库」），播放确认 DirectPlay
 5. **自动整理**：配置 TMDB / 分类 / 洗版 / 重命名规则，跑一次整理验证效果
 

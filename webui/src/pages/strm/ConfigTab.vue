@@ -30,7 +30,7 @@ const example = computed(() => {
 </script>
 
 <template>
-  <SectionCard title="STRM 配置" hint="直链域名与格式">
+  <SectionCard title="STRM 配置" hint="直链域名与格式，全量 / 增量同步生成 STRM 时都按这里的规则写">
     <FieldRow
       label="STRM 直连域名"
       required

@@ -442,7 +442,7 @@ func (h *Handler) executeEnrichScan() (int, int, error) {
 	}
 	// 沿用全量同步卡上选的模式：这里没有独立开关，也不该背着用户偷偷换通道
 	// progress 传 nil：本扫描不持有任务状态槽，不能覆盖别处正在展示的进度
-	// 完整性标志只有孤儿清理用得上，补全扫描不关心
+	// 完整性标志只有失效 STRM 清理用得上，补全扫描不关心
 	mode, _, err := h.collectSyncFiles(ops, cookie, h.fullSyncMode(), orgCfg.Library, libName, &videos, nil, filter, skipCids, nil)
 	if err != nil {
 		return 0, 0, err

@@ -15,26 +15,28 @@ import (
 	"gorm.io/gorm"
 )
 
-// ==================== 孤儿清理 ====================
+// ==================== 失效 STRM 清理 ====================
 //
-// 孤儿 = 本地还有 strm/附属文件，但网盘上的源文件已经没了。
+// 失效 STRM（代码里沿用 orphan 命名，界面与日志一律叫「失效 STRM」）
+// = 本地还有 strm/附属文件，但网盘上的源文件已经没了。
 // 生活事件有窗口，增量同步停机、网页版批量删除、事件识别不出来，
 // 都会漏掉删除动作，漏掉的就永远烂在库里——Emby 还显示着条目，点开播放 404。
 //
-// 全量同步本来就会拿到网盘当前的完整文件清单，和台账做一次差集就知道谁是孤儿。
+// 全量同步本来就会拿到网盘当前的完整文件清单，和台账做一次差集就知道谁已失效。
 // 但只标记不删：
 //   - 清单不完整（翻页短缺/目录表缺项）时算出的差集是假的，一删就是真丢数据
-//   - 用户改了扩展名配置（比如去掉 jpg）也会让老文件变成孤儿，这是预期行为但要让人看见
+//   - 用户改了扩展名配置（比如去掉 jpg）也会让老文件变成失效，这是预期行为但要让人看见
 //
-// 所以流程是：全量同步打标 → 同步页显示「发现 N 个孤儿」+ 预览 → 用户点了才删。
+// 所以流程是：全量同步打标 → Strm 管理页显示「发现 N 个失效 STRM」+ 预览 → 用户点了才删。
+// 检测打开后还能配一条全量 cron 定时刷新标记（见 cron.go 的 loadFullCron）。
 
 // orphanSampleLimit 预览返回多少条（前端只做抽样展示，不下发全量清单）
 const orphanSampleLimit = 50
 
-// markOrphans 用本次扫描到的 fid 全集刷新台账的孤儿标记。
+// markOrphans 用本次扫描到的 fid 全集刷新台账的失效标记。
 // libPrefix 为媒体库根目录名：台账 rel_path 的第一层就是它（见 libraryFilesOf），
-// 据此把差集限定在本次同步的这个库内——否则同步 A 库会把 B 库的记录全判成孤儿。
-// 返回 (新标记数, 恢复数, 当前孤儿总数)
+// 据此把差集限定在本次同步的这个库内——否则同步 A 库会把 B 库的记录全判成失效。
+// 返回 (新标记数, 恢复数, 当前失效总数)
 func markOrphans(db *gorm.DB, libPrefix string, seen map[string]bool) (marked, cleared, total int) {
 	if db == nil || libPrefix == "" {
 		return 0, 0, 0
@@ -42,7 +44,7 @@ func markOrphans(db *gorm.DB, libPrefix string, seen map[string]bool) (marked, c
 	var rows []model.SyncedFile
 	if err := db.Select("id", "file_id", "orphan_at").
 		Where(`rel_path LIKE ? ESCAPE '\'`, likeEscape(libPrefix)+"/%").Find(&rows).Error; err != nil {
-		log.Printf("[同步] 孤儿标记：读取台账失败: %v", err)
+		log.Printf("[同步] 失效 STRM 标记：读取台账失败: %v", err)
 		return 0, 0, 0
 	}
 	now := time.Now()
@@ -72,7 +74,7 @@ func markOrphans(db *gorm.DB, libPrefix string, seen map[string]bool) (marked, c
 
 // likeEscape 转义 LIKE 模式里的通配符。库名带 % 或 _ 时不转义会跨库匹配——
 // 「电影_4K」的 _ 能匹配任意单字符，把「电影X4K」库的台账也拖进差集，
-// 那些记录会被判成孤儿，用户一点清理就是真丢文件
+// 那些记录会被判成失效，用户一点清理就是真丢文件
 func likeEscape(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 	return r.Replace(s)
@@ -91,7 +93,7 @@ func chunkIDs(ids []uint, size int) [][]uint {
 	return out
 }
 
-// orphanLocalRoot 本地媒体库根目录（孤儿的 rel_path 相对于它）
+// orphanLocalRoot 本地媒体库根目录（失效条目的 rel_path 相对于它）
 func (h *Handler) orphanLocalRoot() string {
 	var cfg struct {
 		LocalPath string `json:"local_path"`
@@ -102,7 +104,7 @@ func (h *Handler) orphanLocalRoot() string {
 	return defaultLocalPath
 }
 
-// orphanDetectEnabled 用户是否在同步页打开了孤儿检测（默认关）
+// orphanDetectEnabled 用户是否在 Strm 管理页打开了失效 STRM 检测（默认关）
 func (h *Handler) orphanDetectEnabled() bool {
 	var cfg struct {
 		DetectOrphans bool `json:"detect_orphans"`
@@ -111,7 +113,7 @@ func (h *Handler) orphanDetectEnabled() bool {
 	return cfg.DetectOrphans
 }
 
-// ListOrphans 孤儿预览。GET /sync/orphans
+// ListOrphans 失效 STRM 预览。GET /sync/orphans
 func (h *Handler) ListOrphans(c *gin.Context) {
 	var total, ledger int64
 	h.DB.Model(&model.SyncedFile{}).Where("orphan_at IS NOT NULL").Count(&total)
@@ -141,17 +143,17 @@ func (h *Handler) ListOrphans(c *gin.Context) {
 	})
 }
 
-// CleanOrphans 删除已标记的孤儿（本地文件 + 台账记录）。POST /sync/orphans/clean
+// CleanOrphans 删除已标记的失效 STRM（本地文件 + 台账记录）。POST /sync/orphans/clean
 // 只动 orphan_at 非空的记录——这些是上一次「完整」扫描确认过网盘已无源文件的
 func (h *Handler) CleanOrphans(c *gin.Context) {
 	root := h.orphanLocalRoot()
 	var rows []model.SyncedFile
 	if err := h.DB.Where("orphan_at IS NOT NULL").Find(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取孤儿列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取失效 STRM 列表失败: " + err.Error()})
 		return
 	}
 	if len(rows) == 0 {
-		c.JSON(http.StatusOK, gin.H{"message": "没有待清理的孤儿", "removed": 0})
+		c.JSON(http.StatusOK, gin.H{"message": "没有待清理的失效 STRM", "removed": 0})
 		return
 	}
 
@@ -168,7 +170,7 @@ func (h *Handler) CleanOrphans(c *gin.Context) {
 			missing++ // 本地早就没了，台账清掉即可
 		default:
 			failed++
-			log.Printf("[同步] 孤儿清理失败 %s: %v", r.RelPath, err)
+			log.Printf("[同步] 失效 STRM 清理失败 %s: %v", r.RelPath, err)
 			continue // 删不掉就留着台账，下次再试
 		}
 		doneIDs = append(doneIDs, r.ID)
@@ -176,9 +178,9 @@ func (h *Handler) CleanOrphans(c *gin.Context) {
 	for _, batch := range chunkIDs(doneIDs, 400) {
 		h.DB.Where("id IN ?", batch).Delete(&model.SyncedFile{})
 	}
-	log.Printf("[同步] ○ 孤儿清理完成：删除 %d 个，本地已不存在 %d 个，失败 %d 个", removed, missing, failed)
+	log.Printf("[同步] ○ 失效 STRM 清理完成：删除 %d 个，本地已不存在 %d 个，失败 %d 个", removed, missing, failed)
 	c.JSON(http.StatusOK, gin.H{
-		"message": "孤儿清理完成", "removed": removed, "missing": missing, "failed": failed,
+		"message": "失效 STRM 清理完成", "removed": removed, "missing": missing, "failed": failed,
 	})
 }
 

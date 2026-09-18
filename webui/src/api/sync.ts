@@ -2,6 +2,7 @@ import { http } from './client'
 
 export type FullSyncMode = 'normal' | 'fast'
 
+/** 同步接口的请求体（/sync/full 与 /sync/incremental 共用） */
 export interface SyncExtConfig {
   cid: string
   local_path: string
@@ -10,17 +11,30 @@ export interface SyncExtConfig {
   data_ext: string[]
   /** 全量同步模式；增量同步忽略此字段 */
   mode?: FullSyncMode
-  /** 全量同步后标记孤儿（本地还在、网盘已删）；只打标，删除要单独确认 */
-  detect_orphans?: boolean
+}
+
+/** setting「full」的持久化结构（与后端 fullSyncCfg 同构） */
+export interface FullSyncConfig {
+  cid: string
+  local_path: string
+  video_ext: string[]
+  image_ext: string[]
+  data_ext: string[]
+  mode: FullSyncMode
+  /** 失效 STRM 检测：全量同步后标出「本地还在、网盘已删」的条目，只打标不删 */
+  detect_orphans: boolean
+  /** 定时全量开关。只在 detect_orphans 打开时生效，后端同样按此判定 */
+  cron_enabled: boolean
+  cron: string
 }
 
 export interface FullSyncResult {
   message?: string
   /** 实际使用的模式：选了 fast 但接口失败时会降级为 normal */
   mode_used?: FullSyncMode
-  /** 本次清单是否完整；false 时后端会跳过孤儿标记 */
+  /** 本次清单是否完整；false 时后端会跳过失效 STRM 标记 */
   scan_complete?: boolean
-  /** 当前待清理的孤儿数 */
+  /** 当前待清理的失效 STRM 数 */
   orphans?: number
   total: number
   created: number
@@ -74,11 +88,12 @@ export interface OrphanEntry {
   marked_at: string
 }
 
+/** 失效 STRM 报告（接口沿用 orphan 命名，界面一律叫「失效 STRM」） */
 export interface OrphanReport {
   enabled: boolean
   total: number
   ledger_total: number
-  /** 孤儿占台账总数的比例，异常偏高时前端要拦一下 */
+  /** 失效条目占台账总数的比例，异常偏高时前端要拦一下 */
   ratio: number
   sample: OrphanEntry[]
   sample_limit: number

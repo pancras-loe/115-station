@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -128,9 +129,37 @@ func TaskStatus() (bool, string, time.Time, string) {
 	return taskRunning, taskName, taskStart, taskProgress
 }
 
-// RunFullSync 执行全量同步：递归遍历 cid 目录，视频生成 .strm，附属文件实体落盘
-// 附属文件 = 用户配置的图片后缀 + 数据文件后缀 + nfo（Emby/Jellyfin 标准元数据）；
-// 不在过滤集合内的文件一律不同步
+// fullParams 全量同步参数（HTTP 入口与 cron 调度器共用）
+type fullParams struct {
+	Cid       string
+	LocalPath string
+	VideoExt  []string
+	ImageExt  []string
+	DataExt   []string
+	Mode      string // normal(默认) / fast
+}
+
+// fullSummary 全量同步结果摘要
+type fullSummary struct {
+	ModeUsed         string // 实际使用的模式：选了 fast 但端点不可用时会降级为 normal
+	ScanComplete     bool   // 本次清单是否完整；false 时跳过失效 STRM 标记
+	Orphans          int    // 当前待清理的失效 STRM 数
+	Elapsed          string
+	Total            int
+	Created          int
+	AssetsTotal      int
+	AssetsDownloaded int
+	AssetsSkipped    int
+	AssetsFailed     int
+}
+
+// fullConfigErr 配置类失败（拿不到可用的 115 通道等）。HTTP 入口据此回 400 而不是 502——
+// 这类错误重试多少次结果都一样，得让用户回去改配置
+type fullConfigErr struct{ err error }
+
+func (e fullConfigErr) Error() string { return e.err.Error() }
+
+// RunFullSync 全量同步 HTTP 入口
 // POST /sync/full  body: {"cid":"...","local_path":"...","video_ext":["mp4"],"image_ext":["jpg"],"data_ext":["ass"]}
 func (h *Handler) RunFullSync(c *gin.Context) {
 	var req struct {
@@ -145,9 +174,6 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：请填写 115 媒体库 cid"})
 		return
 	}
-	if req.LocalPath == "" {
-		req.LocalPath = defaultLocalPath
-	}
 
 	// 同一时刻只允许一个全量同步
 	if !fullSyncMu.TryLock() {
@@ -157,6 +183,43 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 	defer fullSyncMu.Unlock()
 	beginTask("全量同步")
 	defer endTask()
+
+	sum, err := h.executeFullSync(fullParams{
+		Cid: req.Cid, LocalPath: req.LocalPath,
+		VideoExt: req.VideoExt, ImageExt: req.ImageExt, DataExt: req.DataExt, Mode: req.Mode,
+	})
+	if err != nil {
+		var ce fullConfigErr
+		if errors.As(err, &ce) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": ce.Error()})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message":           "全量同步完成",
+		"mode_used":         sum.ModeUsed,
+		"scan_complete":     sum.ScanComplete,
+		"orphans":           sum.Orphans,
+		"elapsed":           sum.Elapsed,
+		"total":             sum.Total,
+		"created":           sum.Created,
+		"assets_total":      sum.AssetsTotal,
+		"assets_downloaded": sum.AssetsDownloaded,
+		"assets_skipped":    sum.AssetsSkipped,
+		"assets_failed":     sum.AssetsFailed,
+	})
+}
+
+// executeFullSync 全量同步核心：递归遍历 cid 目录，视频生成 .strm，附属文件实体落盘。
+// 附属文件 = 用户配置的图片后缀 + 数据文件后缀 + nfo（Emby/Jellyfin 标准元数据）；
+// 不在过滤集合内的文件一律不同步。
+// 调用方负责持有 fullSyncMu 与 beginTask/endTask（HTTP 入口与 cron 调度器都要用）
+func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
+	if p.LocalPath == "" {
+		p.LocalPath = defaultLocalPath
+	}
 	fullStart := time.Now()
 
 	// 读取 STRM 直链配置
@@ -165,14 +228,13 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 	// 构造统一操作通道（OpenAPI 优先，Cookie 回退）
 	ops, err := h.newPan115Ops()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		return nil, fullConfigErr{err}
 	}
 
 	// 过滤器：视频组生成 strm；附属组 = 图片后缀 ∪ 数据后缀 ∪ .nfo（始终包含）
 	filter := &syncFilter{
-		videoExts: buildExtSet(req.VideoExt),
-		assetExts: buildExtSet(append(append([]string{}, req.ImageExt...), req.DataExt...)),
+		videoExts: buildExtSet(p.VideoExt),
+		assetExts: buildExtSet(append(append([]string{}, p.ImageExt...), p.DataExt...)),
 	}
 	filter.assetExts[".nfo"] = true
 
@@ -180,37 +242,36 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 	libName := ""
 	cookie, _ := h.get115Cookie()
 	if cookie != "" {
-		if info, err := get115DirInfo(cookie, req.Cid); err == nil {
+		if info, err := get115DirInfo(cookie, p.Cid); err == nil {
 			libName = info.n
 		}
 	}
 
-	log.Printf("[同步] ▶ 全量同步开始（媒体库 cid=%s → %s）", req.Cid, req.LocalPath)
+	log.Printf("[同步] ▶ 全量同步开始（媒体库 cid=%s → %s）", p.Cid, p.LocalPath)
 	// 整理工作区不参与同步（见 orgSkipCids）；打印各槽位配置情况，配错配漏一眼可见
-	skipCids, slots := h.orgSkipCids(req.Cid)
+	skipCids, slots := h.orgSkipCids(p.Cid)
 	vlog("[同步] ○ 整理工作区排除: %s（✗ 的槽位对应目录会被当成媒体同步，请到对应配置卡重新选择目录）", strings.Join(slots, " "))
 
 	// 取清单（模式见 collectSyncFiles）；libName 作为 STRM 路径第一层
 	var videos, assets []remoteFile
-	modeUsed, complete, err := h.collectSyncFiles(ops, cookie, req.Mode, req.Cid, libName, &videos, &assets, filter, skipCids, SetTaskProgress)
+	modeUsed, complete, err := h.collectSyncFiles(ops, cookie, p.Mode, p.Cid, libName, &videos, &assets, filter, skipCids, SetTaskProgress)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "遍历 115 目录失败: " + err.Error()})
-		return
+		return nil, fmt.Errorf("遍历 115 目录失败: %w", err)
 	}
 
 	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
-	strmCreated, downloaded, skipped, failed := applySyncResults(h.DB, ops, videos, assets, req.LocalPath, domain, format, keepExt, skipExist, "")
+	strmCreated, downloaded, skipped, failed := applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
 
-	// 孤儿标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
+	// 失效 STRM 标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
 	// 三个前提缺一不可——用户开了开关、清单完整、拿得到库名（台账按库名前缀分区）。
-	// 只打标不删，删除由用户在同步页看过预览后手动触发
+	// 只打标不删，删除由用户在 Strm 管理页看过预览后手动触发
 	orphanTotal := 0
 	if h.orphanDetectEnabled() {
 		switch {
 		case !complete:
-			log.Printf("[同步] ○ 本次清单不完整，跳过孤儿标记（避免把没取全的文件误判成已删除）")
+			log.Printf("[同步] ○ 本次清单不完整，跳过失效 STRM 标记（避免把没取全的文件误判成已删除）")
 		case libName == "":
-			log.Printf("[同步] ○ 取不到媒体库根目录名，跳过孤儿标记（台账按库名前缀区分不同媒体库）")
+			log.Printf("[同步] ○ 取不到媒体库根目录名，跳过失效 STRM 标记（台账按库名前缀区分不同媒体库）")
 		default:
 			seen := make(map[string]bool, len(videos)+len(assets))
 			for _, f := range videos {
@@ -222,7 +283,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 			marked, cleared, total := markOrphans(h.DB, libName, seen)
 			orphanTotal = total
 			if marked+cleared+total > 0 {
-				log.Printf("[同步] ○ 孤儿标记：新增 %d，恢复 %d，当前共 %d 个待清理（同步页确认后删除）",
+				log.Printf("[同步] ○ 失效 STRM 标记：新增 %d，恢复 %d，当前共 %d 个待清理（Strm 管理页确认后删除）",
 					marked, cleared, total)
 			}
 		}
@@ -230,7 +291,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 
 	totalNew := strmCreated + downloaded
 	if totalNew > 0 {
-		h.notifyEmbyRefresh(req.LocalPath)
+		h.notifyEmbyRefresh(p.LocalPath)
 	}
 	// 全量已覆盖一切：把事件窗口内的生活事件标记为已处理，
 	// 之后的增量同步只处理此后发生的新事件
@@ -246,19 +307,18 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		map[string]string{"fast": "快速", "normal": "标准"}[modeUsed],
 		len(videos), strmCreated, downloaded, time.Since(fullStart).Truncate(time.Second))
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":           "全量同步完成",
-		"mode_used":         modeUsed,
-		"scan_complete":     complete,
-		"orphans":           orphanTotal,
-		"elapsed":           time.Since(fullStart).Truncate(time.Second).String(),
-		"total":             len(videos),
-		"created":           strmCreated,
-		"assets_total":      len(assets),
-		"assets_downloaded": downloaded,
-		"assets_skipped":    skipped,
-		"assets_failed":     failed,
-	})
+	return &fullSummary{
+		ModeUsed:         modeUsed,
+		ScanComplete:     complete,
+		Orphans:          orphanTotal,
+		Elapsed:          time.Since(fullStart).Truncate(time.Second).String(),
+		Total:            len(videos),
+		Created:          strmCreated,
+		AssetsTotal:      len(assets),
+		AssetsDownloaded: downloaded,
+		AssetsSkipped:    skipped,
+		AssetsFailed:     failed,
+	}, nil
 }
 
 // ---- 日志分级：simple 模式静默过程性日志（目录遍历/搜索/302/播放改写），只留关键节点与异常 ----

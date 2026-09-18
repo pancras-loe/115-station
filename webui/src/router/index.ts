@@ -38,7 +38,7 @@ const routes: RouteRecordRaw[] = [
         path: 'sync',
         name: 'sync',
         component: () => import('@/pages/SyncPage.vue'),
-        meta: { title: '115 账号同步', desc: '全量 / 增量 / 分享同步', icon: 'sync' },
+        meta: { title: 'Strm 管理', desc: 'STRM 配置 / 全量同步 / 增量同步', icon: 'sync' },
       },
       {
         path: 'organize',
@@ -62,7 +62,7 @@ const routes: RouteRecordRaw[] = [
         path: 'settings',
         name: 'settings',
         component: () => import('@/pages/SettingsPage.vue'),
-        meta: { title: '系统配置', desc: 'STRM / TMDB / 代理 / EMBY 配置', icon: 'settings' },
+        meta: { title: '系统配置', desc: 'TMDB / 代理 / EMBY 配置', icon: 'settings' },
       },
       {
         path: 'message',

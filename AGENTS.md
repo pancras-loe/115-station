@@ -67,12 +67,12 @@
 |---|---|---|
 | **路由与认证** | `routes.go` | `Handler{DB, Config}` + 全部路由注册 + 登录防爆破 + 备份/日志接口 |
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
-| **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` | 全量 / 增量（生活事件）/ 分享转存 / 上传与监控回传 |
+| **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` `orphan115.go` `cron.go` | 全量 / 增量（生活事件）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / cron 调度 |
 | **整理流水线** | `organize.go` `org115.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移；`resource.go` 是文件名结构化解析的核心 |
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `cron.go` `offline.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、定时任务、离线下载、媒体库封面生成、115 签到、容器内自更新 |
+| **其他** | `dashboard.go` `offline.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、离线下载、媒体库封面生成、115 签到、容器内自更新 |
 
 ### 数据模型（`internal/model/model.go`）
 
@@ -140,6 +140,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 5. **凭据不入库**：`.gitignore` 已排除 `.localtest/`、`data/`、`*.db`、`*.log`。
    任何 115 Cookie、TMDB key、机器人密钥都只能落在 `/config` 或数据库，不进源码。
 6. **别用 `gin.Default()`**：它自带的访问日志会让每个 HTTP 请求刷一行，实时日志页会被淹没。
+   另：代码里的 `orphan*`（`orphan115.go`、`detect_orphans`、`/sync/orphans`）在界面和日志里一律叫
+   **「失效 STRM」**，改这块时别把两套词混进用户可见的文案。
 7. **自更新路径**：`selfupdate.go` + `main.go` 的 `update-finish` 子命令依赖挂载 Docker socket。
    主容器不能停自己，收尾必须由独立进程完成——改动这条链路前先读懂两处注释。
 
@@ -158,6 +160,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
+| 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，三个页签在 `webui/src/pages/strm/` |
+| 改同步定时 | `internal/api/cron.go`：全量 cron（服务于失效 STRM 检测）与增量 cron（自动整理+增量流水线）两条线 |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
 | 查某个 115 接口怎么调 | [REFERENCES.md](REFERENCES.md) 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | [REFERENCES.md](REFERENCES.md) 的「STRM 同步类项目」，里面有五个项目的策略对比 |

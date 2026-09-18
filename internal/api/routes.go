@@ -201,8 +201,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 应用用户设置的 115 API 请求间隔（数据库 > 环境变量 > 默认 1s）
 	Apply115Interval(db)
 
-	// 启动增量同步 cron 调度器（每分钟检查 incr 配置）
-	StartIncrScheduler(h)
+	// 启动同步 cron 调度器（每分钟检查 full / incr 配置）
+	StartSyncScheduler(h)
 
 	// 启动转存目录守望者（下载完成后 ~1 分钟自动整理）
 	StartTransferWatcher(h)
@@ -300,7 +300,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/sync/incremental", h.RunIncrementalSync)
 		// 快速模式是否可用（规则在后端，前端不自行按通道推断）
 		protected.GET("/sync/capabilities", h.SyncCapabilities)
-		// 孤儿（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
+		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
 		protected.GET("/sync/orphans", h.ListOrphans)
 		protected.POST("/sync/orphans/clean", h.CleanOrphans)
 

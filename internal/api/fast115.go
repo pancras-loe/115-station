@@ -143,7 +143,7 @@ func fetch115FlatPage(cookie, cid string, offset int) ([]map[string]interface{},
 // basePath 为媒体库根目录名（作为 STRM 路径第一层）；assets 为 nil 时只收视频。
 //
 // 第一个返回值表示本次清单是否「完整」——翻页短缺、祖先链断裂都会置 false。
-// 孤儿清理拿它当闸：清单不完整时算出来的「网盘已删除」可能是假的，一删就是真丢数据。
+// 失效 STRM 清理拿它当闸：清单不完整时算出来的「网盘已删除」可能是假的，一删就是真丢数据。
 func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remoteFile, f *syncFilter, skipCids map[string]bool) (bool, error) {
 	// ① 首页：一次拿到总数 + 第一批数据 + 一个 pickcode（用来推不动点）
 	first, total, origin, err := fetch115FlatPage(cookie, rootCid, 0)
@@ -152,7 +152,7 @@ func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remo
 	}
 	if total == 0 || len(first) == 0 {
 		log.Printf("[同步] ○ 快速模式：子树内没有文件（cid=%s）", rootCid)
-		// 空库是个完整而合法的结果：调用方据此可以把整个台账判成孤儿
+		// 空库是个完整而合法的结果：调用方据此可以把整个台账判成失效
 		return true, nil
 	}
 	vlog("[同步] 快速模式：子树内共 %d 个文件（%s）", total, origin)

@@ -3,6 +3,9 @@ package api
 import (
 	"testing"
 	"time"
+
+	"strmhub/internal/config"
+	"strmhub/internal/model"
 )
 
 func TestCronMatch(t *testing.T) {
@@ -26,6 +29,35 @@ func TestCronMatch(t *testing.T) {
 	for _, c := range cases {
 		if got := CronMatch(c.expr, ts); got != c.want {
 			t.Errorf("CronMatch(%q, %v) = %v, want %v", c.expr, ts, got, c.want)
+		}
+	}
+}
+
+// 定时全量只服务于失效 STRM 检测：检测关掉后，即便配置里还留着
+// cron_enabled 与表达式，调度器也必须当没开——否则界面上看不到开关，
+// 后台却在每天偷偷跑一次整库扫描（115 风控高危）
+func TestLoadFullCronGatedByOrphanDetect(t *testing.T) {
+	if _, err := model.InitDB("file:fullcron_test?mode=memory&cache=shared"); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	h := &Handler{DB: model.DB, Config: &config.Config{}}
+
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"检测+开关都开", `{"detect_orphans":true,"cron_enabled":true,"cron":"0 4 * * *"}`, "0 4 * * *"},
+		{"检测关", `{"detect_orphans":false,"cron_enabled":true,"cron":"0 4 * * *"}`, ""},
+		{"开关关", `{"detect_orphans":true,"cron_enabled":false,"cron":"0 4 * * *"}`, ""},
+		{"表达式为空", `{"detect_orphans":true,"cron_enabled":true,"cron":"  "}`, ""},
+		{"配置损坏", `not-json`, ""},
+	}
+	for _, c := range cases {
+		model.DB.Where("1=1").Delete(&model.Setting{})
+		model.DB.Create(&model.Setting{Key: "full", Value: c.value})
+		if got := h.loadFullCron(); got != c.want {
+			t.Errorf("%s: loadFullCron() = %q, want %q", c.name, got, c.want)
 		}
 	}
 }
