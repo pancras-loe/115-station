@@ -73,18 +73,12 @@ var renameTpl *RenameConfig
 // 回退默认模板。此前只在 runOrganizeEngine 里初始化，转存触发的
 // runOrganizeEngineWithConfig 不经过它 → renameBeforeMove 解引用 nil panic
 func ensureRenameTpl() {
+	renameTpl = defaultRenameConfig()
 	if v := modelSettingValue("org-rename"); v != "" {
 		var saved RenameConfig
 		if json.Unmarshal([]byte(v), &saved) == nil {
-			renameTpl = &saved
-			return
+			mergeRenameConfig(renameTpl, &saved)
 		}
-	}
-	renameTpl = &RenameConfig{
-		MovieFolder: "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
-		MovieFile:   "{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
-		TVFolder:    "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
-		TVFile:      "{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
 	}
 }
 
@@ -94,6 +88,32 @@ type RenameConfig struct {
 	MovieFile   string `json:"movie_file"`   // 电影文件命名规则
 	TVFolder    string `json:"tv_folder"`    // 电视剧文件夹命名规则
 	TVFile      string `json:"tv_file"`      // 电视剧文件命名规则
+}
+
+// defaultRenameConfig 是唯一内置方案。界面只允许在此基础上自定义，不再维护多套预设，
+// 避免前后端默认值漂移后同一份资源在不同入口得到不同路径。
+func defaultRenameConfig() *RenameConfig {
+	return &RenameConfig{
+		MovieFolder: "{title}.{year}<.[[tmdbid={tmdb_id}]]>",
+		MovieFile:   "{title}<.{en_title.replace('.', ' ')}>.{year}<.{resource_type}><.{resource_effect.replace('.', ' ')}><.{resource_pix}><.{video_encode}><.{audio_encode}>{ext}",
+		TVFolder:    "{title}.{year}<.[[tmdbid={tmdb_id}]]>/Season {season_num}",
+		TVFile:      "{title}<.{en_title.replace('.', ' ')}>.{season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}>{ext}",
+	}
+}
+
+func mergeRenameConfig(dst, src *RenameConfig) {
+	if src.MovieFolder != "" {
+		dst.MovieFolder = src.MovieFolder
+	}
+	if src.MovieFile != "" {
+		dst.MovieFile = src.MovieFile
+	}
+	if src.TVFolder != "" {
+		dst.TVFolder = src.TVFolder
+	}
+	if src.TVFile != "" {
+		dst.TVFile = src.TVFile
+	}
 }
 
 // loadOrgConfig 从数据库加载整理配置
@@ -622,23 +642,42 @@ func buildNewNameWithTemplate(media *TmdbMedia, parsed *ParsedName, originalName
 		return buildNewName(media, parsed, pathExt(originalName)) // 降级到硬编码
 	}
 	ctx := buildRenameContext(media, parsed, originalName)
-	var path string
+	var folder, file string
 	switch media.MediaType {
 	case "movie":
-		path = ctx.ApplyTemplate(renameTpl.MovieFolder) + "/" + ctx.ApplyTemplate(renameTpl.MovieFile)
+		folder, file = ctx.ApplyTemplate(renameTpl.MovieFolder), ctx.ApplyTemplate(renameTpl.MovieFile)
 	case "tv":
-		path = ctx.ApplyTemplate(renameTpl.TVFolder) + "/" + ctx.ApplyTemplate(renameTpl.TVFile)
+		folder, file = ctx.ApplyTemplate(renameTpl.TVFolder), ctx.ApplyTemplate(renameTpl.TVFile)
 	default:
 		return ""
 	}
-	// 剧集需要插入 Season 目录（如果模板没有包含）
-	if media.MediaType == "tv" && parsed.Season > 0 && !strings.Contains(path, "Season") {
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) == 2 {
-			path = parts[0] + "/" + fmt.Sprintf("Season %02d", parsed.Season) + "/" + parts[1]
+	// 剧集需要插入 Season 目录（模板没带就补一层）
+	if media.MediaType == "tv" && parsed.Season > 0 && !folderHasSeason(renameTpl.TVFolder, folder) {
+		folder += "/" + fmt.Sprintf("Season %02d", parsed.Season)
+	}
+	return sanitizePath(folder + "/" + file)
+}
+
+// seasonDirRe 匹配「这一段就是个季目录」的写法
+var seasonDirRe = regexp.MustCompile(`(?i)^(season\s*\d+|specials|第.+季)$`)
+
+// folderHasSeason 判断文件夹模板是否已经自己安排了季目录。
+//
+// 先看模板有没有引用季变量（最可靠），再退回看渲染结果里有没有整段是
+// 季目录。不能拿 strings.Contains(folder, "Season") 了事——《Season of
+// the Witch》这类片名会让整个剧集都漏掉 Season 层
+func folderHasSeason(tpl, rendered string) bool {
+	for _, v := range []string{"{season_num}", "{season_episode}", "{season_name}"} {
+		if strings.Contains(tpl, v) {
+			return true
 		}
 	}
-	return sanitizePath(path)
+	for _, seg := range strings.Split(rendered, "/") {
+		if seasonDirRe.MatchString(strings.TrimSpace(seg)) {
+			return true
+		}
+	}
+	return false
 }
 
 // titleFirstLetter 取标题首字母：英文取首字母，中文取拼音首字母（巴→B），数字为 #

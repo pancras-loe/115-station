@@ -35,6 +35,34 @@ func TestApplyTemplateSingleBracketKept(t *testing.T) {
 	}
 }
 
+func TestApplyTemplateStringExpressions(t *testing.T) {
+	media := &TmdbMedia{TmdbID: 1726, Title: "钢铁侠", OriginalTitle: "Iron.Man", Year: "2008", MediaType: "movie"}
+	parsed := &ParsedName{Title: "钢铁侠", Year: "2008"}
+	ctx := buildRenameContext(media, parsed, "钢铁侠.2008.DV.HDR.mkv")
+
+	got := ctx.ApplyTemplate("{title}<.{en_title.replace('.', ' ')}><.{resource_effect.replace('.', ' ')}>.{en_title.lower()}.{en_title.upper()}{ext}")
+	want := "钢铁侠.Iron Man.DV HDR.iron.man.IRON.MAN.mkv"
+	if got != want {
+		t.Fatalf("字符串变换结果 %q，预期 %q", got, want)
+	}
+}
+
+func TestDefaultRenameConfig(t *testing.T) {
+	cfg := defaultRenameConfig()
+	if cfg.MovieFolder != "{title}.{year}<.[[tmdbid={tmdb_id}]]>" {
+		t.Errorf("电影文件夹默认规则不正确: %q", cfg.MovieFolder)
+	}
+	if cfg.MovieFile != "{title}<.{en_title.replace('.', ' ')}>.{year}<.{resource_type}><.{resource_effect.replace('.', ' ')}><.{resource_pix}><.{video_encode}><.{audio_encode}>{ext}" {
+		t.Errorf("电影文件默认规则不正确: %q", cfg.MovieFile)
+	}
+	if cfg.TVFolder != "{title}.{year}<.[[tmdbid={tmdb_id}]]>/Season {season_num}" {
+		t.Errorf("剧集文件夹默认规则不正确: %q", cfg.TVFolder)
+	}
+	if cfg.TVFile != "{title}<.{en_title.replace('.', ' ')}>.{season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}>{ext}" {
+		t.Errorf("剧集文件默认规则不正确: %q", cfg.TVFile)
+	}
+}
+
 // 分类名归一化：前缀要剥到底，分类名本身就是一级分类名时视为「不要二级分类」
 func TestNormalizeCategoryName(t *testing.T) {
 	for in, want := range map[string]string{
@@ -128,5 +156,56 @@ func TestFileKindSummary(t *testing.T) {
 	rec := []orgRecordFile{{Name: "电影.mkv"}, {Name: "电影.srt"}}
 	if recordKindSummary(rec) != fileKindSummary([]remoteFile{{Name: "电影.mkv"}, {Name: "电影.srt"}}) {
 		t.Error("记录侧与整理侧的分类汇总口径不一致")
+	}
+}
+
+// 多级文件夹模板 + 缺年份：中间段不能留下 "钢铁侠." 这种尾巴
+func TestSanitizePathTrimsSegments(t *testing.T) {
+	for in, want := range map[string]string{
+		"钢铁侠./Season 01/a.mkv": "钢铁侠/Season 01/a.mkv",
+		"钢铁侠.2008//x.mkv":      "钢铁侠.2008/x.mkv",
+		"  钢铁侠 -/Season 01/":   "钢铁侠/Season 01",
+	} {
+		if got := sanitizePath(in); got != want {
+			t.Errorf("sanitizePath(%q) = %q，预期 %q", in, got, want)
+		}
+	}
+}
+
+// Season 目录只看文件夹段：片名里带 Season 的剧集也要补目录
+func TestBuildNewNameSeasonDirFromFolderOnly(t *testing.T) {
+	saved := renameTpl
+	defer func() { renameTpl = saved }()
+	renameTpl = &RenameConfig{
+		TVFolder: "{title}.{year}",
+		TVFile:   "{title}.{season_episode}{ext}",
+	}
+
+	media := &TmdbMedia{TmdbID: 1, Title: "Season of the Witch", Year: "2011", MediaType: "tv"}
+	got := buildNewNameWithTemplate(media, &ParsedName{Season: 1, Episode: 2}, "x.mkv")
+	want := "Season of the Witch.2011/Season 01/Season of the Witch.S01E02.mkv"
+	if got != want {
+		t.Fatalf("Season 目录补位结果 %q，预期 %q", got, want)
+	}
+}
+
+// 模板自己安排了季目录（默认模板的季变量，或手写的字面量）就不再补一层
+func TestBuildNewNameSeasonDirNotDuplicated(t *testing.T) {
+	saved := renameTpl
+	defer func() { renameTpl = saved }()
+
+	for _, tc := range []struct {
+		folder string
+		want   string
+	}{
+		{defaultRenameConfig().TVFolder, "海贼王.1999.{tmdbid=2}/Season 1/海贼王.S01E02.mkv"},
+		{"{title}/Season 01", "海贼王/Season 01/海贼王.S01E02.mkv"},
+		{"{title}/第一季", "海贼王/第一季/海贼王.S01E02.mkv"},
+	} {
+		renameTpl = &RenameConfig{TVFolder: tc.folder, TVFile: "{title}.{season_episode}{ext}"}
+		media := &TmdbMedia{TmdbID: 2, Title: "海贼王", Year: "1999", MediaType: "tv"}
+		if got := buildNewNameWithTemplate(media, &ParsedName{Season: 1, Episode: 2}, "x.mkv"); got != tc.want {
+			t.Errorf("模板 %q 结果 %q，预期 %q", tc.folder, got, tc.want)
+		}
 	}
 }

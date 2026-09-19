@@ -68,6 +68,7 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 	result := template
 
 	replacements := ctx.allReplacements()
+	addExpressionReplacements(template, replacements)
 
 	// 第一步：处理 <> 块语法（变量非空才输出块内容）
 	// 格式：<.{resource_pix}> → resource_pix 非空时输出 ".1080p"，空时输出 ""
@@ -108,6 +109,29 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 
 // parenValueRe 匹配 (.xxx) 形式（括号内有点+值）→ 提取 .xxx（去掉括号）
 var parenValueRe = regexp.MustCompile(`\((\.[\w.-]+)\)`)
+
+// templateExprRe 只开放无副作用的字符串变换，既满足命名清洗需要，也避免把模板变成
+// 可执行脚本。replace 使用单引号参数，与前端规则构建器展示的写法保持一致。
+var templateExprRe = regexp.MustCompile(`\{([a-z_]+)(?:\.replace\('([^']*)',\s*'([^']*)'\)|\.(lower|upper)\(\))\}`)
+
+func addExpressionReplacements(template string, replacements map[string]string) {
+	for _, match := range templateExprRe.FindAllStringSubmatch(template, -1) {
+		base, ok := replacements["{"+match[1]+"}"]
+		if !ok {
+			continue
+		}
+		value := base
+		switch match[4] {
+		case "lower":
+			value = strings.ToLower(value)
+		case "upper":
+			value = strings.ToUpper(value)
+		default:
+			value = strings.ReplaceAll(value, match[2], match[3])
+		}
+		replacements[match[0]] = value
+	}
+}
 
 // processBlocks 处理 <> 块语法
 // 语法：<任意文字{variable}任意文字> — 块内所有 {variable} 非空时输出整块，有空变量时丢弃整块
@@ -220,12 +244,7 @@ func (ctx *RenameContext) seasonEpisode() string {
 
 // LoadRenameTemplates 从配置加载重命名模板（yaml 优先，DB 回退）
 func (h *Handler) LoadRenameTemplates() *RenameConfig {
-	cfg := &RenameConfig{
-		MovieFolder: "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
-		MovieFile:   "{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
-		TVFolder:    "{first_letter}-{title}-{year}-[tmdb={tmdb_id}]",
-		TVFile:      "{title} - {season_episode}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}",
-	}
+	cfg := defaultRenameConfig()
 
 	v := h.getSettingValue("org-rename")
 	if v == "" {
@@ -234,18 +253,7 @@ func (h *Handler) LoadRenameTemplates() *RenameConfig {
 
 	var saved RenameConfig
 	if err := json.Unmarshal([]byte(v), &saved); err == nil {
-		if saved.MovieFolder != "" {
-			cfg.MovieFolder = saved.MovieFolder
-		}
-		if saved.MovieFile != "" {
-			cfg.MovieFile = saved.MovieFile
-		}
-		if saved.TVFolder != "" {
-			cfg.TVFolder = saved.TVFolder
-		}
-		if saved.TVFile != "" {
-			cfg.TVFile = saved.TVFile
-		}
+		mergeRenameConfig(cfg, &saved)
 	}
 	return cfg
 }
@@ -272,12 +280,17 @@ func (h *Handler) BuildPathWithTemplate(media *TmdbMedia, parsed *ParsedName, or
 }
 
 // sanitizePath 清理路径中的空段和连续分隔符
+//
+// 逐段剪首尾的 . - 空格：ApplyTemplate 的 Trim 只够到整串两端，模板里带
+// 层级时（默认剧集文件夹是 "标题.年份/Season N"）中间那段缺变量就会留下
+// 尾巴，建出 "钢铁侠." 这种目录
 func sanitizePath(p string) string {
 	parts := strings.Split(p, "/")
 	var cleaned []string
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if part != "" && part != "." {
+		part = strings.TrimSpace(strings.Trim(part, ".-"))
+		if part != "" {
 			cleaned = append(cleaned, part)
 		}
 	}

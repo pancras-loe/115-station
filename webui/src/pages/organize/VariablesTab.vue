@@ -1,58 +1,18 @@
 <script setup lang="ts">
-/** 重命名模板的变量速查表。纯文档页，无交互、无请求 */
-const SYNTAX = [
-  { code: '{变量名}', desc: '取变量的值' },
-  { code: '<...>', desc: '尖括号包围称「块」，块内变量非空时输出块内容' },
-  { code: '<{name}...>', desc: '给块取名，可用 {name} 反复引用' },
-  { code: '<?{name}...>', desc: '只取名不输出，便于后续引用' },
-  { code: '<{title}>', desc: '先判断 title 是否为空再取值（推荐）' },
-  { code: '[[ ]]', desc: '代替 { } 输出花括号（解决语法冲突）' },
-  { code: "{resource_effect.replace('.', ' ')}", desc: '替换 . 为空格' },
-  { code: '{resource_effect.lower()}', desc: '转小写' },
-  { code: '{resource_effect.upper()}', desc: '转大写' },
-  { code: "{'2160p' if resource_pix=='4k' else resource_pix}", desc: '条件判断' },
-]
+/**
+ * 重命名模板的语法 / 变量速查。纯文档，变量表从 RENAME_VAR_GROUPS 取，
+ * 不再和「插入变量」面板各维护一份。
+ */
+import { RENAME_VAR_GROUPS } from '@/utils/rename'
 
-const GROUPS = [
-  {
-    title: '基本信息',
-    vars: [
-      ['{title}', 'TMDB 标题', '钢铁侠'],
-      ['{en_title}', '英文标题（空时转拼音）', 'Iron Man'],
-      ['{original_name}', '原文件名', '钢铁侠.2008.2160p.mkv'],
-      ['{year}', '上映年份', '2008'],
-      ['{tmdb_id}', 'TMDB ID', '1726'],
-      ['{first_letter}', '拼音首字母（大写）', 'G'],
-      ['{ext}', '文件扩展名', 'mkv'],
-      ['{custom_regex_match}', '自定义正则匹配', '自定义'],
-    ],
-  },
-  {
-    title: '剧集专用',
-    vars: [
-      ['{season_episode}', '季集 SxxExx', 'S01E01'],
-      ['{season_num}', '季号', '1'],
-      ['{episode_num}', '集号', '1'],
-      ['{season_name}', '季名', '东海篇'],
-      ['{episode_name}', '集名', '我是路飞'],
-      ['{season_year}', '季年份', '1999'],
-      ['{disc_num}', '盘号', '1'],
-    ],
-  },
-  {
-    title: '资源信息',
-    vars: [
-      ['{resource_pix}', '分辨率', '2160p'],
-      ['{fps}', '帧率', '60FPS'],
-      ['{resource_version}', '资源版本', 'IMAX'],
-      ['{resource_source}', '资源来源', 'NF'],
-      ['{resource_type}', '资源质量', 'BluRay'],
-      ['{resource_effect}', '特效', 'DV.HDR'],
-      ['{video_encode}', '视频编码', 'H265.10bit'],
-      ['{audio_encode}', '音频编码', 'TrueHD.7.1'],
-      ['{resource_team}', '发布组', 'TnT'],
-    ],
-  },
+const SYNTAX = [
+  { code: '{变量名}', desc: '取变量的值；认不出的变量名会原样留在文件名里' },
+  { code: '<...{变量}...>', desc: '块：块内变量有值才输出整块，任一为空整块省略' },
+  { code: '[[ ]]', desc: '输出真正的花括号（{ } 被变量语法占用了）' },
+  { code: '/', desc: '在文件夹规则里分隔层级，可建多级目录' },
+  { code: "{变量.replace('.', ' ')}", desc: '把值里的点换成空格' },
+  { code: '{变量.lower()}', desc: '值转小写' },
+  { code: '{变量.upper()}', desc: '值转大写' },
 ]
 </script>
 
@@ -66,15 +26,20 @@ const GROUPS = [
           <span>{{ s.desc }}</span>
         </div>
       </div>
+      <p class="note">
+        输出会自动清理：连续的 <code>.</code> / <code>-</code> 压成一个，首尾多余的分隔符去掉。
+        所以 <code>{title}.{year}</code> 在没有年份时得到的是 <code>钢铁侠</code>，不会留下尾巴。
+      </p>
     </section>
 
-    <section v-for="g in GROUPS" :key="g.title" class="block">
+    <section v-for="g in RENAME_VAR_GROUPS" :key="g.key" class="block">
       <h3 class="block-title">{{ g.title }}</h3>
       <div class="chips">
-        <div v-for="v in g.vars" :key="v[0]" class="chip">
-          <code>{{ v[0] }}</code>
-          <span>{{ v[1] }}</span>
-          <em>{{ v[2] }}</em>
+        <div v-for="v in g.vars" :key="v.token" class="chip">
+          <code>{{ v.token }}</code>
+          <span>{{ v.label }}</span>
+          <em v-if="v.example">{{ v.example }}</em>
+          <i v-if="v.optional" class="flag">可能为空</i>
         </div>
       </div>
     </section>
@@ -86,11 +51,6 @@ const GROUPS = [
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 18px;
-  background: var(--c-bg-elevated);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
 }
 
 .block-title {
@@ -131,5 +91,24 @@ const GROUPS = [
   font-style: normal;
   font-size: 11px;
   color: var(--c-text-4);
+}
+.chip .flag {
+  font-style: normal;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--c-bg-hover);
+  color: var(--c-text-4);
+}
+
+.note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--c-text-3);
+}
+.note code {
+  font-family: var(--font-mono);
+  color: var(--c-primary);
 }
 </style>
