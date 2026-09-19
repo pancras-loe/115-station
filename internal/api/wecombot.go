@@ -452,7 +452,7 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 			defer fullSyncMu.Unlock()
 			beginTask("企微指令-整理")
 			defer endTask()
-			if _, _, err := h.executeOrganize(false); err != nil {
+			if _, _, err := h.executeOrganize(); err != nil {
 				NotifyMessage("", "✗ 整理失败: "+err.Error())
 			} else {
 				NotifyMessage("", "✓ 整理完成（详见日志）")

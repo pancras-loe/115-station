@@ -406,10 +406,17 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/scrape/wash", h.ListWashRules)
 		protected.POST("/scrape/wash", h.SaveWashRules)
 
-		// 整理→同步闭环
+		// 整理流水线（识别 → 搬移 → STRM → 刮削 → 刷 Emby 一条龙）
 		protected.POST("/organize/pipeline", h.RunOrganizePipeline)
 
-		// TMDB 搜索（影视转存页：名称 → 条目选择 → 站内种子搜索）
+		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理
+		protected.GET("/organize/records", h.ListOrganizeRecords)
+		protected.GET("/organize/records/:id", h.GetOrganizeRecord)
+		protected.POST("/organize/records/:id/redo", h.RedoOrganizeRecord)
+		protected.DELETE("/organize/records/:id", h.DeleteOrganizeRecord)
+		protected.POST("/organize/records/clear", h.ClearOrganizeRecords)
+
+		// TMDB 搜索（影视转存页与整理记录的「重新整理」共用：名称或 TMDB ID → 条目选择）
 		protected.GET("/tmdb/search", h.TmdbSearchMulti)
 
 		// 影视转存 · 观影（账号密码登录 + PoW 反爬自动过验证；磁力提交 115 离线）
@@ -1283,12 +1290,33 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))})
 }
 
-// normalizeCategoryName 去掉分类名里的媒体类型前缀（电影/电视剧/剧集），
-// 避免与 mediaTypeCategory 拼路径时出现 "剧集/电视剧/xxx" 双前缀
+// mediaTypeDirNames 一级分类目录名的全部写法（YAML 里用户怎么写的都有）
+var mediaTypeDirNames = []string{"电影", "电视剧", "剧集", "movie", "tv"}
+
+// normalizeCategoryName 去掉分类名里的媒体类型前缀，避免与 mediaTypeCategory
+// 拼路径时出现 "剧集/电视剧/xxx" 双前缀。
+//
+// 两条容易踩的：
+//   - 前缀可能叠了不止一层（"剧集/电视剧/国产剧"），要循环剥到底；
+//   - 分类名**本身就是**一级分类名（tv 下直接写 "剧集"）时返回空 ——
+//     用户的意思是「不要二级分类，直接放一级目录下」，不是要一个叫「剧集」
+//     的子目录，照搬会整理成 剧集/剧集/片名
 func normalizeCategoryName(name string) string {
-	for _, p := range []string{"电影/", "电视剧/", "剧集/", "movie/", "tv/"} {
-		if strings.HasPrefix(name, p) {
-			return strings.TrimPrefix(name, p)
+	name = strings.Trim(strings.TrimSpace(name), "/")
+	for name != "" {
+		trimmed := false
+		for _, p := range mediaTypeDirNames {
+			if name == p {
+				return ""
+			}
+			if strings.HasPrefix(name, p+"/") {
+				name = strings.TrimPrefix(name, p+"/")
+				trimmed = true
+				break
+			}
+		}
+		if !trimmed {
+			break
 		}
 	}
 	return name

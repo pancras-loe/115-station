@@ -10,7 +10,9 @@ package api
 
 import (
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -395,10 +397,31 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, t
 			onLog(fmt.Sprintf("✗ 洗版移动旧版失败: %v（台账保留）", err))
 			return washSkip
 		}
-		// 搬移成功后才清台账（按查到的行精确清理，避免前缀字符串推导）
+		onLog(fmt.Sprintf("○ 洗版：%d 个旧版文件已移到 %s/洗版-旧版本/%s（cid=%s）", len(fids), destLabelOf(oldTarget), destRel, junkCid))
+		// 搬移成功后才清台账（按查到的行精确清理，避免前缀字符串推导）。
+		// 本地 strm/附属实体也一并删：旧版已经不在库目录下了，留着就是
+		// 指向「冗余/洗版-旧版本」的多余版本，Emby 会当成同一集的两个源。
+		// 此前指望增量同步的 move 事件来清，但台账行这里已经删掉、事件也
+		// 因为是整理自产而被跳过，谁都不会来收拾
+		localRoot := localMediaRoot()
 		ids := make([]uint, 0, len(sfs))
+		cleaned := 0
 		for _, sf := range sfs {
 			ids = append(ids, sf.ID)
+			if sf.RelPath == "" {
+				continue
+			}
+			full := filepath.Join(localRoot, filepath.FromSlash(sf.RelPath))
+			if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+				onLog(fmt.Sprintf("✗ 洗版：旧版本地文件清理失败 %s: %v", sf.RelPath, err))
+				continue
+			}
+			cleaned++
+			onLog(fmt.Sprintf("○ 洗版：已删除旧版本地文件 %s", sf.RelPath))
+			removeEmptyParents(filepath.Dir(full), localRoot)
+		}
+		if cleaned > 0 {
+			onLog(fmt.Sprintf("○ 洗版：共清理 %d 个旧版本地文件（本地根 %s）", cleaned, localRoot))
 		}
 		model.DB.Where("id IN ?", ids).Delete(&model.SyncedFile{})
 	}
@@ -410,4 +433,12 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, t
 	onLog(fmt.Sprintf("✦ 洗版替换: 新版 %s 优于库内旧版，旧版已移到%s/洗版-旧版本", shortLogName(newName), destLabel))
 	go NotifyMessage("🔄 洗版替换", fmt.Sprintf("新版: %s\n旧版: %s\n旧版已移到%s/洗版-旧版本", truncateStr(newName, 80), truncateStr(oldName, 80), destLabel))
 	return washReplaced
+}
+
+// destLabelOf 旧版去向的中文名（日志用）
+func destLabelOf(oldTarget string) string {
+	if oldTarget == "existing" {
+		return "已存在"
+	}
+	return "冗余"
 }

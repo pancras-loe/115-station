@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -43,6 +44,26 @@ type OrgConfig struct {
 	ReplaceRules string `json:"replace_rules"`
 	MinSize      int64  `json:"min_size"`
 	ShareCid     string `json:"-"` // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
+}
+
+// orgCtx 一次整理运行的上下文：引擎各函数共用的只读配置 + 落盘出口。
+// 此前这些是 6 个位置参数逐层传递，加上 sink 之后签名已经不可读
+type orgCtx struct {
+	ops    *pan115Ops
+	cfg    *OrgConfig
+	tc     *TmdbClient
+	rules  []ReplaceRule
+	libAbs string     // 库根绝对路径（去重的网盘验证用；OpenAPI 通道取不到则为空）
+	sink   *orgSink   // 落盘出口：STRM / 附属文件 / 刮削目标 / 整理记录
+	pruner *dirPruner // 搬空之后的空文件夹清理（收尾统一 flush）
+	onLog  func(string)
+}
+
+// withPending 换一个扫描根（转存目录兜底扫描用），其余配置不变
+func (c *orgCtx) withPending(cfg *OrgConfig) *orgCtx {
+	n := *c
+	n.cfg = cfg
+	return &n
 }
 
 // renameTpl 全局重命名模板（ensureRenameTpl 加载，两条整理引擎入口都会调用）
@@ -160,17 +181,19 @@ func orgMetaFixedName(base, ext string) bool {
 }
 
 // moveSiblingAttachments 把与视频同目录的附件（字幕/nfo/图片）随视频一起移动，
-// 并把与视频同名的字幕重命名为视频新名（播放器按视频名匹配外挂字幕）
-func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBase, targetCid string, rename bool, onLog func(string)) {
+// 并把与视频同名的字幕重命名为视频新名（播放器按视频名匹配外挂字幕）。
+// 返回真正搬走的附件及其最终文件名——一条龙落盘要据此把字幕/NFO 下到本地
+func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBase, targetCid string, rename bool, onLog func(string)) []remoteFile {
 	if pendingCid == "" {
-		return
+		return nil
 	}
 	entries, _, err := ops.listEntries(pendingCid, 0)
 	if err != nil {
 		onLog(fmt.Sprintf("✗ 收集随行附件失败: %v", err))
-		return
+		return nil
 	}
 	moved := 0
+	var movedFiles []remoteFile
 	for _, e := range entries {
 		if fmt.Sprint(e["f"]) != "1" { // 只看文件
 			continue
@@ -196,6 +219,7 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 			continue
 		}
 		moved++
+		finalName := name
 		// 重命名对齐视频新名（仅成功入库场景；冗余/已存在保持原名；
 		// 标准元数据命名保持固定名）
 		if rename && !metaFixed && videoNewBase != "" && base != videoNewBase {
@@ -204,20 +228,28 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 				onLog(fmt.Sprintf("○ 附件随行 %s（重命名失败保持原名: %v）", name, err))
 			} else {
 				onLog(fmt.Sprintf("✓ 附件随行 %s → %s", name, newName))
+				finalName = newName
 			}
 		} else {
 			onLog(fmt.Sprintf("✓ 附件随行 %s", name))
 		}
+		movedFiles = append(movedFiles, remoteFile{
+			Fid: fid, Name: finalName, PickCode: nilSprint(e["pc"]), Sha1: nilSprint(e["sha"]),
+		})
 	}
 	if moved > 0 {
 		time.Sleep(300 * time.Millisecond)
 	}
+	return movedFiles
 }
 
 // renameBeforeMove 在源目录中先重命名文件（带画质信息），再移动到目标。
 // 全目录的重命名（视频+字幕）合并为一次 batch_rename 调用：
-// 逐个调用时每个文件过一遍 API 限流，24 集仅等待就要 70+ 秒
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, onLog func(string)) {
+// 逐个调用时每个文件过一遍 API 限流，24 集仅等待就要 70+ 秒。
+//
+// 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
+// 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, onLog func(string)) map[string]string {
 	// 计算单个视频的新名（保持原命名规则）
 	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
 	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
@@ -294,13 +326,14 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 	// 此前这里入队后 worker 用入队时的旧文件名重建名，会覆盖随后的模板
 	// 重命名并使字幕失配。异步队列只保留给手动「补全」存量扫描用。
 	if len(names) == 0 {
-		return
+		return nil
 	}
 	if err := ops.renameBatch(names); err != nil {
 		onLog(fmt.Sprintf("✗ 批量重命名失败（%d 个文件保持原名）: %v", len(names), err))
-		return
+		return nil // 整批没改成，调用方按原名落盘
 	}
 	onLog(fmt.Sprintf("✓ 批量重命名 %d 个文件（例: %s）", len(names), example))
+	return names
 }
 
 // moveQuietly 移动并记录失败（失败不再被吞掉）
@@ -383,18 +416,30 @@ func classifyMedia(media *TmdbMedia) string {
 
 	for _, cat := range categories {
 		if matchCategory(&cat, media) {
-			return cat.Name
+			return normalizeCategoryName(cat.Name)
 		}
 	}
 
 	// 查找默认分类
 	for _, cat := range categories {
 		if cat.IsDefault {
-			return cat.Name
+			return normalizeCategoryName(cat.Name)
 		}
 	}
 
 	return "未分类"
+}
+
+// libSubPath 拼库内相对路径，自动跳过空段。
+// 二级分类允许为空（用户不想分二级时），拿 "+ / +" 硬拼会拼出 "剧集//片名"
+func libSubPath(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.Trim(strings.TrimSpace(p), "/"); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "/")
 }
 
 // matchCategory 判断媒体是否匹配某个分类规则
@@ -637,7 +682,7 @@ func checkByCloudSHA1(ops *pan115Ops, media *TmdbMedia, cfg *OrgConfig, libAbs, 
 		return false
 	}
 	absDir := strings.TrimSuffix(libAbs, "/") + "/" +
-		mediaTypeCategory(media.MediaType) + "/" + classifyMedia(media) + "/" + folderName
+		libSubPath(mediaTypeCategory(media.MediaType), classifyMedia(media), folderName)
 
 	// 查目标标题目录 cid
 	cid, ok := cloudPathCid(ops.cookie, absDir)
@@ -951,12 +996,13 @@ func baseName(name string) string {
 
 // dirEntry 待整理目录中的一个条目（文件或子目录）
 type dirEntry struct {
-	Fid   string // 文件 id
-	Name  string // 文件名
-	IsDir bool   // 是否文件夹
-	Size  int64  // 文件大小
-	Cid   string // 子目录 cid（仅文件夹有）
-	Sha1  string // 文件 sha1（散文件去重用）
+	Fid      string // 文件 id
+	Name     string // 文件名
+	IsDir    bool   // 是否文件夹
+	Size     int64  // 文件大小
+	Cid      string // 子目录 cid（仅文件夹有）
+	Sha1     string // 文件 sha1（散文件去重用）
+	PickCode string // 文件 pickcode（散文件一条龙落盘写 STRM 直链要用）
 }
 
 // listPendingTopLevel 列出待整理目录下的顶层条目（不递归）
@@ -985,6 +1031,7 @@ func listPendingTopLevel(ops *pan115Ops, cid string) ([]dirEntry, error) {
 			if sha1 != "<nil>" {
 				e.Sha1 = sha1
 			}
+			e.PickCode = nilSprint(d["pc"])
 			if s, ok := d["s"].(float64); ok {
 				e.Size = int64(s)
 			}
@@ -1123,7 +1170,7 @@ func (g *orgGuards) skip(cid string) bool {
 
 // runOrganizeEngine 整理引擎核心逻辑
 // 按目录级别整理：识别视频→分类→移动整个目录（视频+字幕+NFO+标准图片）到影视库
-func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]OrganizeResult, int) {
+func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func(string)) ([]OrganizeResult, int) {
 	results := []OrganizeResult{}
 	successCount := 0
 
@@ -1140,13 +1187,9 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]Or
 	// 加载重命名模板配置
 	ensureRenameTpl()
 
-	// 库根绝对路径（去重记录的网盘验证用；OpenAPI 通道取不到则跳过验证）
-	libAbs := ""
-	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
-	}
-
-	// 获取待整理目录下的顶层条目
+	// 先列待整理目录：绝大多数轮次它是空的（定时任务 10 分钟一跑），
+	// 空转就该在这里结束。库根绝对路径要爬目录链、每层一次 115 调用，
+	// 放在这之前等于每轮都为「没活干」先付几次请求
 	topEntries, err := listPendingTopLevel(ops, cfg.Pending)
 	if err != nil {
 		onLog("✗ 遍历待整理目录失败: " + err.Error())
@@ -1157,6 +1200,14 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]Or
 		onLog("○ 待整理目录为空")
 		return results, 0
 	}
+
+	// 库根绝对路径（去重记录的网盘验证用；OpenAPI 通道取不到则跳过验证）
+	libAbs := ""
+	if ops.cookie != "" {
+		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
+	}
+	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
+		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}
 
 	// 五个工作区根目录（媒体库/待整理/已存在/冗余/转存目录）永不被移动：
 	// 引擎只往它们里面放内容，目录自身绝不能被当作影视条目处理
@@ -1187,9 +1238,10 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]Or
 
 	for i, entry := range topEntries {
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
-		results = append(results, processEntry(ops, cfg, tc, replaceRules, guards, entry, libAbs, onLog, 0, &successCount)...)
+		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
 		time.Sleep(300 * time.Millisecond)
 	}
+	ctx.pruner.flush()
 	SetTaskProgress("")
 
 	return results, successCount
@@ -1200,7 +1252,8 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]Or
 //     递归处理每个子目录（每部剧独立识别入库），容器自身最后移到冗余
 //   - 其余目录 → 单部影视目录
 //   - 文件 → 散视频
-func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []ReplaceRule, guards *orgGuards, entry dirEntry, libAbs string, onLog func(string), depth int, successCount *int) []OrganizeResult {
+func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, successCount *int) []OrganizeResult {
+	ops, cfg, onLog := ctx.ops, ctx.cfg, ctx.onLog
 	results := []OrganizeResult{}
 	// 库子树防护：目录传自身 cid，文件传父目录 cid；命中保护子树直接放行不处理
 	if guards.skip(entry.Cid) {
@@ -1223,8 +1276,8 @@ func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules [
 			onLog(fmt.Sprintf("○ %s - 仅 %.1fMB（小于最小体积 %dMB），跳过", entry.Name, float64(entry.Size)/1024/1024, cfg.MinSize))
 			return results
 		}
-		f := remoteFile{Fid: entry.Fid, Name: entry.Name, Size: entry.Size, Sha1: entry.Sha1}
-		result := processSingleFileWithSiblings(ops, cfg, tc, replaceRules, f, libAbs, onLog)
+		f := remoteFile{Fid: entry.Fid, Name: entry.Name, Size: entry.Size, Sha1: entry.Sha1, PickCode: entry.PickCode}
+		result := processSingleFileWithSiblings(ctx, f)
 		results = append(results, result...)
 		for _, r := range results {
 			if r.Status == "success" {
@@ -1252,7 +1305,7 @@ func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules [
 		if !hasDirectVideo && len(subDirs) > 0 {
 			onLog(fmt.Sprintf("▣ %s/ 为容器目录（无直接视频，含 %d 个子目录），逐个处理", entry.Name, len(subDirs)))
 			for _, child := range subDirs {
-				results = append(results, processEntry(ops, cfg, tc, replaceRules, guards, child, libAbs, onLog, depth+1, successCount)...)
+				results = append(results, processEntry(ctx, guards, child, depth+1, successCount)...)
 			}
 			// 容器壳处理：重新列目录确认真的空了才移冗余；
 			// 有残留（移动失败/未识别跳过的条目）时保留原地，避免误吞内容目录
@@ -1279,11 +1332,8 @@ func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules [
 				}
 			}
 			if len(remaining) == 0 {
-				if err := ops.moveFiles(cfg.Redundant, []string{entry.Fid}); err != nil {
-					onLog(fmt.Sprintf("○ %s/ - 空容器目录移到冗余失败: %v", entry.Name, err))
-				} else {
-					onLog(fmt.Sprintf("○ %s/ - 空容器目录已移到冗余", entry.Name))
-				}
+				ctx.pruner.mark(entry.Fid, entry.Name)
+				onLog(fmt.Sprintf("○ %s/ - 容器目录已清空，收尾统一清理", entry.Name))
 			} else {
 				onLog(fmt.Sprintf("○ %s/ - 容器目录仍有 %d 个残留条目，保留原地", entry.Name, len(remaining)))
 			}
@@ -1295,19 +1345,20 @@ func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules [
 	subFiles, err := collectDirFiles(ops, entry.Cid, entry.Name)
 	if err != nil {
 		onLog(fmt.Sprintf("✗ %s/ - 遍历失败: %v", entry.Name, err))
+		// 遍历失败是用户要能看见的失败：目录还留在待整理，下轮会重试，
+		// 但连续失败（cid 失效/风控）只在日志里一闪而过就没人知道了
+		ctx.sink.noteFail(entry.Name+"/", entry.Fid, "dir", "failed", "recognize",
+			"读取目录内容失败，留在待整理目录下轮重试: "+err.Error(), nil)
 		return results
 	}
 	if len(subFiles) == 0 {
-		// 空目录（离线/转存产生的空壳）清进冗余：不处理会导致守望者
+		// 空目录（离线/转存产生的空壳）直接删：不处理会导致守望者
 		// 反复"整理后转存目录仍有内容"且无任何日志可查
-		if err := ops.moveFiles(cfg.Redundant, []string{entry.Fid}); err != nil {
-			onLog(fmt.Sprintf("○ %s/ - 空目录移到冗余失败: %v", entry.Name, err))
-		} else {
-			onLog(fmt.Sprintf("○ %s/ - 空目录（无任何文件），已移到冗余", entry.Name))
-		}
+		ctx.pruner.mark(entry.Fid, entry.Name)
+		onLog(fmt.Sprintf("○ %s/ - 空目录（无任何文件），待清理", entry.Name))
 		return results
 	}
-	result := processDir(ops, cfg, tc, replaceRules, entry, subFiles, libAbs, onLog)
+	result := processDir(ctx, entry, subFiles)
 	results = append(results, result...)
 	for _, r := range result {
 		if r.Status == "success" {
@@ -1317,9 +1368,76 @@ func processEntry(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules [
 	return results
 }
 
+// fileKindSummary 按类型汇总条目里的文件数，如「视频 52、字幕 52、NFO/封面 2、其他 3」。
+// 剧集目录动辄上百个文件，日志只报「目录 + 每类几个」；电影那种单文件条目才打文件名
+func fileKindSummary(files []remoteFile) string {
+	var video, sub, meta, junk int
+	for _, f := range files {
+		switch classifyFile(f.Name) {
+		case FileTypeVideo:
+			video++
+		case FileTypeSubtitle:
+			sub++
+		case FileTypeNFO, FileTypeStdImage:
+			meta++
+		default:
+			junk++
+		}
+	}
+	var parts []string
+	for _, kv := range []struct {
+		label string
+		n     int
+	}{{"视频", video}, {"字幕", sub}, {"NFO/封面", meta}, {"其他", junk}} {
+		if kv.n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", kv.label, kv.n))
+		}
+	}
+	if len(parts) == 0 {
+		return "空"
+	}
+	return strings.Join(parts, "、")
+}
+
 // processDir 处理一个子目录（包含多个文件的影视目录）
-func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []ReplaceRule, dir dirEntry, files []remoteFile, libAbs string, onLog func(string)) []OrganizeResult {
+func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult {
+	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	var results []OrganizeResult
+
+	// 记录快照：整理记录要能在事后定位这些文件（fid 在 115 上移动/改名后不变），
+	// 所以失败分支也照样登记，用户才能在记录页点「重新整理」把它们捞回来
+	snapshot := func(names map[string]string) []orgRecordFile {
+		out := make([]orgRecordFile, 0, len(files))
+		for _, f := range files {
+			n := f.Name
+			if names != nil {
+				if v, ok := names[f.Fid]; ok {
+					n = v
+				}
+			}
+			out = append(out, orgRecordFile{
+				Fid: f.Fid, Name: n, Kind: recordFileKind(n),
+				PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
+			})
+		}
+		return out
+	}
+	fail := func(status, stage, msg string) {
+		ctx.sink.noteFail(dir.Name+"/", dir.Fid, "dir", status, stage, msg, snapshot(nil))
+	}
+	failMedia := func(status, stage, msg string, media *TmdbMedia, category, targetDir string) {
+		rec := &model.OrganizeRecord{
+			Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
+			Status: status, Stage: stage, Message: msg,
+			Category: category, TargetDir: targetDir,
+			Files: marshalRecordFiles(snapshot(nil)),
+		}
+		if media != nil {
+			rec.TmdbID, rec.Title, rec.Year, rec.MediaType, rec.PosterPath =
+				media.TmdbID, media.Title, media.Year, media.MediaType, media.PosterPath
+		}
+		ctx.sink.note(rec)
+	}
 
 	// 分流视频：正片 vs 广告/引流（清洗后无有效内容名、仍含域名、或小于
 	// 最小体积的"视频"是广告载体，不能重命名成正片名混入库）
@@ -1362,6 +1480,7 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 		} else {
 			onLog(fmt.Sprintf("○ %s/ - 无视频文件，已移到冗余", dir.Name))
 		}
+		fail("unrecognized", "recognize", "目录内没有视频文件，已移到冗余")
 		return results
 	}
 
@@ -1381,7 +1500,8 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 	if len(replaceRules) > 0 {
 		name = applyReplaceRules(name, replaceRules)
 	}
-	onLog(fmt.Sprintf("▶ 开始识别: %s/（样本: %s）", shortLogName(dir.Name), shortLogName(mainVideo.Name)))
+	onLog(fmt.Sprintf("▶ 开始识别: %s/（%s；样本: %s）",
+		shortLogName(dir.Name), fileKindSummary(files), shortLogName(mainVideo.Name)))
 
 	parsed := parseFileName(name)
 	// 文件名无法提取标题 → 用目录名识别（目录名通常比文件名规范）
@@ -1418,6 +1538,7 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 		// 文件名和目录名都无法识别，移到冗余
 		moveQuietly(ops, cfg.Redundant, []string{dir.Fid}, dir.Name+"/", onLog)
 		onLog(fmt.Sprintf("○ %s/ - 无法提取标题，已移到冗余", dir.Name))
+		fail("unrecognized", "recognize", "文件名与目录名都提取不出片名，已移到冗余")
 		return results
 	}
 
@@ -1445,10 +1566,12 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 				// 好内容被误分流后只能靠人工捞回。留在待整理目录，下轮重试
 				results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "TMDB 暂时不可达: " + err.Error()})
 				onLog(fmt.Sprintf("○ %s/ - TMDB 暂时不可达（%v），留在待整理目录下轮重试", dir.Name, err))
+				fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
 				return results
 			}
 			moveQuietly(ops, cfg.Redundant, []string{dir.Fid}, dir.Name+"/", onLog)
 			onLog(fmt.Sprintf("○ %s/ - TMDB 未找到匹配，已移到冗余", dir.Name))
+			fail("unrecognized", "recognize", "TMDB 未找到匹配条目，已移到冗余")
 			return results
 		}
 	}
@@ -1467,6 +1590,7 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 			results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title, Year: media.Year, MediaType: media.MediaType,
 				Message: "网盘已有相同文件"})
 		}
+		failMedia("exists", "recognize", "网盘已有相同文件，已移到已存在目录", media, "", "")
 		return results
 	}
 
@@ -1487,6 +1611,7 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 				results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title, Year: media.Year, MediaType: media.MediaType,
 					Message: "库内已有更优版本"})
 			}
+			failMedia("exists", "recognize", "库内已有更优版本，已移到已存在目录", media, "", "")
 			return results
 		}
 	}
@@ -1494,28 +1619,32 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 	// 不存在 → 分类 + 移动到我的影视库
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, mainVideo.Name)
-	targetDir := mediaTypeCategory(media.MediaType) + "/" + category + "/" + pathDir(newPath)
+	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
 
 	_ = targetDir // 目标目录在下方按新结构创建（根目录 + 季目录）
 
 	// 按文件分类移动（规范结构）：
 	//   视频 + 字幕 → 季目录（电影为根目录）；NFO + 标准封面图 → 剧集根目录；垃圾 → 冗余
 	parts := strings.Split(newPath, "/")
-	rootRel := mediaTypeCategory(media.MediaType) + "/" + category + "/" + parts[0]
+	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, parts[0])
 	onLog(fmt.Sprintf("▣ 目标目录就绪: %s", rootRel))
 	rootCid, err := ops.ensurePath(cfg.Library, rootRel)
 	if err != nil {
 		onLog(fmt.Sprintf("✗ %s/ - 创建目录失败: %v（目标=%q）", dir.Name, err, rootRel))
 		results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建目录失败: " + err.Error()})
+		failMedia("failed", "move", "创建目标目录失败: "+err.Error(), media, category, rootRel)
 		return results
 	}
 	mediaCid := rootCid
+	mediaRel := rootRel                             // 视频与字幕的实际落点（电影同标题目录，剧集到季目录）
 	if media.MediaType == "tv" && len(parts) >= 2 { // Season XX 层
 		onLog(fmt.Sprintf("▣ 季目录就绪: %s/%s", rootRel, parts[1]))
+		mediaRel = rootRel + "/" + parts[1]
 		mediaCid, err = ops.ensurePath(cfg.Library, rootRel+"/"+parts[1])
 		if err != nil {
 			onLog(fmt.Sprintf("✗ %s/ - 创建季目录失败: %v", dir.Name, err))
 			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建季目录失败: " + err.Error()})
+			failMedia("failed", "move", "创建季目录失败: "+err.Error(), media, category, rootRel)
 			return results
 		}
 	}
@@ -1543,17 +1672,26 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 	// 同步补全：文件名缺画质信息时立即探测（ffprobe 拉头部几 MB），
 	// 用探测结果补充画质后再重命名 → 移动 → 入库，一步到位
 	enrichRenames := map[string]string{} // 补全前视频基名 → 补全后基名（字幕跟随用）
+	enriched, enrichFailed := 0, 0
 	if policy := loadEnrichPolicy(); policy.Enabled {
 		for i, vf := range videoFiles {
 			if !enrichNeedsProbe(vf.Name) || vf.PickCode == "" {
 				continue
 			}
-			onLog(fmt.Sprintf("▣ 补全探测: %s（文件名缺画质信息）", vf.Name))
+			// 单文件条目（电影/散文件）才逐个点名；剧集几十集逐条打就是几十行，
+			// 只累计数量、收尾给一行汇总（vlog 默认是开的，降级到 vlog 没用）
+			enrichLog := onLog
+			if len(videoFiles) > 1 {
+				enrichLog = func(string) {}
+			}
+			enrichLog(fmt.Sprintf("▣ 补全探测: %s（文件名缺画质信息）", vf.Name))
 			probe, perr := probeFileNow(vf.PickCode)
 			if probe == nil {
-				onLog(fmt.Sprintf("○ 补全探测失败 %s（保留原名）: %s", vf.Name, perr))
+				enrichLog(fmt.Sprintf("○ 补全探测失败 %s（保留原名）: %s", vf.Name, perr))
+				enrichFailed++
 				continue
 			}
+			enriched++
 			{
 				action, reason := enrichDecide(vf.Name, probe, policy)
 				if action == "rename" {
@@ -1562,32 +1700,52 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 					newName := buildEnrichedName(base, ext, probe)
 					if newName != vf.Name {
 						if err := ops.rename(vf.Fid, newName); err != nil {
-							onLog(fmt.Sprintf("○ 补全改名失败 %s: %v", vf.Name, err))
+							enrichLog(fmt.Sprintf("○ 补全改名失败 %s: %v", vf.Name, err))
 						} else {
-							onLog(fmt.Sprintf("✓ 补全 %s → %s", vf.Name, newName))
+							enrichLog(fmt.Sprintf("✓ 补全 %s → %s", vf.Name, newName))
 							enrichRenames[baseName(vf.Name)] = baseName(newName)
 							videoFiles[i].Name = newName // 后续模板重命名基于补全后的名字
 						}
 					}
 				} else {
-					onLog(fmt.Sprintf("○ 补全跳过 %s: %s", vf.Name, reason))
+					enrichLog(fmt.Sprintf("○ 补全跳过 %s: %s", vf.Name, reason))
 				}
 			}
 		}
 	}
 
-	// 先在源目录重命名（批量 batch_rename），再移动到目标
-	renameBeforeMove(ops, media, videoFiles, files, enrichRenames, onLog)
+	if len(videoFiles) > 1 && enriched+enrichFailed > 0 {
+		failNote := ""
+		if enrichFailed > 0 {
+			failNote = fmt.Sprintf("，%d 个探测失败保留原名", enrichFailed)
+		}
+		onLog(fmt.Sprintf("▣ 画质补全：探测 %d 个视频%s", enriched, failNote))
+	}
+
+	// 先在源目录重命名（批量 batch_rename），再移动到目标。
+	// finalNames 是落盘的依据：文件搬过去之后叫什么，只有这里知道
+	finalNames := map[string]string{}
+	for _, vf := range videoFiles {
+		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
+	}
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, onLog) {
+		finalNames[fid] = n
+	}
 
 	// 视频/字幕 → 季目录（电影为根目录）
 	if len(mediaFids) > 0 {
+		onLog(fmt.Sprintf("▣ 移动 %d 个视频/字幕 → %s（cid=%s）", len(mediaFids), mediaRel, mediaCid))
 		if err := ops.moveFiles(mediaCid, mediaFids); err != nil {
 			onLog(fmt.Sprintf("✗ %s/ - 移动文件失败: %v", dir.Name, err))
 			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "移动文件失败: " + err.Error()})
+			failMedia("failed", "move", "移动文件到媒体库失败: "+err.Error(), media, category, rootRel)
 			return results
 		}
 	}
 	// 封面/NFO → 剧集根目录
+	if len(metaFids) > 0 {
+		onLog(fmt.Sprintf("▣ 移动 %d 个 NFO/封面 → %s（cid=%s）", len(metaFids), rootRel, rootCid))
+	}
 	if len(metaFids) > 0 && mediaCid != rootCid {
 		if err := ops.moveFiles(rootCid, metaFids); err != nil {
 			onLog(fmt.Sprintf("○ %s/ - 封面/NFO 移动到根目录失败（留在季目录）: %v", dir.Name, err))
@@ -1602,8 +1760,12 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 	// 移动无用文件到冗余
 	if len(junkFids) > 0 {
 		junkCid, err := ops.ensurePath(cfg.Redundant, dir.Name)
-		if err == nil {
-			ops.moveFiles(junkCid, junkFids)
+		if err != nil {
+			onLog(fmt.Sprintf("○ %s/ - 冗余目录创建失败，%d 个无用文件留在原地: %v", dir.Name, len(junkFids), err))
+		} else if err := ops.moveFiles(junkCid, junkFids); err != nil {
+			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件移到冗余失败: %v", dir.Name, len(junkFids), err))
+		} else {
+			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件已移到 冗余/%s", dir.Name, len(junkFids), dir.Name))
 		}
 	}
 
@@ -1624,19 +1786,67 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 				onLog(fmt.Sprintf("○ 海报重命名失败 %s: %v", f.Name, err))
 			} else {
 				onLog(fmt.Sprintf("✓ 海报 %s → %s", f.Name, newName))
+				finalNames[f.Fid] = newName
 			}
 		}
 	}
 
-	// 整理完毕：已移空的源目录移到冗余（避免待整理目录残留空壳）
-	if err := ops.moveFiles(cfg.Redundant, []string{dir.Fid}); err != nil {
-		onLog(fmt.Sprintf("○ %s/ - 空源目录移到冗余失败: %v", dir.Name, err))
-	} else {
-		onLog(fmt.Sprintf("○ %s/ - 空源目录已移到冗余", dir.Name))
+	// 整理完毕收拾源目录：整棵没有文件就删掉（进 115 回收站，可还原）。
+	// 此前一律搬进冗余——冗余目录被空壳越堆越多，点进去什么都没有。
+	// 注意不能只看直接子项：待整理常见 片名/Season 01/*.mkv，文件搬走后
+	// 父目录里还挂着空的 Season 01，pruneOrMove 会递归判断整棵子树
+	pruneOrMove(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", onLog)
+
+	// ---- 一条龙落盘：STRM + 附属文件直接由整理写出 ----
+	// 到这一步 targetDir / fid / pickcode / 最终文件名全都在手里，
+	// 没有任何理由再让增量同步从生活事件里把它们反推一遍
+	nameOf := func(f remoteFile) string {
+		if n, ok := finalNames[f.Fid]; ok && n != "" {
+			return n
+		}
+		return f.Name
 	}
+	movedFids := map[string]bool{}
+	for _, fid := range mediaFids {
+		movedFids[fid] = true
+	}
+	for _, fid := range metaFids {
+		movedFids[fid] = true
+	}
+	var strmVideos, strmAssets []remoteFile
+	recFiles := make([]orgRecordFile, 0, len(files))
+	for _, f := range files {
+		f.Name = nameOf(f)
+		kind := recordFileKind(f.Name)
+		recFiles = append(recFiles, orgRecordFile{
+			Fid: f.Fid, Name: f.Name, Kind: kind,
+			PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
+		})
+		if !movedFids[f.Fid] {
+			continue // 广告/垃圾已进冗余，不落盘
+		}
+		if kind == "video" {
+			strmVideos = append(strmVideos, f)
+		} else if kind == "subtitle" || kind == "meta" {
+			strmAssets = append(strmAssets, f)
+		}
+	}
+	strmCreated, assetsDL := ctx.sink.commit(ops, media, rootRel, mediaRel, strmVideos, strmAssets)
+	onLog(fmt.Sprintf("✓ %s/ - 落盘完成：STRM %d 个、附属 %d 个 → %s",
+		dir.Name, strmCreated, assetsDL,
+		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(mediaRel)))))
 
 	// 记录到数据库
 	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
+	ctx.sink.note(&model.OrganizeRecord{
+		Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
+		Status: "success", Stage: "", Message: fmt.Sprintf("→ %s", targetDir),
+		TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+		MediaType: media.MediaType, PosterPath: media.PosterPath,
+		Category: category, TargetDir: rootRel, TargetCid: rootCid,
+		Files: marshalRecordFiles(recFiles), VideoCount: len(strmVideos),
+		TotalSize: sumSizes(strmVideos), StrmCreated: strmCreated,
+	})
 
 	// 入库成功通知：TMDB 封面 + 重命名信息 + 详情链接（企微图文卡 / TG 图片）
 	// 入库文件统计（视频+字幕+NFO/封面；垃圾文件已移冗余不计）
@@ -1678,9 +1888,10 @@ func processDir(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []R
 // processSingleFileWithSiblings 散文件批量处理：识别第一个文件后，
 // 同前缀的其他散文件共享识别结果（一部剧 24 集只需 1 次 TMDB 调用）
 // 前缀判定：文件名去掉 EP/SxxExx/集数 部分后剩余部分相同
-func processSingleFileWithSiblings(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []ReplaceRule, f remoteFile, libAbs string, onLog func(string)) []OrganizeResult {
+func processSingleFileWithSiblings(ctx *orgCtx, f remoteFile) []OrganizeResult {
+	ops, cfg, onLog := ctx.ops, ctx.cfg, ctx.onLog
 	// 先识别主文件
-	result := processSingleFile(ops, cfg, tc, replaceRules, f, libAbs, onLog)
+	result, rec := processSingleFile(ctx, f)
 	if result.Status != "success" {
 		return []OrganizeResult{result}
 	}
@@ -1735,11 +1946,13 @@ func processSingleFileWithSiblings(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClien
 	successCount := 1
 
 	for _, sib := range siblings {
-		sibResult := organizeIdentifiedFile(ops, cfg, tc, replaceRules, sib, libAbs, result, onLog)
+		sibResult, sibFiles, sibStrm := organizeIdentifiedFile(ctx, sib, result)
 		allResults = append(allResults, sibResult)
 		if sibResult.Status == "success" {
 			successCount++
 		}
+		// 并进主文件那条记录：一部剧的 24 集是一个整理动作，不该刷出 24 行
+		ctx.sink.appendToRecord(rec, sibFiles, sibStrm, sib.Size)
 	}
 
 	onLog(fmt.Sprintf("✓ 散文件批量完成: 共 %d 个文件（成功 %d）", len(allResults), successCount))
@@ -1788,14 +2001,17 @@ func isAllDigits(s string) bool {
 }
 
 // organizeIdentifiedFile 用已识别的媒体信息处理单个散文件（跳过 TMDB 识别）
-func organizeIdentifiedFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []ReplaceRule, f remoteFile, libAbs string, mainResult OrganizeResult, onLog func(string)) OrganizeResult {
+// organizeIdentifiedFile 用主文件的识别结果处理一个同前缀兄弟文件。
+// 返回结果 + 本文件的记录条目 + 生成的 STRM 数（由调用方并进主记录）
+func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult) (OrganizeResult, []orgRecordFile, int) {
+	ops, cfg, replaceRules, onLog := ctx.ops, ctx.cfg, ctx.rules, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
 
 	// sha1 去重
 	if sha1ExistsInLibrary(f.Sha1) {
 		ops.moveFiles(cfg.Existing, []string{f.Fid})
 		onLog(fmt.Sprintf("○ %s - sha1已存在，已移到已存在目录", f.Name))
-		return OrganizeResult{FileName: f.Name, Status: "exists", Message: "sha1已存在"}
+		return OrganizeResult{FileName: f.Name, Status: "exists", Message: "sha1已存在"}, nil, 0
 	}
 
 	// 解析文件名获取季集号
@@ -1817,29 +2033,39 @@ func organizeIdentifiedFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, repl
 
 	category := mainResult.Category
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := mediaTypeCategory(media.MediaType) + "/" + category + "/" + pathDir(newPath)
+	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+
+	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
 		result.Status = "failed"
 		result.Message = "创建目录失败: " + err.Error()
-		return result
+		return result, nil, 0
 	}
 
 	if err := ops.moveFiles(targetCid, []string{f.Fid}); err != nil {
 		result.Status = "failed"
 		result.Message = "移动失败: " + err.Error()
-		return result
+		return result, nil, 0
 	}
 
 	// 重命名为标准名
+	finalName := f.Name
 	if stdName := pathBase(newPath); stdName != "" && stdName != f.Name {
 		if err := ops.rename(f.Fid, stdName); err != nil {
 			onLog(fmt.Sprintf("○ 重命名失败保持原名 %s: %v", f.Name, err))
 		} else {
 			onLog(fmt.Sprintf("✓ 重命名 %s → %s", f.Name, stdName))
+			finalName = stdName
 		}
 	}
+
+	// 一条龙落盘（与主文件同一个片目，sink 内部按 key 去重刮削目标）
+	video := f
+	video.Name = finalName
+	strmCreated, _ := ctx.sink.commit(ops, media, rootRel, targetDir, []remoteFile{video}, nil)
+	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
 
 	result.Category = category
 	result.TargetDir = targetDir
@@ -1850,7 +2076,7 @@ func organizeIdentifiedFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, repl
 	result.Status = "success"
 	result.Message = fmt.Sprintf("→ %s (%s) [%s] → %s", mainResult.Title, mainResult.Year, category, targetDir)
 	onLog(fmt.Sprintf("✓ %s → %s", f.Name, stdPath(newPath)))
-	return result
+	return result, recFiles, strmCreated
 }
 
 func stdPath(p string) string {
@@ -1858,8 +2084,16 @@ func stdPath(p string) string {
 }
 
 // processSingleFile 处理待整理目录下的顶层单独视频文件
-func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRules []ReplaceRule, f remoteFile, libAbs string, onLog func(string)) OrganizeResult {
+// processSingleFile 处理一个散视频。第二个返回值是本次留下的整理记录：
+// 同前缀的兄弟文件会并进同一条记录（一部剧 24 集不该刷出 24 行）
+func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.OrganizeRecord) {
+	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
+	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+	fail := func(status, stage, msg string) (OrganizeResult, *model.OrganizeRecord) {
+		ctx.sink.noteFail(f.Name, f.Fid, "file", status, stage, msg, self)
+		return result, nil
+	}
 
 	// 应用替换规则
 	name := f.Name
@@ -1877,7 +2111,7 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 		result.Status = "failed"
 		result.Message = "无法提取标题，已移到冗余"
 		onLog(fmt.Sprintf("✗ %s - 无法提取标题，已移到冗余", f.Name))
-		return result
+		return fail("unrecognized", "recognize", "文件名提取不出片名，已移到冗余")
 	}
 
 	// TMDB 识别
@@ -1887,7 +2121,7 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 		result.Status = "failed"
 		result.Message = "TMDB 暂时不可达，留在待整理: " + err.Error()
 		onLog(fmt.Sprintf("○ %s - TMDB 暂时不可达（%v），留在待整理目录下轮重试", f.Name, err))
-		return result
+		return fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
 	}
 	if media == nil {
 		moveQuietly(ops, cfg.Redundant, []string{f.Fid}, f.Name, onLog)
@@ -1895,7 +2129,7 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 		result.Status = "failed"
 		result.Message = "TMDB 未找到匹配，已移到冗余"
 		onLog(fmt.Sprintf("✗ %s - TMDB 未找到匹配，已移到冗余", f.Name))
-		return result
+		return fail("unrecognized", "recognize", "TMDB 未找到匹配条目，已移到冗余")
 	}
 
 	result.TmdbID = media.TmdbID
@@ -1912,41 +2146,74 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 		result.Status = "exists"
 		result.Message = fmt.Sprintf("已存在: %s (%s)，已移到已存在目录", media.Title, media.Year)
 		onLog(fmt.Sprintf("○ %s → 已存在: %s (%s)", f.Name, media.Title, media.Year))
-		return result
+		ctx.sink.note(&model.OrganizeRecord{
+			Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
+			Status: "exists", Message: "网盘已有相同文件，已移到已存在目录",
+			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+			MediaType: media.MediaType, PosterPath: media.PosterPath,
+			Files: marshalRecordFiles(self),
+		})
+		return result, nil
 	}
 
 	// 分类 + 移动到影视库
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := mediaTypeCategory(media.MediaType) + "/" + category + "/" + pathDir(newPath)
+	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+
+	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
 		result.Status = "failed"
 		result.Message = "创建目录失败: " + err.Error()
 		onLog(fmt.Sprintf("✗ %s - 创建目录失败: %v", f.Name, err))
-		return result
+		return fail("failed", "move", "创建目标目录失败: "+err.Error())
 	}
 
 	if err := ops.moveFiles(targetCid, []string{f.Fid}); err != nil {
 		result.Status = "failed"
 		result.Message = "移动文件失败: " + err.Error()
 		onLog(fmt.Sprintf("✗ %s - 移动失败: %v", f.Name, err))
-		return result
+		return fail("failed", "move", "移动文件到媒体库失败: "+err.Error())
 	}
 	// 视频本体重命名为标准名
+	finalName := f.Name
 	if stdName := pathBase(newPath); stdName != "" && stdName != f.Name {
 		if err := ops.rename(f.Fid, stdName); err != nil {
 			onLog(fmt.Sprintf("○ 重命名失败保持原名 %s: %v", f.Name, err))
 		} else {
 			onLog(fmt.Sprintf("✓ 重命名 %s → %s", f.Name, stdName))
+			finalName = stdName
 		}
 	}
 
 	onLog(fmt.Sprintf("▣ 目标目录就绪: %s", category+"/"+strings.Split(newPath, "/")[0]))
 	// 成功入库：附件随行并按视频新名重命名字幕（播放器按视频名匹配外挂字幕）
 	newBase := baseName(pathBase(newPath))
-	moveSiblingAttachments(ops, cfg.Pending, oldBase, newBase, targetCid, true, onLog)
+	attachments := moveSiblingAttachments(ops, cfg.Pending, oldBase, newBase, targetCid, true, onLog)
+
+	// 一条龙落盘
+	video := f
+	video.Name = finalName
+	strmCreated, _ := ctx.sink.commit(ops, media, rootRel, targetDir, []remoteFile{video}, attachments)
+	onLog(fmt.Sprintf("✓ %s - 落盘完成：STRM %d 个、附属 %d 个 → %s", f.Name, strmCreated, len(attachments),
+		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(targetDir)))))
+
+	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+	for _, a := range attachments {
+		recFiles = append(recFiles, orgRecordFile{Fid: a.Fid, Name: a.Name, Kind: recordFileKind(a.Name), PickCode: a.PickCode, Sha1: a.Sha1})
+	}
+	rec := &model.OrganizeRecord{
+		Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
+		Status: "success", Message: "→ " + targetDir,
+		TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+		MediaType: media.MediaType, PosterPath: media.PosterPath,
+		Category: category, TargetDir: rootRel, TargetCid: targetCid,
+		Files: marshalRecordFiles(recFiles), VideoCount: 1,
+		TotalSize: f.Size, StrmCreated: strmCreated,
+	}
+	ctx.sink.note(rec)
 
 	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
 	result.Category = category
@@ -1955,7 +2222,7 @@ func processSingleFile(ops *pan115Ops, cfg *OrgConfig, tc *TmdbClient, replaceRu
 	result.Message = fmt.Sprintf("→ %s (%s) [%s/%s] → %s", media.Title, media.Year, category, media.MediaType, targetDir)
 	onLog(fmt.Sprintf("✓ %s → %s (%s) [%s/%s] → %s", f.Name, media.Title, media.Year, category, media.MediaType, targetDir))
 
-	return result
+	return result, rec
 }
 
 // pathDir 取路径中的目录部分（最后一个 / 之前）
@@ -1991,16 +2258,21 @@ func modelSettingValue(key string) string {
 	return settingValueCompat(key)
 }
 
-// executeOrganizeWithConfig 用指定的 OrgConfig 执行整理（转存目录等场景）
-func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig, syncAfter bool) ([]gin.H, []OrganizeResult, error) {
+// executeOrganizeWithConfig 用指定的 OrgConfig 执行整理（转存目录等场景）。
+// 与 executeOrganize 一样自带落盘：引擎跑完统一刮削 + 刷 Emby
+func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) ([]gin.H, []OrganizeResult, error) {
 	orgStart := time.Now()
 	ops, err := h.newPan115Ops()
 	if err != nil {
 		return nil, nil, err
 	}
+	ops.suppress = true
 
+	sink := h.newOrgSink(cfg.Library)
 	logFn := func(msg string) { log.Println(msg) }
-	orgResults, successCount := runOrganizeEngineWithConfig(ops, cfg, logFn)
+	orgResults, successCount := runOrganizeEngineWithConfig(ops, cfg, sink, logFn)
+	sink.flushScrape()
+	sink.flushRefresh()
 	existsN, failN := 0, 0
 	for _, r := range orgResults {
 		if r.Status == "exists" {
@@ -2031,7 +2303,7 @@ func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig, syncAfter bool) ([]g
 }
 
 // runOrganizeEngineWithConfig 用指定的 OrgConfig 运行整理引擎
-func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, onLog func(string)) ([]OrganizeResult, int) {
+func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func(string)) ([]OrganizeResult, int) {
 	results := []OrganizeResult{}
 	successCount := 0
 
@@ -2047,19 +2319,21 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, onLog func(stri
 	ensureRenameTpl()
 
 	// 计算库根绝对路径（去重记录网盘验证用，不能传空否则验证被跳过）
-	libAbs := ""
-	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
-	}
-
 	topEntries, err := listPendingTopLevel(ops, cfg.Pending)
 	if err != nil {
 		onLog("✗ 遍历转存目录失败: " + err.Error())
 		return results, 0
 	}
 	if len(topEntries) == 0 {
-		return results, 0 // 空转静默
+		return results, 0 // 空转静默：库根路径等开销留到确认有活干之后
 	}
+
+	libAbs := ""
+	if ops.cookie != "" {
+		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
+	}
+	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
+		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}
 
 	// 五个工作区根目录自身永不被当作条目处理（与 runOrganizeEngine 一致）
 	excluded := map[string]bool{cfg.Library: true, cfg.Existing: true, cfg.Redundant: true, cfg.Pending: true}
@@ -2083,9 +2357,10 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, onLog func(stri
 	onLog(fmt.Sprintf("▶ 转存目录发现 %d 个条目，开始整理...", len(topEntries)))
 	for i, entry := range topEntries {
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
-		results = append(results, processEntry(ops, cfg, tc, replaceRules, guards, entry, libAbs, onLog, 0, &successCount)...)
+		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
 		time.Sleep(300 * time.Millisecond)
 	}
+	ctx.pruner.flush()
 	SetTaskProgress("")
 	return results, successCount
 }

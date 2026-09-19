@@ -117,7 +117,7 @@ onMounted(load)
 
     <FieldRow
       label="整理后自动刮削"
-      hint="增量同步动过媒体库后自动开始刮削；刮削期间元数据边生成边回传 115。"
+      hint="整理完成后只刮本轮新入库的片目（不扫全库）；刮削期间元数据边生成边回传 115。"
     >
       <NRadioGroup v-model:value="cfg.auto_after_organize">
         <NRadioButton :value="true">开启</NRadioButton>

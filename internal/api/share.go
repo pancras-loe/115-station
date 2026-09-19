@@ -2,13 +2,15 @@ package api
 
 // ==================== 115 分享链接转存 ====================
 //
-// 流程（web 通道经典四步）：
+// 流程（协议以 p115client 为准，字段与方法都踩过坑，改前先对一遍）：
 //  1. 解析分享链接取 share_code
-//  2. POST webapi.115.com/share/info 拿分享信息
-//  3. POST webapi.115.com/share/snap 拿文件列表
-//  4. POST webapi.115.com/share/sharepost + files/receive 转存到目标目录
+//  2. GET  webapi.115.com/share/snap    拿文件列表与分享标题（翻页收全）
+//     —— 旧的 POST /share/info 恒返「开小差」、POST /share/snap 回 405，都已作废
+//  3. POST webapi.115.com/share/receive 一次性转存（file_id 逗号分隔）
+//     —— 这个是 POST，和上一步的 GET 不一样；用 GET 打会回
+//        {"state":false,"error":"405 METHOD NOT ALLOWED","errNo":980005}
 //
-// 转存后由「自动整理 → 增量同步」闭环接管（转存产生 receive_files 事件）。
+// 转存落到「转存目录」后由整理流水线接管（整理自带 STRM 落盘与刮削）。
 
 import (
 	"encoding/json"
@@ -61,6 +63,42 @@ func getShareAPI(path string, query url.Values, cookie string, timeout time.Dura
 		return nil, lastErr
 	}
 	return lastBody, nil
+}
+
+// postShareAPI 分享接口 POST 表单：镜像轮换与风控识别同 getShareAPI。
+//
+// /share/receive 只认 POST —— 用 GET 打会被回
+// {"state":false,"error":"405 METHOD NOT ALLOWED","errNo":980005}，
+// 且这个错误跟链接失效、提取码错完全长得不一样，排查时别往那边想。
+// 协议以 p115client 的 share_receive 为准（POST + form）。
+//
+// 轮换是安全的：只有命中 is115BusyResp（开小差/稍后再试/频繁）才换下一个镜像，
+// 那类响应代表请求被拒、没有真的执行，不会重复转存
+func postShareAPI(path string, form url.Values, cookie, referer string, timeout time.Duration) ([]byte, error) {
+	var lastBody []byte
+	var lastErr error
+	for _, origin := range shareAPIOrigins {
+		body, err := httpPostForm115Ref(origin+path, form, cookie, referer, timeout)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if is115BusyResp(body) {
+			lastBody = body
+			log.Printf("[上传] ○ %s 命中风控（开小差），切换镜像重试", path)
+			continue
+		}
+		return body, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return lastBody, nil
+}
+
+// shareReferer 分享页 Referer（115driver 的 BuildShareReferer 同款）
+func shareReferer(shareCode, receiveCode string) string {
+	return fmt.Sprintf("https://115cdn.com/s/%s?password=%s&", shareCode, receiveCode)
 }
 
 // is115BusyResp 识别 115 风控响应（state=false 且带"开小差/稍后再试/频繁"文案）
@@ -179,18 +217,19 @@ func (h *Handler) shareReceiveCore(shareURL, code, target string, organize bool)
 	}
 	log.Printf("[上传] ▣ 分享「%s」共 %d 项，开始转存...", shareTitle, len(allItems))
 
-	// 2. 一次性转存到目标目录：GET /share/receive（file_id 逗号分隔）。
-	//    此前的 POST /share/sharepost + files/receive 逐个转存为失效端点
+	// 2. 一次性转存到目标目录：POST /share/receive（file_id 逗号分隔）。
+	//    列表端点 /share/snap 是 GET，转存端点是 POST——两者不一样，
+	//    用 GET 打 receive 会拿到 "405 METHOD NOT ALLOWED"（errNo 980005）
 	fids := make([]string, 0, len(allItems))
 	for _, f := range allItems {
 		fids = append(fids, f.Fid)
 	}
-	rBody, err := getShareAPI("/share/receive", url.Values{
+	rBody, err := postShareAPI("/share/receive", url.Values{
 		"share_code":   {shareCode},
 		"receive_code": {code},
 		"file_id":      {strings.Join(fids, ",")},
 		"cid":          {target},
-	}, cookie, 30*time.Second)
+	}, cookie, shareReferer(shareCode, code), 30*time.Second)
 	if err != nil {
 		return "", 0, 0, fmt.Errorf("转存提交失败: %s", err.Error())
 	}

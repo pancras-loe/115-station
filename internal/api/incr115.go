@@ -241,7 +241,8 @@ type incrSummary struct {
 	AssetsDownloaded int    `json:"assets_downloaded"`
 	AssetsSkipped    int    `json:"assets_skipped"`
 	AssetsFailed     int    `json:"assets_failed"`
-	Ignored          int    `json:"ignored"` // 非媒体库区域（待整理/已存在/冗余等）的事件
+	Ignored          int    `json:"ignored"`    // 非媒体库区域（待整理/已存在/冗余等）的事件
+	Suppressed       int    `json:"suppressed"` // 整理自己产生、已由整理落盘的变更，本轮跳过
 	Elapsed          string `json:"elapsed"`
 }
 
@@ -291,7 +292,14 @@ func normalizeIncrParams(cid, localPath string, videoExt, imageExt, dataExt []st
 	return incrParams{Cid: cid, LocalPath: localPath, VideoExt: videoExt, ImageExt: imageExt, DataExt: dataExt, Limit: limit}
 }
 
-// executeIncrementalSync 增量同步核心（CMS 两阶段模式）：
+// executeIncrementalSync 增量同步核心。
+//
+// **职责边界**：只处理 115 端的**外部变更** —— 手机/客户端上传、离线下载完成、
+// 网页端的删除与改名。自动整理已经是一条龙流水线（识别 → 搬移 → 写 STRM →
+// 刮削），它自己的产物不经过这里：整理做的每次 move/rename 都登记进
+// EventSuppress，事件绕回来时在下面被跳过（peekSuppressed）。
+//
+// 两阶段（CMS 同款）：
 // 阶段一：小批量分页拉取生活事件并落库去重（SyncEvent 表，事件 id 唯一，永不丢失）
 // 阶段二：按时间正序应用事件——新增类定向重遍历受影响目录；
 //
@@ -355,9 +363,10 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		}
 	}
 
-	// 沉淀延迟：等上游转存/移动操作完成，避免拿到中间状态（CMS 同款）
+	// 此处原有 3 秒「沉淀延迟」，是为「整理刚搬完文件、事件还没落库」准备的。
+	// 整理改成一条龙自己落盘之后，增量只处理 115 端的外部变更（手机上传、
+	// 离线下载、网页端删改）——这些事件被我们拉到时早就稳定了，没有上游要等
 	SetTaskProgress("正在获取网盘最近的改动…")
-	time.Sleep(3 * time.Second)
 
 	// ---- 阶段一：小批量分页拉取，落库去重，直到追平（本页无新事件）----
 	// 拉取失败重试：30 秒 × 3 次（网络抖动/瞬时风控不应让整轮作废，QMediaSync 同款）
@@ -470,6 +479,9 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		return "other"
 	}
 
+	// 本轮命中抑制表的 fid：事件成功消费后才把这些标记清掉
+	var suppressedHits []string
+
 	dirSet := map[string]bool{}
 	// 零遍历清单：事件自带 pick_code 时直接用事件数据生成 strm，
 	// 不再重遍历受影响目录（CMS 同款；无 pick_code 的事件回退 dirSet 遍历）
@@ -482,6 +494,14 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 	for i, ev := range pending {
 		if i%50 == 0 {
 			SetTaskProgress(fmt.Sprintf("处理网盘变化 %d/%d 条…", i+1, len(pending)))
+		}
+		// 整理自产的 move/rename：STRM 早在整理时就落好了，绕回来的事件直接跳过。
+		// 只查不删——标记要留到本轮事件真的标成 applied 之后再清（见收尾处），
+		// 否则中途放弃重来时标记已经没了，整理的产物会被当成外部变更处理掉
+		if ev.FileID != "" && peekSuppressed(ev.FileID) {
+			sum.Suppressed++
+			suppressedHits = append(suppressedHits, ev.FileID)
+			continue
 		}
 		switch ev.Type {
 		case evUpload, evReceive, evCopy:
@@ -716,6 +736,9 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		h.DB.Model(&model.SyncEvent{}).Where("event_id IN ?", ids).
 			Updates(map[string]interface{}{"status": "applied", "applied_at": now})
 	}
+	// 事件已落定，现在才能清掉抑制标记：同一个 fid 之后被用户真的手动移动时
+	// 必须能正常处理，标记不清就会把那次真实变更也吞了
+	unmarkSuppressed(suppressedHits...)
 	h.Config.SaveSetting("incr-last", fmt.Sprint(now.Unix()))
 
 	if sum.StrmCreated+sum.AssetsDownloaded+sum.Deleted+sum.Moved > 0 {
@@ -757,9 +780,10 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		}
 		log.Printf("[同步] ✓ 增量同步完成：%s%s。用时 %s", detail, ignoredNote, sum.Elapsed)
 	}
-	// 整理后自动刮削：本轮真的动了媒体库才触发（开关在影视刮削配置里）
-	if len(parts) > 0 {
-		h.scrapeAutoTrigger()
+	// 整理自产的变更单独报一行：它们的 STRM 在整理时就已经落好，这里跳过是正常的，
+	// 不说清楚会让人以为增量把变更漏了
+	if sum.Suppressed > 0 {
+		log.Printf("[同步] ○ 已跳过自产变更 %d 条（整理时已生成 STRM）", sum.Suppressed)
 	}
 	return sum, nil
 }

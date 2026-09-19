@@ -67,8 +67,8 @@
 |---|---|---|
 | **路由与认证** | `routes.go` | `Handler{DB, Config}` + 全部路由注册 + 登录防爆破 + 备份/日志接口 |
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
-| **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` `orphan115.go` `cron.go` | 全量 / 增量（生活事件）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / cron 调度 |
-| **整理流水线** | `organize.go` `org115.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移；`resource.go` 是文件名结构化解析的核心 |
+| **同步** | `full115.go` `incr115.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / cron 调度 / 整理自产事件抑制 |
+| **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」 |
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
@@ -76,9 +76,12 @@
 
 ### 数据模型（`internal/model/model.go`）
 
-15 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
+17 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
-`MediaLibrary`、`UploadMark`。
+`MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）。
+
+> `MediaLibrary` 与 `OrganizeRecord` 不是一回事：前者「一部影视一条」（去重 upsert，仪表盘用），
+> 后者「一次整理动作一条」且失败与未识别同样留痕（记录页与「重新整理」用）。
 
 ---
 
@@ -144,6 +147,27 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    **「失效 STRM」**，改这块时别把两套词混进用户可见的文案。
 7. **自更新路径**：`selfupdate.go` + `main.go` 的 `update-finish` 子命令依赖挂载 Docker socket。
    主容器不能停自己，收尾必须由独立进程完成——改动这条链路前先读懂两处注释。
+8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
+   刮削 → 刷 Emby），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
+   自己做的每一次 move/rename 都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
+   （对齐 p115strmhelper 的 `pantransfercacher`）。
+   - 新增任何在整理链路里改网盘的代码，都要走 `ops.moveFiles` / `ops.rename` / `ops.renameBatch`，
+     绕过它们就绕过了抑制登记，增量会把同一份变更再处理一遍。
+   - 整理搬走文件后如果还删了本地旧产物（洗版让位、重新整理回滚），**必须自己删**：
+     台账行一旦清掉、事件又被抑制，没有第二个人会来收拾（见 `wash.go` 的洗版替换分支）。
+   - 增量同步现在只负责 115 端的外部变更：手机上传、离线下载、网页端删改。
+   - 抑制标记**只查不删**（`peekSuppressed`），要等事件真的标成 `applied` 之后
+     才由 `unmarkSuppressed` 批量清。增量遇到目录读不出来会整轮放弃重来，
+     查时就消费的话下一轮没标记可命中，整理的产物会被当成外部变更处理掉。
+9. **空目录清理会删网盘内容**（`emptydir.go`）：整理搬完文件后，源目录与重新整理前的
+   旧标题目录都会被清掉。删除走 `/rb/delete`（进 115 回收站，可还原），但守卫一条都不能松：
+   - 工作区根（媒体库/待整理/已存在/冗余/转存，见 `orgProtectedCids`）永不删；
+   - **整棵子树没有任何文件**才删，只看直接子项会误判——待整理常见
+     `片名/Season 01/*.mkv`，文件搬走后父目录里还挂着空的 `Season 01`；
+   - 列目录失败（风控/目录已不存在）一律按「不删」处理；
+   - 限深 `emptyDirMaxDepth`。
+   守卫逻辑全部由 `emptydir_test.go` 用假目录树覆盖（判断错一次就是误删用户文件），
+   改这块**先把测试跑绿**。
 
 ---
 
@@ -160,8 +184,12 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
+| 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`） |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，三个页签在 `webui/src/pages/strm/` |
-| 改同步定时 | `internal/api/cron.go`：全量 cron（服务于失效 STRM 检测）与增量 cron（自动整理+增量流水线）两条线 |
+| 改同步定时 | `internal/api/cron.go`：全量 cron（服务于失效 STRM 检测）与增量 cron（自动整理 + 增量）两条线 |
+| 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
+| 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
+| 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
 | 查某个 115 接口怎么调 | [REFERENCES.md](REFERENCES.md) 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | [REFERENCES.md](REFERENCES.md) 的「STRM 同步类项目」，里面有五个项目的策略对比 |

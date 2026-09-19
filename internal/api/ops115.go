@@ -17,13 +17,20 @@ import (
 
 // httpPostForm115 带 Cookie 的 POST 表单请求
 func httpPostForm115(api string, form url.Values, cookie string, timeout time.Duration) ([]byte, error) {
+	return httpPostForm115Ref(api, form, cookie, "https://115.com/", timeout)
+}
+
+// httpPostForm115Ref 同上，但可指定 Referer。
+// 分享类端点要带 https://115cdn.com/s/{share_code}?password={code}& 这种
+// 分享页 Referer（115driver 的 BuildShareReferer 同款），默认 Referer 容易被拒
+func httpPostForm115Ref(api string, form url.Values, cookie, referer string, timeout time.Duration) ([]byte, error) {
 	throttle115(api) // 全局节流，防止触发 115 风控
 	req, err := http.NewRequest(http.MethodPost, api, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", ua115Unified())
-	req.Header.Set("Referer", "https://115.com/")
+	req.Header.Set("Referer", referer)
 	req.Header.Set("Cookie", cookie)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -44,6 +51,44 @@ func httpPostForm115(api string, form url.Values, cookie string, timeout time.Du
 	return body, nil
 }
 
+// delete115Files 删除文件/目录（Cookie 通道）。
+//
+// 端点是 /rb/delete —— rb = recycle bin，**删进 115 回收站，可以还原**，
+// 不是不可逆的抹除。这是空目录清理敢做成默认行为的前提。
+// 字段格式 fid[0]、fid[1]… 与 115driver 的 Delete 一致
+func delete115Files(cookie string, fileIds []string) error {
+	if len(fileIds) == 0 {
+		return nil
+	}
+	form := url.Values{}
+	for i, fid := range fileIds {
+		form.Set(fmt.Sprintf("fid[%d]", i), fid)
+	}
+	body, err := httpPostForm115("https://webapi.115.com/rb/delete", form, cookie, 20*time.Second)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		State bool   `json:"state"`
+		Error string `json:"error"`
+		ErrMs string `json:"errMsg"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("解析删除响应失败: %s", truncateStr(string(body), 150))
+	}
+	if !result.State {
+		msg := result.Error
+		if msg == "" {
+			msg = result.ErrMs
+		}
+		if msg == "" {
+			msg = "未知错误"
+		}
+		return fmt.Errorf("115 拒绝删除: %s", msg)
+	}
+	return nil
+}
+
 // mkdir115 在指定父目录下创建文件夹，返回新文件夹 cid
 func mkdir115(cookie, parentCid, folderName string) (string, error) {
 	// 字段名以 p115client fs_mkdir 为准：pid + cname（旧字段 n 已失效，
@@ -60,13 +105,13 @@ func mkdir115(cookie, parentCid, folderName string) (string, error) {
 	// 实测成功响应为平铺结构：{"state":true,"cid":"...","file_id":"...","file_name":"..."}
 	// 且 errno 可能是空字符串（不能声明为 int），失败时才有 data/errMsg
 	var result struct {
-		State   bool            `json:"state"`
-		Error   string          `json:"error"`
-		Data    json.RawMessage `json:"data"`
-		ErrNo   json.RawMessage `json:"errNo"`
-		ErrMsg  string          `json:"errMsg"`
-		Cid     string          `json:"cid"`
-		FileID  string          `json:"file_id"`
+		State  bool            `json:"state"`
+		Error  string          `json:"error"`
+		Data   json.RawMessage `json:"data"`
+		ErrNo  json.RawMessage `json:"errNo"`
+		ErrMsg string          `json:"errMsg"`
+		Cid    string          `json:"cid"`
+		FileID string          `json:"file_id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("解析创建目录响应失败: %s", truncateStr(string(body), 150))
@@ -261,4 +306,3 @@ func buildExtSet(exts []string) map[string]bool {
 	}
 	return set
 }
-

@@ -97,6 +97,12 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 	result = strings.Trim(result, ".-")
 	result = strings.TrimSpace(result)
 
+	// [[ ]] 是花括号的字面量转义：变量语法占用了 {}，要在文件名里输出真正的
+	// 大括号只能这么写（前端 renderRenameExample 的示例渲染同款规则）。
+	// 必须放在变量替换之后——先转义的话，转出来的 { 会被当成变量起始符
+	result = strings.ReplaceAll(result, "[[", "{")
+	result = strings.ReplaceAll(result, "]]", "}")
+
 	return result
 }
 

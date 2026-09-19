@@ -36,7 +36,9 @@ type scrapeCfg struct {
 	WriteImages bool   `json:"write_images"`
 	Force       bool   `json:"force"` // 覆盖已存在的元数据文件
 
-	AutoAfterOrganize bool `json:"auto_after_organize"` // 增量同步动过媒体库后自动开始刮削
+	// AutoAfterOrganize 整理完成后自动刮削本轮入库的片目（orgSink.flushScrape）。
+	// 此前挂在增量同步末尾且扫全台账——新增一部片也要全库过一遍
+	AutoAfterOrganize bool `json:"auto_after_organize"`
 }
 
 func loadScrapeCfg() scrapeCfg {
@@ -69,33 +71,6 @@ var (
 	scrapeSt       scrapeStatus
 	scrapeStopFlag bool
 )
-
-// scrapeAutoTrigger 增量同步动过媒体库后的自动刮削入口（开关+运行中去重）。
-// 刮削进行中：元数据文件边生成边由每分钟的监控上传分批回传（天然并行）；
-// 刮削结束：再补一轮监控上传 + 元数据回传，收尾兜底
-func (h *Handler) scrapeAutoTrigger() {
-	cfg := loadScrapeCfg()
-	if !cfg.AutoAfterOrganize {
-		return
-	}
-	scrapeMu.Lock()
-	running := scrapeSt.Running
-	scrapeMu.Unlock()
-	if running {
-		return
-	}
-	scrapeSt = scrapeStatus{Running: true, Errors: []string{}}
-	log.Printf("[影视刮削] ▶ 整理完成，自动开始刮削")
-	go func() {
-		h.scrapeAll(cfg)
-		// 收尾兜底：等最后一写落盘后，立即各跑一轮回传（不等分钟级 ticker）
-		go func() {
-			time.Sleep(2 * time.Second)
-			monitorOnce(h)
-			h.uploadMetadataOnce()
-		}()
-	}()
-}
 
 func scrapeStatusSnapshot() scrapeStatus {
 	scrapeMu.Lock()
@@ -358,6 +333,11 @@ func scrapeStopRequested() bool {
 
 // scrapeAll 主流程：遍历媒体库（有 tmdb id 的）逐条刮削
 func (h *Handler) scrapeAll(cfg scrapeCfg) {
+	// 开跑先清停止标志：此前点过一次「停止刮削」之后标志永远留着，
+	// 后续每一轮刮削都在第一个片目就退出（整理后自动刮削尤其看不出来）
+	scrapeMu.Lock()
+	scrapeStopFlag = false
+	scrapeMu.Unlock()
 	defer func() {
 		scrapeMu.Lock()
 		scrapeSt.Running = false

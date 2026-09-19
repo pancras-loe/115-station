@@ -255,14 +255,14 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 			if orgCfg.Pending != shareFolder {
 				orgCfg.Pending = shareFolder
 			}
-			_, _, orgErr := h.executeOrganizeWithConfig(orgCfg, false)
+			_, _, orgErr := h.executeOrganizeWithConfig(orgCfg)
 			if orgErr != nil {
 				log.Printf("[上传] ○ 转存目录整理失败: %v", orgErr)
 			}
 		}
 	} else {
 		// 没配转存目录，退回到扫待整理目录
-		_, _, orgErr := h.executeOrganize(false)
+		_, _, orgErr := h.executeOrganize()
 		if orgErr != nil {
 			log.Printf("[上传] ○ 整理跳过: %v", orgErr)
 		}

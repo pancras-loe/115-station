@@ -52,6 +52,7 @@ const (
 	openPathDownurl = "/open/ufile/downurl"
 	openPathMkdir   = "/open/folder/add"
 	openPathMove    = "/open/ufile/move"
+	openPathDelete  = "/open/ufile/delete"
 
 	openTokenLead  = 5 * time.Minute // 过期前提前刷新
 	openRetryDelay = time.Second
@@ -785,6 +786,15 @@ func (o *open115Client) moveFiles(targetCid string, fids []string) error {
 	return o.apiCall(http.MethodPost, openPathMove, nil, form, nil)
 }
 
+// deleteFiles 删除文件/目录（OpenAPI 通道）。同样是进回收站，可还原
+func (o *open115Client) deleteFiles(fids []string) error {
+	if len(fids) == 0 {
+		return nil
+	}
+	form := url.Values{"file_ids": {strings.Join(fids, ",")}}
+	return o.apiCall(http.MethodPost, openPathDelete, nil, form, nil)
+}
+
 // downloadURL 通过 pickcode 获取下载直链（LitePan ResolveDownload）
 func (o *open115Client) downloadURL(pickcode string) (string, error) {
 	form := url.Values{"pick_code": {pickcode}}
@@ -846,6 +856,10 @@ func openParseDownloadURL(raw json.RawMessage) string {
 type pan115Ops struct {
 	open   *open115Client // OpenAPI 通道（nil 表示走 cookie）
 	cookie string         // Cookie 通道
+	// suppress 打开后，本通道做的每一次 move/rename 都登记进事件抑制表。
+	// 只有整理链路会打开（executeOrganize / redoOrganize 构造后立即置位）：
+	// 整理已经自己落了 STRM，绕一圈回来的生活事件不该再被增量处理一遍
+	suppress bool
 }
 
 // newPan115Ops 构造操作通道：OpenAPI 启用且已授权则优先
@@ -952,7 +966,13 @@ func (o *pan115Ops) rename(fid, newName string) error {
 	if o.open != nil && o.cookie == "" {
 		return fmt.Errorf("OpenAPI 通道暂不支持重命名，且未配置 Cookie 无法回退（账号管理 → 二维码登录可补 Cookie）")
 	}
-	return rename115(o.cookie, fid, newName)
+	if err := rename115(o.cookie, fid, newName); err != nil {
+		return err
+	}
+	if o.suppress {
+		markSuppressed("rename", []string{fid})
+	}
+	return nil
 }
 
 // renameBatch 批量重命名（一次调用）；OpenAPI 模式同样回退 Cookie 通道
@@ -963,15 +983,56 @@ func (o *pan115Ops) renameBatch(names map[string]string) error {
 	if o.open != nil && o.cookie == "" {
 		return fmt.Errorf("OpenAPI 通道暂不支持批量重命名，且未配置 Cookie 无法回退（账号管理 → 二维码登录可补 Cookie）")
 	}
-	return rename115Batch(o.cookie, names)
+	if err := rename115Batch(o.cookie, names); err != nil {
+		return err
+	}
+	if o.suppress {
+		fids := make([]string, 0, len(names))
+		for fid := range names {
+			fids = append(fids, fid)
+		}
+		markSuppressed("rename", fids)
+	}
+	return nil
 }
 
 // moveFiles 移动文件
 func (o *pan115Ops) moveFiles(targetCid string, fids []string) error {
+	var err error
 	if o.open != nil {
-		return o.open.moveFiles(targetCid, fids)
+		err = o.open.moveFiles(targetCid, fids)
+	} else {
+		err = move115Files(o.cookie, targetCid, fids)
 	}
-	return move115Files(o.cookie, targetCid, fids)
+	if err != nil {
+		return err
+	}
+	if o.suppress {
+		markSuppressed("move", fids)
+	}
+	return nil
+}
+
+// deleteFiles 删除文件/目录（两通道都是删进 115 回收站，可还原）
+func (o *pan115Ops) deleteFiles(fids []string) error {
+	if len(fids) == 0 {
+		return nil
+	}
+	var err error
+	if o.open != nil {
+		err = o.open.deleteFiles(fids)
+	} else {
+		err = delete115Files(o.cookie, fids)
+	}
+	if err != nil {
+		return err
+	}
+	if o.suppress {
+		// 删除同样会产生生活事件（type 22）。整理清理空目录属于自产变更，
+		// 不登记的话增量同步会拿这个 fid 去做路径推导 + 整树删本地文件
+		markSuppressed("delete", fids)
+	}
+	return nil
 }
 
 // downloadURL 获取下载直链（默认签发 UA）

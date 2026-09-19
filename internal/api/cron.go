@@ -5,7 +5,9 @@ package api
 // 支持标准 5 字段 cron（分 时 日 月 周），字段支持 * 、*/n 、a-b 、逗号列表。
 // 每分钟检查一次，命中且无同步任务运行时触发。两条独立的调度线：
 //
-//   - 增量（incr.cron）：「自动整理 → 增量同步」流水线，日常入库主力，高频
+//   - 增量（incr.cron）：「自动整理 → 增量同步」两段，日常入库主力，高频。
+//     整理是一条自带落盘的完整流水线（识别→搬移→STRM→刮削→刷 Emby），
+//     跟在后面的增量只负责 115 端的外部变更（手机上传、离线下载、网页端删改）
 //   - 全量（full.cron）：整库扫描，服务于失效 STRM 检测——生活事件有窗口，
 //     网页版批量删除、停机期间的删除都会漏掉，只有整库差集能查出来。低频即可
 //
@@ -147,7 +149,7 @@ func (h *Handler) incrParamsFromConfig() incrParams {
 
 // StartSyncScheduler 启动分钟级调度器：
 //   - full 配置的 cron 命中 → 定时全量同步（刷新失效 STRM 标记）
-//   - incr 配置的 cron 命中 → 「自动整理 → 增量同步」流水线（CMS 主任务模式）
+//   - incr 配置的 cron 命中 → 自动整理（自带落盘）+ 增量同步（只管外部变更）
 //
 // 两者同一分钟同时命中时只跑全量：整库扫描本来就会覆盖增量那点事件，
 // 且全量跑完会把事件窗口标记为已覆盖，紧接着再跑一次增量纯属重复请求 115
@@ -232,8 +234,8 @@ func (h *Handler) runScheduledTick(cron string) {
 	}()
 	beginTask("定时整理+增量")
 	start := time.Now()
-	// 1) 自动整理（不联动全量同步，交给下一步增量精确处理）
-	orgSteps, _, orgErr := h.executeOrganize(false)
+	// 1) 自动整理：识别 → 搬移 → 写 STRM → 刮削 → 刷 Emby 一条龙跑完
+	orgSteps, _, orgErr := h.executeOrganize()
 	if orgErr != nil {
 		log.Printf("[定时] ○ 整理跳过: %v", orgErr)
 	} else {
@@ -244,7 +246,8 @@ func (h *Handler) runScheduledTick(cron string) {
 			}
 		}
 	}
-	// 2) 增量同步（整理产生的 move 事件会被精确应用）
+	// 2) 增量同步：只处理 115 端的外部变更。整理刚刚自产的 move/rename
+	// 已登记进抑制表，绕回来时会被 pop 掉跳过
 	p := h.incrParamsFromConfig()
 	sum, err := h.executeIncrementalSync(p)
 	if err != nil {
@@ -264,8 +267,8 @@ func (h *Handler) runScheduledTick(cron string) {
 	// 只有真的处理了内容才输出摘要
 	if !idle {
 		if sum != nil {
-			log.Printf("[定时] 增量: 新事件 %d，删 %d，移/改 %d，STRM %d，附属下载 %d",
-				sum.EventsFresh, sum.Deleted, sum.Moved, sum.StrmCreated, sum.AssetsDownloaded)
+			log.Printf("[定时] 增量: 新事件 %d，删 %d，移/改 %d，STRM %d，附属下载 %d，跳过自产 %d",
+				sum.EventsFresh, sum.Deleted, sum.Moved, sum.StrmCreated, sum.AssetsDownloaded, sum.Suppressed)
 		}
 		log.Printf("[定时] ✅ 定时任务完成，耗时 %.2f 秒", time.Since(start).Seconds())
 	}
@@ -285,6 +288,18 @@ func (h *Handler) pruneSyncEvents() {
 	if res.Error == nil && res.RowsAffected > 0 {
 		log.Printf("[系统] ○ 清理 %d 条 30 天前的已应用事件", res.RowsAffected)
 	}
+	// 卡死的 pending 事件：某个网盘目录持续读不出来时，增量会整轮放弃
+	// （DirsSkipped>0 不标记），这批事件就每 10 分钟被重放一次、永不落地。
+	// 超过 7 天直接判死：生活事件窗口早过了，真缺的内容只有全量整库差集能补回来
+	stuck := h.DB.Model(&model.SyncEvent{}).
+		Where("status = ? AND created_at < ?", "pending", time.Now().AddDate(0, 0, -7)).
+		Updates(map[string]interface{}{"status": "applied", "applied_at": time.Now()})
+	if stuck.Error == nil && stuck.RowsAffected > 0 {
+		log.Printf("[系统] ⚠ 有 %d 条网盘变动积压超过 7 天始终没能处理完，已停止重试。"+
+			"如果发现媒体库缺内容，到「Strm 管理 → 全量同步」跑一次整库扫描即可补齐", stuck.RowsAffected)
+	}
+	pruneEventSuppress()
+	pruneOrganizeRecords()
 }
 
 // nextCronTime 计算给定时刻之后下一次 cron 触发时间

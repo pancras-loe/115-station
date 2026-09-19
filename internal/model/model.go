@@ -212,6 +212,54 @@ type MediaEnrich struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
+// 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
+// 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
+type OrganizeRecord struct {
+	ID         uint   `json:"id" gorm:"primaryKey"`
+	BatchID    string `json:"batch_id" gorm:"index;size:32"` // 一轮整理的批次号
+	Source     string `json:"source" gorm:"size:500"`        // 原目录名 / 原文件名
+	SourceFid  string `json:"source_fid" gorm:"index;size:64"`
+	SourceKind string `json:"source_kind" gorm:"size:8"` // dir / file
+
+	Status  string `json:"status" gorm:"index;size:16"` // success / exists / failed / unrecognized
+	Stage   string `json:"stage" gorm:"size:16"`        // recognize / move / strm / scrape：失败发生在哪一步
+	Message string `json:"message" gorm:"size:500"`
+
+	TmdbID     int    `json:"tmdb_id" gorm:"index"`
+	Title      string `json:"title" gorm:"size:255"`
+	Year       string `json:"year" gorm:"size:10"`
+	MediaType  string `json:"media_type" gorm:"size:20"`
+	PosterPath string `json:"poster_path" gorm:"size:255"` // 列表直接出图，走 /tmdb/img 代理
+	Category   string `json:"category" gorm:"size:50"`
+	TargetDir  string `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
+	TargetCid  string `json:"target_cid" gorm:"size:64"`
+
+	// Files 是 []{fid,name,kind} 的 JSON。fid 在 115 上移动/改名后不变，
+	// 所以这就是「重新整理」原地捞回文件所需的全部定位信息
+	Files       string `json:"files" gorm:"type:text"`
+	VideoCount  int    `json:"video_count"`
+	TotalSize   int64  `json:"total_size"`
+	StrmCreated int    `json:"strm_created"`
+	ScrapeState string `json:"scrape_state" gorm:"size:16"` // done / failed / skipped
+	ScrapeMsg   string `json:"scrape_msg" gorm:"size:255"`
+
+	ManualTmdb bool      `json:"manual_tmdb"` // 用户手动指定过 TMDB 条目
+	RedoCount  int       `json:"redo_count"`
+	CreatedAt  time.Time `json:"created_at" gorm:"index"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// EventSuppress 整理自产事件抑制表：整理自己做的每一次 move/rename 都登记 fid，
+// 生活事件绕一圈回来时命中就删除该行并跳过（命中即消费，pop 语义）。
+// 落库而不是内存 map：进程重启后 pending 事件还会被重新消费，内存标记会丢。
+type EventSuppress struct {
+	ID       uint      `json:"id" gorm:"primaryKey"`
+	FileID   string    `json:"file_id" gorm:"uniqueIndex;size:64"`
+	Op       string    `json:"op" gorm:"size:16"` // move / rename
+	ExpireAt time.Time `json:"expire_at" gorm:"index"`
+}
+
 var DB *gorm.DB
 
 func InitDB(dbPath string) (*gorm.DB, error) {
@@ -239,6 +287,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&SyncedFile{},
 		&OfflinePlay{},
 		&UploadMark{},
+		&OrganizeRecord{},
+		&EventSuppress{},
 	); err != nil {
 		return nil, err
 	}

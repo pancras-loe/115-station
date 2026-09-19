@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NTabPane, NTabs } from 'naive-ui'
 import BasicTab from './organize/BasicTab.vue'
+import RecordsTab from './organize/RecordsTab.vue'
 import ScrapeTab from './organize/ScrapeTab.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
 import GptTab from './organize/GptTab.vue'
@@ -19,6 +20,7 @@ const tab = useTabQuery('basic')
 <template>
   <NTabs v-model:value="tab" type="line" animated>
     <NTabPane name="basic" tab="基础配置"><BasicTab /></NTabPane>
+    <NTabPane name="records" tab="整理记录" display-directive="if"><RecordsTab /></NTabPane>
     <NTabPane name="scrape" tab="影视刮削"><ScrapeTab /></NTabPane>
     <NTabPane name="recognize" tab="识别规则"><RecognizeTab /></NTabPane>
     <NTabPane name="gpt" tab="GPT 识别"><GptTab /></NTabPane>

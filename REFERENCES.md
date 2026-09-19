@@ -96,6 +96,40 @@ openStrm 因为导出树不带 pickcode，被迫把 STRM 写成路径式、播�
 ⚠️ 这是 115 客户端自用端点，不是公开 API，也**没有开放平台对应端点**。
 调用方必须能降级（见 `collectSyncFiles`）。
 
+### 删除 = 进回收站，可还原
+
+| 通道 | 端点 | 参数 |
+|---|---|---|
+| Cookie | `POST webapi.115.com/rb/delete` | `fid[0]` `fid[1]` …（115driver 的 `Delete` 同款） |
+| OpenAPI | `POST proapi.115.com/open/ufile/delete` | `file_ids`（多个逗号分隔） |
+
+`rb` = recycle bin。**删除是移进 115 回收站，用户能在网页端还原**，不是不可逆的抹除。
+空目录自动清理敢做成默认行为就是基于这一点。p115client 提示单次别超过 5 万个、不要并发。
+
+回收站相关：`/open/rb/list` 列、`/open/rb/revert` 还原、`/open/rb/del` 彻底删（**这个才不可逆**）。
+
+### 分享转存：两个端点的 HTTP 方法不一样
+
+| 端点 | 方法 | 参数 |
+|---|---|---|
+| `webapi.115.com/share/snap` | **GET** + query | `share_code` `receive_code` `cid` `offset` `limit`（上限 1150）`asc` `fc_mix` |
+| `webapi.115.com/share/receive` | **POST** + form | `share_code` `receive_code` `file_id`（多个逗号分隔）`cid`（目标目录） |
+
+一前一后方法相反，很容易顺手都写成 GET。用 GET 打 `receive` 会拿到：
+
+```json
+{"state":false,"error":"405 METHOD NOT ALLOWED","errNo":980005,"request":"/share/receive?cid=..."}
+```
+
+这条错误跟「链接失效」「提取码错误」长得完全不一样，别往那边排查。
+权威签名见 `p115client/client.py` 的 `share_receive`。
+
+已作废的端点：`POST /share/info`（恒返「服务器开小差」）、`POST /share/snap`（405）、
+`POST /share/sharepost` + `files/receive`（逐个转存，现在一次 `receive` 带逗号分隔的 file_id 即可）。
+
+分享类请求带上分享页 Referer 更稳：`https://115cdn.com/s/{share_code}?password={code}&`
+（`115driver` 的 `BuildShareReferer` 同款）。
+
 ### pickcode ⇄ id 是纯本地换算
 
 替换表 + 36 进制，不需要任何请求。目录 pickcode 以 `fa`~`fe` 开头，文件以 `a`~`e` 开头，
