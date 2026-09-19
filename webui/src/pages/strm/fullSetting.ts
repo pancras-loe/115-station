@@ -12,6 +12,7 @@ import type { FullSyncConfig } from '@/api/sync'
 export function defaultFull(): FullSyncConfig {
   return {
     cid: '',
+    cid_path: '',
     local_path: '/media',
     video_ext: ['mp4', 'mkv', 'ts', 'avi', 'mov', 'rmvb', 'webm', 'flv', 'm2ts', 'wmv', 'mpg', 'iso'],
     image_ext: ['jpg', 'png', 'jpeg', 'webp'],

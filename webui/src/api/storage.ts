@@ -63,6 +63,10 @@ export const dirs115 = (cid: string) => http.get<DirListResult>('/storage/115/di
 export const resolve115 = (path: string) =>
   http.get<{ cid?: string }>('/storage/115/resolve', { params: { path } })
 
+/** 把历史配置中的裸 cid 反查为可读路径 */
+export const path115 = (cid: string) =>
+  http.get<{ cid: string; path: string }>('/storage/115/path', { params: { cid } })
+
 export const localDirs = (path: string) => http.get<DirListResult>('/storage/local/dirs', { params: { path } })
 
 export const diagnose115 = () => http.get('/storage/115/diagnose')

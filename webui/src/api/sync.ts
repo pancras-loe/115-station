@@ -16,6 +16,8 @@ export interface SyncExtConfig {
 /** setting「full」的持久化结构（与后端 fullSyncCfg 同构） */
 export interface FullSyncConfig {
   cid: string
+  /** 仅用于配置页回显；同步仍以 cid 为准 */
+  cid_path?: string
   local_path: string
   video_ext: string[]
   image_ext: string[]

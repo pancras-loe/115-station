@@ -237,7 +237,7 @@ const plugins = [
     key: 'checkin',
     name: '115 每日签到',
     icon: CalendarCheck,
-    desc: '按 cron 计划自动签到领积分，结果推送企微 / TG。需先在「账号管理」扫码登录。',
+    desc: '按 cron 计划自动签到领积分，结果推送企微 / TG。需先在「账号与媒体库」扫码登录。',
     available: true,
     runLabel: '立即签到',
     onConfig: ckOpen,
@@ -363,7 +363,7 @@ const availableCount = plugins.filter((p) => p.available).length
           <span class="muted">{{ existing ? `${existing} 个已存在将跳过` : '' }}</span>
           <NButton :loading="libScanning" @click="libScan">重新扫描</NButton>
           <NButton @click="libShow = false">关闭</NButton>
-          <NPopconfirm :disabled="!pending.length" @positive-click="libCreate">
+          <NPopconfirm :disabled="!pending.length" @positive-click="void libCreate()">
             <template #trigger>
               <NButton type="primary" :disabled="!pending.length" :loading="libCreating">
                 创建 {{ pending.length }} 个库

@@ -242,7 +242,7 @@ func (s *orgSink) flushScrape() {
 		scrapeMu.Unlock()
 		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
 	}
-	// 元数据回传 115：等最后一写落盘再跑，不用等分钟级 ticker
+	// 用户允许上传时回传 115：等最后一写落盘再跑，不用等分钟级 ticker
 	go func() {
 		time.Sleep(2 * time.Second)
 		monitorOnce(s.h)

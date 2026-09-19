@@ -108,11 +108,11 @@ function warnOverlap() {
 }
 
 async function runOrganize() {
-  if (!(await resolveAll())) return
   running.value = true
-  message.info('整理任务执行中…')
-  task.poll()
   try {
+    if (!(await resolveAll())) return
+    message.info('整理任务执行中…')
+    task.poll()
     const d = await organizeApi.runPipeline()
     const failed = (d.details ?? []).filter((x) => x.status !== 'success' && x.status !== 'exists').length
     const ok = (d.details ?? []).filter((x) => x.status === 'success').length
@@ -197,9 +197,9 @@ const ENRICH_ROWS = [
 
       <FormActions>
         <NButton type="primary" :loading="saving" @click="saveAll">保存配置</NButton>
-        <NPopconfirm @positive-click="runOrganize">
+        <NPopconfirm @positive-click="void runOrganize()">
           <template #trigger>
-            <NButton type="error" ghost :disabled="busy">开始整理</NButton>
+            <NButton type="error" ghost :disabled="busy" :loading="running">开始整理</NButton>
           </template>
           确定开始整理？会扫描待整理目录并搬移文件。
         </NPopconfirm>

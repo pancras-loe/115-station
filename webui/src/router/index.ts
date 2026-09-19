@@ -32,7 +32,7 @@ const routes: RouteRecordRaw[] = [
         path: 'accounts',
         name: 'accounts',
         component: () => import('@/pages/AccountsPage.vue'),
-        meta: { title: '账号管理', desc: '管理各云盘账号配置', icon: 'accounts' },
+        meta: { title: '账号与媒体库', desc: '管理 115 账号与媒体库位置', icon: 'accounts' },
       },
       {
         path: 'sync',

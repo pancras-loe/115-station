@@ -5,7 +5,7 @@ package api
 // 直接生成 Emby/Kodi 标准元数据，替代"Emby 刮削到本地"这半段：
 //   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 movie.nfo / tvshow.nfo
 //   + poster.jpg / fanart.jpg / seasonNN-poster.jpg 到本地媒体库对应片目目录，
-//   落盘后由「监控上传」自动回传 115 对应目录。
+//   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
 //
 // 接口：GET/POST /scrape/config、POST /scrape/run、GET /scrape/status
@@ -46,7 +46,9 @@ func loadScrapeCfg() scrapeCfg {
 	if v := settingValueCompat("scrape"); v != "" {
 		_ = json.Unmarshal([]byte(v), &c)
 	}
-	c.LocalRoot = strings.TrimRight(strings.TrimSpace(c.LocalRoot), "/")
+	// 本地媒体库根目录只有一个来源。刮削配置中的旧字段继续保留用于兼容，
+	// 但运行时必须跟随 full.local_path，避免同步、整理和刮削落到不同目录树。
+	c.LocalRoot = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
 	return c
 }
 
@@ -282,7 +284,8 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	req.LocalRoot = strings.TrimRight(strings.TrimSpace(req.LocalRoot), "/")
+	// 忽略旧客户端提交的独立根目录，统一使用媒体库位置配置。
+	req.LocalRoot = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
 	if err := saveScrapeCfg(req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -345,7 +348,7 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 		scrapeMu.Unlock()
 		log.Printf("[影视刮削] ■ 本轮结束：完成 %d，失败 %d", scrapeStatusSnapshot().Done, scrapeStatusSnapshot().Failed)
 	}()
-	// 边刮边传：刮削期间每分钟的监控上传已在分批回传；结束后立即补一轮
+	// 用户允许上传时边刮边传；默认禁止，因此这两个入口通常只是快速返回。
 	go func() {
 		time.Sleep(2 * time.Second) // 等最后写入落盘
 		monitorOnce(h)

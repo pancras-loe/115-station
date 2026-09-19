@@ -170,7 +170,7 @@ async function clearAll() {
           <template #prefix><Search :size="14" /></template>
         </NInput>
         <NButton @click="refilter">查询</NButton>
-        <NPopconfirm @positive-click="clearAll">
+        <NPopconfirm @positive-click="void clearAll()">
           <template #trigger>
             <NButton quaternary type="error"><Trash2 :size="14" /></NButton>
           </template>
@@ -240,7 +240,7 @@ async function clearAll() {
                 </template>
                 指定正确的 TMDB 条目，把这 {{ r.file_list.length }} 个文件从当前位置改名并搬到正确目录
               </NTooltip>
-              <NPopconfirm @positive-click="removeRecord(r)">
+              <NPopconfirm @positive-click="void removeRecord(r)">
                 <template #trigger>
                   <NButton size="small" quaternary type="error"><Trash2 :size="14" /></NButton>
                 </template>

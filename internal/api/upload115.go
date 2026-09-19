@@ -102,6 +102,11 @@ func openOSSTokenFromMap(raw map[string]any) openOSSCredential {
 // 双通道：OpenAPI 已授权走官方开放接口；否则回退 Cookie 通道
 // （115driver 库，OpenList/CMS 同款，扫码登录即可上传）。
 func (h *Handler) upload115File(cookie string, pid int64, filename string, data []byte) error {
+	// 上传是 115 风控敏感操作，必须由用户显式开启。扫描入口也会提前判断，
+	// 这里再守一次是为了覆盖“扫描过程中关闭开关”和未来新增调用点。
+	if !h.monitorUploadConfig().Enabled {
+		return fmt.Errorf("上传到 115 未启用")
+	}
 	if oc := h.getOpen115(); oc != nil && oc.authorized() {
 		return h.upload115FileOpen(oc, pid, filename, data)
 	}
@@ -428,6 +433,30 @@ func ossPutOpen(tk openOSSCredential, init openUploadInit, sha string, data []by
 
 // ==================== 监控上传引擎 ====================
 
+// monitorUploadCfg 是所有本地元数据回传 115 的统一授权配置。
+// Enabled 缺省为 false：旧配置即使已经填过 dir，升级后也不会静默恢复上传。
+type monitorUploadCfg struct {
+	Enabled bool   `json:"enabled"`
+	Dir     string `json:"dir"`
+	Target  string `json:"target"` // 旧字段，仅为兼容保留
+}
+
+func parseMonitorUploadCfg(raw string) monitorUploadCfg {
+	var cfg monitorUploadCfg
+	_ = json.Unmarshal([]byte(raw), &cfg)
+	cfg.Dir = strings.TrimSpace(cfg.Dir)
+	cfg.Target = strings.TrimSpace(cfg.Target)
+	return cfg
+}
+
+func (h *Handler) monitorUploadConfig() monitorUploadCfg {
+	cfg := parseMonitorUploadCfg(h.getSettingValue("monitor"))
+	// 监控上传与同步、整理、刮削共用唯一的本地媒体库根目录。
+	// 历史 monitor.dir 只保留反序列化兼容，不再参与运行时路径选择。
+	cfg.Dir = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
+	return cfg
+}
+
 // fileStamp 已上传文件的指纹（修改时间+大小）。Emby 重新刮削会覆盖同名
 // poster/nfo，指纹随之变化，下一轮扫描即检测到并重新上传（内容未变则
 // 115 秒传命中，不会产生重复文件）。
@@ -488,7 +517,7 @@ func StartMonitorUploader(h *Handler) {
 			}
 		}
 	}()
-	log.Println("[监控上传] 引擎已启动（每分钟扫描一次监控目录）")
+	log.Println("[监控上传] 引擎已启动（默认禁止；开启后每分钟扫描一次监控目录）")
 }
 
 // monitorOnce 单轮扫描上传
@@ -496,22 +525,16 @@ func StartMonitorUploader(h *Handler) {
 var monitorRunning atomic.Bool
 
 func monitorOnce(h *Handler) {
+	cfg := h.monitorUploadConfig()
+	if !cfg.Enabled || cfg.Dir == "" {
+		return
+	}
 	if !monitorRunning.CompareAndSwap(false, true) {
 		return // 上一轮还没跑完，跳过本轮
 	}
 	defer monitorRunning.Store(false)
-	// 配置：仅需监控目录；上传目标固定为全量同步的媒体库（旧配置里的
-	// target 字段已废弃忽略——监控的是本地媒体树，目标自然是云端媒体库）
-	var cfg struct {
-		Dir    string `json:"dir"`
-		Target string `json:"target"`
-	}
-	if err := json.Unmarshal([]byte(h.getSettingValue("monitor")), &cfg); err != nil {
-		return // 配置解析失败视为未启用
-	}
-	if cfg.Dir == "" {
-		return // 未启用
-	}
+	// 本地路径固定跟随统一媒体库位置；上传目标固定为全量同步的媒体库。
+	// target 字段已废弃忽略——监控的是本地媒体树，目标自然是云端媒体库。
 	_ = cfg.Target
 
 	cookie, err := h.get115Cookie()
@@ -632,15 +655,8 @@ var metadataUploadNames = map[string]bool{
 // 用 files/getid 定位）。与「监控上传」（Emby 图片目录→115）互补：
 // 这里针对的是媒体卷内、随剧集目录存放的元数据文件
 func StartMetadataUploader(h *Handler) {
-	// 监控上传（monitor 配置）已覆盖同一职责且更可配（目录自选）；
-	// 本引擎仅在监控目录未配置时作为兜底启用，避免双路重复上传
-	var mc struct {
-		Dir string `json:"dir"`
-	}
-	_ = json.Unmarshal([]byte(h.getSettingValue("monitor")), &mc)
-	if mc.Dir != "" {
-		return // 监控上传已启用，兜底引擎休眠
-	}
+	// 是否允许上传和目录配置运行时读取，保存开关后无需重启服务。
+	// 配了监控目录时由分钟级引擎处理；未配目录才由本引擎扫描统一媒体库根目录。
 	go func() {
 		for {
 			select {
@@ -651,13 +667,17 @@ func StartMetadataUploader(h *Handler) {
 			h.uploadMetadataOnce()
 		}
 	}()
-	log.Println("[元数据回传] 兜底引擎已启动（未配置监控目录；每 5 分钟扫描媒体目录）")
+	log.Println("[元数据回传] 兜底引擎已启动（默认禁止；开启且未配置监控目录时每 5 分钟扫描）")
 }
 
 // uploadMetadataOnce 单轮回传
 var metadataRunning atomic.Bool
 
 func (h *Handler) uploadMetadataOnce() {
+	mc := h.monitorUploadConfig()
+	if !mc.Enabled || mc.Dir != "" {
+		return // 禁止上传，或已由监控目录引擎负责
+	}
 	if !metadataRunning.CompareAndSwap(false, true) {
 		return
 	}

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   NAlert,
   NButton,
   NDynamicTags,
+  NInput,
   NPopconfirm,
   NRadioButton,
   NRadioGroup,
@@ -13,33 +14,19 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import CronField from '@/components/ui/CronField.vue'
-import Cid115Input from '@/components/Cid115Input.vue'
-import LocalPathInput from '@/components/LocalPathInput.vue'
+import { useRouter } from 'vue-router'
 import { syncApi } from '@/api'
 import type { FullSyncMode, OrphanReport } from '@/api/sync'
-import type { FullSetting } from './fullSetting'
+import { defaultFull, type FullSetting } from './fullSetting'
 import { useTaskStore } from '@/stores/task'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const props = defineProps<{ full: FullSetting }>()
 
 const { message } = useFeedback()
+const router = useRouter()
 const task = useTaskStore()
 const cfg = computed(() => props.full.model.value)
-
-const cidInput = ref<InstanceType<typeof Cid115Input> | null>(null)
-/**
- * 配置里存的是裸 cid（没有路径），所以初始 path 直接显示 cid。
- * 用户点「选择目录」后 path 会变成可读路径，cid 仍然是真正提交的值。
- */
-const cidValue = ref({ cid: '', path: '' })
-watch(
-  () => cfg.value.cid,
-  (v) => {
-    if (v && v !== cidValue.value.cid) cidValue.value = { cid: v, path: v }
-  },
-  { immediate: true },
-)
 
 const running = ref(false)
 
@@ -108,25 +95,30 @@ function humanSize(n: number): string {
   return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
-/** 保存前先确认 cid 可信，否则会把空 cid 或失配的旧 cid 存进配置 */
-async function ensureCid(): Promise<string | null> {
-  const cid = (await cidInput.value?.ensureCid()) ?? ''
+/** 媒体库位置改为统一配置后，这里只校验是否已经完成基础配置。 */
+function configuredCid(): string | null {
+  const cid = cfg.value.cid.trim()
   if (!cid || cid === '0') {
-    message.error('目录路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
+    message.error('请先到「账号与媒体库」配置 115 媒体库目录')
     return null
   }
   return cid
 }
 
 async function saveFull() {
-  const cid = await ensureCid()
-  if (cid === null) return
-  cfg.value.cid = cid
+  await props.full.save()
+}
+
+async function resetFullOptions() {
+  const cid = cfg.value.cid
+  const cidPath = cfg.value.cid_path
+  const localPath = cfg.value.local_path
+  Object.assign(cfg.value, defaultFull(), { cid, cid_path: cidPath, local_path: localPath })
   await props.full.save()
 }
 
 async function runFull() {
-  const cid = await ensureCid()
+  const cid = configuredCid()
   if (cid === null) return
   if (!cfg.value.video_ext.length) {
     message.warning('请至少保留一个视频文件后缀')
@@ -192,19 +184,23 @@ const busy = computed(() => running.value || task.status.running)
       </FieldRow>
 
       <FieldRow
-        label="115 媒体库 cid"
-        required
-        tip="全量同步的根目录。增量同步、整理入库、洗版判定均锚定此目录；STRM 本地路径保存其镜像结构。"
+        label="115 媒体库目录"
+        tip="统一位置配置；全量同步、增量同步、整理入库与洗版判定共同使用。"
       >
-        <Cid115Input ref="cidInput" v-model="cidValue" />
+        <NInput :value="cfg.cid_path || cfg.cid || '未配置'" readonly />
       </FieldRow>
 
       <FieldRow
-        label="本地媒体库目录"
-        tip="STRM 与附属文件（字幕/NFO/图片）的本地保存根目录。需与 Emby 媒体库路径一致（配合 EMBY 管理卡的路径映射）。"
+        label="本地媒体库根目录"
+        tip="统一位置配置；STRM、附属文件与影视刮削共同使用。"
       >
-        <LocalPathInput v-model="cfg.local_path" />
+        <NInput :value="cfg.local_path || '未配置'" readonly />
       </FieldRow>
+
+      <NAlert class="location-note" type="info" :bordered="false">
+        媒体库位置已统一到「账号与媒体库」页面配置。
+        <NButton text type="primary" @click="router.push({ name: 'accounts' })">前往配置</NButton>
+      </NAlert>
 
       <FieldRow label="视频文件后缀" tip="匹配这些后缀的文件视为视频，生成 STRM。">
         <NDynamicTags v-model:value="cfg.video_ext" size="small" />
@@ -220,9 +216,9 @@ const busy = computed(() => running.value || task.status.running)
 
       <FormActions>
         <NButton type="primary" :loading="full.saving.value" @click="saveFull">保存配置</NButton>
-        <NPopconfirm @positive-click="runFull">
+        <NPopconfirm @positive-click="void runFull()">
           <template #trigger>
-            <NButton type="primary" ghost :disabled="busy">开始全量同步</NButton>
+            <NButton type="primary" ghost :disabled="busy" :loading="running">开始全量同步</NButton>
           </template>
           {{
             fullMode === 'fast'
@@ -230,7 +226,7 @@ const busy = computed(() => running.value || task.status.running)
               : '确定开始全量同步？整库扫描耗时较长。'
           }}
         </NPopconfirm>
-        <NButton :disabled="busy" @click="full.reset">重置配置</NButton>
+        <NButton :disabled="busy" @click="resetFullOptions">重置同步选项</NButton>
       </FormActions>
     </SectionCard>
 
@@ -298,7 +294,7 @@ const busy = computed(() => running.value || task.status.running)
       </div>
 
       <FormActions>
-        <NPopconfirm @positive-click="cleanOrphans">
+        <NPopconfirm @positive-click="void cleanOrphans()">
           <template #trigger>
             <NButton type="error" ghost :disabled="busy" :loading="orphanCleaning">
               清理全部 {{ orphan.total }} 个失效 STRM
@@ -323,6 +319,9 @@ const busy = computed(() => running.value || task.status.running)
 }
 .mode-note {
   margin-top: 8px;
+}
+.location-note {
+  margin-bottom: 10px;
 }
 .mode-locked {
   font-size: 13px;

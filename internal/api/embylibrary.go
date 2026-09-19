@@ -53,6 +53,18 @@ func guessLibType(parentName, dirName string) (string, string) {
 	}
 }
 
+// embyPathRoots 返回统一的本地媒体库根与 Emby 挂载根。
+// path_mapping 的前半段是历史兼容字段；本地根始终以 full.local_path 为准，
+// 这样在统一入口修改本地目录后，不需要再去 Emby 卡片重复修改一次。
+func embyPathRoots(pathMapping string) (string, string) {
+	localRoot := strings.TrimRight(strings.ReplaceAll(localMediaRoot(), "\\", "/"), "/")
+	parts := strings.SplitN(pathMapping, "#", 2)
+	if len(parts) != 2 {
+		return localRoot, ""
+	}
+	return localRoot, strings.TrimRight(strings.ReplaceAll(parts[1], "\\", "/"), "/")
+}
+
 // mapToEmbyPath 本地路径 → Emby 路径（复用 emby 配置的映射规则）
 func (h *Handler) mapToEmbyPath(local string) string {
 	// 统一为正斜杠再比较（Windows 下 filepath.Join 产生反斜杠）
@@ -61,10 +73,9 @@ func (h *Handler) mapToEmbyPath(local string) string {
 		PathMapping string `json:"path_mapping"`
 	}
 	_ = json.Unmarshal([]byte(h.getSettingValue("emby")), &embyCfg)
-	if embyCfg.PathMapping != "" && strings.Contains(embyCfg.PathMapping, "#") {
-		parts := strings.SplitN(embyCfg.PathMapping, "#", 2)
-		src, dst := strings.TrimRight(parts[0], "/"), strings.TrimRight(parts[1], "/")
-		if src != "" && strings.HasPrefix(local, src+"/") || local == src {
+	if embyCfg.PathMapping != "" {
+		src, dst := embyPathRoots(embyCfg.PathMapping)
+		if src != "" && dst != "" && (strings.HasPrefix(local, src+"/") || local == src) {
 			return dst + strings.TrimPrefix(local, src)
 		}
 	}

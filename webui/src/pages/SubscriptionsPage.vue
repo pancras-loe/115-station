@@ -256,7 +256,7 @@ onMounted(load)
           <template #icon><Pencil :size="13" /></template>
         </NButton>
 
-        <NPopconfirm @positive-click="remove(r)">
+        <NPopconfirm @positive-click="void remove(r)">
           <template #trigger>
             <NButton size="tiny" quaternary type="error">
               <template #icon><Trash2 :size="13" /></template>

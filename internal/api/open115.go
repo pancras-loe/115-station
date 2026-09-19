@@ -964,7 +964,7 @@ func (o *pan115Ops) openEnsurePath(parent, dirPath string) (string, error) {
 // OpenAPI 暂无重命名接口：回退 Cookie 通道（未配置 Cookie 时明确报错）
 func (o *pan115Ops) rename(fid, newName string) error {
 	if o.open != nil && o.cookie == "" {
-		return fmt.Errorf("OpenAPI 通道暂不支持重命名，且未配置 Cookie 无法回退（账号管理 → 二维码登录可补 Cookie）")
+		return fmt.Errorf("OpenAPI 通道暂不支持重命名，且未配置 Cookie 无法回退（账号与媒体库 → 二维码登录可补 Cookie）")
 	}
 	if err := rename115(o.cookie, fid, newName); err != nil {
 		return err
@@ -981,7 +981,7 @@ func (o *pan115Ops) renameBatch(names map[string]string) error {
 		return nil
 	}
 	if o.open != nil && o.cookie == "" {
-		return fmt.Errorf("OpenAPI 通道暂不支持批量重命名，且未配置 Cookie 无法回退（账号管理 → 二维码登录可补 Cookie）")
+		return fmt.Errorf("OpenAPI 通道暂不支持批量重命名，且未配置 Cookie 无法回退（账号与媒体库 → 二维码登录可补 Cookie）")
 	}
 	if err := rename115Batch(o.cookie, names); err != nil {
 		return err

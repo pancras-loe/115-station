@@ -124,7 +124,7 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 		cfg.Library = fullCfg.Cid
 	}
 	if cfg.Library == "" {
-		return nil, fmt.Errorf("未配置全量同步的媒体库目录（整理目标库取自全量同步配置）")
+		return nil, fmt.Errorf("未配置媒体库目录（请到「账号与媒体库」完成配置）")
 	}
 	// 转存目录同样是工作区根：整理引擎跳过它自身（内容由转存触发/守望者以它为扫描根处理）
 	var shareCfg struct {

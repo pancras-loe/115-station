@@ -141,6 +141,27 @@ func (h *Handler) Resolve115Path(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cid": cid, "path": "/" + p})
 }
 
+// Resolve115CID 把 cid 反查为可读的网盘绝对路径，供配置页回显历史配置。
+// GET /storage/115/path?cid=123456
+func (h *Handler) Resolve115CID(c *gin.Context) {
+	cid := strings.TrimSpace(c.Query("cid"))
+	if cid == "" || cid == "0" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cid 为空"})
+		return
+	}
+	cookie, err := h.get115Cookie()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	p := absPathOf(cookie, cid, map[string]dirInfo{})
+	if p == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "无法解析该 cid 对应的目录路径"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cid": cid, "path": p})
+}
+
 // build115FileQuery 构造 115 文件列表查询参数
 // 与 p115client web 通道默认参数一致（asc/cid/cur/fc_mix/o/offset/limit/show_dir），
 // 多余参数曾被怀疑参与触发风控，保持最简

@@ -94,7 +94,7 @@ onUnmounted(stopTimer)
           <template #icon><RefreshCw :size="14" /></template>
           刷新
         </NButton>
-        <NPopconfirm @positive-click="clear">
+        <NPopconfirm @positive-click="void clear()">
           <template #trigger>
             <NButton size="small" type="error" ghost>
               <template #icon><Trash2 :size="14" /></template>

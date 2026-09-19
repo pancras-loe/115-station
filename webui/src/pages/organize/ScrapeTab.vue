@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NAlert, NButton, NRadioButton, NRadioGroup } from 'naive-ui'
+import { NAlert, NButton, NInput, NRadioButton, NRadioGroup, NTag } from 'naive-ui'
+import { useRouter } from 'vue-router'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import LocalPathInput from '@/components/LocalPathInput.vue'
 import { organizeApi } from '@/api'
+import { useSetting } from '@/composables/useSetting'
+import { useFullSetting } from '@/pages/strm/fullSetting'
 import type { ScrapeConfig } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
+const router = useRouter()
+const media = useFullSetting()
+const monitor = useSetting('monitor', { enabled: false })
 
 const cfg = ref<ScrapeConfig>({
   local_root: '',
@@ -41,6 +46,7 @@ async function load() {
 async function save() {
   saving.value = true
   try {
+    cfg.value.local_root = media.model.value.local_path
     await organizeApi.saveScrapeConfig(cfg.value)
     message.success('保存成功')
   } catch (e) {
@@ -51,12 +57,13 @@ async function save() {
 }
 
 async function run() {
-  if (!cfg.value.local_root) {
-    message.warning('请先填写本地媒体库根目录')
+  if (!media.model.value.local_path) {
+    message.warning('请先到「账号与媒体库」配置本地媒体库根目录')
     return
   }
   starting.value = true
   try {
+    cfg.value.local_root = media.model.value.local_path
     // 先存再跑：后端跑的是已保存的配置，不是请求体
     await organizeApi.saveScrapeConfig(cfg.value)
     await organizeApi.runScrape()
@@ -87,8 +94,36 @@ onMounted(load)
 
 <template>
   <SectionCard title="影视刮削" hint="TMDB → 本地 NFO / 海报">
+    <FieldRow
+      label="整理后自动刮削"
+      hint="整理完成后只刮本轮新入库的片目（不扫全库）；是否上传到 115 由下方上传开关独立控制。"
+    >
+      <NRadioGroup v-model:value="cfg.auto_after_organize">
+        <NRadioButton :value="true">开启</NRadioButton>
+        <NRadioButton :value="false">关闭</NRadioButton>
+      </NRadioGroup>
+    </FieldRow>
+
+    <FieldRow
+      label="上传到 115"
+      tip="这里只显示监控上传总开关的当前状态；刮削始终先写入本地媒体库。"
+    >
+      <div class="upload-status">
+        <NTag :type="monitor.model.value.enabled ? 'success' : 'default'" :bordered="false">
+          {{ monitor.model.value.enabled ? '已允许上传' : '已禁止上传（默认）' }}
+        </NTag>
+        <NButton
+          text
+          type="primary"
+          @click="router.push({ name: 'upload-download', query: { tab: 'upload' } })"
+        >
+          前往上传开关配置
+        </NButton>
+      </div>
+    </FieldRow>
+
     <NAlert class="note" type="info" :bordered="false">
-      按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录，落盘后由「监控上传」自动回传 115
+      按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录；仅在允许上传时由「监控上传」回传 115
       —— 替代「Emby 刮削到本地」。Emby 侧建议把元数据读取器设为「仅 NFO」，以本站数据为准。
       剧集生成 tvshow.nfo、整季海报与逐集同名 NFO；NFO 内含 fileinfo/streamdetails
       轨道信息（ffprobe 探测的多音轨 / 内嵌字幕），播放器无需探测 strm 远端即可显示音轨字幕。
@@ -96,9 +131,12 @@ onMounted(load)
 
     <FieldRow
       label="本地媒体库根目录"
-      tip="本地挂载的媒体库根目录（如 /media）。片目目录 = 根目录 + 台账相对路径，与监控上传的监控目录通常是同一个。"
+      tip="统一位置配置；片目目录 = 根目录 + 台账相对路径。"
     >
-      <LocalPathInput v-model="cfg.local_root" placeholder="如 /media" />
+      <NInput :value="media.model.value.local_path || '未配置'" readonly />
+      <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+        前往「账号与媒体库」修改
+      </NButton>
     </FieldRow>
 
     <FieldRow v-for="s in SWITCHES" :key="s.key" :label="s.label">
@@ -115,16 +153,6 @@ onMounted(load)
       </NRadioGroup>
     </FieldRow>
 
-    <FieldRow
-      label="整理后自动刮削"
-      hint="整理完成后只刮本轮新入库的片目（不扫全库）；刮削期间元数据边生成边回传 115。"
-    >
-      <NRadioGroup v-model:value="cfg.auto_after_organize">
-        <NRadioButton :value="true">开启</NRadioButton>
-        <NRadioButton :value="false">关闭</NRadioButton>
-      </NRadioGroup>
-    </FieldRow>
-
     <FormActions>
       <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
       <NButton type="primary" ghost :loading="starting" @click="run">开始刮削</NButton>
@@ -136,5 +164,14 @@ onMounted(load)
 <style scoped>
 .note {
   margin-bottom: 12px;
+}
+.location-link {
+  margin-top: 6px;
+}
+.upload-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 </style>

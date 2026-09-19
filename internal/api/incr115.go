@@ -330,7 +330,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		// 媒体库 cid 无效/未配置（如全量同步配置缺 cid 时默认 "0"）：
 		// 所有事件都会被判为 other 静默吞掉并标已消费 → STRM 永久缺失。
 		// 熔断本轮，事件原样留待配置修正
-		log.Printf("[同步] ⚠⚠ 媒体库 cid=%s 解析不出绝对路径（未配置或已失效），增量同步中止（事件未消费）。请到「全量同步」确认媒体库目录配置", p.Cid)
+		log.Printf("[同步] ⚠⚠ 媒体库 cid=%s 解析不出绝对路径（未配置或已失效），增量同步中止（事件未消费）。请到「账号与媒体库」确认媒体库目录配置", p.Cid)
 		return sum, fmt.Errorf("媒体库 cid 无效（%s），增量同步中止（事件未消费，修正配置后重试即可补上）", p.Cid)
 	}
 	var excludedAbs []string

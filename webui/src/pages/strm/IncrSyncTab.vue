@@ -22,7 +22,7 @@ async function runIncremental() {
   const cfg = props.full.model.value
   // 增量走的是已保存的媒体库配置（定时任务也读同一份），没保存过就没得跑
   if (!cfg.cid || cfg.cid === '0') {
-    message.error('请先到「全量同步」页签配置并保存 115 媒体库 cid')
+    message.error('请先到「账号与媒体库」配置并保存 115 媒体库目录')
     return
   }
   running.value = true
@@ -105,9 +105,9 @@ const busy = computed(() => running.value || task.status.running)
 
       <FormActions>
         <NButton type="primary" :loading="incr.saving.value" @click="incr.save()">保存配置</NButton>
-        <NPopconfirm @positive-click="runIncremental">
+        <NPopconfirm @positive-click="void runIncremental()">
           <template #trigger>
-            <NButton type="primary" ghost :disabled="busy">开始增量同步</NButton>
+            <NButton type="primary" ghost :disabled="busy" :loading="running">开始增量同步</NButton>
           </template>
           确定立即执行一次增量同步？
         </NPopconfirm>

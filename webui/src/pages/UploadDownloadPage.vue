@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
@@ -18,16 +19,18 @@ import FormActions from '@/components/ui/FormActions.vue'
 import MeterBar from '@/components/ui/MeterBar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
-import LocalPathInput from '@/components/LocalPathInput.vue'
 import { transferApi } from '@/api'
 import type { OfflineTask } from '@/api/transfer'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
+import { useFullSetting } from '@/pages/strm/fullSetting'
 import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
+const router = useRouter()
 const tab = useTabQuery('download')
+const media = useFullSetting()
 
 // ---- 转存目录 ----
 const share = useSetting('share', { folder: '' })
@@ -52,7 +55,7 @@ async function saveShare() {
 }
 
 // ---- 监控上传 ----
-const monitor = useSetting('monitor', { dir: '', target: '' })
+const monitor = useSetting('monitor', { enabled: false })
 
 // ---- 提交链接 ----
 const link = ref('')
@@ -283,18 +286,31 @@ onUnmounted(() => clearInterval(timer))
     </NTabPane>
 
     <NTabPane name="upload" tab="监控上传">
-      <SectionCard title="监控上传" hint="Emby 刮削产物回传 115">
-        <NAlert class="note" type="info" :bordered="false">
-          把 Emby 刮削生成的标准元数据回传 115：监控目录填本地媒体库根目录（如 <code>/media</code>），
-          自动检测新产生的标准图片（poster / fanart / banner / seasonXX-poster 等）与
+      <SectionCard title="监控上传" hint="默认禁止，显式开启后才向 115 写入">
+        <NAlert class="note" type="warning" :bordered="false">
+          上传属于 115 风控敏感操作，默认关闭。开启后会监控统一配置的本地媒体库根目录，
+          自动检测本站或 Emby 新产生的标准图片（poster / fanart / banner / seasonXX-poster 等）与
           NFO（tvshow / movie / season / 每集同名 .nfo），按相对路径上传到 115 对应目录。
         </NAlert>
 
         <FieldRow
-          label="监控目录"
-          tip="本地媒体库根目录（如 /media）。目标固定为全量同步的媒体库。"
+          label="允许上传到 115"
+          tip="总开关。关闭时，定时监控、刮削结束回传和兜底回传都不会上传任何文件。"
         >
-          <LocalPathInput v-model="monitor.model.value.dir" placeholder="本地媒体库根目录（如 /media）" />
+          <NRadioGroup v-model:value="monitor.model.value.enabled">
+            <NRadioButton :value="true">允许</NRadioButton>
+            <NRadioButton :value="false">禁止（推荐）</NRadioButton>
+          </NRadioGroup>
+        </FieldRow>
+
+        <FieldRow
+          label="本地媒体库根目录"
+          tip="与全量同步、增量同步、整理和影视刮削共用同一位置；目标固定为 115 媒体库。"
+        >
+          <NInput :value="media.model.value.local_path || '未配置'" readonly />
+          <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+            前往「账号与媒体库」修改
+          </NButton>
         </FieldRow>
 
         <FormActions>
@@ -322,6 +338,9 @@ onUnmounted(() => clearInterval(timer))
 }
 .note {
   margin-bottom: 12px;
+}
+.location-link {
+  margin-top: 6px;
 }
 
 .task-tools {

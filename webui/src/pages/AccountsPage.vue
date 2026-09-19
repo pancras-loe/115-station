@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import {
+  NAlert,
   NButton,
   NCollapse,
   NCollapseItem,
@@ -18,7 +19,10 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import MeterBar from '@/components/ui/MeterBar.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
+import Cid115Input from '@/components/Cid115Input.vue'
+import LocalPathInput from '@/components/LocalPathInput.vue'
 import { storageApi } from '@/api'
+import { useFullSetting } from '@/pages/strm/fullSetting'
 import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
 import type { StorageCheck } from '@/types/storage'
@@ -26,6 +30,35 @@ import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
+const media = useFullSetting()
+const cidInput = ref<InstanceType<typeof Cid115Input> | null>(null)
+const cidValue = ref({ cid: '', path: '' })
+
+watch(
+  () => [media.model.value.cid, media.model.value.cid_path] as const,
+  async ([cid, savedPath]) => {
+    if (!cid) {
+      cidValue.value = { cid: '', path: '' }
+      return
+    }
+    const displayPath = savedPath || cid
+    if (cid !== cidValue.value.cid || displayPath !== cidValue.value.path) {
+      cidValue.value = { cid, path: displayPath }
+    }
+    // 兼容旧配置：过去只保存 cid，进入页面时自动反查一次可读路径。
+    if (!savedPath) {
+      try {
+        const resolved = await storageApi.path115(cid)
+        if (media.model.value.cid === cid && resolved.path) {
+          cidValue.value = { cid, path: resolved.path }
+        }
+      } catch {
+        // Cookie 暂不可用时保留 cid；重新选择目录或下次保存仍可补齐。
+      }
+    }
+  },
+  { immediate: true },
+)
 
 const DEFAULT_COOKIE_PATH = '/config/115-cookies.txt'
 
@@ -139,6 +172,29 @@ async function saveAndScan() {
   if (await save()) qrShow.value = true
 }
 
+async function saveMedia() {
+  const cid = (await cidInput.value?.ensureCid()) ?? ''
+  if (!cid || cid === '0') {
+    message.error('目录路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
+    return
+  }
+  if (!media.model.value.local_path.trim()) {
+    message.error('请填写本地媒体库根目录')
+    return
+  }
+  media.model.value.cid = cid
+  let readablePath = cidValue.value.path.trim()
+  if (!readablePath || /^\d+$/.test(readablePath)) {
+    try {
+      readablePath = (await storageApi.path115(cid)).path
+    } catch {
+      readablePath = ''
+    }
+  }
+  media.model.value.cid_path = readablePath
+  await media.save()
+}
+
 function reset() {
   form.value = {
     cookie_path: DEFAULT_COOKIE_PATH,
@@ -228,6 +284,32 @@ onMounted(load)
       </FormActions>
     </SectionCard>
 
+    <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
+      <NAlert class="media-note" type="info" :bordered="false">
+        此处是全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共同使用的统一位置配置。
+      </NAlert>
+
+      <FieldRow
+        label="115 媒体库目录"
+        required
+        tip="全量同步、增量同步、整理入库与洗版判定共同锚定此目录。"
+      >
+        <Cid115Input ref="cidInput" v-model="cidValue" />
+      </FieldRow>
+
+      <FieldRow
+        label="本地媒体库根目录"
+        required
+        tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
+      >
+        <LocalPathInput v-model="media.model.value.local_path" />
+      </FieldRow>
+
+      <FormActions>
+        <NButton type="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</NButton>
+      </FormActions>
+    </SectionCard>
+
     <SectionCard v-if="account" title="账号状态">
       <div class="acc">
         <div class="acc-avatar">
@@ -292,6 +374,9 @@ onMounted(load)
 .acc {
   display: flex;
   gap: 16px;
+}
+.media-note {
+  margin-bottom: 12px;
 }
 .acc-avatar {
   width: 56px;

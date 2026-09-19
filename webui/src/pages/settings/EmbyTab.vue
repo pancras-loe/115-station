@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { NAlert, NButton, NInput, NInputGroup, NRadioButton, NRadioGroup } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
@@ -10,9 +11,12 @@ import CopyBox from '@/components/ui/CopyBox.vue'
 import { configApi } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
+import { useFullSetting } from '@/pages/strm/fullSetting'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
+const router = useRouter()
+const media = useFullSetting()
 
 const { model, saving, save, reset } = useSetting('emby', {
   server_url: '',
@@ -25,6 +29,27 @@ const { model, saving, save, reset } = useSetting('emby', {
 const banner = ref<BannerState | null>(null)
 const testing = ref(false)
 const pathProbe = ref('')
+const embyMediaRoot = ref('')
+
+watch(
+  () => model.value.path_mapping,
+  (rule) => {
+    const splitAt = rule.indexOf('#')
+    embyMediaRoot.value = splitAt >= 0 ? rule.slice(splitAt + 1) : ''
+  },
+  { immediate: true },
+)
+
+function currentPathMapping(): string {
+  const localRoot = media.model.value.local_path.trim()
+  const embyRoot = embyMediaRoot.value.trim()
+  return localRoot && embyRoot ? `${localRoot}#${embyRoot}` : ''
+}
+
+async function saveEmby() {
+  model.value.path_mapping = currentPathMapping()
+  await save()
+}
 
 async function testConnection() {
   const url = model.value.server_url.trim()
@@ -55,7 +80,7 @@ const pathResult = computed(() => {
   const input = pathProbe.value
   if (!input) return ''
   let out = input
-  const rule = model.value.path_mapping
+  const rule = currentPathMapping()
   if (rule.includes('#')) {
     const [src, dst] = rule.split('#')
     if (src && input.startsWith(src)) out = dst + input.slice(src.length)
@@ -150,9 +175,22 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 
       <FieldRow
         label="本地路径映射"
-        tip="本地路径#Emby 路径（# 分隔）。入库刷新与建库插件共用此规则，把本地路径转换为 Emby 路径。"
+        tip="前段固定使用统一配置的本地媒体库根目录，后段填写该目录在 Emby 中的挂载路径。"
       >
-        <NInput v-model:value="model.path_mapping" placeholder="/media#/media" />
+        <div class="path-pair">
+          <label>
+            <span>本地媒体库目录</span>
+            <NInput :value="media.model.value.local_path || '未配置'" readonly />
+          </label>
+          <span class="path-arrow">→</span>
+          <label>
+            <span>Emby 媒体库目录</span>
+            <NInput v-model:value="embyMediaRoot" placeholder="如 /media" />
+          </label>
+        </div>
+        <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+          前往「账号与媒体库」修改本地目录
+        </NButton>
       </FieldRow>
 
       <FieldRow
@@ -185,7 +223,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="save()">保存配置</NButton>
+        <NButton type="primary" :loading="saving" @click="saveEmby">保存配置</NButton>
         <NButton @click="reset">重置配置</NButton>
       </FormActions>
 
@@ -237,10 +275,40 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 .probe-out {
   margin-top: 8px;
 }
+.path-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: end;
+}
+.path-pair label {
+  min-width: 0;
+}
+.path-pair label > span {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.path-arrow {
+  padding-bottom: 8px;
+  color: var(--c-text-3);
+}
+.location-link {
+  margin-top: 6px;
+}
 .note {
   margin-top: 16px;
 }
 .note-top {
   margin-bottom: 8px;
+}
+@media (max-width: 720px) {
+  .path-pair {
+    grid-template-columns: 1fr;
+  }
+  .path-arrow {
+    display: none;
+  }
 }
 </style>
