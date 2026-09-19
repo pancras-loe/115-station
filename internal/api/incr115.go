@@ -511,11 +511,11 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 				continue
 			case "library":
 				// 精确删除：台账 → 路径推导（支持整目录删除与无台账的旧文件）
-				if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, false, false) {
+				if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, false, false) {
 					sum.Deleted++
 				}
 			default: // unknown（cid=0 等）：仅按台账名称匹配，静默处理
-				if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, true, false) {
+				if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, false) {
 					sum.Deleted++
 				} else {
 					sum.Ignored++
@@ -536,7 +536,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 			}
 			// 移动/改名：清理旧位置只按台账精确匹配（事件的 Cid/FileName 均为
 			// 新位置信息，模糊删除会误删库内同名字幕树），新位置精确重建或回退遍历
-			if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, true, true) {
+			if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, true) {
 				sum.Moved++
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
@@ -859,7 +859,7 @@ func (h *Handler) removeSyncedFile(fileID, localRoot string) bool {
 // （LIKE %/名/% 整树删、全盘同名删）都会指向错误目标——工作区里与库内
 // 同名的文件（重复转存同名片名极常见）会被误删媒体库 STRM 树。
 // delete 事件（Cid=被删位置）才允许全级联
-func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, localRoot string, quiet, ledgerOnly bool) bool {
+func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libName, localRoot string, quiet, ledgerOnly bool) bool {
 	// 1) 台账精确匹配
 	if ev.FileID != "" && h.removeSyncedFile(ev.FileID, localRoot) {
 		return true
@@ -870,10 +870,21 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, loca
 		}
 		return false
 	}
-	// 2) 路径推导
-	if ev.Cid != "" && ev.FileName != "" {
+	// 事件所在目录的本地相对路径（**含库名前缀**）。
+	// 台账里的 rel_path 一律带库名（applySyncResults 写的是 path.Join(f.Path, …)，
+	// 而 f.Path = path.Join(libName, base)），推导时漏掉这一层就永远匹配不上——
+	// 改造前第 2 级就是这么废掉的，活儿全落到了第 4 级的全库按名搜索上
+	dirRel, dirOK := "", false
+	if ev.Cid != "" {
 		if base, ok, err := d.relPath(ev.Cid, rootCid); err == nil && ok {
-			rel := path.Join(base, ev.FileName)
+			dirRel, dirOK = path.Join(libName, base), true
+		}
+	}
+
+	// 2) 路径推导
+	if dirOK && ev.FileName != "" {
+		{
+			rel := path.Join(dirRel, ev.FileName)
 			local := filepath.Join(localRoot, filepath.FromSlash(rel))
 			// 目录：整树删除（strm/附属全在树内），并清理台账
 			if st, err := os.Stat(local); err == nil && st.IsDir() {
@@ -941,11 +952,16 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, loca
 			}
 		}
 	}
-	// 4) 本地磁盘按名搜索兜底（父目录与台账均不可用时）：
-	//    目录精确名匹配取最浅层整树删除；文件匹配 实体/strm 两种形态
-	if ev.FileName != "" {
+	// 4) 本地磁盘按名搜索兜底：目录精确名匹配取最浅层整树删除；文件匹配 实体/strm 两种形态。
+	//
+	// ⚠️ 只在【本次事件推导出的那个目录】子树内搜。改造前是从 localRoot 整库扫，
+	// 万级库是秒级 IO，更要命的是按裸文件名全盘匹配后 RemoveAll——
+	// 重复片名在媒体库里极常见。推不出范围就放弃：宁可漏删留给失效 STRM 检测，
+	// 也不能误删
+	if ev.FileName != "" && dirOK {
+		searchRoot := filepath.Join(localRoot, filepath.FromSlash(dirRel))
 		var hitDir, hitFile string
-		filepath.WalkDir(localRoot, func(p string, d os.DirEntry, err error) error {
+		filepath.WalkDir(searchRoot, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -981,7 +997,11 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, loca
 		}
 	}
 	if !quiet {
-		log.Printf("[同步] ○ 本地未找到对应文件: %s", ev.FileName)
+		if !dirOK {
+			log.Printf("[同步] ○ 定位不到 %s 所在的网盘目录，跳过本地搜索（避免全库按名误删）", ev.FileName)
+		} else {
+			log.Printf("[同步] ○ 本地未找到对应文件: %s", ev.FileName)
+		}
 	}
 	return false
 }
