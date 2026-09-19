@@ -9,13 +9,37 @@ import { computed, nextTick, ref, watch } from 'vue'
  * CM5 做成「面板可见才懒加载」。规则文件编辑是低频操作，一个高亮 + 行号 +
  * Tab 缩进的文本域足够，换来的是首屏体积不被拖累。
  */
-const props = defineProps<{ modelValue: string; rows?: number }>()
+export interface EditorMarker {
+  /** 1 起的行号 */
+  line: number
+  level: 'error' | 'warn' | 'info'
+  text: string
+}
+
+const props = defineProps<{ modelValue: string; rows?: number; markers?: EditorMarker[] }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 
 const ta = ref<HTMLTextAreaElement | null>(null)
 const scroller = ref<HTMLElement | null>(null)
+const gutter = ref<HTMLElement | null>(null)
 
 const lines = computed(() => props.modelValue.split('\n'))
+
+/** 行号槽上的体检标记：同一行多条时取最重的一档着色，提示文案全挂在 title 上 */
+const RANK = { info: 0, warn: 1, error: 2 }
+const marks = computed(() => {
+  const map: Record<number, { level: 'error' | 'warn' | 'info'; texts: string[] }> = {}
+  for (const m of props.markers ?? []) {
+    if (m.line <= 0) continue
+    const cur = map[m.line]
+    if (!cur) map[m.line] = { level: m.level, texts: [m.text] }
+    else {
+      cur.texts.push(m.text)
+      if (RANK[m.level] > RANK[cur.level]) cur.level = m.level
+    }
+  }
+  return map
+})
 
 /** 极简 YAML 着色：注释 / 键 / 字符串 / 数字与布尔。够用即可，不追求完备解析 */
 function highlight(line: string): string {
@@ -64,22 +88,42 @@ function onKeydown(e: KeyboardEvent) {
   nextTick(() => el.setSelectionRange(s + 2, s + 2))
 }
 
-// 高亮层不滚动，靠 textarea 的滚动位置同步，两层才不会错位
+// 高亮层与行号槽都不自己滚，靠 textarea 的滚动位置同步，三层才不会错位
 function onScroll() {
   const el = ta.value
   const box = scroller.value
   if (!el || !box) return
   box.scrollTop = el.scrollTop
   box.scrollLeft = el.scrollLeft
+  if (gutter.value) gutter.value.scrollTop = el.scrollTop
 }
 
 watch(() => props.modelValue, () => nextTick(onScroll))
+
+/** 体检结果点一下跳到对应行：光标落到行首并把它滚到视野中间 */
+function focusLine(line: number) {
+  const el = ta.value
+  if (!el) return
+  const at = lines.value.slice(0, Math.max(0, line - 1)).reduce((n, l) => n + l.length + 1, 0)
+  el.focus()
+  el.setSelectionRange(at, at + (lines.value[line - 1]?.length ?? 0))
+  const lh = parseFloat(getComputedStyle(el).lineHeight) || 21
+  el.scrollTop = Math.max(0, (line - 1) * lh - el.clientHeight / 2)
+  onScroll()
+}
+
+defineExpose({ focusLine })
 </script>
 
 <template>
   <div class="editor" :style="{ '--rows': String(rows ?? 24) }">
-    <div class="gutter" aria-hidden="true">
-      <span v-for="(_, i) in lines" :key="i">{{ i + 1 }}</span>
+    <div ref="gutter" class="gutter" aria-hidden="true">
+      <span
+        v-for="(_, i) in lines"
+        :key="i"
+        :class="marks[i + 1]?.level"
+        :title="marks[i + 1]?.texts.join('\n')"
+      >{{ i + 1 }}</span>
     </div>
 
     <div class="pane">
@@ -127,6 +171,18 @@ watch(() => props.modelValue, () => nextTick(onScroll))
   user-select: none;
   max-height: calc(var(--rows) * 1.7em + 20px);
   overflow: hidden;
+}
+/* 有体检提示的行号点亮，hover 出 title —— 错在哪一行不用自己数 */
+.gutter span.error {
+  color: var(--c-danger);
+  font-weight: 700;
+}
+.gutter span.warn {
+  color: var(--c-warning);
+  font-weight: 700;
+}
+.gutter span.info {
+  color: var(--c-primary);
 }
 
 .pane {

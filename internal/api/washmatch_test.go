@@ -65,3 +65,27 @@ func TestWashDecisionUserConfig(t *testing.T) {
 		}
 	}
 }
+
+// 编码字段此前在 washRule 里缺席，YAML 写了也被静默丢弃
+func TestWashDecisionEncodeFields(t *testing.T) {
+	rules := []washRule{
+		{ResourcePix: "1080p", VideoEncode: "H265"},
+		{ResourcePix: "1080p", AudioEncode: "TrueHD"},
+		{ResourcePix: "1080p"},
+	}
+	cases := []struct {
+		newName, oldName string
+		want             bool
+	}{
+		// H265 档高于只有分辨率命中的旧版
+		{"片名.2024.1080p.WEB-DL.H265.AAC", "片名.2024.1080p.WEB-DL.H264.AAC", true},
+		{"片名.2024.1080p.WEB-DL.H264.AAC", "片名.2024.1080p.WEB-DL.H265.AAC", false},
+		// 视频编码同档时由音频编码分胜负
+		{"片名.2024.1080p.BluRay.H264.TrueHD.7.1", "片名.2024.1080p.BluRay.H264.AAC2.0", true},
+	}
+	for _, c := range cases {
+		if got := washDecision(c.newName, []string{c.oldName}, rules); got != c.want {
+			t.Errorf("washDecision(new=%q, old=%q) = %v, want %v", c.newName, c.oldName, got, c.want)
+		}
+	}
+}

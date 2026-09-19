@@ -1345,10 +1345,14 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 		}
 		prio := 0
 		for j := 0; j+1 < len(val.Content); j += 2 {
-			name := normalizeCategoryName(val.Content[j].Value)
-			if name == "" {
-				continue
+			raw := val.Content[j].Value
+			if strings.TrimSpace(raw) == "" {
+				continue // 空键，没有分类名可言
 			}
+			// 分类名就是一级目录名本身（movie 下写「电影」）→ normalize 后为空，
+			// 表示「不要二级分类，直接放一级目录下」。此前这里把它整条丢掉，
+			// 结果是这一档既没规则也没兜底，反而被 classifyMedia 判成「未分类」
+			name := normalizeCategoryName(raw)
 			r := model.CategoryRule{MediaType: mediaKey, Name: name}
 			fields := val.Content[j+1]
 			if fields != nil && fields.Kind == yaml.MappingNode {

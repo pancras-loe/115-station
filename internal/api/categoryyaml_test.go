@@ -53,3 +53,28 @@ av:
 	}
 	_ = model.DB
 }
+
+// 分类名写成一级目录名本身 = 不加二级分类，直接放 电影/ 剧集/ 这一层。
+// 这样的条目必须留在规则表里当兜底，否则整理会落到「未分类」子目录
+func TestParseCategoryYAMLBareMediaDir(t *testing.T) {
+	src := `movie:
+  电影:
+tv:
+  动漫番剧:
+    genre_ids: '16'
+  剧集:
+`
+	rows, err := parseCategoryYAML(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("want 3 rows, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].MediaType != "movie" || rows[0].Name != "" || !rows[0].IsDefault {
+		t.Errorf("row0 = %+v，电影 应作为 movie 的空名兜底", rows[0])
+	}
+	if rows[2].MediaType != "tv" || rows[2].Name != "" || !rows[2].IsDefault {
+		t.Errorf("row2 = %+v，剧集 应作为 tv 的空名兜底", rows[2])
+	}
+}

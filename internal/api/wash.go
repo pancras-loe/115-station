@@ -28,6 +28,10 @@ type washRule struct {
 	ResourcePix    string `yaml:"resource_pix" json:"resource_pix"`
 	ResourceType   string `yaml:"resource_type" json:"resource_type"`
 	ResourceEffect string `yaml:"resource_effect" json:"resource_effect"`
+	// 编码两项默认模板的注释里一直写着可用，但结构体里没有——yaml.v3 静默
+	// 丢弃未知字段，用户按说明写的 video_encode/audio_encode 从来没参与过比较
+	VideoEncode string `yaml:"video_encode" json:"video_encode"`
+	AudioEncode string `yaml:"audio_encode" json:"audio_encode"`
 }
 
 // washStrategy 一条完整洗版策略（UI 的 YAML 编辑器格式，与 CMS 对齐）
@@ -121,7 +125,9 @@ func ruleMatch(name string, r washRule) bool {
 	return matchField(name, r.ResourceTeam, extractTeam(name)) &&
 		matchField(name, r.ResourcePix, extractPix(name)) &&
 		matchField(name, r.ResourceType, extractType(name)) &&
-		matchField(name, r.ResourceEffect, extractEffect(name))
+		matchField(name, r.ResourceEffect, extractEffect(name)) &&
+		matchField(name, r.VideoEncode, extractVideoEncode(name)) &&
+		matchField(name, r.AudioEncode, extractAudioEncode(name))
 }
 
 // matchField 单字段匹配（CMS 语义）：逗号分隔多值——
@@ -168,6 +174,9 @@ func extractPix(name string) string    { return ParseResourceInfo(name).Pix }
 func extractType(name string) string   { return ParseResourceInfo(name).Type }
 func extractEffect(name string) string { return ParseResourceInfo(name).Effect }
 func extractTeam(name string) string   { return ParseResourceInfo(name).Team }
+
+func extractVideoEncode(name string) string { return ParseResourceInfo(name).VideoEncode }
+func extractAudioEncode(name string) string { return ParseResourceInfo(name).AudioEncode }
 
 // washDecision 洗版判定：返回是否替换（新版本优于库内版本）
 func washDecision(newName string, libraryNames []string, rules []washRule) bool {
