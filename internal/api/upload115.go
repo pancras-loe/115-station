@@ -557,7 +557,7 @@ func monitorOnce(h *Handler) {
 	if rootCid == "" {
 		return
 	}
-	libAbs := absPathOf(cookie, rootCid, map[string]dirInfo{})
+	libAbs := absPathOf(cookie, rootCid)
 	if libAbs == "" {
 		return
 	}
@@ -701,7 +701,7 @@ func (h *Handler) uploadMetadataOnce() {
 	// 库根绝对路径与库名（云端目录定位用）。
 	// 本地路径第一层是库名（STRM 结构特性），拼接云端绝对路径前要剥掉，
 	// 否则出现 /俱乐部/俱乐部/... 查不到目录（全部跳过）
-	libAbs := absPathOf(cookie, fullCfg.Cid, map[string]dirInfo{})
+	libAbs := absPathOf(cookie, fullCfg.Cid)
 	if libAbs == "" {
 		return
 	}

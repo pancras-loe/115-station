@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"strmhub/internal/model"
@@ -149,71 +148,50 @@ func fetch115LifeEvents(cookie string, limit, offset int, typ string) ([]lifeEve
 	return events, nil
 }
 
-// get115DirInfo 查询目录自身的 cid/pid/名称（webapi files/get_info，data 为数组取首项）
+// dirInfo 目录自身的 cid/pid/名称
 type dirInfo struct {
 	cid, pid, n string
 }
 
-// get115DirInfo 查询目录自身的 cid/pid/名称
+// get115DirInfo 查询目录自身的 cid/pid/名称。
+// 改用祖先链实现（见 panpath.go）：一次请求顺带把整条链都捂进缓存，
+// 比原先的 files/get_info 多拿到上面每一级。
+// ⚠️ 仅对【目录】有效
 func get115DirInfo(cookie, cid string) (dirInfo, error) {
-	body, err := httpGet115UA("https://webapi.115.com/files/get_info",
-		url.Values{"file_id": {cid}}, cookie, ua115Unified(), 15*time.Second)
-	if err != nil {
+	if row, ok := lookupCachedRow(cid); ok {
+		return dirInfo{cid: row.FileID, pid: row.ParentID, n: row.Name}, nil
+	}
+	if _, err := resolveDirAbsFresh(cookie, cid); err != nil {
 		return dirInfo{}, err
 	}
-	var r struct {
-		State bool `json:"state"`
-		Data  []struct {
-			Cid string `json:"cid"`
-			Pid string `json:"pid"`
-			N   string `json:"n"`
-		} `json:"data"`
+	row, ok := lookupCachedRow(cid)
+	if !ok {
+		return dirInfo{}, errDirGone
 	}
-	if err := json.Unmarshal(body, &r); err != nil || !r.State || len(r.Data) == 0 {
-		return dirInfo{}, fmt.Errorf("获取目录信息失败: %s", truncateStr(string(body), 120))
-	}
-	d := r.Data[0]
-	return dirInfo{cid: d.Cid, pid: d.Pid, n: d.N}, nil
+	return dirInfo{cid: row.FileID, pid: row.ParentID, n: row.Name}, nil
 }
 
-// get115RelPath 从 cid 逐级向上爬父目录链至 rootCid，返回相对路径（如 电影/香港动画/xxx）
-// 爬到网盘根仍未遇到 rootCid 说明不在媒体库内，返回 ok=false；memo 缓存减少重复查询
-func get115RelPath(cookie, cid, rootCid string, memo map[string]dirInfo) (string, bool, error) {
+// get115RelPath 目录相对媒体库根的路径。不在库内返回 ok=false
+func get115RelPath(cookie, cid, rootCid string) (string, bool, error) {
 	if cid == rootCid {
 		return "", true, nil
 	}
-	var parts []string
-	cur := cid
-	for i := 0; i < 64; i++ { // 深度保险
-		info, ok := memo[cur]
-		if !ok {
-			var err error
-			info, err = get115DirInfo(cookie, cur)
-			if err != nil {
-				return "", false, err
-			}
-			memo[cur] = info
-		}
-		if cur == rootCid {
-			// 逆序拼接：parts 是从受影响目录向上收集的
-			for l, r := 0, len(parts)-1; l < r; l, r = l+1, r-1 {
-				parts[l], parts[r] = parts[r], parts[l]
-			}
-			return path.Join(parts...), true, nil
-		}
-		parts = append(parts, info.n)
-		if info.pid == "" || info.pid == "0" {
-			return "", false, nil // 到达网盘根，不在媒体库内
-		}
-		if info.pid == rootCid {
-			for l, r := 0, len(parts)-1; l < r; l, r = l+1, r-1 {
-				parts[l], parts[r] = parts[r], parts[l]
-			}
-			return path.Join(parts...), true, nil
-		}
-		cur = info.pid
+	abs, err := resolveDirAbs(cookie, cid)
+	if err != nil {
+		return "", false, err
 	}
-	return "", false, nil
+	rootAbs, err := resolveDirAbs(cookie, rootCid)
+	if err != nil {
+		return "", false, err
+	}
+	rootAbs = strings.TrimSuffix(rootAbs, "/")
+	if abs == rootAbs {
+		return "", true, nil
+	}
+	if !strings.HasPrefix(abs, rootAbs+"/") {
+		return "", false, nil // 不在媒体库内
+	}
+	return strings.TrimPrefix(abs, rootAbs+"/"), true, nil
 }
 
 // incrParams 增量同步参数（HTTP 与 cron 调度器共用）
@@ -639,9 +617,11 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	for cid := range dirSet {
 		base, ok, err := d.relPath(cid, p.Cid)
 		if err != nil {
-			// 目录已不存在（800001）：目录被删除后残留的定位请求是永久性失败，
-			// 重试永远不会成功、还会让水位永远不推进。按"已解决"跳过
-			if strings.Contains(err.Error(), "目录不存在") || strings.Contains(err.Error(), "800001") {
+			// 目录已不存在：目录被删除后残留的定位请求是永久性失败，
+			// 重试永远不会成功、还会让水位永远不推进。按"已解决"跳过。
+			// 判据从 files/get_info 的 800001 换成了 errDirGone —— 新接口对已删除
+			// 的 cid 不报错，是 fetch115Ancestors 自己校验末元素 cid 得出的结论
+			if errors.Is(err, errDirGone) {
 				log.Printf("[同步] 网盘目录已被删除，跳过相关变化")
 				continue
 			}
@@ -768,65 +748,35 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	return sum, nil
 }
 
-// dirAbsCache cid→绝对路径缓存：守卫/作用域每轮都要爬目录链
-// （每层一次 API × 3 秒限流），冷启动一趟就是十来秒。TTL 10 分钟；
-// 目录改名/移动事件发生时整体失效（见 invalidateDirAbsCache）
-var (
-	dirAbsMu    sync.Mutex
-	dirAbsCache = map[string]dirAbsEntry{}
-)
-
-type dirAbsEntry struct {
-	path string
-	at   time.Time
-}
-
-// invalidateDirAbsCache 目录结构变化后调用（目录改名/移动），清空缓存
-func invalidateDirAbsCache() {
-	dirAbsMu.Lock()
-	dirAbsCache = map[string]dirAbsEntry{}
-	dirAbsMu.Unlock()
-}
-
-// absPathOf 爬到网盘根，返回目录绝对路径（如 /整理/已存在），失败返回空。
-// 结果进 dirAbsCache（命中免爬链）
-func absPathOf(cookie, cid string, memo map[string]dirInfo) string {
+// absPathOf 目录绝对路径（如 /整理/已存在）；取不到返回 ""。
+// 网盘根（cid 为空或 "0"）同样返回 ""——调用方一律按「判不了」处理，
+// 这是改造前就有的约定，别改成 "/"
+func absPathOf(cookie, cid string) string {
 	if cid == "" || cid == "0" {
 		return ""
 	}
-	dirAbsMu.Lock()
-	if e, ok := dirAbsCache[cid]; ok && time.Since(e.at) < 10*time.Minute {
-		p := e.path
-		dirAbsMu.Unlock()
-		return p
+	p, err := resolveDirAbs(cookie, cid)
+	if err != nil {
+		return ""
 	}
-	dirAbsMu.Unlock()
-	var parts []string
-	cur := cid
-	for i := 0; i < 64; i++ {
-		info, ok := memo[cur]
-		if !ok {
-			var err error
-			info, err = get115DirInfo(cookie, cur)
-			if err != nil {
-				return ""
-			}
-			memo[cur] = info
-		}
-		parts = append(parts, info.n)
-		if info.pid == "" || info.pid == "0" {
-			break
-		}
-		cur = info.pid
+	return p
+}
+
+// absPathOfFresh 同上，但绕过缓存强制重查。
+//
+// 给「拿错路径会删错/搬错文件」的判定用。为什么不是所有地方都用它：
+// 作用域判定（scopeOf）是每条事件一次的热路径，全走 Fresh 等于每条事件一个请求，
+// 比改造前还慢。缓存的正确性由 pan115Ops 的失效钩子（move/rename/delete）
+// 与目录改名事件共同保证，Fresh 只留给低频且后果严重的地方
+func absPathOfFresh(cookie, cid string) string {
+	if cid == "" || cid == "0" {
+		return ""
 	}
-	for l, r := 0, len(parts)-1; l < r; l, r = l+1, r-1 {
-		parts[l], parts[r] = parts[r], parts[l]
+	p, err := resolveDirAbsFresh(cookie, cid)
+	if err != nil {
+		return ""
 	}
-	result := "/" + strings.Join(parts, "/")
-	dirAbsMu.Lock()
-	dirAbsCache[cid] = dirAbsEntry{path: result, at: time.Now()}
-	dirAbsMu.Unlock()
-	return result
+	return p
 }
 
 // removeSyncedFile 按文件 id 从台账定位并删除本地文件（仅删除本工具生成过的文件）

@@ -1180,11 +1180,14 @@ func newOrgGuards(cookie, scanCid string, cfg *OrgConfig) *orgGuards {
 	return g
 }
 
+// absOf 保护子树路径。走 absPathOfFresh 而不是缓存版：
+// 这个值算错的后果是守卫失效、库内内容被当成待整理素材重排，
+// 而 g.absCache 已经保证了单次整理里每个 cid 只查一次，代价就是几个请求
 func (g *orgGuards) absOf(cid string) string {
 	if a, ok := g.absCache[cid]; ok {
 		return a
 	}
-	a := absPathOf(g.cookie, cid, g.memo)
+	a := absPathOfFresh(g.cookie, cid)
 	g.absCache[cid] = a
 	return a
 }
@@ -1243,7 +1246,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 	// 库根绝对路径（去重记录的网盘验证用；OpenAPI 通道取不到则跳过验证）
 	libAbs := ""
 	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
+		libAbs = absPathOf(ops.cookie, cfg.Library)
 	}
 	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
 		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}
@@ -2369,7 +2372,7 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 
 	libAbs := ""
 	if ops.cookie != "" {
-		libAbs = absPathOf(ops.cookie, cfg.Library, map[string]dirInfo{})
+		libAbs = absPathOf(ops.cookie, cfg.Library)
 	}
 	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
 		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}

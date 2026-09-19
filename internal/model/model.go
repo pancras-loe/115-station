@@ -260,6 +260,22 @@ type EventSuppress struct {
 	ExpireAt time.Time `json:"expire_at" gorm:"index"`
 }
 
+// PathCache 115 目录 id → 网盘绝对路径。
+//
+// 生活事件只带 parent_id 不带路径，每条事件都要把 cid 还原成路径；
+// move/rename 的【旧】路径更是只能从这里拿（事件里的字段全是新位置）。
+// 一次祖先链请求就能把整条链的每一级都写进来，后续同目录的事件零请求。
+//
+// ⚠️ 只缓存目录。目录被改名/移动/删除后必须失效对应子树，
+// 否则「已搬进冗余的目录」会被算成还在媒体库里（见 forgetPathsUnder）
+type PathCache struct {
+	FileID    string    `json:"file_id" gorm:"primaryKey;size:64"`
+	ParentID  string    `json:"parent_id" gorm:"index;size:64"`
+	Name      string    `json:"name" gorm:"size:500"`
+	Path      string    `json:"path" gorm:"size:1000;index"` // 网盘绝对路径，/ 开头
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 var DB *gorm.DB
 
 func InitDB(dbPath string) (*gorm.DB, error) {
@@ -289,6 +305,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&UploadMark{},
 		&OrganizeRecord{},
 		&EventSuppress{},
+		&PathCache{},
 	); err != nil {
 		return nil, err
 	}

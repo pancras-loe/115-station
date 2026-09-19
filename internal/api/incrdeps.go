@@ -57,7 +57,6 @@ type realIncrDeps struct {
 	h      *Handler
 	cookie string
 	ops    *pan115Ops
-	memo   map[string]dirInfo // 单轮目录信息缓存（原先是主流程里的局部变量）
 }
 
 // newIncrDeps 组装生产依赖。cookie 与 ops 取不到时直接失败，
@@ -71,7 +70,7 @@ func (h *Handler) newIncrDeps() (*realIncrDeps, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &realIncrDeps{h: h, cookie: cookie, ops: ops, memo: map[string]dirInfo{}}, nil
+	return &realIncrDeps{h: h, cookie: cookie, ops: ops}, nil
 }
 
 func (d *realIncrDeps) lifeEvents(limit, offset int) ([]lifeEvent, error) {
@@ -87,18 +86,18 @@ func (d *realIncrDeps) dirName(cid string) string {
 }
 
 func (d *realIncrDeps) absPath(cid string) string {
-	return absPathOf(d.cookie, cid, d.memo)
+	return absPathOf(d.cookie, cid)
 }
 
 func (d *realIncrDeps) relPath(cid, rootCid string) (string, bool, error) {
-	return get115RelPath(d.cookie, cid, rootCid, d.memo)
+	return get115RelPath(d.cookie, cid, rootCid)
 }
 
 func (d *realIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter) error {
 	return walk115Dir(d.ops, cid, basePath, videos, assets, f, nil)
 }
 
-func (d *realIncrDeps) invalidateDirCache() { invalidateDirAbsCache() }
+func (d *realIncrDeps) invalidateDirCache() { forgetAllDirPaths() }
 
 func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(key) }
 

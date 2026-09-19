@@ -969,6 +969,10 @@ func (o *pan115Ops) rename(fid, newName string) error {
 	if err := rename115(o.cookie, fid, newName); err != nil {
 		return err
 	}
+	// 改的是目录的话它整棵子树的绝对路径都变了，路径缓存必须跟上。
+	// 不跟上就是：已搬走/改名的目录还被算在媒体库里，
+	// 增量给它生成 STRM、整理的保护子树守卫失效（见 panpath.go）
+	forgetDirSubtree(fid)
 	if o.suppress {
 		markSuppressed("rename", []string{fid})
 	}
@@ -986,11 +990,12 @@ func (o *pan115Ops) renameBatch(names map[string]string) error {
 	if err := rename115Batch(o.cookie, names); err != nil {
 		return err
 	}
+	fids := make([]string, 0, len(names))
+	for fid := range names {
+		fids = append(fids, fid)
+		forgetDirSubtree(fid) // 理由同 rename
+	}
 	if o.suppress {
-		fids := make([]string, 0, len(names))
-		for fid := range names {
-			fids = append(fids, fid)
-		}
 		markSuppressed("rename", fids)
 	}
 	return nil
@@ -1006,6 +1011,11 @@ func (o *pan115Ops) moveFiles(targetCid string, fids []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	// 整理会整目录搬进冗余/已存在（organize.go 的几处 moveFiles(cfg.Redundant, dir.Fid)），
+	// 搬完这棵子树的绝对路径全变了，缓存不失效就会永久陈旧
+	for _, fid := range fids {
+		forgetDirSubtree(fid)
 	}
 	if o.suppress {
 		markSuppressed("move", fids)
@@ -1026,6 +1036,9 @@ func (o *pan115Ops) deleteFiles(fids []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	for _, fid := range fids {
+		forgetDirSubtree(fid) // 目录没了，缓存里的路径也不能留
 	}
 	if o.suppress {
 		// 删除同样会产生生活事件（type 22）。整理清理空目录属于自产变更，

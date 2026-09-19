@@ -210,7 +210,23 @@ pending = append(pending, fresh...)
 
 ---
 
-## 5. 阶段 2 ｜路径解析器（P0）
+## 5. 阶段 2 ｜路径解析器（P0）— ✅ 已完成（2026-09-19）
+
+> 落地情况：新增 [`panpath.go`](internal/api/panpath.go)（祖先链请求 + 三级缓存 +
+> 子树失效）与 `model.PathCache` 表；`absPathOf` / `get115RelPath` / `get115DirInfo`
+> 全部重写成解析器的薄封装，`memo` / `dirAbsCache` / `invalidateDirAbsCache` 删除；
+> `absPathOf` 的 10 个调用点去掉 `memo` 参数（全仓库受益，不止增量）。
+> ops 层 `moveFiles` / `rename` / `renameBatch` / `deleteFiles` 挂上
+> `forgetDirSubtree`；`orgGuards.absOf` 改走 `absPathOfFresh`。
+> 新增 [`panpath_test.go`](internal/api/panpath_test.go)（9 个用例）。
+>
+> 探测 B 的硬门槛已落地并做过变异验证：摘掉 `last.cid != cid` 那行校验，
+> 「115 静默降级成根目录」用例立刻失败。
+>
+> `errDirGone` 取代了原先 `strings.Contains(err, "800001")` 的字符串判据 ——
+> 新接口对已删除的 cid 根本不报错，800001 永远不会再出现。
+>
+> ⚠️ §5.4(b) 的 Fresh 名单在实施时收窄过，理由见该节的修正说明。
 
 ### 问题
 
@@ -295,13 +311,17 @@ func repathSubtree(oldAbs, newAbs string)      // 目录改名：表内前缀替
 forgetPathsUnder(abs)   // 或按 fid 精确失效
 ```
 
-**（b）安全关键路径不吃缓存**，改用强制刷新的 `resolveDirAbsFresh`：
+**（b）安全关键路径不吃缓存**，改用强制刷新的 `resolveDirAbsFresh`。
 
-| 调用点 | 拿错路径的后果 |
-|---|---|
-| `scopeOf`（[`incr115.go:464`](internal/api/incr115.go:464)） | 已搬进「冗余」的目录仍被判成 `library` → **增量给冗余内容生成 STRM** |
-| `orgGuards.absOf`（[`organize.go:1187`](internal/api/organize.go:1187)） | 保护子树路径算错 → 守卫失效 → **把库内内容当待整理素材重排** |
-| 增量熔断体检（`libAbs` / `excludedAbs`） | 工作区覆盖判定失准 → 熔断该响的时候不响 |
+> ⚠️ **落地时修正过一次**：原先这里列了三个调用点，实施时发现 `scopeOf`
+> 是**每条事件一次的热路径**，全走 Fresh 等于每条事件一个请求，比改造前还慢，
+> 整个阶段 2 的收益归零。实际只有 `orgGuards.absOf` 用 Fresh。
+
+| 调用点 | 拿错路径的后果 | 取舍 |
+|---|---|---|
+| `orgGuards.absOf`（[`organize.go:1187`](internal/api/organize.go:1187)） | 保护子树路径算错 → 守卫失效 → **把库内内容当待整理素材重排** | **Fresh**。一次整理只查几个 cid（`g.absCache` 兜着），后果严重，值这几个请求 |
+| `scopeOf`（`incr115.go`） | 已搬进「冗余」的目录仍被判成 `library` → 增量给冗余内容生成 STRM | 走缓存。正确性由 (a) 的 ops 失效钩子 + 目录改名事件保证 |
+| 增量熔断体检（`libAbs` / `excludedAbs`） | 工作区覆盖判定失准 | 走缓存。这几个是**配置目录**（媒体库根/待整理/已存在/冗余/转存），本身很少移动；整理搬的是内容，不是它们 |
 
 **（c）被抑制的事件仍要维护缓存** —— 见阶段 5 的「抑制检查的位置」。
 
@@ -765,11 +785,11 @@ if !fullSyncMu.TryLock() {
 ## 13. 执行顺序与总量
 
 ```
-阶段1 ✅ → 阶段0 ✅ → 阶段2 (4h，含缓存钩子) → 阶段3 (4h)
-                  → 阶段4 (1h) → 阶段5 (2h) → 阶段6 (1.5h) → 阶段7 (2h) → 阶段8 (2h)
+阶段1 ✅ → 阶段0 ✅ → 阶段2 ✅ → 阶段3 (4h) → 阶段4 (1h)
+                            → 阶段5 (2h) → 阶段6 (1.5h) → 阶段7 (2h) → 阶段8 (2h)
 ```
 
-约 **18 小时**，已完成 2.5h。
+约 **18 小时**，已完成 6.5h。
 
 阶段 1 是 0.5h 的纯收窄 bug 修复、不依赖地基，**插队先做**；
 随后阶段 0 铺好可注入接口（§3.1），阶段 2/3 是主干，做完收益就拿到九成；4~8 可分批跟进。

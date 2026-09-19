@@ -154,7 +154,7 @@ func (h *Handler) Resolve115CID(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	p := absPathOf(cookie, cid, map[string]dirInfo{})
+	p := absPathOf(cookie, cid)
 	if p == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "无法解析该 cid 对应的目录路径"})
 		return

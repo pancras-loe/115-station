@@ -721,9 +721,8 @@ func (h *Handler) dirInside(childCid, parentCid string) bool {
 	if err != nil {
 		return false
 	}
-	memo := map[string]dirInfo{}
-	childAbs := strings.TrimSuffix(absPathOf(cookie, childCid, memo), "/")
-	parentAbs := strings.TrimSuffix(absPathOf(cookie, parentCid, memo), "/")
+	childAbs := strings.TrimSuffix(absPathOf(cookie, childCid), "/")
+	parentAbs := strings.TrimSuffix(absPathOf(cookie, parentCid), "/")
 	if childAbs == "" || parentAbs == "" {
 		return false
 	}
@@ -744,9 +743,8 @@ func (h *Handler) dirOverlapWithLibrary(shareCid, libCid string) bool {
 	if err != nil {
 		return false
 	}
-	memo := map[string]dirInfo{}
-	shareAbs := strings.TrimSuffix(absPathOf(cookie, shareCid, memo), "/")
-	libAbs := strings.TrimSuffix(absPathOf(cookie, libCid, memo), "/")
+	shareAbs := strings.TrimSuffix(absPathOf(cookie, shareCid), "/")
+	libAbs := strings.TrimSuffix(absPathOf(cookie, libCid), "/")
 	if shareAbs == "" || libAbs == "" {
 		return false
 	}
