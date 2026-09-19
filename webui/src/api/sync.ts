@@ -110,6 +110,35 @@ export const cleanOrphans = () =>
     { timeoutMs: 10 * 60_000 },
   )
 
+/** 增量事件流状态：回答「为什么没同步」 */
+export interface IncrStatus {
+  life_gate: { ok: boolean; message: string; checked_at?: string }
+  /** 当前走的是主通道还是被限流后的备用通道 */
+  endpoint: string
+  cursor: { from_id?: string; from_time?: string }
+  last_round: { at?: string; error?: string; summary?: IncrSummary }
+  /** 还没消费完的事件数；持续不降说明有目录一直读不出来 */
+  pending_events: number
+  path_cache: number
+  interval_sec: number
+}
+
+export const incrStatus = () => http.get<IncrStatus>('/sync/incr-status', { timeoutMs: 15_000 })
+
+export interface ProbeEvent {
+  id: string
+  type: string
+  name: string
+  kind: string
+  at: string
+  /** 浏览/标星类，拉取时会被丢掉 */
+  ignored: boolean
+}
+
+/** 只拉不处理：不碰游标、不落库、不动本地文件 */
+export const incrProbe = () =>
+  http.post<{ message: string; events: ProbeEvent[] }>('/sync/incr-probe', {}, { timeoutMs: 60_000 })
+
 export const cronPreview = (cron: string) => http.post<{ next: string[] }>('/sync/cron-preview', { cron })
 
 export interface TaskStatus {

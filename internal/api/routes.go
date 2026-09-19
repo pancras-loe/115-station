@@ -299,6 +299,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/sync/tasks/:id/logs", h.GetSyncLogs)
 		protected.POST("/sync/full", h.RunFullSync)
 		protected.POST("/sync/incremental", h.RunIncrementalSync)
+		// 增量事件流状态与探针（回答「为什么没同步」：门禁/通道/游标/上一轮结果）
+		protected.GET("/sync/incr-status", h.IncrStatus)
+		protected.POST("/sync/incr-probe", h.IncrProbe)
 		// 快速模式是否可用（规则在后端，前端不自行按通道推断）
 		protected.GET("/sync/capabilities", h.SyncCapabilities)
 		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认

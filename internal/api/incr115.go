@@ -242,9 +242,12 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 
 // executeIncrementalSyncWith 增量同步主流程。外部依赖全部经 incrDeps 进出
 // （见 incrdeps.go），测试传桩即可整体覆盖
-func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSummary, error) {
+func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *incrSummary, err error) {
 	defer SetTaskProgress("") // 结束清进度（含错误路径）
-	sum := &incrSummary{}
+	sum = &incrSummary{}
+	// 每一轮都记一份快照给状态页——包括熔断和失败的那些轮，
+	// 「为什么没动静」正是要靠它们回答
+	defer func() { noteIncrRound(sum, err) }()
 
 	incrStart := time.Now()
 

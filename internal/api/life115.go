@@ -77,6 +77,15 @@ func encodeLifeCursor(c lifeCursor) string {
 	return string(b)
 }
 
+// parseUnixStr 事件里的时间戳是字符串形态的 unix 秒；解析不出返回 0
+func parseUnixStr(v string) int64 {
+	ts, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return ts
+}
+
 // eventIDNewer 判断 a 是否比 b 新。
 // 115 的事件 id 是 19 位数字，直接按字符串比会把 "9..." 判成大于 "10..."，
 // 必须先比长度
@@ -93,7 +102,7 @@ func reachedCursor(ev lifeEvent, cur lifeCursor) bool {
 		return true
 	}
 	if cur.FromTime > 0 {
-		if ts, err := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64); err == nil && ts < cur.FromTime {
+		if ts := parseUnixStr(ev.Time); ts > 0 && ts < cur.FromTime {
 			return true
 		}
 	}
@@ -232,7 +241,7 @@ func (f *lifeFetcher) fetch(cur lifeCursor, max int) ([]lifeEvent, lifeCursor, e
 		// 游标推进到本轮最新那条（第一页的第一条）
 		if page == 0 && evs[0].ID != "" {
 			next.FromID = evs[0].ID
-			if ts, e := strconv.ParseInt(strings.TrimSpace(evs[0].Time), 10, 64); e == nil {
+			if ts := parseUnixStr(evs[0].Time); ts > 0 {
 				next.FromTime = ts
 			}
 		}
