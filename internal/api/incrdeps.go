@@ -32,6 +32,11 @@ type incrDeps interface {
 	relPath(cid, rootCid string) (string, bool, error) // 相对媒体库根的路径
 	walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter) error
 	invalidateDirCache()
+	// dirMoved 目录在网盘上改了名/换了位置：更新路径缓存，返回它【原来】的绝对路径。
+	// 旧路径只可能来自缓存（事件里的字段全是新位置），查不到就返回 false，不猜
+	dirMoved(fileID, newAbs string) (oldAbs string, ok bool)
+	// dirGone 目录在网盘上没了：清掉那棵子树的缓存
+	dirGone(fileID string)
 
 	// ---- 配置 ----
 	setting(key string) string
@@ -111,6 +116,17 @@ func (d *realIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFil
 }
 
 func (d *realIncrDeps) invalidateDirCache() { forgetAllDirPaths() }
+
+func (d *realIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
+	old, ok := lookupCachedAbs(fileID)
+	if !ok || old == newAbs {
+		return "", false
+	}
+	repathSubtree(old, newAbs)
+	return old, true
+}
+
+func (d *realIncrDeps) dirGone(fileID string) { forgetDirSubtree(fileID) }
 
 func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(key) }
 

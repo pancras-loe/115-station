@@ -157,6 +157,8 @@ type SyncEvent struct {
 	FileID    string     `json:"file_id" gorm:"index;size:64"`
 	FileName  string     `json:"file_name" gorm:"size:500"`
 	Cid       string     `json:"cid" gorm:"size:64"`
+	PickCode  string     `json:"pick_code" gorm:"size:64"`    // 事件自带；有则零遍历直推 STRM，不必重遍历目录
+	FileCat   string     `json:"file_category" gorm:"size:4"` // "0"=目录 "1"=文件
 	Size      int64      `json:"size"`
 	EventTime int64      `json:"event_time"`                              // unix 秒
 	Status    string     `json:"status" gorm:"size:20;default:'pending'"` // pending / applied

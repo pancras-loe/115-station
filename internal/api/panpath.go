@@ -11,6 +11,7 @@ import (
 
 	"strmhub/internal/model"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -253,6 +254,36 @@ func forgetPathsUnder(abs string) {
 	for k, e := range pathCacheMem {
 		if e.row.Path == abs || strings.HasPrefix(e.row.Path, abs+"/") {
 			delete(pathCacheMem, k)
+		}
+	}
+	pathCacheMu.Unlock()
+}
+
+// repathSubtree 目录改名/移动后，把缓存里整棵子树的路径前缀换掉。
+//
+// 为什么是改而不是清：接下来处理这批事件时还要用子孙的【新】路径，
+// 清掉就得一个个重新请求回来。
+// SQL 里用 length(?) 而不是 Go 的 len()：Go 数字节、SQLite 的 substr 数字符，
+// 中文目录名下两者对不上
+func repathSubtree(oldAbs, newAbs string) {
+	oldAbs = strings.TrimSuffix(oldAbs, "/")
+	newAbs = strings.TrimSuffix(newAbs, "/")
+	if oldAbs == "" || newAbs == "" || oldAbs == newAbs {
+		return
+	}
+	if model.DB != nil {
+		model.DB.Model(&model.PathCache{}).
+			Where("path = ? OR path LIKE ?", oldAbs, oldAbs+"/%").
+			Updates(map[string]interface{}{
+				"path":       gorm.Expr("? || substr(path, length(?) + 1)", newAbs, oldAbs),
+				"updated_at": time.Now(),
+			})
+	}
+	pathCacheMu.Lock()
+	for k, e := range pathCacheMem {
+		if e.row.Path == oldAbs || strings.HasPrefix(e.row.Path, oldAbs+"/") {
+			e.row.Path = newAbs + e.row.Path[len(oldAbs):]
+			pathCacheMem[k] = e
 		}
 	}
 	pathCacheMu.Unlock()

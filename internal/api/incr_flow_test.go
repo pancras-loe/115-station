@@ -16,12 +16,14 @@ import (
 // 这些最容易出错的地方，用桩反而会糊过去。
 
 type stubIncrDeps struct {
-	pages    [][]lifeEvent     // 按次序返回的事件页
-	names    map[string]string // cid → 目录名
-	abs      map[string]string // cid → 网盘绝对路径
-	rel      map[string]string // cid → 相对媒体库根的路径
-	settings map[string]string
-	walkErr  error // 非 nil 时所有目录遍历都失败
+	pages     [][]lifeEvent     // 按次序返回的事件页
+	names     map[string]string // cid → 目录名
+	abs       map[string]string // cid → 网盘绝对路径
+	rel       map[string]string // cid → 相对媒体库根的路径
+	cachedAbs map[string]string // file_id → 目录当前的网盘绝对路径（模拟 PathCache）
+	goneDirs  []string          // 被判定为「已消失」的目录
+	settings  map[string]string
+	walkErr   error // 非 nil 时所有目录遍历都失败
 
 	// 观测点
 	fetchCalls int
@@ -33,11 +35,12 @@ type stubIncrDeps struct {
 
 func newStubDeps() *stubIncrDeps {
 	return &stubIncrDeps{
-		names:    map[string]string{},
-		abs:      map[string]string{},
-		rel:      map[string]string{},
-		settings: map[string]string{"org-basic": "{}", "share": "{}"},
-		saved:    map[string]string{},
+		names:     map[string]string{},
+		abs:       map[string]string{},
+		rel:       map[string]string{},
+		cachedAbs: map[string]string{},
+		settings:  map[string]string{"org-basic": "{}", "share": "{}"},
+		saved:     map[string]string{},
 	}
 }
 
@@ -56,6 +59,18 @@ func (s *stubIncrDeps) lifeEvents(cur lifeCursor, max int) ([]lifeEvent, lifeCur
 }
 
 func (s *stubIncrDeps) ensureLifeGate() { s.gateCalls++ }
+
+// dirMoved 桩：cachedAbs 记着目录「原来」的网盘路径，取到就算搬迁成功
+func (s *stubIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
+	old, ok := s.cachedAbs[fileID]
+	if !ok || old == newAbs {
+		return "", false
+	}
+	s.cachedAbs[fileID] = newAbs
+	return old, true
+}
+
+func (s *stubIncrDeps) dirGone(fileID string) { s.goneDirs = append(s.goneDirs, fileID) }
 
 func (s *stubIncrDeps) dirName(cid string) string { return s.names[cid] }
 func (s *stubIncrDeps) absPath(cid string) string { return s.abs[cid] }

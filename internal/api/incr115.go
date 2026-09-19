@@ -52,6 +52,7 @@ type lifeEvent struct {
 	FileName string `json:"file_name"` // 文件名
 	Cid      string `json:"cid"`       // 父目录 cid
 	PickCode string `json:"-"`         // 事件自带的 pick_code（有则零遍历直推 strm）
+	FileCat  string `json:"-"`         // file_category："0"=目录 "1"=文件
 	Size     int64  `json:"size"`      // 文件大小
 	Time     string `json:"time"`      // 发生时间
 }
@@ -322,20 +323,19 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	noteLifeRound(len(events))
 	sum.EventsTotal = len(events)
 
-	pickByEvent := map[string]string{} // 事件 id → pick_code（落库结构不含，本轮内存携带）
 	batch := make([]model.SyncEvent, 0, len(events))
 	for _, ev := range events {
 		if ev.ID == "" {
 			continue
 		}
 		ts, _ := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64)
+		// pick_code 与 file_category 一起落库：此前 pick_code 只在内存 map 里活一轮，
+		// 上轮中断残留的事件重新消费时它已经丢了，零遍历优化白白失效
 		batch = append(batch, model.SyncEvent{
 			EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
 			FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size, EventTime: ts,
+			PickCode: ev.PickCode, FileCat: ev.FileCat,
 		})
-		if ev.PickCode != "" {
-			pickByEvent[ev.ID] = ev.PickCode
-		}
 	}
 	// 只有真正新插入的行才进 pending——此前是把整页都塞进去，
 	// 同页已 applied 的历史事件会跟着被重放（见 insertSyncEvents 注释）
@@ -386,6 +386,49 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 		return "other"
 	}
 
+	// localRelOf 网盘绝对路径 → 本地相对路径（含库名前缀）；不在库内返回 false
+	localRelOf := func(panAbs string) (string, bool) {
+		base := strings.TrimSuffix(libAbs, "/")
+		if panAbs == base {
+			return libName, true
+		}
+		if base == "" || !strings.HasPrefix(panAbs, base+"/") {
+			return "", false
+		}
+		return path.Join(libName, strings.TrimPrefix(panAbs, base+"/")), true
+	}
+
+	// relocateDir 目录改名/移动：本地跟着搬。oldPanAbs 来自路径缓存，
+	// 拿不到就返回 false 让调用方回退重遍历
+	relocateDir := func(ev model.SyncEvent, oldPanAbs string) bool {
+		if oldPanAbs == "" || ev.FileName == "" {
+			return false
+		}
+		parent := d.absPath(ev.Cid)
+		if parent == "" {
+			return false
+		}
+		oldRel, ok1 := localRelOf(oldPanAbs)
+		newRel, ok2 := localRelOf(strings.TrimSuffix(parent, "/") + "/" + ev.FileName)
+		if !ok1 || !ok2 {
+			return false
+		}
+		return h.relocateLocalDir(oldRel, newRel, p.LocalPath)
+	}
+
+	// 本轮受影响的最浅目录（Emby 定向刷新用，传库根=全刷）。
+	// 各处传入的都必须是【含库名前缀】的本地相对路径，
+	// 否则刷新路径会少一层、指到一个不存在的目录上
+	shallowest := ""
+	noteShallow := func(rel string) {
+		if rel == "" {
+			return
+		}
+		if shallowest == "" || len(rel) < len(shallowest) {
+			shallowest = rel
+		}
+	}
+
 	// 本轮命中抑制表的 fid：事件成功消费后才把这些标记清掉
 	var suppressedHits []string
 
@@ -402,6 +445,24 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 		if i%50 == 0 {
 			SetTaskProgress(fmt.Sprintf("处理网盘变化 %d/%d 条…", i+1, len(pending)))
 		}
+		// 路径缓存维护必须在抑制检查【之前】：网盘侧的事实已经变了，
+		// 与本地怎么处理无关。整理自产的目录搬移也会绕回来，那些事件下面会被跳过，
+		// 跳过前不更新缓存的话，缓存就永久停在旧路径上——已搬进冗余的目录
+		// 还被算在媒体库里，守卫与作用域判定跟着一起错
+		movedFrom := ""
+		if ev.FileID != "" {
+			switch {
+			case ev.Type == evFolderRename || (ev.FileCat == "0" && (ev.Type == evMove || ev.Type == evMoveImage)):
+				if parent := d.absPath(ev.Cid); parent != "" && ev.FileName != "" {
+					if old, ok := d.dirMoved(ev.FileID, strings.TrimSuffix(parent, "/")+"/"+ev.FileName); ok {
+						movedFrom = old
+					}
+				}
+			case ev.Type == evDelete && ev.FileCat == "0":
+				d.dirGone(ev.FileID)
+			}
+		}
+
 		// 整理自产的 move/rename：STRM 早在整理时就落好了，绕回来的事件直接跳过。
 		// 只查不删——标记要留到本轮事件真的标成 applied 之后再清（见收尾处），
 		// 否则中途放弃重来时标记已经没了，整理的产物会被当成外部变更处理掉
@@ -421,7 +482,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 			}
 			if isMedia(ev.FileName) {
 				sum.Relevant++
-				if pickByEvent[ev.EventID] != "" && ev.Cid != "" && ev.FileID != "" {
+				if ev.PickCode != "" && ev.Cid != "" && ev.FileID != "" {
 					precise = append(precise, preciseFile{ev: ev})
 				} else {
 					fallbackDir(ev.Cid)
@@ -462,13 +523,24 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 			}
 			sum.Structural++
 		case evMove, evMoveImage, evRename:
+			// 目录整体移动：本地目录直接搬过去 + 台账换前缀，零 115 请求。
+			// 台账按 file_id 存的是文件行，目录的 fid 不在里面，
+			// 走 removeSyncedItem 永远清不掉旧树（改造前就是这样）
+			if ev.FileCat == "0" && relocateDir(ev, movedFrom) {
+				sum.Moved++
+				if newRel, ok := localRelOf(strings.TrimSuffix(d.absPath(ev.Cid), "/") + "/" + ev.FileName); ok {
+					noteShallow(newRel)
+				}
+				sum.Structural++
+				continue
+			}
 			// 移动/改名：清理旧位置只按台账精确匹配（事件的 Cid/FileName 均为
 			// 新位置信息，模糊删除会误删库内同名字幕树），新位置精确重建或回退遍历
 			if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, true, true) {
 				sum.Moved++
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
-				if pickByEvent[ev.EventID] != "" && ev.FileID != "" && isMedia(ev.FileName) {
+				if ev.PickCode != "" && ev.FileID != "" && isMedia(ev.FileName) {
 					precise = append(precise, preciseFile{ev: ev}) // 移入媒体库：事件直推重建
 				} else {
 					fallbackDir(ev.Cid)
@@ -476,30 +548,28 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 			}
 			sum.Structural++
 		case evFolderRename:
-			// 目录改名：目录结构已变，路径缓存整体失效
-			d.invalidateDirCache()
-			// 重遍历父目录重建；旧名子树可能残留，交由后续清理功能
+			// 目录改名。路径缓存已在循环开头按子树重定位过（不再整表清空）
 			if ev.Cid != "" {
 				if sc := scopeOf(ev.Cid); sc == "excluded" || sc == "other" {
 					sum.Ignored++
 					sum.Structural++
 					continue
 				}
-				dirSet[ev.Cid] = true
+				// 本地目录直接改名 + 台账换前缀；旧路径拿不到才回退重遍历，
+				// 那种情况下旧名子树会残留，交给失效 STRM 检测
+				if relocateDir(ev, movedFrom) {
+					sum.Moved++
+					if newRel, ok := localRelOf(strings.TrimSuffix(d.absPath(ev.Cid), "/") + "/" + ev.FileName); ok {
+						noteShallow(newRel)
+					}
+				} else {
+					dirSet[ev.Cid] = true
+				}
 			}
 			sum.Structural++
 		default:
 			sum.Structural++
 			vlog("[同步] ○ 未处理的事件: 类型=%s 文件=%s", ev.Type, ev.FileName)
-		}
-	}
-
-	// 本轮受影响的最浅目录（Emby 定向刷新用，传库根=全刷）；
-	// 零遍历直推与目录遍历两条路径共同维护
-	shallowest := ""
-	noteShallow := func(base string) {
-		if shallowest == "" || len(base) < len(shallowest) {
-			shallowest = base
 		}
 	}
 
@@ -519,7 +589,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 				Name:     ev.FileName,
 				Path:     path.Join(libName, base),
 				Size:     ev.Size,
-				PickCode: pickByEvent[ev.EventID],
+				PickCode: ev.PickCode,
 			}
 			ext := strings.ToLower(path.Ext(ev.FileName))
 			switch {
@@ -598,7 +668,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	// 逐目录遍历并立即落盘
 	domain, format, keepExt, skipExist := d.strmConfig()
 	for _, t := range uniqTargets {
-		noteShallow(t.base)
+		noteShallow(path.Join(libName, t.base)) // 必须带库名，与零遍历那条保持一致
 		var videos, assets []remoteFile
 		if err := d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter); err != nil {
 			log.Printf("[同步] 遍历目录失败 %s: %v，30 秒后重试一次", t.base, err)
@@ -722,6 +792,40 @@ func absPathOfFresh(cookie, cid string) string {
 		return ""
 	}
 	return p
+}
+
+// relocateLocalDir 网盘目录改名/移动后，本地目录跟着搬 + 台账整棵子树换前缀。零 115 请求。
+//
+// 改造前这里只是「重遍历新位置」，旧名子树原样留在本地等失效 STRM 检测来收 ——
+// 而目录【移动】更糟：台账按 file_id 索引存的是文件行，目录的 fid 根本不在里面，
+// removeSyncedItem 找不到、返回 false，旧树就永远留着了。
+//
+// 拿不到旧路径（缓存里没有）时返回 false，调用方回退重遍历 —— 不猜。
+// SQL 用 length(?) 而不是 Go 的 len()：Go 数字节、SQLite 数字符，中文路径下对不上
+func (h *Handler) relocateLocalDir(oldRel, newRel, localRoot string) bool {
+	if oldRel == "" || newRel == "" || oldRel == newRel {
+		return false
+	}
+	oldAbs := filepath.Join(localRoot, filepath.FromSlash(oldRel))
+	newAbs := filepath.Join(localRoot, filepath.FromSlash(newRel))
+	if st, err := os.Stat(oldAbs); err != nil || !st.IsDir() {
+		return false // 本地没有这棵树
+	}
+	if _, err := os.Stat(newAbs); err == nil {
+		return false // 目标已存在，不覆盖，交给重遍历
+	}
+	if err := os.MkdirAll(filepath.Dir(newAbs), 0o755); err != nil {
+		return false
+	}
+	if err := os.Rename(oldAbs, newAbs); err != nil {
+		log.Printf("[同步] ○ 本地目录改名失败（改用重新遍历）: %s → %s: %v", oldRel, newRel, err)
+		return false
+	}
+	h.DB.Model(&model.SyncedFile{}).
+		Where("rel_path = ? OR rel_path LIKE ?", oldRel, oldRel+"/%").
+		Update("rel_path", gorm.Expr("? || substr(rel_path, length(?) + 1)", newRel, oldRel))
+	log.Printf("[同步] ✓ 跟随网盘改名: %s → %s", oldRel, newRel)
+	return true
 }
 
 // removeSyncedFile 按文件 id 从台账定位并删除本地文件（仅删除本工具生成过的文件）

@@ -315,6 +315,7 @@ func fetchLifeEventsPage(cookie, app string, limit, offset int) ([]lifeEvent, in
 			FileName: firstStr(d, "file_name", "n", "name"),
 			Cid:      firstStr(d, "parent_id", "cid", "pid"),
 			PickCode: firstStr(d, "pick_code", "pickcode", "pc"),
+			FileCat:  firstStr(d, "file_category", "fc"),
 			Time:     firstStr(d, "update_time", "time", "create_time"),
 		}
 		if s, ok := d["file_size"].(float64); ok {

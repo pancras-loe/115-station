@@ -523,7 +523,14 @@ func (e *httpStatusError) Error() string { return fmt.Sprintf("115 接口返回 
 
 ---
 
-## 7. 阶段 4 ｜落库字段（P2）
+## 7. 阶段 4 ｜落库字段（P2）— ✅ 已完成（2026-09-19）
+
+> 与阶段 5 一起落地：`file_category` 这一列正是阶段 5 判断「移动的是不是目录」
+> 要用的，分开做会留一个没人读的列。
+> `SyncEvent` 加 `PickCode` / `FileCat` 两列，删掉 `pickByEvent` 那个只活一轮的
+> 内存 map —— 上轮中断残留的事件重新消费时 pick_code 此前已经丢了，
+> 零遍历优化白白失效。
+
 
 > 原计划的「浏览/标星事件过滤」与「同一 file_id 只取最新」已在阶段 3 一并落地
 > （见该节的差异说明），本阶段只剩 `SyncEvent` 加两列。工作量 1h → 0.5h。
@@ -556,7 +563,22 @@ FileCategory string `json:"file_category" gorm:"size:4"`   // "0"=目录 "1"=文
 
 ---
 
-## 8. 阶段 5 ｜目录改名与移动（P2）＋ 一个功能修复
+## 8. 阶段 5 ｜目录改名与移动（P2）＋ 一个功能修复 — ✅ 已完成（2026-09-19）
+
+> 落地情况：`panpath.go` 加 `repathSubtree`（子树前缀重定位，替代整表清空）；
+> `incrDeps` 加 `dirMoved` / `dirGone`；新增 `relocateLocalDir`（本地目录改名 +
+> 台账整棵子树换前缀，零 115 请求）；`evFolderRename` 与 `FileCat=="0"` 的
+> `evMove` 都先走本地搬迁，拿不到旧路径才回退重遍历。
+> 新增 [`incr_relocate_test.go`](internal/api/incr_relocate_test.go)（9 个用例）。
+>
+> **§12 ① 的顺序约束已落地并做过变异验证**：把抑制检查挪回缓存维护之前，
+> `TestIncrSuppressedDirMoveStillUpdatesCache` 立刻失败（缓存停在旧路径）。
+>
+> 顺带修了一个 Emby 定向刷新的老问题：目录遍历那条 `noteShallow(t.base)`
+> 漏了库名前缀，刷新路径少一层、指向一个不存在的目录。现在统一成含库名。
+>
+> ⚠️ SQL 换前缀用 `length(?)` 而不是 Go 的 `len()`：Go 数字节、SQLite 数字符，
+> 中文目录名下两者对不上。
 
 ### 顺手修掉的现存 bug
 
@@ -803,11 +825,11 @@ if !fullSyncMu.TryLock() {
 ## 13. 执行顺序与总量
 
 ```
-阶段1 ✅ → 阶段0 ✅ → 阶段2 ✅ → 阶段3 ✅ → 阶段4 (0.5h)
-                            → 阶段5 (2h) → 阶段6 (1.5h) → 阶段7 (2h) → 阶段8 (2h)
+阶段1 ✅ → 阶段0 ✅ → 阶段2 ✅ → 阶段3 ✅ → 阶段4 ✅ → 阶段5 ✅
+                            → 阶段6 (1.5h) → 阶段7 (2h) → 阶段8 (2h)
 ```
 
-约 **18 小时**，已完成 10.5h。
+约 **18 小时**，已完成 13h。
 
 阶段 1 是 0.5h 的纯收窄 bug 修复、不依赖地基，**插队先做**；
 随后阶段 0 铺好可注入接口（§3.1），阶段 2/3 是主干，做完收益就拿到九成；4~8 可分批跟进。
