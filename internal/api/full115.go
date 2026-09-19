@@ -569,41 +569,35 @@ func (h *Handler) getSettingValue(key string) string {
 	return ""
 }
 
-// markEventsCoveredByFullSync 全量同步完成后调用：
-// 把事件窗口内的生活事件直接落库并标记为已处理（全量已覆盖一切，无需增量再处理）
+// markEventsCoveredByFullSync 全量同步完成后调用：整库扫描已经覆盖了一切，
+// 事件窗口里的东西不用增量再处理一遍。
+//
+// 改造前是把最近 1000 条事件逐条插成 applied（千次独立写事务 + 34 次请求）。
+// 有了游标之后只剩两件事：把还没消费的事件标掉，再把游标推到最新那条
 func (h *Handler) markEventsCoveredByFullSync(cookie string) (int, error) {
-	count := 0
-	offset := 0
 	now := time.Now()
-	for {
-		events, err := fetch115LifeEvents(cookie, 30, offset, "")
-		if err != nil {
-			return count, err
-		}
-		batch := make([]model.SyncEvent, 0, len(events))
-		for _, ev := range events {
-			if ev.ID == "" {
-				continue
+	res := h.DB.Model(&model.SyncEvent{}).Where("status = ?", "pending").
+		Updates(map[string]interface{}{"status": "applied", "applied_at": now})
+	covered := int(res.RowsAffected)
+
+	f := &lifeFetcher{
+		cookie: cookie,
+		load:   h.getSettingValue,
+		save: func(k, v string) {
+			if h.Config != nil {
+				h.Config.SaveSetting(k, v)
 			}
-			ts, _ := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64)
-			batch = append(batch, model.SyncEvent{
-				EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
-				FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size,
-				EventTime: ts, Status: "applied", AppliedAt: &now,
-			})
-		}
-		// 与增量共用批量落库：此前逐条 Create，千级事件就是千次独立写事务
-		fresh := insertSyncEvents(h.DB, batch)
-		count += len(fresh)
-		if len(fresh) == 0 || count >= 1000 {
-			break
-		}
-		offset += len(events)
-		if len(events) < 30 {
-			break
-		}
+		},
 	}
-	return count, nil
+	evs, _, err := f.page(1, 0)
+	if err != nil {
+		return covered, err
+	}
+	if len(evs) > 0 && evs[0].ID != "" && h.Config != nil {
+		ts, _ := strconv.ParseInt(strings.TrimSpace(evs[0].Time), 10, 64)
+		h.Config.SaveSetting("incr-cursor", encodeLifeCursor(lifeCursor{FromID: evs[0].ID, FromTime: ts}))
+	}
+	return covered, nil
 }
 
 // rename115 重命名网盘文件（单个；批量场景用 rename115Batch）

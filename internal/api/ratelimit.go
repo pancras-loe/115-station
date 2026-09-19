@@ -133,6 +133,27 @@ func throttleFast(api string, gap time.Duration) {
 	_ = api
 }
 
+// ==================== 生活事件独立冷却 ====================
+//
+// behavior/detail 的 app 通道对高频特别敏感（返 405），p115client 建议
+// app 通道间隔 ≥2 秒。此前它跟目录遍历挤在同一条 ≤1 秒的读队列里，
+// 与本文件顶上「两次调用间隔 ≥5 秒」的说法自相矛盾。
+// 单独一条队列：既不被后台遍历带快，也不拖慢遍历
+
+var (
+	lifeThrottleMu   sync.Mutex
+	lifeThrottleLast time.Time
+)
+
+func throttleLife() {
+	lifeThrottleMu.Lock()
+	defer lifeThrottleMu.Unlock()
+	if elapsed := time.Since(lifeThrottleLast); elapsed < lifeCooldown {
+		time.Sleep(lifeCooldown - elapsed)
+	}
+	lifeThrottleLast = time.Now()
+}
+
 // isDownloadURLAPI 取直链端点（播放起播关键路径）
 func isDownloadURLAPI(api string) bool {
 	return strings.Contains(api, "/ufile/download") ||

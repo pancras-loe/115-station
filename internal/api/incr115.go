@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,10 +23,11 @@ import (
 
 // ==================== 生活事件增量 ====================
 //
-// 接口：P115Client.life_behavior_detail_app
-//   GET https://proapi.115.com/{app}/behavior/detail  （app 默认 android，Cookie 认证）
-//   参数：type（省略=全部）、limit（≤1000）、offset、date（可选 'YYYY-MM-DD'）
-//   注意：有风控风险，两次调用间隔 ≥5 秒；缺少「回收站还原」事件
+// 事件拉取层在 life115.go（端点选择、游标、分页、忽略类过滤、405 降级、开关门禁）。
+// 这里只负责消费：把事件应用到本地 STRM 与台账。
+//
+// 115 的事件流本身缺「回收站还原」——还原了只是对应的删除事件消失，
+// 不会补一条新增，所以还原过的内容只有全量整库扫描能补回来
 
 // 关键操作类型（type 字段，数字或字符串均可能返回）
 const (
@@ -94,58 +94,6 @@ func firstStr(d map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
-}
-
-// fetch115LifeEvents 拉取 115 生活事件（type 为空则拉全部类型）
-// 响应结构：{state, data: {count, list: [...]}}，事件字段 type/file_id/file_name/cid/file_size/update_time
-func fetch115LifeEvents(cookie string, limit, offset int, typ string) ([]lifeEvent, error) {
-	query := url.Values{
-		"limit":  {fmt.Sprint(limit)},
-		"offset": {fmt.Sprint(offset)},
-	}
-	if typ != "" {
-		query.Set("type", typ)
-	}
-	body, err := httpGet115(behaviorAPI, query, cookie, 20*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
-		Data  struct {
-			// 注意：count 在响应中是字符串（"118262"），声明为 int 会导致整体解析失败；
-			// 当前不需要该值，故意不解析
-			List []map[string]interface{} `json:"list"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("解析生活事件失败: %s", truncateStr(string(body), 150))
-	}
-	if !result.State {
-		msg := result.Error
-		if msg == "" {
-			msg = "state=false"
-		}
-		return nil, fmt.Errorf("拉取生活事件被拒: %s", msg)
-	}
-	events := make([]lifeEvent, 0, len(result.Data.List))
-	for _, d := range result.Data.List {
-		ev := lifeEvent{
-			ID:       firstStr(d, "id"),
-			Type:     normalizeEventType(fmt.Sprint(d["type"])),
-			FileID:   firstStr(d, "file_id", "fid"),
-			FileName: firstStr(d, "file_name", "n", "name"),
-			Cid:      firstStr(d, "cid", "pid", "parent_id"),
-			PickCode: firstStr(d, "pick_code", "pickcode", "pc"),
-			Time:     firstStr(d, "update_time", "time", "create_time"),
-		}
-		if s, ok := d["file_size"].(float64); ok {
-			ev.Size = int64(s)
-		}
-		events = append(events, ev)
-	}
-	return events, nil
 }
 
 // dirInfo 目录自身的 cid/pid/名称
@@ -345,14 +293,21 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	// 离线下载、网页端删改）——这些事件被我们拉到时早就稳定了，没有上游要等
 	SetTaskProgress("正在获取网盘最近的改动…")
 
-	// ---- 阶段一：小批量分页拉取，落库去重，直到追平（本页无新事件）----
-	// 拉取失败重试：30 秒 × 3 次（网络抖动/瞬时风控不应让整轮作废，QMediaSync 同款）
-	fetchWithRetry := func(offset int) ([]lifeEvent, error) {
+	// ---- 阶段一：按游标拉一轮，落库去重 ----
+	// 游标（事件 id）命中即停，日常一轮 1 次请求；DB 去重仍然保留作为第二道保险，
+	// 游标万一出错也不会导致重复落盘。
+	// 拉取失败重试：30 秒 × 3 次（网络抖动/瞬时风控不该让整轮作废，qmediasync 同款）
+	d.ensureLifeGate()
+	cur := parseLifeCursor(d.setting("incr-cursor"))
+	var events []lifeEvent
+	nextCur := cur
+	{
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			evs, err := d.lifeEvents(30, offset)
+			evs, nc, err := d.lifeEvents(cur, p.Limit)
 			if err == nil {
-				return evs, nil
+				events, nextCur, lastErr = evs, nc, nil
+				break
 			}
 			lastErr = err
 			log.Printf("[同步] 事件拉取失败（第 %d/3 次）: %v", attempt, err)
@@ -360,45 +315,32 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 				time.Sleep(incrRetryDelay)
 			}
 		}
-		return nil, lastErr
+		if lastErr != nil {
+			return sum, fmt.Errorf("拉取生活事件失败（已重试 3 次）: %w", lastErr)
+		}
 	}
-	var pending []model.SyncEvent
+	noteLifeRound(len(events))
+	sum.EventsTotal = len(events)
+
 	pickByEvent := map[string]string{} // 事件 id → pick_code（落库结构不含，本轮内存携带）
-	offset := 0
-	for {
-		events, err := fetchWithRetry(offset)
-		if err != nil {
-			return sum, fmt.Errorf("拉取生活事件失败（已重试 3 次）: %w", err)
+	batch := make([]model.SyncEvent, 0, len(events))
+	for _, ev := range events {
+		if ev.ID == "" {
+			continue
 		}
-		sum.EventsTotal += len(events)
-		batch := make([]model.SyncEvent, 0, len(events))
-		for _, ev := range events {
-			if ev.ID == "" {
-				continue
-			}
-			ts, _ := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64)
-			batch = append(batch, model.SyncEvent{
-				EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
-				FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size, EventTime: ts,
-			})
-			if ev.PickCode != "" {
-				pickByEvent[ev.ID] = ev.PickCode // 消费端按新事件 id 取，多记无害
-			}
-		}
-		// 批量落库（此前逐条 Create：千级事件即千次独立写事务）。
-		// 只有真正新插入的行才进 pending——此前是把整页都塞进去，
-		// 同页已 applied 的历史事件会跟着被重放（见 insertSyncEvents 注释）
-		fresh := insertSyncEvents(h.DB, batch)
-		pending = append(pending, fresh...)
-		sum.EventsFresh += len(fresh)
-		if len(fresh) == 0 || sum.EventsFresh >= p.Limit {
-			break // 已追平或达到单次上限
-		}
-		offset += len(events)
-		if len(events) < 30 {
-			break
+		ts, _ := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64)
+		batch = append(batch, model.SyncEvent{
+			EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
+			FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size, EventTime: ts,
+		})
+		if ev.PickCode != "" {
+			pickByEvent[ev.ID] = ev.PickCode
 		}
 	}
+	// 只有真正新插入的行才进 pending——此前是把整页都塞进去，
+	// 同页已 applied 的历史事件会跟着被重放（见 insertSyncEvents 注释）
+	pending := insertSyncEvents(h.DB, batch)
+	sum.EventsFresh = len(pending)
 
 	// 恢复上轮中断遗留的 pending 事件：拉取中途失败/进程重启后已落库的事件
 	// 会永久滞留 pending，无人再消费。
@@ -700,6 +642,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSum
 	// 必须能正常处理，标记不清就会把那次真实变更也吞了
 	unmarkSuppressed(suppressedHits...)
 	d.saveSetting("incr-last", fmt.Sprint(now.Unix()))
+	// 游标只在本轮真的全部消费完之后才推进：DirsSkipped>0 已在上面提前返回，
+	// 那批事件下轮还要重来，游标跟着不动才补得回来
+	d.saveSetting("incr-cursor", encodeLifeCursor(nextCur))
 
 	if sum.StrmCreated+sum.AssetsDownloaded+sum.Deleted+sum.Moved > 0 {
 		// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）

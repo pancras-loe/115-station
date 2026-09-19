@@ -23,7 +23,10 @@ import (
 
 type incrDeps interface {
 	// ---- 115 只读 ----
-	lifeEvents(limit, offset int) ([]lifeEvent, error)
+	// lifeEvents 拉一轮生活事件：从最新往回翻到游标为止，
+	// 返回倒序（新→旧）的事件与推进后的游标
+	lifeEvents(cur lifeCursor, max int) ([]lifeEvent, lifeCursor, error)
+	ensureLifeGate()
 	dirName(cid string) string                         // 目录自身名字；取不到返回 ""
 	absPath(cid string) string                         // 网盘绝对路径；取不到返回 ""
 	relPath(cid, rootCid string) (string, bool, error) // 相对媒体库根的路径
@@ -73,9 +76,19 @@ func (h *Handler) newIncrDeps() (*realIncrDeps, error) {
 	return &realIncrDeps{h: h, cookie: cookie, ops: ops}, nil
 }
 
-func (d *realIncrDeps) lifeEvents(limit, offset int) ([]lifeEvent, error) {
-	return fetch115LifeEvents(d.cookie, limit, offset, "")
+func (d *realIncrDeps) newLifeFetcher() *lifeFetcher {
+	return &lifeFetcher{
+		cookie: d.cookie,
+		load:   func(k string) string { return d.h.getSettingValue(k) },
+		save:   d.saveSetting,
+	}
 }
+
+func (d *realIncrDeps) lifeEvents(cur lifeCursor, max int) ([]lifeEvent, lifeCursor, error) {
+	return d.newLifeFetcher().fetch(cur, max)
+}
+
+func (d *realIncrDeps) ensureLifeGate() { d.newLifeFetcher().ensureLifeGate() }
 
 func (d *realIncrDeps) dirName(cid string) string {
 	info, err := get115DirInfo(d.cookie, cid)

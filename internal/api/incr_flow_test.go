@@ -25,6 +25,7 @@ type stubIncrDeps struct {
 
 	// 观测点
 	fetchCalls int
+	gateCalls  int
 	walkCalls  int
 	refreshed  []string
 	saved      map[string]string
@@ -40,14 +41,21 @@ func newStubDeps() *stubIncrDeps {
 	}
 }
 
-func (s *stubIncrDeps) lifeEvents(limit, offset int) ([]lifeEvent, error) {
-	i := s.fetchCalls
+// lifeEvents 桩：一轮返回一批（真实现是翻页到游标为止，翻页逻辑归 life115_test 管）
+func (s *stubIncrDeps) lifeEvents(cur lifeCursor, max int) ([]lifeEvent, lifeCursor, error) {
 	s.fetchCalls++
-	if i < len(s.pages) {
-		return s.pages[i], nil
+	if len(s.pages) == 0 {
+		return nil, cur, nil
 	}
-	return nil, nil
+	evs := s.pages[0]
+	next := cur
+	if len(evs) > 0 && evs[0].ID != "" {
+		next.FromID = evs[0].ID
+	}
+	return evs, next, nil
 }
+
+func (s *stubIncrDeps) ensureLifeGate() { s.gateCalls++ }
 
 func (s *stubIncrDeps) dirName(cid string) string { return s.names[cid] }
 func (s *stubIncrDeps) absPath(cid string) string { return s.abs[cid] }
@@ -227,6 +235,10 @@ func TestIncrKeepsEventsPendingWhenWalkFails(t *testing.T) {
 	}
 	if _, ok := d.saved["incr-last"]; ok {
 		t.Fatal("整轮放弃时不该推进水位")
+	}
+	// 游标同样不能推进——推了这批事件下轮就拉不回来了
+	if _, ok := d.saved["incr-cursor"]; ok {
+		t.Fatal("整轮放弃时不该推进游标")
 	}
 }
 

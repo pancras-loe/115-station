@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +17,7 @@ import (
 //
 // 数据通道（走 webapi + Cookie，不依赖已暂停服务的开放平台）：
 //   - 全量：webapi.115.com/files 递归遍历目录
-//   - 增量：life_behavior_detail_app 拉取生活事件
+//   - 增量：behavior/detail 拉取生活事件（见 life115.go）
 //
 // 文件条目字段（webapi files 接口返回）：
 //   f = "0" 文件夹 / "1" 文件；n 文件名；fid 文件id；cid 目录id；s 文件大小
@@ -24,8 +25,6 @@ import (
 const (
 	webapi115   = "https://webapi.115.com"
 	fileListAPI = "https://webapi.115.com/files/"
-	// 生活事件（App 接口，Cookie 认证）：type 省略则逆序拉全部类型；limit 最大 1000
-	behaviorAPI = "https://proapi.115.com/android/behavior/detail"
 	pageSize    = 1150
 )
 
@@ -36,6 +35,18 @@ var webapiFileOrigins = []string{
 	"http://web.api.115.com",
 	"https://115cdn.com/webapi",
 	"https://115vod.com/webapi",
+}
+
+// httpStatusError 115 返回的非 200。带上状态码，调用方才能按码决定降级/重试 ——
+// 生活事件的 proapi 通道被风控时返回 405，要据此切到 webapi（见 life115.go）
+type httpStatusError struct{ Code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("115 接口返回 HTTP %d", e.Code) }
+
+// isHTTPStatus 判断错误是否为指定状态码
+func isHTTPStatus(err error, code int) bool {
+	var he *httpStatusError
+	return errors.As(err, &he) && he.Code == code
 }
 
 // remoteFile 115 网盘上的一个文件
@@ -100,7 +111,7 @@ func httpGet115Full(api string, query url.Values, cookie, ua string, timeout tim
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("115 接口返回 HTTP %d", resp.StatusCode)
+		return nil, &httpStatusError{Code: resp.StatusCode}
 	}
 	return body, nil
 }
