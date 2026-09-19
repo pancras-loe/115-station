@@ -1,36 +1,116 @@
-# INCR-SYNC-PLAN.md — 增量同步改造方案
+# INCR-SYNC-UPGRADE.md — 增量同步改造记录（2026-09-19）
 
-面向实施。对比对象是 `D:\Code\` 下的 p115client / p115strmhelper / openStrm / qmediasync /
+**这是一份已完成改造的存档，不是待办计划。** 八个阶段全部落地，7 个 commit
+（`9fd767e` … `87b35ee`）。保留它是为了事后可查：改了什么、为什么这么改、
+当时验证到什么程度、哪些地方与最初的方案不一样。
+
+对比对象是 `D:\Code\` 下的 p115client / p115strmhelper / openStrm / qmediasync /
 MediaSync115 / SmartStrm（清单见 [REFERENCES.md](REFERENCES.md)）。
-
-**本文是一次性的实施计划，全部阶段落地后即可删除。**
-
-> ✅ **2026-09-19：八个阶段全部完成。** 各节标题上的落地说明记录了实施时与原计划的
-> 偏差和理由，留到下一轮改动前作参考；确认不需要了就可以整个删掉本文。
+改造中挖到的 115 接口事实已单独写进 REFERENCES.md 第三节，那份是长期参考，
+本文只记这次改造本身。
 
 ---
 
-## 1. 背景
+## 0. 速查
 
-增量同步（[`internal/api/incr115.go`](internal/api/incr115.go)，1041 行）目前一个文件同时干四件事：
-拉生活事件、解析网盘路径、判作用域、落盘。对照其他项目逐项体检后，发现 1 个正确性 bug、
-1 个功能缺失、以及一批请求量与健壮性上的差距。
+### 0.1 新增/改动的文件
 
-改造主线：**把「拉事件」和「解析路径」抽成独立的、可注入可测试的模块**，`incr115.go` 只留编排。
+| 文件 | 职责 | 对应阶段 |
+|---|---|---|
+| [`internal/api/life115.go`](internal/api/life115.go) | **新增**。生活事件拉取层：端点选择、405 粘滞降级、游标分页、忽略类过滤、file_id 去重、「115 生活」开关门禁 | §6 |
+| [`internal/api/panpath.go`](internal/api/panpath.go) | **新增**。cid → 网盘绝对路径解析器：一次请求取整条祖先链 + 内存/DB 两级缓存 + 子树失效与重定位 | §5 |
+| [`internal/api/incrdeps.go`](internal/api/incrdeps.go) | **新增**。`incrDeps` 接口 + `realIncrDeps` 逐行转发实现，主流程由此可整体单测 | §3.1 |
+| [`internal/api/incrstatus.go`](internal/api/incrstatus.go) | **新增**。事件流状态接口与探针 | §11 |
+| [`internal/api/incr115.go`](internal/api/incr115.go) | 瘦身为「消费事件 → 落盘 → 记账」；事件重放 bug、目录搬迁、删除兜底都在这里 | §4 §8 §9 |
+| [`internal/api/cron.go`](internal/api/cron.go) | 增量拆出独立轮询；整理「错过即补」 | §10 |
+| [`internal/api/files115.go`](internal/api/files115.go) | 加 `httpStatusError` / `isHTTPStatus`（405 才能被识别） | §6 |
+| [`internal/api/ratelimit.go`](internal/api/ratelimit.go) | 加 `throttleLife`：事件接口独立 2 秒队列 | §6 |
+| [`internal/api/open115.go`](internal/api/open115.go) | move/rename/delete 挂上 `forgetDirSubtree` 缓存失效钩子 | §5.4 |
+| [`internal/api/full115.go`](internal/api/full115.go) | `markEventsCoveredByFullSync` 改为「标掉 pending + 推游标」 | §4 §6 |
+| [`internal/model/model.go`](internal/model/model.go) | 新增 `PathCache` 表；`SyncEvent` 加 `PickCode` / `FileCat` 两列 | §5 §7 |
+| [`webui/src/pages/strm/IncrSyncTab.vue`](webui/src/pages/strm/IncrSyncTab.vue) | 间隔配置、状态卡片、探针按钮；原「增量同步 Cron」改名「自动整理 Cron」 | §10 §11 |
 
-> ⚠️ 现状 `incr115.go` 里**只有 `insertSyncEvents` 一个函数有测试**
+测试文件：`incr_pending_test.go` `incr_flow_test.go` `panpath_test.go` `life115_test.go`
+`incr_relocate_test.go` `incr_remove_test.go` `incr_poll_test.go` `incrstatus_test.go`。
+
+### 0.2 新增的配置项与存储
+
+排查问题时这些是入口：
+
+| 键 | 位置 | 含义 |
+|---|---|---|
+| `incr.interval_sec` | setting `incr` | 增量独立轮询间隔，默认 30 秒；**填 0 关闭**，退回跟着整理串行跑的旧行为 |
+| `incr-cursor` | setting | 事件游标 `{"from_id","from_time"}`。删掉它 = 下轮按「无游标」重新收敛一次 |
+| `life-endpoint` | setting | 405 降级状态 `{"proapi_405","web_until"}`。删掉它 = 立刻回主通道 |
+| `incr-last` | setting | 上一轮成功时间（沿用，未改） |
+| `path_caches` 表 | SQLite | 目录 id → 网盘绝对路径。删表只影响性能，下轮自动重建 |
+| `sync_events.pick_code` / `.file_category` | SQLite | 新增两列；旧行为空时自动回退到目录遍历 |
+
+### 0.3 升级后的行为变化
+
+- **第一轮会慢**：游标为空走「无游标」路径（首批 1000 条），`PathCache` 也是冷的，
+  每个目录各一次请求。第二轮起才降到日常水平
+- **旧的 pending 事件**：升级前积压的浏览/标星类事件还在表里，第一轮会被捞出来
+  走 `default` 分支标成 applied。无害，不需要清理脚本
+- **整理的 cron 没变**，但它在界面上改名为「自动整理 Cron」——它本来就只管整理
+- **日志更安静**：增量空转轮次完全静默，且不再占用「当前任务」。
+  想知道它在不在干活，看「事件流状态」卡片
+
+### 0.4 量化结果
+
+| | 改造前 | 改造后 |
+|---|---|---|
+| 日常一轮请求数 | ~34 次 + 每个新目录 depth 次 | **1 次** + 每个新目录 1 次（命中缓存 0 次） |
+| 请求频率 | ~3.4 次/分钟 | **~2.0 次/分钟** |
+| 网盘删除的响应 | 最长 10 分钟 | **30 秒** |
+| `internal/api` 测试用例 | 这块只有 1 个纯函数有测试 | **197 个**（全包） |
+
+### 0.5 修掉的实际问题
+
+| 问题 | 后果 | 落点 |
+|---|---|---|
+| 事件重放 | 已 applied 的 delete 事件被重放，删掉用户重新上传的同名文件 | §4 |
+| 目录移动清不掉旧树 | 台账存的是文件行，目录 fid 不在里面，旧树永远留着 | §8 |
+| 删除兜底第 2 级漏库名前缀 | 整条分支是死的，活儿全落到全库按名搜索上 | §9 |
+| 第 4 级全库扫描 | 按裸文件名匹配后 `RemoveAll`，另一部剧下的同名文件会被一起删 | §9 |
+| `noteShallow` 漏库名 | Emby 定向刷新指向不存在的目录 | §8 |
+| 无 405 兜底 | proapi 被限流后事件流直接断掉 | §6 |
+| 无生活开关门禁 | 开关关着就永久静默空转，日志里一行异常都没有 | §6 |
+
+### 0.6 验证方式
+
+六处关键逻辑做过**变异验证**（注入旧行为，确认对应用例会失败）：
+事件重放（§4）、目录消失判定（§5.5）、游标停止与 405 降级（§6）、
+抑制检查顺序（§8）、删除兜底第 2/4 级（§9）。
+
+四条 115 接口事实做过真机探测，结论见 §14 与 REFERENCES.md 第三节。
+
+---
+
+## 1. 改造前的状况
+
+增量同步（`internal/api/incr115.go`，当时 1041 行）一个文件同时干四件事：
+拉生活事件、解析网盘路径、判作用域、落盘。对照其他项目逐项体检后，
+发现 1 个正确性 bug、1 个功能缺失、以及一批请求量与健壮性上的差距。
+
+改造主线：**把「拉事件」和「解析路径」抽成独立的、可注入可测试的模块**，
+`incr115.go` 只留编排。
+
+> 当时 `incr115.go` 里**只有 `insertSyncEvents` 一个函数有测试**
 > （而且还写在 `full115_test.go` 里）。事件消费主流程、路径解析、`removeSyncedItem`
-> 的四级兜底全部裸奔。这是本次改造要一并补上的。
+> 的四级兜底全部裸奔。
 
-> ⚠️ **动手前先读 [§12 对既有链路的影响](#12-对既有链路的影响)**。
-> 其中 ①（PathCache 陈旧 × 整理搬移目录）与 ②（`fullSyncMu` 竞争 × 30 秒轮询）
-> 是本次改造**自己引入的债**，不是可选优化 —— ① 会让整理的保护子树守卫失效、
-> 让增量给冗余内容生成 STRM；② 会让自动整理整轮被跳过。
-> 它们已分别落到 §5.4、阶段 5「抑制检查的位置」、阶段 7「错过即补」三处。
+> **两笔改造自己引入的债**（详见 [§12](#12-对既有链路的影响)）：
+> ①（PathCache 陈旧 × 整理搬移目录）会让整理的保护子树守卫失效、让增量给冗余内容
+> 生成 STRM；②（`fullSyncMu` 竞争 × 30 秒轮询）会让自动整理整轮被跳过。
+> 两条都已还清，分别落在 §5.4、§8「抑制检查的位置」、§10「错过即补」。
 
 ---
 
-## 2. 现状盘点
+## 2. 改造前的横向对比
+
+> ⚠️ 下面两张表记录的是**改造前**的状况（2026-09-19 改造当天的快照），
+> 留作当初判断的依据。本项目那一列现在已经全部变了，对照 §0.4 看。
 
 ### 2.1 术语先对齐
 
@@ -40,11 +120,11 @@ MediaSync115 / SmartStrm（清单见 [REFERENCES.md](REFERENCES.md)）。
 - **p115strmhelper**：增量同步 = 导出目录树做树差集；生活事件是另一个独立模块「监控生活事件」
 - **qmediasync / MediaSync115 / SmartStrm**：没有生活事件，增量 = 重新遍历但只处理新增（或目录快照哈希比对）
 
-### 2.2 各项目「增量」策略
+### 2.2 各项目「增量」策略（本项目一列 = 改造前）
 
 | 项目 | 实现原理 | 感知删除 | 感知改名/移动 | 请求量级 | 实时性 |
 |---|---|---|---|---|---|
-| **115-Station** | 生活事件流 → 事件落库去重 → 定向重遍历受影响目录 / pick_code 零遍历直推 | ✅ | 移动 ✅ / 目录改名只重建不搬旧树 | 每轮 ~34 次拉取 + 每个新目录 depth 次 `get_info` | cron，默认 `*/10 8-23` |
+| **115-Station（改造前）** | 生活事件流 → 事件落库去重 → 定向重遍历受影响目录 / pick_code 零遍历直推 | ✅ | 移动 ✅ / 目录改名只重建不搬旧树 | 每轮 ~34 次拉取 + 每个新目录 depth 次 `get_info` | cron，默认 `*/10 8-23` |
 | **p115strmhelper·增量同步** | `export_dir` 导出网盘目录树 → 与本地树差集 | ✅（可选，带阈值保护） | ❌（表现为删+增） | O(1) 导出 + 轮询 | 手动 / 定时 |
 | **p115strmhelper·监控生活事件** | 生活事件流 → 直接对本地文件增删改名 | ✅ | ✅（本地目录直接 rename） | 每轮 1~2 次 | 常驻循环，10~15s |
 | **openStrm** | 生活事件流 → 统一 ChangeEvent → handlers | ✅ | ✅（path_cache 里有旧路径） | 每轮 1~2 次 | 常驻循环，默认 15s |
@@ -54,7 +134,9 @@ MediaSync115 / SmartStrm（清单见 [REFERENCES.md](REFERENCES.md)）。
 
 ### 2.3 生活事件监控实现细节（p115client 为基准）
 
-| 维度 | **115-Station（现状）** | p115strmhelper | openStrm | p115client |
+逐项体检的结论就是这张表 —— 打 ❌ 的每一格后来都补上了，对应阶段见 §0.1。
+
+| 维度 | **115-Station（改造前）** | p115strmhelper | openStrm | p115client |
 |---|---|---|---|---|
 | 端点 | 固定 `proapi.115.com/android/behavior/detail` | ios ⇄ web 互为兜底 | ios ⇄ web 互为兜底 | app / web 双通道 |
 | 405 风控降级 | ❌ 无 | ✅ 连续 3 次 405 → 24h 固定 webapi | ✅ 同左 | 注释建议 web 顶上 |
@@ -861,7 +943,7 @@ if !fullSyncMu.TryLock() {
 
 ---
 
-## 13. 执行顺序与总量
+## 13. 实际的实施顺序
 
 ```
 阶段1 ✅ → 阶段0 ✅ → 阶段2 ✅ → 阶段3 ✅ → 阶段4 ✅ → 阶段5 ✅ → 阶段6 ✅
