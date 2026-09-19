@@ -3,16 +3,23 @@ package api
 // ==================== 同步 Cron 调度器 ====================
 //
 // 支持标准 5 字段 cron（分 时 日 月 周），字段支持 * 、*/n 、a-b 、逗号列表。
-// 每分钟检查一次，命中且无同步任务运行时触发。两条独立的调度线：
+// 三条独立的调度线：
 //
-//   - 增量（incr.cron）：「自动整理 → 增量同步」两段，日常入库主力，高频。
-//     整理是一条自带落盘的完整流水线（识别→搬移→STRM→刮削→刷 Emby），
-//     跟在后面的增量只负责 115 端的外部变更（手机上传、离线下载、网页端删改）
+//   - 自动整理（incr.cron）：识别→搬移→STRM→刮削→刷 Emby 一条龙，
+//     每分钟检查一次 cron 是否命中。重操作，低频合适
+//   - 增量同步（incr.interval_sec）：**独立轮询**，默认 30 秒一轮。
+//     只负责 115 端的外部变更（手机上传、离线下载、网页端删改）。
+//     改造后一轮只要 1~2 个请求，挂在整理的 cron 上纯属浪费实时性；
+//     30 秒一轮 ≈ 2 次/分钟，反而比改造前（10 分钟 34 次 ≈ 3.4 次/分钟）更低。
+//     填 0 可退回「跟着整理串行跑」的老行为
 //   - 全量（full.cron）：整库扫描，服务于失效 STRM 检测——生活事件有窗口，
 //     网页版批量删除、停机期间的删除都会漏掉，只有整库差集能查出来。低频即可
 //
 // 全量整库扫描请求量大（115 风控敏感），所以它只在用户开了失效 STRM 检测时
 // 才有意义：检测关着的时候定时全量纯属白跑一趟，前后端都直接当没开。
+//
+// 三条线共用 fullSyncMu。整理抢不到锁时会置位 organizeMissed 稍后补跑——
+// 增量提频之后，整理的 cron 撞上一轮正在遍历大目录的增量是常态。
 
 import (
 	"strmhub/internal/model"
@@ -21,6 +28,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -71,19 +79,49 @@ func CronMatch(expr string, t time.Time) bool {
 		cronFieldMatch(fields[4], int(t.Weekday()))
 }
 
-// loadIncrCron 从配置读取增量同步 cron（setting "incr" 的 cron 字段）
+// incrCfg setting "incr" 的结构。IntervalSec 用指针区分「没配过」与「显式填 0」
+type incrCfg struct {
+	Cron        string `json:"cron"`
+	IntervalSec *int   `json:"interval_sec"`
+}
+
+// loadIncrCfg 读 incr 配置。走 getSettingValue 而不是 Config.GetSetting——
+// 与 loadFullSyncCfg 保持同一条读取路径，两处读法不一致会出现
+// 「配置改了但调度器没看见」这类只在某种部署形态下复现的偏差
+func (h *Handler) loadIncrCfg() incrCfg {
+	var cfg incrCfg
+	_ = json.Unmarshal([]byte(h.getSettingValue("incr")), &cfg)
+	return cfg
+}
+
+// loadIncrCron 自动整理的 cron（这条 cron 同时是整理的调度开关）
 func (h *Handler) loadIncrCron() string {
-	v := h.Config.GetSetting("incr")
-	if v == "" {
-		return ""
+	return strings.TrimSpace(h.loadIncrCfg().Cron)
+}
+
+const (
+	// incrIntervalDefault 增量独立轮询的默认间隔。
+	// 改造后一轮增量只要 1~2 个请求，30 秒一轮 ≈ 2 次/分钟，
+	// 反而比改造前（10 分钟 34 次 ≈ 3.4 次/分钟）更低
+	incrIntervalDefault = 30 * time.Second
+	// incrIntervalMin 下限，再快也没有意义（115 的事件本身就有延迟）
+	incrIntervalMin = 15 * time.Second
+)
+
+// loadIncrInterval 增量独立轮询间隔。没配过取默认 30 秒；
+// 显式填 0 表示关闭独立轮询、退回「跟着整理的 cron 串行跑」的老行为（逃生门）
+func (h *Handler) loadIncrInterval() time.Duration {
+	sec := h.loadIncrCfg().IntervalSec
+	if sec == nil {
+		return incrIntervalDefault
 	}
-	var cfg struct {
-		Cron string `json:"cron"`
+	if *sec <= 0 {
+		return 0
 	}
-	if json.Unmarshal([]byte(v), &cfg) != nil {
-		return ""
+	if d := time.Duration(*sec) * time.Second; d > incrIntervalMin {
+		return d
 	}
-	return strings.TrimSpace(cfg.Cron)
+	return incrIntervalMin
 }
 
 // fullSyncCfg 全量同步的持久化配置（setting "full"，与前端「全量同步」页签同构）
@@ -173,15 +211,82 @@ func StartSyncScheduler(h *Handler) {
 
 			cron := h.loadIncrCron()
 			if cron == "" {
-				continue // 未配置调度
-			}
-			if !CronMatch(cron, now) {
+				organizeMissed.Store(false) // 调度被清空，别留着一个永远待补的标记
 				continue
 			}
-			h.runScheduledTick(cron)
+			// 错过即补：上一次命中时锁被占用的话，这里每分钟继续尝试直到补上
+			if CronMatch(cron, now) || organizeMissed.Load() {
+				h.runScheduledTick()
+			}
 		}
 	}()
-	log.Println("[调度] 调度器已启动（cron 触发 自动整理+增量同步 / 全量同步）")
+	h.startIncrPoller()
+	log.Println("[调度] 调度器已启动（cron 触发 自动整理 / 全量同步）")
+}
+
+// organizeMissed 整理的 cron 命中时锁被占用 → 置位，之后每分钟继续尝试补跑。
+//
+// 改造前这里是 TryLock 失败直接 return。增量提频到 30 秒之后，
+// 整理的 cron 撞上一轮正在遍历大目录的增量是常态，一错过就要等下一个
+// cron 周期（默认配置下 10 分钟）
+var organizeMissed atomic.Bool
+
+// startIncrPoller 增量独立轮询。
+//
+// 从整理的 cron 里拆出来：改造后一轮增量只要 1~2 个请求，
+// 挂在最细 1 分钟、默认 10 分钟的 cron 上纯属浪费实时性。
+// 间隔每轮重读，改配置不必重启
+func (h *Handler) startIncrPoller() {
+	if h.loadIncrInterval() > 0 {
+		log.Printf("[调度] 增量轮询已启动（每 %v 一轮）", h.loadIncrInterval())
+	}
+	go func() {
+		for {
+			wait := h.loadIncrInterval()
+			if wait <= 0 {
+				wait = time.Minute // 关闭状态下也每分钟回来看一眼配置改没改
+			}
+			select {
+			case <-time.After(wait):
+			case <-stopCh:
+				return
+			}
+			if h.loadIncrInterval() > 0 {
+				h.runIncrPollTick()
+			}
+		}
+	}()
+}
+
+// runIncrPollTick 一轮独立增量。
+//
+// ⚠️ 这里不 beginTask：30 秒一次的 beginTask 会让前端「当前任务」闪个不停，
+// 还会把运行历史刷满。后台轮询的可见性交给状态页，不占用「当前任务」这个位置。
+// 但锁还是要拿——手动触发时才能正确地报「任务进行中」
+func (h *Handler) runIncrPollTick() {
+	p := h.incrParamsFromConfig()
+	if p.Cid == "" || p.Cid == "0" {
+		return // 未配置媒体库
+	}
+	if !fullSyncMu.TryLock() {
+		return // 整理/全量在跑，让路（下一轮 30 秒后再来）
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[轮询] ✗ 增量 panic 已恢复: %v", r)
+		}
+		fullSyncMu.Unlock()
+	}()
+	sum, err := h.executeIncrementalSync(p)
+	if err != nil {
+		log.Printf("[轮询] 增量同步失败: %v", err)
+		return
+	}
+	// 空转轮次完全静默（30 秒一轮，静默才不刷屏）
+	if sum.EventsFresh > 0 {
+		log.Printf("[轮询] 增量: 新事件 %d，删 %d，移/改 %d，STRM %d，附属下载 %d，跳过自产 %d",
+			sum.EventsFresh, sum.Deleted, sum.Moved, sum.StrmCreated, sum.AssetsDownloaded, sum.Suppressed)
+	}
 }
 
 // runScheduledFullSync 单轮定时全量同步。defer 解锁 + recover 的理由同 runScheduledTick。
@@ -220,11 +325,16 @@ func (h *Handler) runScheduledFullSync() {
 // defer 解锁 + recover：中途 panic（解析外部数据的路径是高发区）也不会
 // 永久抱死互斥锁——此前非 defer 的 Unlock 在 panic 时被跳过，之后所有
 // 同步入口都报"任务正在进行中"直到重启
-func (h *Handler) runScheduledTick(cron string) {
+func (h *Handler) runScheduledTick() {
 	if !fullSyncMu.TryLock() {
-		log.Printf("[定时] ○ 已有任务运行中，本轮跳过")
+		// 错过即补：置位后每分钟继续尝试，不再等下一个 cron 周期。
+		// 增量提频到 30 秒之后，撞上一轮正在遍历大目录的增量是常态
+		if organizeMissed.CompareAndSwap(false, true) {
+			log.Printf("[定时] ○ 已有任务运行中，整理稍后补跑")
+		}
 		return
 	}
+	organizeMissed.Store(false)
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[定时] ✗ 任务 panic 已恢复: %v", r)
@@ -246,12 +356,16 @@ func (h *Handler) runScheduledTick(cron string) {
 			}
 		}
 	}
-	// 2) 增量同步：只处理 115 端的外部变更。整理刚刚自产的 move/rename
-	// 已登记进抑制表，绕回来时会被 pop 掉跳过
-	p := h.incrParamsFromConfig()
-	sum, err := h.executeIncrementalSync(p)
-	if err != nil {
-		log.Printf("[定时] 增量同步失败: %v", err)
+	// 2) 增量同步：只在独立轮询关掉时才在这里串一次（逃生门下的老行为）。
+	// 轮询开着的话它每 30 秒就跑一轮，这里再跑纯属重复请求 115
+	var sum *incrSummary
+	if h.loadIncrInterval() <= 0 {
+		p := h.incrParamsFromConfig()
+		var err error
+		sum, err = h.executeIncrementalSync(p)
+		if err != nil {
+			log.Printf("[定时] 增量同步失败: %v", err)
+		}
 	}
 	// 空转判定：无整理产出且增量无新事件 → 整轮只留一行（此前每轮 ~10 行噪音）
 	idle := orgErr == nil

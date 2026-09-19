@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NInput, NPopconfirm } from 'naive-ui'
+import { NAlert, NButton, NInput, NInputNumber, NPopconfirm } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -15,7 +15,7 @@ const props = defineProps<{ full: FullSetting }>()
 const { message } = useFeedback()
 const task = useTaskStore()
 
-const incr = useSetting('incr', { cron: '*/10 8-23 * * *' })
+const incr = useSetting('incr', { cron: '*/10 8-23 * * *', interval_sec: 30 })
 const running = ref(false)
 
 async function runIncremental() {
@@ -85,10 +85,25 @@ const busy = computed(() => running.value || task.status.running)
       </NAlert>
 
       <FieldRow
-        label="增量同步 Cron"
-        tip="标准 5 字段 cron（分 时 日 月 周）。命中时执行「自动整理 → 增量同步」流水线，这条 cron 同时是自动整理的调度开关——留空则整理与增量都不再定时执行。"
+        label="自动整理 Cron"
+        tip="标准 5 字段 cron（分 时 日 月 周）。命中时执行自动整理（识别 → 搬移 → 写 STRM → 刮削 → 刷 Emby）。留空则整理不再定时执行。"
       >
         <NInput v-model:value="incr.model.value.cron" placeholder="*/10 8-23 * * *" />
+      </FieldRow>
+
+      <FieldRow
+        label="增量同步间隔"
+        tip="增量同步独立轮询，只处理网盘端的外部变更（手机上传、离线下载、网页端删改），与自动整理互不影响。一轮通常只发 1~2 个请求，30 秒一轮的请求频率比旧版「10 分钟一轮、每轮 34 个请求」更低。填 0 可关闭独立轮询，退回跟着整理串行跑的旧行为。"
+        hint="0 = 关闭独立轮询；最小 15 秒，低于 15 按 15 处理"
+      >
+        <NInputNumber
+          v-model:value="incr.model.value.interval_sec"
+          :min="0"
+          :step="15"
+          style="width: 160px"
+        >
+          <template #suffix>秒</template>
+        </NInputNumber>
       </FieldRow>
 
       <FieldRow label="接下来运行" tip="按当前表达式推算的未来 5 次触发时间。">
