@@ -65,7 +65,7 @@ func TestInsertSyncEvents(t *testing.T) {
 		{EventID: "e2", Type: "add", FileID: "f2"},
 		{EventID: "e2", Type: "add", FileID: "f2"}, // 批内重复
 	}
-	if n := insertSyncEvents(model.DB, batch); n != 2 {
+	if n := len(insertSyncEvents(model.DB, batch)); n != 2 {
 		t.Fatalf("首批应新增 2（批内 e2 去重），实得 %d", n)
 	}
 	// 幂等：再来一批含旧事件 + 新事件
@@ -73,7 +73,7 @@ func TestInsertSyncEvents(t *testing.T) {
 		{EventID: "e1", Type: "add", FileID: "f1"}, // 已存在
 		{EventID: "e3", Type: "del", FileID: "f3"},
 	}
-	if n := insertSyncEvents(model.DB, batch2); n != 1 {
+	if n := len(insertSyncEvents(model.DB, batch2)); n != 1 {
 		t.Fatalf("第二批应只新增 1，实得 %d", n)
 	}
 	var n int64

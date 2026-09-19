@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -305,27 +306,25 @@ func normalizeIncrParams(cid, localPath string, videoExt, imageExt, dataExt []st
 //
 //	move/rename/delete 基于本地文件台账（SyncedFile）精确执行
 func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
+	d, err := h.newIncrDeps()
+	if err != nil {
+		return &incrSummary{}, err
+	}
+	return h.executeIncrementalSyncWith(d, p)
+}
+
+// executeIncrementalSyncWith 增量同步主流程。外部依赖全部经 incrDeps 进出
+// （见 incrdeps.go），测试传桩即可整体覆盖
+func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (*incrSummary, error) {
 	defer SetTaskProgress("") // 结束清进度（含错误路径）
 	sum := &incrSummary{}
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		return sum, err
-	}
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return sum, err
-	}
 
 	incrStart := time.Now()
 
 	// ---- 作用域计算与配置体检（先于事件拉取：配置错误时熔断，不消费任何事件）----
-	memo := map[string]dirInfo{}
 	// 媒体库根目录名（STRM 路径第一层）
-	libName := ""
-	if info, err := get115DirInfo(cookie, p.Cid); err == nil {
-		libName = info.n
-	}
-	libAbs := absPathOf(cookie, p.Cid, memo)
+	libName := d.dirName(p.Cid)
+	libAbs := d.absPath(p.Cid)
 	if libAbs == "" {
 		// 媒体库 cid 无效/未配置（如全量同步配置缺 cid 时默认 "0"）：
 		// 所有事件都会被判为 other 静默吞掉并标已消费 → STRM 永久缺失。
@@ -339,16 +338,16 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		Existing  string `json:"existing"`
 		Redundant string `json:"redundant"`
 	}
-	if err := json.Unmarshal([]byte(h.getSettingValue("org-basic")), &orgCfgRaw); err != nil {
+	if err := json.Unmarshal([]byte(d.setting("org-basic")), &orgCfgRaw); err != nil {
 		log.Printf("[同步] ○ 整理配置解析失败（使用默认值）: %v", err)
 	}
 	var shareCfgRaw struct {
 		Folder string `json:"folder"`
 	}
-	_ = json.Unmarshal([]byte(h.getSettingValue("share")), &shareCfgRaw)
+	_ = json.Unmarshal([]byte(d.setting("share")), &shareCfgRaw)
 	for _, cid := range []string{orgCfgRaw.Pending, orgCfgRaw.Existing, orgCfgRaw.Redundant, shareCfgRaw.Folder} {
 		if cid != "" {
-			if a := absPathOf(cookie, cid, memo); a != "" {
+			if a := d.absPath(cid); a != "" {
 				excludedAbs = append(excludedAbs, strings.TrimSuffix(a, "/"))
 			}
 		}
@@ -373,14 +372,14 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 	fetchWithRetry := func(offset int) ([]lifeEvent, error) {
 		var lastErr error
 		for attempt := 1; attempt <= 3; attempt++ {
-			evs, err := fetch115LifeEvents(cookie, 30, offset, "")
+			evs, err := d.lifeEvents(30, offset)
 			if err == nil {
 				return evs, nil
 			}
 			lastErr = err
 			log.Printf("[同步] 事件拉取失败（第 %d/3 次）: %v", attempt, err)
 			if attempt < 3 {
-				time.Sleep(30 * time.Second)
+				time.Sleep(incrRetryDelay)
 			}
 		}
 		return nil, lastErr
@@ -394,7 +393,6 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 			return sum, fmt.Errorf("拉取生活事件失败（已重试 3 次）: %w", err)
 		}
 		sum.EventsTotal += len(events)
-		fresh := 0
 		batch := make([]model.SyncEvent, 0, len(events))
 		for _, ev := range events {
 			if ev.ID == "" {
@@ -410,22 +408,12 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 			}
 		}
 		// 批量落库（此前逐条 Create：千级事件即千次独立写事务）。
-		// 新事件判定改为预查已存在的 event_id（批量插入拿不到单条 RowsAffected）
-		if n := insertSyncEvents(h.DB, batch); n > 0 {
-			fresh += n
-			dupInBatch := map[string]bool{}
-			for _, se := range batch {
-				if !dupInBatch[se.EventID] {
-					dupInBatch[se.EventID] = true
-					pending = append(pending, se)
-				}
-			}
-		}
-		batch = batch[:0]
-		sum.EventsFresh += fresh
-		if fresh > 0 {
-		}
-		if fresh == 0 || sum.EventsFresh >= p.Limit {
+		// 只有真正新插入的行才进 pending——此前是把整页都塞进去，
+		// 同页已 applied 的历史事件会跟着被重放（见 insertSyncEvents 注释）
+		fresh := insertSyncEvents(h.DB, batch)
+		pending = append(pending, fresh...)
+		sum.EventsFresh += len(fresh)
+		if len(fresh) == 0 || sum.EventsFresh >= p.Limit {
 			break // 已追平或达到单次上限
 		}
 		offset += len(events)
@@ -434,13 +422,12 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		}
 	}
 
-	// 恢复上轮中断遗留的 pending 事件：此前只处理"本轮新插入"的行，
-	// 拉取中途失败/进程重启后已落库的事件永久滞留 pending，无人再消费
+	// 恢复上轮中断遗留的 pending 事件：拉取中途失败/进程重启后已落库的事件
+	// 会永久滞留 pending，无人再消费。
+	// 这条查询会把本轮刚插入的行一起捞出来（它们状态也是 pending），必须去重
 	var stale []model.SyncEvent
 	h.DB.Where("status = ?", "pending").Order("event_time").Find(&stale)
-	if len(stale) > 0 {
-		pending = append(stale, pending...)
-	}
+	pending = mergePendingEvents(stale, pending)
 
 	// 事件按时间正序应用（接口返回最新在前）
 	sort.SliceStable(pending, func(i, j int) bool { return pending[i].EventTime < pending[j].EventTime })
@@ -461,7 +448,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		if cid == "" || cid == "0" {
 			return "unknown"
 		}
-		abs := absPathOf(cookie, cid, memo)
+		abs := d.absPath(cid)
 		if abs == "" {
 			return "unknown"
 		}
@@ -543,11 +530,11 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 				continue
 			case "library":
 				// 精确删除：台账 → 路径推导（支持整目录删除与无台账的旧文件）
-				if h.removeSyncedItem(ev, cookie, p.Cid, p.LocalPath, memo, false, false) {
+				if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, false, false) {
 					sum.Deleted++
 				}
 			default: // unknown（cid=0 等）：仅按台账名称匹配，静默处理
-				if h.removeSyncedItem(ev, cookie, p.Cid, p.LocalPath, memo, true, false) {
+				if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, true, false) {
 					sum.Deleted++
 				} else {
 					sum.Ignored++
@@ -557,7 +544,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		case evMove, evMoveImage, evRename:
 			// 移动/改名：清理旧位置只按台账精确匹配（事件的 Cid/FileName 均为
 			// 新位置信息，模糊删除会误删库内同名字幕树），新位置精确重建或回退遍历
-			if h.removeSyncedItem(ev, cookie, p.Cid, p.LocalPath, memo, true, true) {
+			if h.removeSyncedItem(d, ev, p.Cid, p.LocalPath, true, true) {
 				sum.Moved++
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
@@ -570,7 +557,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 			sum.Structural++
 		case evFolderRename:
 			// 目录改名：目录结构已变，路径缓存整体失效
-			invalidateDirAbsCache()
+			d.invalidateDirCache()
 			// 重遍历父目录重建；旧名子树可能残留，交由后续清理功能
 			if ev.Cid != "" {
 				if sc := scopeOf(ev.Cid); sc == "excluded" || sc == "other" {
@@ -598,10 +585,10 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 
 	// ---- 零遍历落盘：事件自带 pick_code 的精确处理（无目录遍历） ----
 	{
-		domain, format, keepExt, skipExist := h.getStrmConfig()
+		domain, format, keepExt, skipExist := d.strmConfig()
 		for _, pf := range precise {
 			ev := pf.ev
-			base, ok, err := get115RelPath(cookie, ev.Cid, p.Cid, memo)
+			base, ok, err := d.relPath(ev.Cid, p.Cid)
 			if err != nil || !ok {
 				fallbackDir(ev.Cid) // 路径推导失败：回退目录遍历
 				continue
@@ -627,22 +614,15 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 				sum.Videos++
 				noteShallow(path.Join(libName, base))
 			case filter.assetExts[ext]:
-				dst := filepath.Join(p.LocalPath, filepath.FromSlash(rel))
-				if _, serr := os.Stat(dst); serr == nil {
+				switch err := d.downloadAsset(f, p.LocalPath); {
+				case err == nil:
+					upsertSyncedFile(h.DB, f, rel, "asset")
+					sum.AssetsDownloaded++
+				case errors.Is(err, errAssetExists):
+					// 本地已有实体：只补台账，不重复下载
 					upsertSyncedFile(h.DB, f, rel, "asset")
 					sum.AssetsSkipped++
-				} else if u, hdrs, uerr := ops.downloadURLFull(f.PickCode, ""); uerr == nil {
-					if data, derr := downloadAssetBytes(u, hdrs, ops.cookieForDL()); derr == nil {
-						if _, werr := writeAssetBytes(f, p.LocalPath, data); werr == nil {
-							upsertSyncedFile(h.DB, f, rel, "asset")
-							sum.AssetsDownloaded++
-						} else {
-							sum.AssetsFailed++
-						}
-					} else {
-						sum.AssetsFailed++
-					}
-				} else {
+				default:
 					sum.AssetsFailed++
 				}
 				noteShallow(path.Join(libName, base))
@@ -657,7 +637,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 	type targetDir struct{ cid, base string }
 	var targets []targetDir
 	for cid := range dirSet {
-		base, ok, err := get115RelPath(cookie, cid, p.Cid, memo)
+		base, ok, err := d.relPath(cid, p.Cid)
 		if err != nil {
 			// 目录已不存在（800001）：目录被删除后残留的定位请求是永久性失败，
 			// 重试永远不会成功、还会让水位永远不推进。按"已解决"跳过
@@ -694,20 +674,20 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 	}
 
 	// 逐目录遍历并立即落盘
-	domain, format, keepExt, skipExist := h.getStrmConfig()
+	domain, format, keepExt, skipExist := d.strmConfig()
 	for _, t := range uniqTargets {
 		noteShallow(t.base)
 		var videos, assets []remoteFile
-		if err := walk115Dir(ops, t.cid, path.Join(libName, t.base), &videos, &assets, filter, nil); err != nil {
+		if err := d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter); err != nil {
 			log.Printf("[同步] 遍历目录失败 %s: %v，30 秒后重试一次", t.base, err)
-			time.Sleep(30 * time.Second)
-			if err := walk115Dir(ops, t.cid, path.Join(libName, t.base), &videos, &assets, filter, nil); err != nil {
+			time.Sleep(incrRetryDelay)
+			if err := d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter); err != nil {
 				log.Printf("[同步] 遍历目录重试仍失败 %s: %v，跳过", t.base, err)
 				sum.DirsSkipped++
 				continue
 			}
 		}
-		sc, dl, sk, fl := applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
+		sc, dl, sk, fl := d.applyResults(videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
 		sum.Dirs++
 		sum.Videos += len(videos)
 		sum.StrmCreated += sc
@@ -739,7 +719,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 	// 事件已落定，现在才能清掉抑制标记：同一个 fid 之后被用户真的手动移动时
 	// 必须能正常处理，标记不清就会把那次真实变更也吞了
 	unmarkSuppressed(suppressedHits...)
-	h.Config.SaveSetting("incr-last", fmt.Sprint(now.Unix()))
+	d.saveSetting("incr-last", fmt.Sprint(now.Unix()))
 
 	if sum.StrmCreated+sum.AssetsDownloaded+sum.Deleted+sum.Moved > 0 {
 		// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）
@@ -747,7 +727,7 @@ func (h *Handler) executeIncrementalSync(p incrParams) (*incrSummary, error) {
 		if shallowest != "" {
 			refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
 		}
-		h.notifyEmbyRefresh(refreshBase)
+		d.notifyRefresh(refreshBase)
 	}
 	sum.Elapsed = time.Since(incrStart).Truncate(time.Second).String()
 
@@ -880,7 +860,7 @@ func (h *Handler) removeSyncedFile(fileID, localRoot string) bool {
 // （LIKE %/名/% 整树删、全盘同名删）都会指向错误目标——工作区里与库内
 // 同名的文件（重复转存同名片名极常见）会被误删媒体库 STRM 树。
 // delete 事件（Cid=被删位置）才允许全级联
-func (h *Handler) removeSyncedItem(ev model.SyncEvent, cookie, rootCid, localRoot string, memo map[string]dirInfo, quiet, ledgerOnly bool) bool {
+func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, localRoot string, quiet, ledgerOnly bool) bool {
 	// 1) 台账精确匹配
 	if ev.FileID != "" && h.removeSyncedFile(ev.FileID, localRoot) {
 		return true
@@ -893,7 +873,7 @@ func (h *Handler) removeSyncedItem(ev model.SyncEvent, cookie, rootCid, localRoo
 	}
 	// 2) 路径推导
 	if ev.Cid != "" && ev.FileName != "" {
-		if base, ok, err := get115RelPath(cookie, ev.Cid, rootCid, memo); err == nil && ok {
+		if base, ok, err := d.relPath(ev.Cid, rootCid); err == nil && ok {
 			rel := path.Join(base, ev.FileName)
 			local := filepath.Join(localRoot, filepath.FromSlash(rel))
 			// 目录：整树删除（strm/附属全在树内），并清理台账
@@ -1007,10 +987,15 @@ func (h *Handler) removeSyncedItem(ev model.SyncEvent, cookie, rootCid, localRoo
 	return false
 }
 
-// insertSyncEvents 批量插入生活事件（OnConflict DoNothing），返回新插入条数
-func insertSyncEvents(db *gorm.DB, batch []model.SyncEvent) int {
+// insertSyncEvents 批量插入生活事件（OnConflict DoNothing），返回**真正新插入**的那些行。
+//
+// 为什么不是只返回条数：调用方拿条数无从区分新旧，只能把整页事件都当新的去消费。
+// 一页里只要有 1 条新事件，同页那些早已 applied 的历史事件就会被重放一遍——
+// 重放一条 delete 事件不只是白跑：台账行那时已经没了，removeSyncedItem 会落到
+// 路径推导那一级，把用户后来重新上传的同名文件删掉
+func insertSyncEvents(db *gorm.DB, batch []model.SyncEvent) []model.SyncEvent {
 	if db == nil || len(batch) == 0 {
-		return 0
+		return nil
 	}
 	ids := make([]string, 0, len(batch))
 	for _, se := range batch {
@@ -1032,10 +1017,32 @@ func insertSyncEvents(db *gorm.DB, batch []model.SyncEvent) int {
 		fresh = append(fresh, se)
 	}
 	if len(fresh) == 0 {
-		return 0
+		return nil
 	}
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&fresh, 200).Error; err != nil {
-		return 0
+		return nil
 	}
-	return len(fresh)
+	return fresh
+}
+
+// mergePendingEvents 合并「上轮遗留的 pending 行」与「本轮新插入的行」，按 event_id 去重。
+// 两边必然重叠：本轮刚插入的行状态就是 pending，会被 stale 那条查询一起捞出来，
+// 不去重就是同一个事件在一轮里被应用两次
+func mergePendingEvents(stale, fresh []model.SyncEvent) []model.SyncEvent {
+	if len(stale) == 0 {
+		return fresh
+	}
+	seen := make(map[string]bool, len(fresh))
+	for _, ev := range fresh {
+		seen[ev.EventID] = true
+	}
+	merged := make([]model.SyncEvent, 0, len(stale)+len(fresh))
+	for _, ev := range stale {
+		if seen[ev.EventID] {
+			continue
+		}
+		seen[ev.EventID] = true
+		merged = append(merged, ev)
+	}
+	return append(merged, fresh...)
 }

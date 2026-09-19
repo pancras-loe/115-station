@@ -574,30 +574,28 @@ func (h *Handler) getSettingValue(key string) string {
 func (h *Handler) markEventsCoveredByFullSync(cookie string) (int, error) {
 	count := 0
 	offset := 0
+	now := time.Now()
 	for {
 		events, err := fetch115LifeEvents(cookie, 30, offset, "")
 		if err != nil {
 			return count, err
 		}
-		fresh := 0
+		batch := make([]model.SyncEvent, 0, len(events))
 		for _, ev := range events {
 			if ev.ID == "" {
 				continue
 			}
 			ts, _ := strconv.ParseInt(strings.TrimSpace(ev.Time), 10, 64)
-			now := time.Now()
-			se := model.SyncEvent{
+			batch = append(batch, model.SyncEvent{
 				EventID: ev.ID, Type: ev.Type, FileID: ev.FileID,
 				FileName: ev.FileName, Cid: ev.Cid, Size: ev.Size,
 				EventTime: ts, Status: "applied", AppliedAt: &now,
-			}
-			res := h.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&se)
-			if res.Error == nil && res.RowsAffected > 0 {
-				fresh++
-				count++
-			}
+			})
 		}
-		if fresh == 0 || count >= 1000 {
+		// 与增量共用批量落库：此前逐条 Create，千级事件就是千次独立写事务
+		fresh := insertSyncEvents(h.DB, batch)
+		count += len(fresh)
+		if len(fresh) == 0 || count >= 1000 {
 			break
 		}
 		offset += len(events)
