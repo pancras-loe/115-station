@@ -10,16 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"115-station/internal/model"
-
 	"github.com/gin-gonic/gin"
 )
 
 // ==================== EMBY 入库刷新通知 ====================
 
 // notifyEmbyRefresh STRM 生成后通知 Emby 刷新入库
-// 统一使用 EMBY管理 配置（emby：服务器地址/API密钥/本地路径映射/路径风格/入库时刷新），
-// 兼容旧版 emby-refresh（path_rule/enabled）与从 webhook 地址提取 host 的配置方式
+// 统一使用 EMBY管理 配置（emby：服务器地址/API密钥/本地路径映射/路径风格/入库时刷新）
 func (h *Handler) notifyEmbyRefresh(localPath string) {
 	// emby 配置走 YAML 优先（settingValueCompat），与保存路径一致；
 	// 此前直查 DB：新装环境 DB 无 emby 行 → 刷新永不触发；老环境读到过期配置
@@ -34,24 +31,13 @@ func (h *Handler) notifyEmbyRefresh(localPath string) {
 	if json.Unmarshal([]byte(v), &cfg) != nil {
 		return
 	}
-	// 检查是否启用；未写 refresh_enabled 时回退旧版 emby-refresh.enabled
+	// 检查是否启用；字段缺失（老配置里没这项）视为开
 	enabled := true
 	switch v := cfg.RefreshEnabled.(type) {
 	case bool:
 		enabled = v
 	case string:
 		enabled = v == "true"
-	default:
-		var old struct {
-			Enabled any `json:"enabled"`
-		}
-		if v2 := h.getSettingValue("emby-refresh"); v2 != "" && json.Unmarshal([]byte(v2), &old) == nil {
-			if b, ok := old.Enabled.(bool); ok {
-				enabled = b
-			} else if str, ok := old.Enabled.(string); ok {
-				enabled = str == "true"
-			}
-		}
 	}
 	if !enabled {
 		return
@@ -59,40 +45,14 @@ func (h *Handler) notifyEmbyRefresh(localPath string) {
 
 	// 路径替换：本地路径映射（emby.path_mapping，与建库插件/6086 反代共用）
 	embyPath := h.mapToEmbyPath(localPath)
-	style := cfg.Style
-	if style == "" {
-		var old struct {
-			Style string `json:"style"`
-		}
-		if v2 := h.getSettingValue("emby-refresh"); v2 != "" && json.Unmarshal([]byte(v2), &old) == nil {
-			style = old.Style
-		}
-	}
-	if style == "windows" {
+	if cfg.Style == "windows" {
 		embyPath = strings.ReplaceAll(embyPath, "/", "\\")
 	}
 
-	// Emby 地址与密钥：优先 EMBY管理 配置；未配置地址时回退从 webhook URL 提取（旧版）
+	// Emby 地址与密钥：EMBY管理 配置，没配就不刷新
 	embyServer, apiKey, ok := h.embyServerInfo()
 	if !ok {
-		var embySetting model.Setting
-		if h.DB.Where("key = ?", "emby-notify").First(&embySetting).Error != nil {
-			return
-		}
-		var embyCfg struct {
-			Webhook string `json:"webhook"`
-		}
-		json.Unmarshal([]byte(embySetting.Value), &embyCfg)
-		// webhook 格式: http://ip:port/api/emby/webhook?token=xxx
-		if embyCfg.Webhook == "" {
-			return
-		}
-		u, err := url.Parse(embyCfg.Webhook)
-		if err != nil {
-			return
-		}
-		embyServer = u.Scheme + "://" + u.Host
-		apiKey = ""
+		return
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
