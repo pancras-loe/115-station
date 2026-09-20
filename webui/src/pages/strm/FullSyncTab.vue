@@ -5,7 +5,6 @@ import {
   NButton,
   NDynamicTags,
   NInput,
-  NInputNumber,
   NPopconfirm,
   NRadioButton,
   NModal,
@@ -19,13 +18,7 @@ import CronField from '@/components/ui/CronField.vue'
 import FullHelp from './FullHelp.vue'
 import { useRouter } from 'vue-router'
 import { syncApi } from '@/api'
-import type {
-  DeepDeleteRecord,
-  DeepDeleteReport,
-  FullSyncConfig,
-  FullSyncMode,
-  OrphanReport,
-} from '@/api/sync'
+import type { FullSyncConfig, FullSyncMode, OrphanReport } from '@/api/sync'
 import { defaultFull, type FullSetting } from './fullSetting'
 import { useTaskStore } from '@/stores/task'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -89,46 +82,6 @@ async function cleanOrphans() {
     toastError(e, '失效 STRM 清理失败')
   } finally {
     orphanCleaning.value = false
-  }
-}
-
-// ---- 深度删除（本地已删、网盘还在）：失效 STRM 的镜像，删的是网盘源文件 ----
-const deepDel = ref<DeepDeleteReport | null>(null)
-const deepDelRecords = ref<DeepDeleteRecord[]>([])
-const deepDelRunning = ref(false)
-
-async function loadDeepDel() {
-  try {
-    deepDel.value = await syncApi.deepDelete()
-  } catch {
-    deepDel.value = null
-  }
-  try {
-    deepDelRecords.value = (await syncApi.deepDeleteRecords(1, 10)).data
-  } catch {
-    deepDelRecords.value = []
-  }
-}
-onMounted(loadDeepDel)
-
-/** 占比上限在界面上按百分比填，存进配置的是 0~1 的小数 */
-const deepDelRatioPct = computed({
-  get: () => Math.round((cfg.value.deep_delete.max_ratio ?? 0.1) * 100),
-  set: (v: number) => {
-    cfg.value.deep_delete.max_ratio = (v || 0) / 100
-  },
-})
-
-async function runDeepDel(dryRun: boolean) {
-  deepDelRunning.value = true
-  try {
-    const d = await syncApi.runDeepDelete(dryRun)
-    message.success(d.message ?? (dryRun ? '预演完成' : '深度删除完成'))
-    await loadDeepDel()
-  } catch (e) {
-    toastError(e, dryRun ? '预演失败' : '深度删除失败')
-  } finally {
-    deepDelRunning.value = false
   }
 }
 
@@ -315,57 +268,6 @@ const helpVisible = ref(false)
         </FieldRow>
       </template>
 
-      <FieldRow
-        label="深度删除"
-        tip="上一条的反向：定期检查「本地 STRM 已经没了、网盘上源文件还在」的条目，把网盘上的源文件也删掉。在 Emby 里删片子时 Emby 会连带删掉本地 STRM，但网盘源文件不动，下次全量同步又把它生成回来 —— 这个开关就是补这个缺口。删除进 115 回收站，可还原。扫描是纯本地检查，不消耗 115 请求。"
-      >
-        <NSwitch v-model:value="cfg.deep_delete.enabled" />
-      </FieldRow>
-
-      <template v-if="cfg.deep_delete.enabled">
-        <FieldRow
-          label="删除方式"
-          tip="只标记：扫出来放在下面等你确认，什么都不删（推荐先用这个跑几天）。自动删除：扫到就删，但仍要连续两轮都确认缺失，且受下面的阈值保护。"
-        >
-          <NRadioGroup v-model:value="cfg.deep_delete.mode">
-            <NRadioButton value="mark">只标记</NRadioButton>
-            <NRadioButton value="auto">自动删除</NRadioButton>
-          </NRadioGroup>
-        </FieldRow>
-
-        <FieldRow
-          label="预演模式"
-          tip="只把「将要删哪些」打进日志，不做任何改动。第一次启用务必先开着跑一轮，确认日志里的路径就是你想删的那些，再关掉。"
-        >
-          <NSwitch v-model:value="cfg.deep_delete.dry_run" />
-        </FieldRow>
-
-        <template v-if="cfg.deep_delete.mode === 'auto'">
-          <FieldRow
-            label="单轮上限（视频数）"
-            tip="一轮扫出的待删视频超过这个数就拒绝自动删除，只留标记并发告警。挂载掉线、路径配置改错会让整库「消失」，量级和正常删一部片子差着数量级，这个阈值卡的就是那个差距。你在下面手动确认时不受此限制。"
-          >
-            <NInputNumber v-model:value="cfg.deep_delete.max_batch" :min="1" :max="100000" />
-          </FieldRow>
-
-          <FieldRow
-            label="单轮占比上限"
-            tip="同上，按「待删文件数占台账总数的比例」再卡一道。小媒体库里几十个文件就可能是整库，用绝对条数拦不住。"
-          >
-            <NInputNumber v-model:value="deepDelRatioPct" :min="1" :max="100">
-              <template #suffix>%</template>
-            </NInputNumber>
-          </FieldRow>
-        </template>
-
-        <FieldRow
-          label="清理网盘空目录"
-          tip="删完源文件后，把因此变空的网盘目录一并删掉（季目录、标题目录等），免得 Emby 扫出一堆没有剧集的空条目。媒体库根与整理工作区目录永远不会被删。"
-        >
-          <NSwitch v-model:value="cfg.deep_delete.prune_pan_dirs" />
-        </FieldRow>
-      </template>
-
       <FormActions>
         <NButton type="primary" :loading="full.saving.value" @click="saveFull">保存配置</NButton>
         <!-- 配置改过没保存时由 runFull 里的确认框接管（那个框里也带着同一句话），
@@ -442,76 +344,6 @@ const helpVisible = ref(false)
       </template>
     </SectionCard>
 
-    <!-- 失效 STRM 的镜像卡。开关关掉但台账里还留着上次标出的条目时也要显示，
-         否则用户就再也没有入口处理它们了（与上面那张卡同样的理由） -->
-    <SectionCard
-      v-if="cfg.deep_delete.enabled || (deepDel && deepDel.total > 0)"
-      title="深度删除"
-      hint="本地文件已被删除，网盘上的源文件还在"
-    >
-      <NAlert v-if="deepDel?.scan_error" class="note" type="error" :bordered="false">
-        本轮扫描已放弃：{{ deepDel.scan_error }}
-        <br />
-        这通常是媒体库目录没挂上或本地路径配置被改过。在确认之前不会删除任何东西。
-      </NAlert>
-
-      <template v-if="deepDel && deepDel.total > 0">
-        <NAlert class="note" type="warning" :bordered="false">
-          共 {{ deepDel.total }} 个（台账 {{ deepDel.ledger_total }} 条，占
-          {{ (deepDel.ratio * 100).toFixed(1) }}%）。执行会删除这些文件在
-          <b>115 网盘上的源文件</b>，同时清掉本地残留与台账记录。
-          删除进 115 回收站，可还原。刚标记的条目要等下一轮扫描再次确认缺失后才会被删。
-        </NAlert>
-
-        <div class="orphan-list">
-          <div v-for="it in deepDel.sample" :key="it.rel_path" class="orphan-row">
-            <span class="orphan-kind">{{ it.kind === 'video' ? 'STRM' : '附属' }}</span>
-            <span class="orphan-path">{{ it.rel_path }}</span>
-            <span class="orphan-meta">{{ humanSize(it.size) }} · {{ it.marked_at }}</span>
-          </div>
-          <div v-if="deepDel.total > deepDel.sample.length" class="orphan-more">
-            仅显示前 {{ deepDel.sample_limit }} 条，其余
-            {{ deepDel.total - deepDel.sample.length }} 条未列出
-          </div>
-        </div>
-
-        <FormActions>
-          <NButton :disabled="busy" :loading="deepDelRunning" @click="void runDeepDel(true)">
-            预演（只看不删）
-          </NButton>
-          <NPopconfirm @positive-click="void runDeepDel(false)">
-            <template #trigger>
-              <NButton type="error" ghost :disabled="busy" :loading="deepDelRunning">
-                删除网盘源文件
-              </NButton>
-            </template>
-            确定删除这些文件在 115 网盘上的源文件？文件会进入 115 回收站，可以还原。
-          </NPopconfirm>
-          <NButton :disabled="busy" @click="loadDeepDel">刷新</NButton>
-        </FormActions>
-      </template>
-
-      <template v-else>
-        <NAlert class="note" type="success" :bordered="false">
-          当前没有「本地已删、网盘还在」的条目。标记每
-          {{ Math.round(cfg.deep_delete.scan_interval_sec / 60) }} 分钟刷新一次，打开本页也会顺带扫一遍。
-        </NAlert>
-        <FormActions>
-          <NButton :disabled="busy" @click="loadDeepDel">重新扫描</NButton>
-        </FormActions>
-      </template>
-
-      <!-- 流水：删除进的是回收站，用户事后要还原时得知道当时删了什么 -->
-      <div v-if="deepDelRecords.length" class="deepdel-records">
-        <div class="deepdel-records-title">最近的删除记录</div>
-        <div v-for="r in deepDelRecords" :key="r.id" class="orphan-row">
-          <span class="orphan-kind">{{ r.status === 'dry_run' ? '预演' : r.status === 'done' ? '已删' : '拦下' }}</span>
-          <span class="orphan-path">{{ r.title }}<template v-if="r.message"> —— {{ r.message }}</template></span>
-          <span class="orphan-meta">视频 {{ r.video_cnt }} · 附属 {{ r.asset_cnt }} · {{ r.created_at }}</span>
-        </div>
-      </div>
-    </SectionCard>
-
     <!-- 弹窗必须留在这个根元素里：本页整体被 SyncPage 的 <Transition> 包着，
          多个根节点会让 Transition 找不到唯一子元素，整页渲染成空白 -->
     <NModal v-model:show="helpVisible" preset="card" title="全量同步是怎么回事" style="width: min(860px, 92vw)">
@@ -571,17 +403,6 @@ const helpVisible = ref(false)
 }
 .orphan-more {
   margin-top: 4px;
-  color: var(--c-text-3);
-}
-/* 深度删除的清单与流水复用上面那套 .orphan-* 行样式：两张卡是镜像关系，
-   长得不一样反而让人以为是两种不同的东西 */
-.deepdel-records {
-  margin-top: 14px;
-  font-size: 12px;
-  line-height: 1.9;
-}
-.deepdel-records-title {
-  margin-bottom: 4px;
   color: var(--c-text-3);
 }
 </style>

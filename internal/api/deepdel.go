@@ -64,9 +64,14 @@ const (
 	deepDelKeepDays = 180
 )
 
-// deepDelCfg 深度删除配置。住在 setting "full" 的 deep_delete 字段下，
-// 不新开 setting key —— incr.cron / incr.interval_sec 同 key 分在两个页面
-// 已经踩过一次，两处整存整取互相覆盖的坑不想再踩第二遍。
+// deepDelCfg 深度删除配置，独立 setting key "deepdel"。
+//
+// 一开始塞在 setting "full" 的 deep_delete 字段下（图省事，界面也摆在全量同步页），
+// 但那是摆错了：**深度删除与全量同步没有任何依赖关系**。失效 STRM 检测放在全量页
+// 是因为标记就是在全量同步末尾打的、定时全量存在的意义就是刷新它；深度删除是
+// 独立的本地扫描 + webhook，跟全量唯一的交集只是抢同一把锁——那是实现细节。
+// 界面挪到自己的页签后，配置也必须跟着拆出来：同一个 key 被两个页面整存整取，
+// 就是 incr.cron / incr.interval_sec 那个互相覆盖的坑。
 //
 // 指针字段是为了区分「没配过」和「显式填了零值」：dry_run 没配过要当 true
 // （第一次开启强制预演），填了 false 才是真的关掉预演。
@@ -120,11 +125,9 @@ func (c deepDelCfg) interval() time.Duration {
 // 保持同一条读取路径，两处读法不一致会出现「配置改了但调度器没看见」这类
 // 只在某种部署形态下复现的偏差
 func (h *Handler) loadDeepDelCfg() deepDelCfg {
-	var wrap struct {
-		DeepDelete deepDelCfg `json:"deep_delete"`
-	}
-	_ = json.Unmarshal([]byte(h.getSettingValue("full")), &wrap)
-	return wrap.DeepDelete
+	var cfg deepDelCfg
+	_ = json.Unmarshal([]byte(h.getSettingValue("deepdel")), &cfg)
+	return cfg
 }
 
 // ---- 扫描 ----
@@ -564,12 +567,17 @@ func (h *Handler) runDeepDelScanNow() {
 	if !cfg.Enabled {
 		return
 	}
-	h.runDeepDelScan(cfg)
+	if !h.runDeepDelScan(cfg) {
+		// 标记还在，下一轮定时扫描会接着处理 —— 但不说一声的话，
+		// 用户看到的就是「点了深度删除，网盘没动静，日志里也没话」
+		log.Printf("[深度删除] ○ 同步任务占用中，本次不立即执行，标记已留下（下一轮扫描会接手）")
+	}
 }
 
-func (h *Handler) runDeepDelScan(cfg deepDelCfg) {
+// runDeepDelScan 返回是否真的跑了（false = 抢不到锁）
+func (h *Handler) runDeepDelScan(cfg deepDelCfg) bool {
 	if !fullSyncMu.TryLock() {
-		return
+		return false
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -581,15 +589,21 @@ func (h *Handler) runDeepDelScan(cfg deepDelCfg) {
 	scan, err := scanVanished(h.DB, h.orphanLocalRoot())
 	if err != nil {
 		log.Printf("[深度删除] ✗ 本轮放弃: %v", err)
-		return
+		return true
 	}
 	// 空转轮次完全静默（5 分钟一轮，静默才不刷屏）
 	if scan.Marked > 0 || scan.Cleared > 0 {
 		log.Printf("[深度删除] ○ 扫描：新增本地已删 %d 个，本地已恢复 %d 个，当前候选 %d 个",
 			scan.Marked, scan.Cleared, scan.Total)
 	}
-	if !cfg.auto() || len(scan.Ready) == 0 {
-		return
+	if len(scan.Ready) == 0 {
+		return true
+	}
+	if !cfg.auto() {
+		// 有货但模式是「只标记」：说一声，否则用户以为功能压根没生效
+		log.Printf("[深度删除] ○ %d 个条目已确认待删，但当前是「只标记」模式 —— "+
+			"到「Strm 管理 → 全量同步 → 深度删除」确认后执行", len(scan.Ready))
+		return true
 	}
 
 	videos, assets := countKinds(scan.Ready)
@@ -600,11 +614,12 @@ func (h *Handler) runDeepDelScan(cfg deepDelCfg) {
 			go NotifyMessage("⚠️ 深度删除已拦截", why+
 				"\n多半是挂载掉线或路径配置变了。标记已保留，确认无误后到「Strm 管理 → 全量同步」手动执行。")
 		}
-		return
+		return true
 	}
 	if _, err := h.runDeepDelete(scan.Ready, "local_scan", cfg.dryRun()); err != nil {
 		log.Printf("[深度删除] ✗ 自动删除失败: %v", err)
 	}
+	return true
 }
 
 // ---- 接口 ----

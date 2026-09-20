@@ -28,15 +28,16 @@ export interface FullSyncConfig {
   /** 定时全量开关。只在 detect_orphans 打开时生效，后端同样按此判定 */
   cron_enabled: boolean
   cron: string
-  /** 深度删除（本地已删 → 删网盘源文件）。与后端 deepDelCfg 同构 */
-  deep_delete: DeepDeleteConfig
 }
 
 /**
- * 深度删除配置。
+ * 深度删除配置（setting「deepdel」，与后端 deepDelCfg 同构）。
+ *
+ * 独立于 full：深度删除和全量同步没有依赖关系，界面也不在同一个页签，
+ * 共用一个 setting key 会让两个页面整存整取时互相覆盖。
  *
  * 后端字段是指针（区分「没配过」和「显式填零值」），前端一律整份下发明确值，
- * 所以这里都是必填 —— 默认值见 fullSetting.ts 的 defaultFull()。
+ * 所以这里都是必填 —— 默认值见 deepDelSetting.ts。
  */
 export interface DeepDeleteConfig {
   enabled: boolean

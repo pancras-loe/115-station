@@ -21,18 +21,6 @@ export function defaultFull(): FullSyncConfig {
     detect_orphans: false,
     cron_enabled: false,
     cron: '0 4 * * *',
-    // 深度删除会真删网盘内容：默认关、默认只标记、默认预演，三道都开着。
-    // 阈值的默认值要和后端 deepdel.go 的 deepDelMaxBatchDefault / MaxRatioDefault 一致
-    deep_delete: {
-      enabled: false,
-      mode: 'mark',
-      dry_run: true,
-      scan_interval_sec: 300,
-      max_batch: 50,
-      max_ratio: 0.1,
-      prune_pan_dirs: true,
-      notify: true,
-    },
   }
 }
 
@@ -44,18 +32,7 @@ export function defaultFull(): FullSyncConfig {
  * 在全量页改完 cid 保存，增量页手里还是旧值。
  */
 export function useFullSetting() {
-  return useSetting<FullSyncConfig>('full', defaultFull(), {
-    /**
-     * deep_delete 是嵌套对象，而 getSetting 的兜底只做浅展开：库里还没有这个字段时
-     * model.deep_delete 会和 defaults 里那份共用同一个引用，用户在界面上一改就把
-     * 「默认值」本身改掉了，之后点「重置配置」恢复出来的是被改过的那份
-     * （与上面数组字段同款的坑）。顺带把旧配置缺的子字段补齐。
-     */
-    normalize: (v) => ({
-      ...v,
-      deep_delete: { ...defaultFull().deep_delete, ...(v.deep_delete ?? {}) },
-    }),
-  })
+  return useSetting<FullSyncConfig>('full', defaultFull())
 }
 
 export type FullSetting = ReturnType<typeof useFullSetting>

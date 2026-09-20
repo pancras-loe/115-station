@@ -112,10 +112,14 @@ func deepDelEmbyTestDB(t *testing.T, localRoot string, rows []model.SyncedFile) 
 		model.DB.Exec("DELETE FROM settings")
 		model.DB = nil
 	})
-	if err := model.DB.Create(&model.Setting{
-		Key: "full", Value: `{"local_path":"` + filepath.ToSlash(localRoot) + `","deep_delete":{"enabled":true}}`,
-	}).Error; err != nil {
-		t.Fatalf("写配置失败: %v", err)
+	// 两条配置：媒体库根在 full，深度删除自己一份（独立 key，互不覆盖）
+	for _, s := range []model.Setting{
+		{Key: "full", Value: `{"local_path":"` + filepath.ToSlash(localRoot) + `"}`},
+		{Key: "deepdel", Value: `{"enabled":true}`},
+	} {
+		if err := model.DB.Create(&s).Error; err != nil {
+			t.Fatalf("写配置失败: %v", err)
+		}
 	}
 	for i := range rows {
 		if err := model.DB.Create(&rows[i]).Error; err != nil {
@@ -140,12 +144,12 @@ func TestMarkVanishedByLocatorsExact(t *testing.T) {
 		{FileID: "here", RelPath: "影视/电影/A/still-here.mkv.strm", Kind: "video"},
 	})
 
-	if n := h.markVanishedByLocators([]string{"影视/电影/A/a.mkv.strm"}, nil); n != 1 {
-		t.Fatalf("应当打标 1 条，得到 %d", n)
+	if n, matched := h.markVanishedByLocators([]string{"影视/电影/A/a.mkv.strm"}, nil); n != 1 || matched != 1 {
+		t.Fatalf("应当打标 1 条（命中 1）, 得到 %d/%d", n, matched)
 	}
 	// 本地还在的那条即使被显式点名也不能打标
-	if n := h.markVanishedByLocators([]string{"影视/电影/A/still-here.mkv.strm"}, nil); n != 0 {
-		t.Fatalf("本地文件还在却打了标: %d", n)
+	if n, matched := h.markVanishedByLocators([]string{"影视/电影/A/still-here.mkv.strm"}, nil); n != 0 || matched != 1 {
+		t.Fatalf("本地文件还在却打了标（或台账没命中）: %d/%d", n, matched)
 	}
 	if markedCount(t) != 1 {
 		t.Fatalf("最终打标数不对: %d", markedCount(t))
@@ -162,10 +166,10 @@ func TestMarkVanishedByLocatorsPrefix(t *testing.T) {
 		{FileID: "other", RelPath: "影视/剧集/BB/S01/x.mkv.strm", Kind: "video"},
 	})
 
-	n := h.markVanishedByLocators([]string{"影视/剧集/B"}, nil)
+	n, matched := h.markVanishedByLocators([]string{"影视/剧集/B"}, nil)
 	// e1 与 tvshow.nfo 本地已没；e2 还在；BB 是另一部剧，前缀不能误伤
-	if n != 2 {
-		t.Fatalf("前缀命中数不对: %d", n)
+	if n != 2 || matched != 3 {
+		t.Fatalf("前缀打标/命中数不对: %d/%d（期望 2/3）", n, matched)
 	}
 	var row model.SyncedFile
 	model.DB.Where("file_id = ?", "other").First(&row)
@@ -181,8 +185,8 @@ func TestMarkVanishedByLocatorsPickcode(t *testing.T) {
 		{FileID: "gone", RelPath: "影视/电影/A/a.mkv.strm", Kind: "video", PickCode: "bifjp50n4pazy83of"},
 	})
 
-	if n := h.markVanishedByLocators(nil, []string{"bifjp50n4pazy83of"}); n != 1 {
-		t.Fatalf("pickcode 应当命中 1 条，得到 %d", n)
+	if n, matched := h.markVanishedByLocators(nil, []string{"bifjp50n4pazy83of"}); n != 1 || matched != 1 {
+		t.Fatalf("pickcode 应当命中 1 条，得到 %d/%d", n, matched)
 	}
 }
 
@@ -194,8 +198,8 @@ func TestMarkVanishedByLocatorsSkipsOrphan(t *testing.T) {
 		{FileID: "orphan", RelPath: "影视/电影/A/a.mkv.strm", Kind: "video", OrphanAt: &now},
 	})
 
-	if n := h.markVanishedByLocators([]string{"影视/电影/A/a.mkv.strm"}, nil); n != 0 {
-		t.Fatalf("失效 STRM 不该被打标，得到 %d", n)
+	if n, matched := h.markVanishedByLocators([]string{"影视/电影/A/a.mkv.strm"}, nil); n != 0 || matched != 1 {
+		t.Fatalf("失效 STRM 不该被打标（但应算命中），得到 %d/%d", n, matched)
 	}
 }
 

@@ -4,6 +4,7 @@ import StrmTabBar from './strm/StrmTabBar.vue'
 import ConfigTab from './strm/ConfigTab.vue'
 import FullSyncTab from './strm/FullSyncTab.vue'
 import IncrSyncTab from './strm/IncrSyncTab.vue'
+import DeepDeleteTab from './strm/DeepDeleteTab.vue'
 import { STRM_TABS } from './strm/tabs'
 import { useFullSetting } from './strm/fullSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
@@ -27,7 +28,9 @@ const full = useFullSetting()
     <Transition name="tab" mode="out-in">
       <ConfigTab v-if="tab === 'config'" key="config" />
       <FullSyncTab v-else-if="tab === 'full'" key="full" :full="full" />
-      <IncrSyncTab v-else key="incr" :full="full" />
+      <IncrSyncTab v-else-if="tab === 'incr'" key="incr" :full="full" />
+      <!-- 深度删除自己持有配置（setting「deepdel」），不共用 full -->
+      <DeepDeleteTab v-else key="deepdel" />
     </Transition>
   </div>
 </template>

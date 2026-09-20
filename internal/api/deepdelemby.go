@@ -51,28 +51,42 @@ func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool)
 		return
 	}
 
+	// 开关开着就把每一步的结果打进常驻日志。这条链有四种「什么都没发生」的结局
+	// （定位不到 / 台账没有 / 本地文件还在 / 只标记不删），全写进 vlog 的话
+	// 用户在界面上看到的就是「删了但网盘没动」，没有任何线索可查
 	rels, pickcodes := h.deepDelLocators(payload, deep)
 	if len(rels) == 0 && len(pickcodes) == 0 {
-		vlog("[深度删除] ○ webhook 事件里没找到可用的定位信息，交给定时扫描")
+		log.Printf("[深度删除] ○ Emby 删除事件里没有可用的定位信息（载荷没带 Item.Path？），交给定时扫描")
 		return
 	}
 
-	marked := h.markVanishedByLocators(rels, pickcodes)
-	if marked == 0 {
-		// 本地文件还在 = Emby 只是从库里移除了条目、没删文件，或者路径映射不对。
-		// 两种情况都不该删网盘，交给定时扫描按它自己的节奏判断
-		vlog("[深度删除] ○ webhook 命中的条目本地文件都还在，未打标")
+	marked, matched := h.markVanishedByLocators(rels, pickcodes)
+	switch {
+	case matched == 0:
+		log.Printf("[深度删除] ○ Emby 删除的内容不在台账里（路径 %v），本站没同步过它或路径映射对不上，跳过",
+			rels)
+		return
+	case marked == 0:
+		// 本地文件还在 = Emby 只是把条目移出库、没删文件，或者媒体目录是只读挂载。
+		// 两种情况都不该删网盘
+		log.Printf("[深度删除] ○ 台账命中 %d 个条目，但本地文件都还在，未标记（Emby 只是移出库、或媒体目录只读？）", matched)
 		return
 	}
-	log.Printf("[深度删除] ○ Emby 删除事件已确认 %d 个本地文件消失，标记待删", marked)
+	log.Printf("[深度删除] ○ Emby 删除事件：台账命中 %d 个，其中 %d 个本地文件已消失，标记待删", matched, marked)
 
 	if !deep {
 		// 原生事件的意图不明确，只完成「首轮确认」，第二轮留给定时扫描。
 		// 延迟因此从典型 10 分钟降到 5 分钟，而两轮之间的时间间隔（抗瞬时抖动的
 		// 关键）仍然保留 —— 这是加速与安全之间的那条线
+		log.Printf("[深度删除] ○ 已标记，等下一轮扫描复核后执行（原生删除事件不跳过两轮确认）")
 		return
 	}
-	// deep.delete：意图明确，立刻跑一轮把它删掉
+	if !cfg.auto() {
+		log.Printf("[深度删除] ○ 已标记，但当前是「只标记」模式，不会自动删除 —— " +
+			"到「Strm 管理 → 全量同步 → 深度删除」确认后执行，或把删除方式改成「自动删除」")
+		return
+	}
+	// deep.delete：用户显式点的按钮，意图明确，立刻跑一轮把它删掉
 	h.runDeepDelScanNow()
 }
 
@@ -118,17 +132,22 @@ func (h *Handler) deepDelLocators(payload map[string]interface{}, deep bool) (re
 // **打标之前一定要 os.Stat 确认本地文件真的没了。** 事件说「删了」不等于文件没了：
 // Emby 可能只是把条目移出库、媒体目录可能是只读挂载。不确认就打标，等于让
 // webhook 绕过深度删除的全部前提。
-func (h *Handler) markVanishedByLocators(rels, pickcodes []string) int {
+// 返回 (打标数, 台账命中数)：两个数分开报，才能在日志里区分
+// 「压根没同步过 / 路径映射不对」与「同步过但本地文件还在」
+func (h *Handler) markVanishedByLocators(rels, pickcodes []string) (marked, matched int) {
 	root := h.orphanLocalRoot()
 	seen := map[uint]bool{}
-	marked := 0
 
 	mark := func(rows []model.SyncedFile) {
 		for _, r := range rows {
-			if seen[r.ID] || r.RelPath == "" || r.VanishAt != nil || r.OrphanAt != nil {
+			if seen[r.ID] || r.RelPath == "" {
 				continue
 			}
 			seen[r.ID] = true
+			matched++
+			if r.VanishAt != nil || r.OrphanAt != nil {
+				continue // 已经标过 / 网盘那份也没了
+			}
 			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(r.RelPath))); err == nil {
 				continue // 本地文件还在，不打标
 			} else if !os.IsNotExist(err) {
@@ -154,7 +173,7 @@ func (h *Handler) markVanishedByLocators(rels, pickcodes []string) int {
 		h.DB.Where("pick_code = ? AND pick_code != ''", pc).Find(&rows)
 		mark(rows)
 	}
-	return marked
+	return marked, matched
 }
 
 // relPathFromLocal 本地绝对路径 → 台账 rel_path（去掉媒体库根前缀）。
