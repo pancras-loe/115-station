@@ -25,8 +25,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'subscriptions',
         name: 'tgsub',
-        component: () => import('@/pages/SubscriptionsPage.vue'),
-        meta: { title: '订阅管理', desc: 'TG 频道关键词订阅 / 命中通知 / 自动转存', icon: 'sub' },
+        // 订阅管理暂未开放，保留旧地址以兼容收藏，统一回到首页。
+        redirect: { name: 'dashboard' },
       },
       {
         path: 'accounts',

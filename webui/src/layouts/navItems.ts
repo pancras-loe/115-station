@@ -1,6 +1,5 @@
 import {
   LayoutDashboard,
-  Rss,
   UserRoundCog,
   RefreshCcw,
   Wand2,
@@ -28,7 +27,6 @@ export interface NavItem {
  */
 export const navItems: NavItem[] = [
   { name: 'dashboard', label: '总览面板', icon: LayoutDashboard, group: '概览' },
-  { name: 'tgsub', label: '订阅管理', icon: Rss },
 
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
