@@ -245,11 +245,12 @@ details[open] summary{margin-bottom:8px}
   </table>
 
   <h3>Docker Compose 部署（推荐）</h3>
-  <p>本仓库不发布预构建镜像，先在仓库根目录构建：<code>docker build -t 115-station:local .</code></p>
+  <p>镜像发布在 GitHub Container Registry，支持 amd64 与 arm64，直接拉即可：
+  <code>ghcr.io/pancras-loe/115-station:latest</code></p>
   <p>新建目录 <code>115-station</code>，保存为 <code>docker-compose.yml</code>，然后 <code>docker compose up -d</code>：</p>
   <pre><code class="lang-yaml">services:
   station:
-    image: 115-station:local
+    image: ghcr.io/pancras-loe/115-station:latest
     container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s        # 优雅退出窗口：SIGTERM 后程序停后台任务、
@@ -274,7 +275,7 @@ details[open] summary{margin-bottom:8px}
   -v $(pwd)/config:/config -v $(pwd)/data:/data \
   -v $(pwd)/media:/media -v $(pwd)/logs:/logs \
   -e TZ=Asia/Shanghai \
-  115-station:local</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
+  ghcr.io/pancras-loe/115-station:latest</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 
   <h3>环境变量</h3>
   <table>
@@ -920,15 +921,24 @@ tv:
 <section id="update">
   <h2><span class="num">22</span>更新与升级</h2>
 
-  <p>本项目不提供应用内自更新，也不发布预构建镜像（理由见 README 的「许可证与再分发声明」）。
-  更新＝<strong>拉最新代码、重新构建、重启容器</strong>，配置与数据都在挂载卷里，不会丢。</p>
+  <p>本项目不提供应用内自更新（那条链路要往容器里挂 Docker socket，风险与收益不成正比）。
+  更新＝<strong>拉新镜像、重启容器</strong>，配置与数据都在挂载卷里，不会丢。</p>
 
   <pre><code>cd 115-station
-git pull
-docker compose up -d --build</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
+docker compose pull
+docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 
-  <p>构建约 3~8 分钟（首次更久）。期间旧容器照常运行，构建完成才重启。
-  升级前建议先做一次「一键备份」（见下一章），出问题可直接回滚配置与数据库。</p>
+  <h3>镜像 tag 怎么选</h3>
+  <table class="tw">
+    <tr><th style="width:170px">tag</th><th>含义</th><th>适合谁</th></tr>
+    <tr><td><code>latest</code></td><td>master 最新一次构建，滚动更新</td><td>想要最新功能、能接受偶发问题</td></tr>
+    <tr><td><code>1.2.3</code> / <code>1.2</code></td><td>语义化版本，打 <code>v*</code> tag 时产出</td><td>要稳定性，自己决定何时升级</td></tr>
+  </table>
+  <p>想钉死版本就把 compose 里的 <code>:latest</code> 换成具体版本号，
+  升级时改成新版本再 <code>docker compose up -d</code>。</p>
+
+  <div class="warn">升级前建议先做一次「一键备份」（见下一章）。
+  出问题时把 compose 的 tag 改回旧版本即可回滚镜像，配置与数据库再从备份恢复。</div>
 
   <div class="tip">容器重启后左下角版本号会变成新的提交号，据此确认跑的是哪一版。</div>
 </section>

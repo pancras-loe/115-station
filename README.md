@@ -83,8 +83,11 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 **建议做法：**
 
 1. 向上游作者提 issue，请其补充一个明确的开源许可证（如 MIT / Apache-2.0 / AGPL-3.0）；
-2. 在上游明确许可之前，本仓库仅作为**个人学习与自用**的 fork 存在，请勿对外分发二进制或镜像；
-3. 上游一旦补充许可证，本仓库将同步遵循该许可证，并在此处更新说明。
+2. 上游一旦补充许可证，本仓库将同步遵循该许可证，并在此处更新说明。
+
+本仓库通过 GitHub Actions 发布容器镜像到 ghcr.io 以便自部署使用。
+镜像内含上游代码，因此**同样适用上述「未声明许可证」的状况**——
+使用者请自行判断是否接受，本仓库不对镜像作出任何授权声明。
 
 如果你是上游作者并希望本仓库做出调整（补充署名、变更措辞或下架），请提 issue，我会配合处理。
 
@@ -105,23 +108,18 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 
 ## 快速部署
 
-由于上文所述的许可证状况，本仓库不发布预构建镜像，请自行构建。
+镜像发布在 GitHub Container Registry，支持 `linux/amd64` 与 `linux/arm64`：
 
-```bash
-git clone https://github.com/<你的用户名>/115-station.git && cd 115-station
+```
+ghcr.io/pancras-loe/115-station:latest
 ```
 
-```bash
-docker build -t 115-station:local .
-```
-
-然后写一份 `docker-compose.yml`（仓库根目录已附带一份可直接使用）：
+新建一个目录，写入下面的 `docker-compose.yml`（仓库根目录已附带一份可直接使用）：
 
 ```yaml
 services:
   station:
-    build: .                  # 本仓库不发布预构建镜像，compose 直接现场构建
-    image: 115-station:local
+    image: ghcr.io/pancras-loe/115-station:latest
     container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s    # 优雅退出窗口：SIGTERM 后程序需要 ~3 秒收尾
@@ -144,6 +142,28 @@ docker compose up -d
 ```
 
 浏览器打开 `http://<服务器IP>:6060` 登录。
+
+### 镜像 tag
+
+| tag | 含义 |
+|---|---|
+| `latest` | master 最新一次构建，滚动更新 |
+| `1.2.3` / `1.2` | 语义化版本，打 `v*` git tag 时产出，适合要稳定性的部署 |
+| `master` | 同 `latest` |
+
+### 自行构建（可选）
+
+不想用预构建镜像时：
+
+```bash
+git clone https://github.com/pancras-loe/115-station.git && cd 115-station
+```
+
+```bash
+docker compose up -d --build
+```
+
+compose 里把 `image:` 换成 `build: .` 即可。
 
 ---
 
@@ -235,8 +255,8 @@ docker compose up -d
 > 两者都未配置且无历史账号时，首次启动会自动生成随机密码并打印在容器日志（`docker logs 115-station`）。
 > 改环境变量即改密码，重启生效。容器内也可执行 `./115-station --reset-admin` 只删账号文件而保留其他配置。
 
-> **关于更新**：本项目没有应用内自更新——它依赖发布公共镜像，与本仓库的许可证立场冲突，
-> 已整条移除。更新方式是 `git pull && docker compose up -d --build`，
+> **关于更新**：本项目没有应用内自更新（那条链路要往容器里挂 Docker socket，
+> 风险与收益不成正比，已整条移除）。更新方式是 `docker compose pull && docker compose up -d`，
 > 配置与数据都在挂载卷里，不受影响。
 
 ## 基本使用流程

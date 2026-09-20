@@ -37,8 +37,9 @@
   是嵌入字体（OFL 1.1）、CodeMirror / Mermaid（MIT，压缩时许可头被剥掉）、
   ECharts（Apache-2.0）要求随附的版权声明与许可证副本。新增任何 vendor 进来的
   第三方文件时，同步在这两处登记。
-- `.github/workflows/docker.yml` 的 `PUBLISH` 开关默认 `false`：docker job 只验证
-  多架构构建能过，不推 ghcr。上游补许可证前不要打开。
+- `.github/workflows/docker.yml` 的 `PUBLISH` 开关控制是否推 ghcr，现在是 `true`：
+  push master 与 `v*` tag 都会产出 `ghcr.io/pancras-loe/115-station`（amd64 + arm64）。
+  README「许可证与再分发声明」一节已说明镜像同样适用上游未授权的状况。
 
 ---
 
@@ -130,13 +131,16 @@ docker build -t 115-station:local .
 ```
 
 CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构建，不推送），
-产出多架构镜像 `ghcr.io/<owner>/115-station`（amd64 + arm64）。
+产出多架构镜像 `ghcr.io/pancras-loe/115-station`（amd64 + arm64），由 `PUBLISH` 开关控制是否推送。
 
-> **推镜像前需要确认三件事**：
-> 1. 仓库 Secrets 里配好 `CR_TOKEN`（有 `write:packages` 权限的 PAT），否则登录 ghcr 会失败；
-> 2. `latest` 标签由 `enable={{is_default_branch}}` 控制——需要把 GitHub 仓库的**默认分支设为 `master`**，
->    否则推 master 只会打出 `master` 标签而没有 `latest`；
-> 3. 先读 §1 的许可证约束：上游未授权前，ghcr 包应保持 private，不要公开分发。
+> **关于镜像发布的两个坑**：
+> 1. 登录 ghcr 用的是内置 `secrets.GITHUB_TOKEN` + job 的 `packages: write`，**不要**换回自建 PAT
+>    ——自定义 secret 会让别人 fork 后这个 job 必红；
+> 2. `latest` 标签由 `enable={{is_default_branch}}` 控制，需要 GitHub 仓库的**默认分支是 `master`**，
+>    否则推 master 只会打出 `master` 标签而没有 `latest`。
+>
+> ghcr 包首次推送默认是 **private**，要在 GitHub 的 Package settings 里手动改成 public，
+> 否则用户 `docker pull` 会报 unauthorized。这一步只需做一次。
 
 测试集中在 `internal/api/*_test.go`（41 个文件），全部是纯单元测试，不需要网络或 115 账号。
 测试数据在 `internal/api/testdata/`。改动识别 / 重命名 / 解析逻辑时，**务必先跑一遍对应测试**——
@@ -177,7 +181,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    **「失效 STRM」**，改这块时别把两套词混进用户可见的文案。
 7. **没有应用内自更新**：这条链路（`selfupdate.go`、`update-finish` 子命令、Docker socket、
    企微「更 新」菜单、前端更新弹窗）已整条删除。它依赖发布公共镜像，与本仓库的许可证立场
-   冲突。更新方式是 `git pull && docker compose up -d --build`，**不要再把它加回来**。
+   冲突。用户更新走 `docker compose pull && docker compose up -d`，**不要再把它加回来**。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刮削 → 刷 Emby），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename 都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
