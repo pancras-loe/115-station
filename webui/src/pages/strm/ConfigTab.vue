@@ -36,7 +36,7 @@ const example = computed(() => {
       required
       tip="STRM 内直链的域名，需指向 302 代理端口（http://NAS_IP:6086）。播放时反代会按客户端实际访问地址自动改写，此项为兜底值。"
     >
-      <NInput v-model:value="model.domain" placeholder="http://172.17.0.1:6060" />
+      <NInput v-model:value="model.domain" placeholder="http://172.17.0.1:6086" />
     </FieldRow>
 
     <FieldRow

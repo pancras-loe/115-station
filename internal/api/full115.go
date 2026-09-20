@@ -655,8 +655,9 @@ func (h *Handler) getStrmConfig() (domain, format string, keepExt, exist bool) {
 	format = "pick_code_name"
 	keepExt = true
 	exist = false // false=覆盖
-	var s model.Setting
-	if err := h.DB.Where("key = ?", "strm").First(&s).Error; err != nil {
+	// 配置由前端 SaveSetting 写进 setting.yaml，只读 DB 的旧写法永远读不到
+	raw := h.getSettingValue("strm")
+	if raw == "" {
 		return
 	}
 	var cfg struct {
@@ -665,7 +666,7 @@ func (h *Handler) getStrmConfig() (domain, format string, keepExt, exist bool) {
 		KeepExt any    `json:"keep_ext"`
 		Exist   string `json:"exist"`
 	}
-	if json.Unmarshal([]byte(s.Value), &cfg) == nil {
+	if json.Unmarshal([]byte(raw), &cfg) == nil {
 		if cfg.Domain != "" {
 			domain = cfg.Domain
 		}
