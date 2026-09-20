@@ -776,28 +776,3 @@ func (h *Handler) dirOverlapWithLibrary(shareCid, libCid string) bool {
 		strings.HasPrefix(shareAbs+"/", libAbs+"/") || // 转存目录在媒体库内
 		strings.HasPrefix(libAbs+"/", shareAbs+"/") // 转存目录覆盖媒体库
 }
-
-// triggerIncrementalAfterTransfer 转存/离线下载成功后立即触发增量同步
-// （协程内执行，不阻塞 HTTP 响应；等 3 秒让 115 服务端写完文件索引）
-func (h *Handler) triggerIncrementalAfterTransfer() {
-	time.Sleep(3 * time.Second)
-
-	if !fullSyncMu.TryLock() {
-		log.Printf("[上传] ○ 增量同步已跳过（已有任务运行中）")
-		return
-	}
-	defer fullSyncMu.Unlock()
-	beginTask("增量同步（转存触发）")
-	defer endTask()
-
-	p := h.incrParamsFromConfig()
-	log.Printf("[上传] ▶ 转存/下载后自动增量同步开始...")
-	start := time.Now()
-	sum, err := h.executeIncrementalSync(p)
-	if err != nil {
-		log.Printf("[上传] ✗ 自动增量同步失败: %v", err)
-		return
-	}
-	log.Printf("[上传] ✅ 自动增量同步完成，耗时 %s · STRM %d，附属 %d",
-		time.Since(start).Truncate(time.Second), sum.StrmCreated, sum.AssetsDownloaded)
-}
