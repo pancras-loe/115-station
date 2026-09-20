@@ -1,6 +1,6 @@
 # 115-Station 使用说明
 
-面向日常使用的操作手册。部署方式见 [README.md](README.md)。
+面向日常使用的操作手册。部署方式见 [README.md](README.md)，交流反馈见 [Telegram 交流群](https://t.me/+7b_HYMltYMozZTk1)。
 
 登录管理后台后，左侧菜单依次为：**仪表盘 / 账号管理 / Strm 管理 / 自动整理 / 上传下载 / 系统配置 / 消息配置 / 扩展功能 / 实时日志**。地址栏与页面一一对应（`/sync`、`/organize`、`/plugins`……），可直接收藏或刷新。
 
@@ -264,3 +264,6 @@ Emby 媒体库需勾选「将媒体封面保存到媒体文件夹」+ 元数据�
 
 **忘记密码 / 想改密码？**
 修改 compose 里的 `AUTH_PASSWORD` 后 `docker compose up -d` 重启即生效（环境变量为准）。或执行 `docker exec 115-station ./115-station --reset-admin` 后重启，按环境变量重建（`/data` 内的同步数据保留）。
+
+**还是没解决？**
+到 [Telegram 交流群](https://t.me/+7b_HYMltYMozZTk1) 里问，带上实时日志里的报错内容。

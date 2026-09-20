@@ -21,6 +21,14 @@ flowchart LR
 
 ---
 
+## 交流群
+
+使用问题、Bug 反馈、版本更新，都在群里聊：
+
+**[Telegram 交流群 →](https://t.me/+7b_HYMltYMozZTk1)**
+
+---
+
 ## 项目来源与致谢
 
 | 项目 | 地址 | 说明 |

@@ -37,6 +37,8 @@ pre code{background:none;color:inherit;padding:0;font-size:inherit;word-break:no
 .doc-hero p{color:#d9cffe;font-size:15px;max-width:680px}
 .doc-hero .tags{margin-top:18px;display:flex;gap:8px;flex-wrap:wrap}
 .doc-hero .tags span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);padding:3px 12px;border-radius:999px;font-size:12.5px}
+.doc-hero .tg{display:inline-flex;align-items:center;gap:6px;margin-top:18px;padding:8px 18px;border-radius:999px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.32);color:#fff;font-size:14px;font-weight:600}
+.doc-hero .tg:hover{background:rgba(255,255,255,.28);text-decoration:none}
 section{margin-bottom:52px}
 h2{font-size:22px;margin-bottom:18px;padding-bottom:10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
 h2 .num{background:var(--primary);color:#fff;font-size:12px;width:25px;height:25px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;flex:none}
@@ -132,6 +134,7 @@ details[open] summary{margin-bottom:8px}
 <div class="doc-hero">
   <h1>115-Station 完整使用文档</h1>
   <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带企微/TG 机器人。</p>
+  <a class="tg" href="https://t.me/+7b_HYMltYMozZTk1" target="_blank" rel="noopener">💬 加入 Telegram 交流群</a>
   <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>企业微信机器人</span></div>
 </div>
 
@@ -1047,6 +1050,7 @@ docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</b
     <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec 115-station ./115-station --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
   <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec 115-station ./115-station --reset-admin</code> 后重启重建。</p></details>
   <details><summary>多个人能用吗？</summary><p>管理后台单管理员（个人工具定位）；Emby 侧多用户由 Emby 自己管理。</p></details>
+  <div class="tip"><b>💬</b><span>文档里没覆盖到的问题，来 <a href="https://t.me/+7b_HYMltYMozZTk1" target="_blank" rel="noopener">Telegram 交流群</a> 问，附上实时日志里的报错内容。</span></div>
 </section>
 
 <!-- ============================================================ 26 -->
@@ -1070,6 +1074,7 @@ docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</b
     115-Station 完整使用文档 · 本项目基于
     <a href="https://github.com/DaisyYijin/STRMhub" target="_blank" rel="noopener">DaisyYijin/STRMhub</a>
     二次开发，核心架构与绝大部分代码由上游作者编写
+    · 交流群：<a href="https://t.me/+7b_HYMltYMozZTk1" target="_blank" rel="noopener">Telegram</a>
     · 本页为单文件静态文档，可部署到任意静态托管（如热铁盒）作为线上 Wiki · 内容随版本更新
   </div>
 </section>

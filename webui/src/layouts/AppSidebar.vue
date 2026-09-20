@@ -32,7 +32,15 @@ const route = useRoute()
       </template>
     </nav>
 
-    <div class="sidebar-foot">{{ version || '115-Station' }}</div>
+    <div class="sidebar-foot">
+      <span class="foot-version">{{ version || '115-Station' }}</span>
+      <a
+        class="foot-link"
+        href="https://t.me/+7b_HYMltYMozZTk1"
+        target="_blank"
+        rel="noopener"
+      >TG 交流群</a>
+    </div>
   </aside>
 </template>
 
@@ -123,9 +131,27 @@ const route = useRoute()
 }
 
 .sidebar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 12px 18px;
   border-top: 1px solid var(--c-border);
   font-size: 11.5px;
   color: var(--c-text-3);
+}
+.foot-version {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.foot-link {
+  flex-shrink: 0;
+  color: var(--c-primary);
+  text-decoration: none;
+}
+.foot-link:hover {
+  text-decoration: underline;
 }
 </style>
