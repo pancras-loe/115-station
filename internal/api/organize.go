@@ -2337,7 +2337,11 @@ func modelSettingValue(key string) string {
 
 // executeOrganizeWithConfig 用指定的 OrgConfig 执行整理（转存目录等场景）。
 // 与 executeOrganize 一样自带落盘：引擎跑完统一刮削 + 刷 Emby
-func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) ([]gin.H, []OrganizeResult, error) {
+func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) (stepsOut []gin.H, detailsOut []OrganizeResult, runErr error) {
+	defer func() { failTask(runErr) }()
+	if _, err := loadTmdbClient(); err != nil {
+		return nil, nil, fmt.Errorf("未执行：%w", err)
+	}
 	orgStart := time.Now()
 	ops, err := h.newPan115Ops()
 	if err != nil {

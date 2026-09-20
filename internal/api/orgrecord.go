@@ -155,6 +155,7 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 	defer endTask()
 
 	if err := h.redoOrganize(&rec, req.TmdbID, req.MediaType); err != nil {
+		failTask(err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}

@@ -54,13 +54,13 @@ func loadTmdbClient() (*TmdbClient, error) {
 	// 通过全局 DB 读取
 	var cfg model.TmdbConfig
 	if err := model.DB.First(&cfg).Error; err != nil {
-		return nil, fmt.Errorf("TMDB 未配置")
+		return nil, fmt.Errorf("缺少 TMDB 配置，请前往「系统配置 → TMDB 配置」填写 API 密钥并测试连接")
 	}
-	if cfg.ApiKey == "" {
-		return nil, fmt.Errorf("TMDB API 密钥未填写")
+	if strings.TrimSpace(cfg.ApiKey) == "" {
+		return nil, fmt.Errorf("缺少 TMDB API 密钥，请前往「系统配置 → TMDB 配置」填写并测试连接")
 	}
 	tc := &TmdbClient{
-		APIKey:   cfg.ApiKey,
+		APIKey:   strings.TrimSpace(cfg.ApiKey),
 		APIURL:   normalizeTMDBBase(cfg.ApiUrl),
 		ImageURL: strings.TrimRight(cfg.ImageApiUrl, "/"),
 		Language: cfg.Language,

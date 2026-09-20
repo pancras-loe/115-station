@@ -146,7 +146,7 @@ export interface TaskStatus {
   task?: string
   elapsed?: string
   progress?: string
-  recent?: { ok: boolean; name: string; elapsed: string; start: string }[]
+  recent?: { ok: boolean; name: string; elapsed: string; start: string; message?: string }[]
 }
 
 export const status = () => http.get<TaskStatus>('/sync/status', { timeoutMs: 15_000 })

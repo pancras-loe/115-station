@@ -22,6 +22,7 @@ export const saveSetting = (key: string, value: unknown) =>
 export interface TmdbConfig {
   api_url: string
   image_url: string
+  image_api_url?: string
   api_key: string
   language: string
 }
@@ -44,7 +45,7 @@ export interface TestResult {
   latency_ms?: number
 }
 
-export const testTmdb = () => http.post<TestResult>('/config/test-tmdb')
+export const testTmdb = (body: TmdbConfig) => http.post<TestResult>('/config/test-tmdb', body)
 /** AI 增强识别的连通性测试。endpoint 是后端补全后实际请求的地址，回显给用户看 */
 export interface AiTestResult extends TestResult {
   endpoint?: string

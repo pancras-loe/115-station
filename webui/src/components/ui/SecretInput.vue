@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NInput } from 'naive-ui'
+import { NInput, type InputInst } from 'naive-ui'
 import { Eye, EyeOff } from '@lucide/vue'
 import { secretProps } from '@/utils/autofill'
 
@@ -29,6 +29,8 @@ defineProps<{
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 
 const revealed = ref(false)
+const input = ref<InputInst | null>(null)
+defineExpose({ focus: () => input.value?.focus() })
 const cssMaskable =
   typeof CSS !== 'undefined' &&
   typeof CSS.supports === 'function' &&
@@ -40,6 +42,7 @@ const masked = computed(() => cssMaskable && !revealed.value)
 
 <template>
   <NInput
+    ref="input"
     :value="modelValue"
     :type="type"
     :status="status"

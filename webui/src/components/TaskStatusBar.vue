@@ -26,6 +26,7 @@ onUnmounted(() => task.stop())
       <Check v-if="r.ok" :size="13" class="ok" />
       <X v-else :size="13" class="err" />
       {{ r.name }}（{{ r.elapsed }}，{{ r.start }}）
+      <span v-if="r.message" class="err">{{ r.message }}</span>
     </span>
   </div>
 </template>

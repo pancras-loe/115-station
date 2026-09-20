@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { NAlert, NButton, NPopconfirm } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -7,7 +8,7 @@ import FormActions from '@/components/ui/FormActions.vue'
 import CronField from '@/components/ui/CronField.vue'
 import TaskStatusBar from '@/components/TaskStatusBar.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
-import { organizeApi } from '@/api'
+import { configApi, organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
 import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
 import { useTaskStore } from '@/stores/task'
@@ -17,6 +18,29 @@ import { ORG_BASIC_DEFAULTS } from './orgBasic'
 
 const { message } = useFeedback()
 const task = useTaskStore()
+const router = useRouter()
+const tmdbReady = ref<boolean | null>(null)
+const tmdbError = ref('')
+const checkingTmdb = ref(false)
+function configureTmdb() {
+  void router.push({ path: '/settings', query: { tab: 'tmdb', from: 'organize' } })
+}
+async function checkTmdb(): Promise<boolean> {
+  checkingTmdb.value = true
+  tmdbError.value = ''
+  try {
+    const res = await configApi.getTmdb()
+    tmdbReady.value = Boolean((res.data ?? res).api_key?.trim())
+    return tmdbReady.value
+  } catch {
+    tmdbReady.value = null
+    tmdbError.value = '无法读取 TMDB 配置，请重试后再开始整理。'
+    return false
+  } finally {
+    checkingTmdb.value = false
+  }
+}
+onMounted(() => { void checkTmdb() })
 
 /** 本页只用得上三个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
 const { model, saving, save, load, dirty: settingDirty } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
@@ -158,6 +182,7 @@ function warnOverlap() {
 const runHint = '确定开始整理？会扫描待整理目录并搬移文件。'
 
 async function runOrganize() {
+  if (!(await checkTmdb())) return
   // 整理接口不带参数，三个目录和补全策略全从库里读——改了没保存就是按旧配置搬文件
   let localFirst = true
   if (dirty.value) {
@@ -190,6 +215,15 @@ async function runOrganize() {
 <template>
   <div class="stack">
     <TaskStatusBar />
+
+    <NAlert v-if="tmdbReady === false" type="warning" :bordered="false" title="整理前需要配置 TMDB">
+      尚未填写 TMDB API 密钥，手动及自动触发的整理均无法识别影视。填写并测试连接后再开始整理。
+      <div class="alert-action"><NButton size="small" @click="configureTmdb">去配置</NButton></div>
+    </NAlert>
+    <NAlert v-else-if="tmdbError" type="error" :bordered="false">
+      {{ tmdbError }}
+      <div class="alert-action"><NButton size="small" :loading="checkingTmdb" @click="checkTmdb">重新检查</NButton></div>
+    </NAlert>
 
     <SectionCard title="基础配置" hint="整理引擎的工作目录与定时">
       <NAlert class="note" type="warning" :bordered="false">
@@ -246,7 +280,9 @@ async function runOrganize() {
       <FormActions>
         <NButton type="primary" :loading="saving" @click="saveAll">保存配置</NButton>
         <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
-        <NPopconfirm v-if="!dirty" @positive-click="void runOrganize()">
+        <NButton v-if="tmdbReady === false" type="warning" @click="configureTmdb">配置 TMDB 后开始整理</NButton>
+        <NButton v-else-if="tmdbReady === null || checkingTmdb" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</NButton>
+        <NPopconfirm v-else-if="!dirty" @positive-click="void runOrganize()">
           <template #trigger>
             <NButton type="error" ghost :disabled="busy" :loading="running">开始整理</NButton>
           </template>
@@ -268,6 +304,7 @@ async function runOrganize() {
 </template>
 
 <style scoped>
+.alert-action { margin-top: 12px; }
 .note-top {
   margin: 4px 0 12px;
 }

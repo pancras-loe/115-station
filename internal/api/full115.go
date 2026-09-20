@@ -30,6 +30,7 @@ type runRecord struct {
 	Start   string `json:"start"`
 	Elapsed string `json:"elapsed"`
 	OK      bool   `json:"ok"`
+	Message string `json:"message,omitempty"`
 }
 
 var (
@@ -38,12 +39,15 @@ var (
 )
 
 // RecordRun 记录一次任务运行（保留最近 5 次）
-func RecordRun(name string, start time.Time, ok bool) {
+func RecordRun(name string, start time.Time, ok bool, messages ...string) {
 	rec := runRecord{
 		Name:    name,
 		Start:   start.Format("01-02 15:04:05"),
 		Elapsed: time.Since(start).Truncate(time.Second).String(),
 		OK:      ok,
+	}
+	if len(messages) > 0 {
+		rec.Message = messages[0]
 	}
 	recentRunsMu.Lock()
 	defer recentRunsMu.Unlock()
@@ -94,6 +98,7 @@ var fullSyncMu sync.Mutex
 var (
 	taskStateMu  sync.Mutex
 	taskRunning  bool
+	taskFailure  string
 	taskName     string
 	taskStart    time.Time
 	taskProgress string // 当前阶段/进度描述（如 "整理 3/12：xxx"），前端轮询展示
@@ -108,7 +113,20 @@ func SetTaskProgress(text string) {
 
 func beginTask(name string) {
 	taskStateMu.Lock()
+	taskFailure = ""
 	taskRunning, taskName, taskStart, taskProgress = true, name, time.Now(), ""
+	taskStateMu.Unlock()
+}
+
+// 失败原因必须随任务历史回传，否则后台触发的整理只能靠日志排查。
+func failTask(err error) {
+	if err == nil {
+		return
+	}
+	taskStateMu.Lock()
+	if taskRunning {
+		taskFailure = err.Error()
+	}
 	taskStateMu.Unlock()
 }
 
@@ -116,10 +134,11 @@ func endTask() {
 	taskStateMu.Lock()
 	name := taskName
 	start := taskStart
+	failure := taskFailure
 	taskRunning, taskProgress = false, ""
 	taskStateMu.Unlock()
 	// 自动记录到运行历史
-	RecordRun(name, start, true)
+	RecordRun(name, start, failure == "", failure)
 }
 
 // TaskStatus 当前任务状态快照（含进度描述）

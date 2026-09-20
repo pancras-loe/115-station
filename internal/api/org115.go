@@ -21,7 +21,11 @@ import (
 // executeOrganize 整理核心（HTTP 与 cron 调度器共用）：
 // 加载配置 → 整理引擎（自带落盘）→ 刮削 → Emby 刷新
 // 返回步骤摘要与错误（错误时 steps 里带原因）
-func (h *Handler) executeOrganize() ([]gin.H, []OrganizeResult, error) {
+func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResult, runErr error) {
+	defer func() { failTask(runErr) }()
+	if _, err := loadTmdbClient(); err != nil {
+		return nil, nil, fmt.Errorf("未执行：%w", err)
+	}
 	orgStart := time.Now()
 	log.Printf("[整理] ▶ 开始整理 %s", time.Now().Format("15:04:05"))
 	steps := []gin.H{}
@@ -143,7 +147,11 @@ func (h *Handler) RunOrganizePipeline(c *gin.Context) {
 	beginTask("自动整理")
 	defer endTask()
 
-	steps, details, _ := h.executeOrganize()
+	steps, details, err := h.executeOrganize()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	// 按部归并（前端一行一部）
 	showSet := map[string]bool{}
 	var shows []gin.H

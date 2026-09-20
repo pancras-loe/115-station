@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -988,10 +987,21 @@ func (h *Handler) SaveTmdbConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	if cfg.ID > 0 {
-		h.DB.Save(&cfg)
-	} else {
-		h.DB.Create(&cfg)
+	cfg.ApiKey = strings.TrimSpace(cfg.ApiKey)
+	if cfg.ApiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 TMDB API 密钥，自动整理需要它来识别影视"})
+		return
+	}
+	// 配置是单例，前端不传 ID；否则每次保存都会新增一行，识别仍读旧密钥。
+	var current model.TmdbConfig
+	if err := h.DB.First(&current).Error; err != nil && err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取 TMDB 配置失败"})
+		return
+	}
+	cfg.ID = current.ID
+	if err := h.DB.Save(&cfg).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存 TMDB 配置失败，请重试"})
+		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": cfg, "message": "保存成功"})
 }
@@ -1151,16 +1161,17 @@ func (h *Handler) TestTMDBConnection(c *gin.Context) {
 		APIKey   string `json:"api_key"`
 		Language string `json:"language"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.APIKey == "" {
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.APIKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 TMDB API 密钥"})
 		return
 	}
 	req.APIURL = normalizeTMDBBase(req.APIURL)
+	req.APIKey = strings.TrimSpace(req.APIKey)
 	if req.Language == "" {
 		req.Language = "zh-CN"
 	}
 	// 用 /configuration 接口测试（/3 前缀已在规范化时补齐）
-	endpoint := req.APIURL + "/configuration?api_key=" + req.APIKey
+	endpoint := req.APIURL + "/configuration?api_key=" + url.QueryEscape(req.APIKey)
 	// 与真实识别链路一致：走全局代理（否则代理配对、测试却直连失败，误导排障）
 	client := &http.Client{Timeout: 10 * time.Second}
 	if pu := getProxyURL(); pu != "" {
@@ -1168,18 +1179,32 @@ func (h *Handler) TestTMDBConnection(c *gin.Context) {
 			client.Transport = &http.Transport{Proxy: p}
 		}
 	}
+	start := time.Now()
 	resp, err := client.Get(endpoint)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "error": "连接失败: " + err.Error()})
+		// 网络错误可能包含带密钥的 URL，不向页面回传原始错误。
+		c.JSON(http.StatusOK, gin.H{"ok": false, "success": false, "error": "无法连接 TMDB，请检查 API 地址、网络或系统代理配置"})
 		return
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "error": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))})
+		message := fmt.Sprintf("TMDB 服务返回 HTTP %d，请稍后重试", resp.StatusCode)
+		if resp.StatusCode == http.StatusUnauthorized {
+			message = "TMDB 密钥验证失败，请检查是否复制了 API Key（而非 API Read Access Token）"
+		} else if resp.StatusCode == http.StatusForbidden {
+			message = "TMDB 拒绝访问，请检查密钥权限或代理设置"
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "success": false, "error": message})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "TMDB 连接成功"})
+	var configuration struct {
+		Images json.RawMessage `json:"images"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&configuration); err != nil || len(configuration.Images) == 0 || string(configuration.Images) == "null" {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "success": false, "error": "响应不是有效的 TMDB 配置，请检查 API 地址或反代设置"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "success": true, "message": "TMDB 连接成功", "latency_ms": time.Since(start).Milliseconds()})
 }
 
 func (h *Handler) ListCategories(c *gin.Context) {
