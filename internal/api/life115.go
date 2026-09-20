@@ -281,7 +281,7 @@ func (f *lifeFetcher) fetch(cur lifeCursor, max int) ([]lifeEvent, lifeCursor, e
 // fetchLifeEventsPage 取一页生活事件明细，返回条目与总数。
 //
 // ⚠️ data.count 两条通道类型不一样：proapi 返回字符串 "4"，webapi 返回数字 4。
-// 声明成 int 会让 proapi 的整个响应解析失败（2026-09-19 实测，见 REFERENCES.md）
+// 声明成 int 会让 proapi 的整个响应解析失败（2026-09-19 真机实测）
 func fetchLifeEventsPage(cookie, app string, limit, offset int) ([]lifeEvent, int, error) {
 	api := lifeAPIProapi
 	if app == "web" {

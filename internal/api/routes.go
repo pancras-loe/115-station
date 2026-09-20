@@ -79,117 +79,6 @@ func loginGuardPass(key string) {
 // SetVersion 注入构建版本号
 func SetVersion(v string) { buildVersion = v }
 
-// latestVersionCache GitHub 最新提交缓存（15 秒去重防狂刷，见 fetchLatestSHA）
-var latestVersionCache struct {
-	sync.Mutex
-	sha string
-	at  time.Time
-}
-
-// latestBuildCache main 分支最新一次 Actions 构建缓存（15 秒防狂刷）
-var latestBuildCache struct {
-	sync.Mutex
-	headSha    string
-	status     string // queued / in_progress / completed
-	conclusion string // success / failure / ...
-	at         time.Time
-	noRunSince time.Time // latest 提交迟迟没有对应 run 的首见时刻（永久 building 兜底用）
-}
-
-// fetchLatestBuild 查询 main 分支最新一次 CI 构建（镜像是否已发布以此为准；
-// 只看 GitHub 提交会抢在 Actions 构建完成前提示更新，点更新拉到的还是旧镜像）
-func fetchLatestBuild() (headSha, status, conclusion string) {
-	latestBuildCache.Lock()
-	cachedHead, cachedStatus, cachedConclusion, cacheAt :=
-		latestBuildCache.headSha, latestBuildCache.status, latestBuildCache.conclusion, latestBuildCache.at
-	latestBuildCache.Unlock()
-	if cachedHead != "" && time.Since(cacheAt) < 15*time.Second {
-		return cachedHead, cachedStatus, cachedConclusion
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	if pu := getProxyURL(); pu != "" {
-		if p, err := parseProxyURL(pu); err == nil {
-			client.Transport = &http.Transport{Proxy: p}
-		}
-	}
-	req, _ := http.NewRequest("GET", "https://api.github.com/repos/DaisyYijin/STRMhub/actions/runs?branch=main&per_page=1", nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := client.Do(req)
-	if err != nil {
-		latestBuildCache.Lock() // 查询失败也要推进缓存时间：否则每次轮询都打 GitHub API 加速限流
-		latestBuildCache.at = time.Now()
-		latestBuildCache.Unlock()
-		return cachedHead, cachedStatus, cachedConclusion
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		latestBuildCache.Lock()
-		latestBuildCache.at = time.Now()
-		latestBuildCache.Unlock()
-		return cachedHead, cachedStatus, cachedConclusion
-	}
-	var out struct {
-		Runs []struct {
-			HeadSha    string `json:"head_sha"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
-		} `json:"workflow_runs"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&out) == nil && len(out.Runs) > 0 {
-		latestBuildCache.Lock()
-		latestBuildCache.headSha, latestBuildCache.status, latestBuildCache.conclusion, latestBuildCache.at =
-			out.Runs[0].HeadSha, out.Runs[0].Status, out.Runs[0].Conclusion, time.Now()
-		latestBuildCache.Unlock()
-		return out.Runs[0].HeadSha, out.Runs[0].Status, out.Runs[0].Conclusion
-	}
-	latestBuildCache.Lock()
-	latestBuildCache.at = time.Now()
-	latestBuildCache.Unlock()
-	return cachedHead, cachedStatus, cachedConclusion
-}
-
-// imageBuildState latest 提交对应的镜像状态：
-// ready=构建成功可更新 / building=构建中（含构建未注册）/ failed=构建失败 /
-// unknown=CI 状态不可用（保持旧行为：允许更新，避免 API 抖动/CI 缺失卡死更新）
-func imageBuildState(latest string) string {
-	head, status, conclusion := fetchLatestBuild()
-	if head == "" {
-		return "unknown"
-	}
-	if head != latest {
-		// 新提交的 workflow 还没注册上。若持续 10 分钟仍未出现（Actions 被
-		// 禁用/CI 故障/查到的是无关 workflow），降级 unknown 放行更新——
-		// 否则状态永远停在 building，用户被 503 拒绝且无法自救
-		latestBuildCache.Lock()
-		firstSeen := latestBuildCache.noRunSince
-		if firstSeen.IsZero() {
-			latestBuildCache.noRunSince = time.Now()
-			firstSeen = latestBuildCache.noRunSince
-		}
-		latestBuildCache.Unlock()
-		if time.Since(firstSeen) > 10*time.Minute {
-			return "unknown"
-		}
-		return "building"
-	}
-	latestBuildCache.Lock()
-	latestBuildCache.noRunSince = time.Time{}
-	latestBuildCache.Unlock()
-	if status != "completed" {
-		return "building"
-	}
-	if conclusion == "success" {
-		return "ready"
-	}
-	return "failed"
-}
-
-// LatestVersion GET /version/latest —— 查询 GitHub main 分支最新提交与镜像构建状态
-func (h *Handler) LatestVersion(c *gin.Context) {
-	latest, _ := fetchLatestSHA(false)
-	c.JSON(http.StatusOK, gin.H{"latest": latest, "build": imageBuildState(latest)})
-}
-
 func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 注入通知配置读取源（YAML 优先，DB 回退）
 	notifyConfigSource = cfg
@@ -225,9 +114,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 启动监控上传引擎（Emby 生成图片回传 115）
 	StartMonitorUploader(h)
 
-	// 启动更新通知监视（CI 构建完成/失败、更新完成 → 用户配置的企微/TG）
-	StartUpdateNotifier()
-
 	// 认证（账号由环境变量 AUTH_USER/AUTH_PASSWORD 提供或启动时自动生成，
 	// 网页注册已移除）
 	auth := r.Group("/auth")
@@ -239,7 +125,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// Emby Webhook 接收端（无需登录鉴权：Emby 服务器推送事件，token 可选）
 	r.POST("/emby/webhook", h.EmbyWebhook)
 	r.GET("/emby/webhook", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"message": "StrmHub Emby Webhook 接收端就绪，请使用 POST 推送事件"})
+		c.JSON(http.StatusOK, gin.H{"message": "115-Station Emby Webhook 接收端就绪，请使用 POST 推送事件"})
 	})
 
 	// 以下接口需要认证
@@ -383,9 +269,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/version", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"version": buildVersion})
 		})
-		protected.GET("/version/latest", h.LatestVersion)
-		protected.GET("/version/changes", h.VersionChanges)
-		protected.POST("/update/apply", h.ApplyUpdate)
 		protected.POST("/system/log-level", func(c *gin.Context) {
 			var req struct {
 				Level string `json:"level"` // simple / verbose

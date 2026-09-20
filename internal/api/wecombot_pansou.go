@@ -132,7 +132,7 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 			}
 			reply("✓ 已提交 115 离线下载。下载完成后自动整理入库并通知。")
 		default:
-			out := fmt.Sprintf("[%s] 链接（StrmHub 仅支持 115 自动转存，请手动打开）：\n%s", label, it.URL)
+			out := fmt.Sprintf("[%s] 链接（115-Station 仅支持 115 自动转存，请手动打开）：\n%s", label, it.URL)
 			if it.Password != "" {
 				out += "\n提取码: " + it.Password
 			}

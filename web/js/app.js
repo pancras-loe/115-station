@@ -2728,9 +2728,11 @@ function menuNetworkTest() {
     if (btn) networkCheck(btn);
   }, 400);
 }
-// 账号菜单动作：新标签打开使用文档
+// 账号菜单动作：提示文档位置。
+// 文档随仓库走（USAGE.md / wiki/index.html），不跳任何外部站点——
+// 本项目不预设仓库地址，自建部署者的仓库各不相同。
 function menuDocs() {
-  window.open('https://strmhub.rth1.xyz/', '_blank');
+  toast('使用文档见仓库根目录的 USAGE.md，完整版在 wiki/index.html');
 }
 function setBar(id, pct) {
   const el = document.getElementById(id);
@@ -2768,10 +2770,7 @@ function renderWeekly(weekly, total) {
   setTxt('dash-week-total', '最近一周入库 ' + total + ' 部' + (total ? ' 🎉' : ' 😴'));
 }
 // 快捷操作（复用既有确认与执行逻辑）
-// 版本号（左下角 footer 显示）+ 刷新时自动检查 GitHub 是否有新版本
-// versionPollTimer 构建中的轮询定时器（构建完成后自动把灰标签换成「有新版本」）
-let versionPollTimer = null;
-
+// 版本号（左下角 footer 显示）。应用内自更新已移除，这里只展示版本，不查远端。
 async function loadVersion() {
   let local = '';
   try {
@@ -2779,44 +2778,7 @@ async function loadVersion() {
     local = String(data.version || '');
   } catch (e) {}
   const el = document.getElementById('footer-version');
-  if (el && local) {
-    el.textContent = 'StrmHub v' + local.slice(0, 7);
-    // 版本号可点击：随时手动检查更新（不依赖"有新版本"提示出现）
-    el.style.cursor = 'pointer';
-    el.title = '点击检查更新';
-    el.onclick = openUpdateModal;
-  }
-  // 本地 dev 构建无版本可比，跳过更新检查
-  if (!el || !local || local === 'dev') return;
-  try {
-    const d = await api('/version/latest');
-    if (d.latest && d.latest.slice(0, 7) !== local.slice(0, 7)) {
-      // 版本号右侧同行显示小按钮（flex 不换行，避免窄侧栏下被挤到下一行）。
-      // 镜像是否可更新以 GitHub Actions 构建状态为准：构建中显示灰标签、
-      // 构建失败显示红标签，只有构建成功才出现「有新版本」按钮（点了才有用）
-      const flex = () => {
-        el.style.display = 'flex'; el.style.alignItems = 'center';
-        el.style.gap = '6px'; el.style.whiteSpace = 'nowrap';
-      };
-      if (d.build === 'building') {
-        flex();
-        el.innerHTML = '<span>StrmHub v' + local.slice(0, 7) + '</span>' +
-          '<span style="flex:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--border);color:var(--text-3)">镜像构建中…</span>';
-        // 构建期间每分钟自动复查，完成后自动换成可点击的「有新版本」
-        if (!versionPollTimer) {
-          versionPollTimer = setTimeout(() => { versionPollTimer = null; loadVersion(); }, 60000);
-        }
-      } else if (d.build === 'failed') {
-        flex();
-        el.innerHTML = '<span>StrmHub v' + local.slice(0, 7) + '</span>' +
-          '<span style="flex:none;font-size:11px;padding:2px 8px;border-radius:4px;background:var(--danger);color:#fff;cursor:pointer" onclick="openUpdateModal()">构建失败</span>';
-      } else {
-        flex();
-        el.innerHTML = '<span>StrmHub v' + local.slice(0, 7) + '</span>' +
-          '<button class="btn btn-sm" onclick="openUpdateModal()" style="background:var(--primary);color:#fff;border:none;flex:none;font-size:11px;height:22px;padding:0 8px;border-radius:4px;cursor:pointer">有新版本</button>';
-      }
-    }
-  } catch (e) {}
+  if (el && local) el.textContent = '115-Station v' + local.slice(0, 7);
 }
 
 // ==================== 账号（下拉菜单 / 修改用户名密码 / 退出登录） ====================
@@ -2852,108 +2814,6 @@ function logoutNow() {
   localStorage.clear();
   history.pushState(null, '', '/login');
   location.reload();
-}
-
-// ==================== 应用内更新面板 ====================
-async function openUpdateModal() {
-  const mask = document.getElementById('update-modal');
-  const body = document.getElementById('update-modal-body');
-  const btn = document.getElementById('update-apply-btn');
-  mask.style.display = '';
-  body.textContent = '获取更新内容中...';
-  btn.disabled = false; btn.textContent = '立即更新'; btn.style.display = '';
-  try {
-    const d = await api('/version/changes');
-    // 已是最新：明确告知而不是"发现新版本 vX（当前 vX）"
-    if (d.uptodate) {
-      document.getElementById('update-modal-title').textContent = '已是最新版本';
-      body.innerHTML = '<p>✓ 当前 v' + String(d.current || '').slice(0, 7) + ' 已是最新。' +
-        (d.error ? '<br><span style="font-size:12px;color:var(--warning)">' + escHtml(d.error) + '</span>' : '') + '</p>';
-      document.getElementById('update-apply-btn').style.display = 'none';
-      return;
-    }
-    // 镜像构建状态（GitHub Actions）：构建中/失败时不可更新——
-    // 提交已推送但镜像未发布，此时点更新只会拉到旧镜像并白重启一次
-    if (d.build === 'building' || d.build === 'failed') {
-      document.getElementById('update-modal-title').textContent =
-        d.build === 'building'
-          ? '新版本构建中 v' + String(d.latest || '').slice(0, 7)
-          : '新版本构建失败 v' + String(d.latest || '').slice(0, 7);
-      btn.disabled = true;
-      btn.textContent = d.build === 'building' ? '镜像构建中…' : '构建失败，不可更新';
-    } else {
-      document.getElementById('update-modal-title').textContent =
-        '发现新版本 v' + String(d.latest || '').slice(0, 7) + '（当前 v' + String(d.current || '').slice(0, 7) + '）';
-    }
-    if (!d.commits || !d.commits.length) {
-      body.innerHTML = d.error
-        ? '<p>更新内容获取失败：' + escHtml(d.error) + '</p><p>可点「查看 GitHub」直接查看提交记录。</p>'
-        : '<p>未获取到提交记录，可点「查看 GitHub」查看。</p>';
-      return;
-    }
-    if (d.build === 'building' && !updateBuildPollTimer) {
-      updateBuildPollTimer = setTimeout(() => { updateBuildPollTimer = null; openUpdateModal(); }, 45000);
-    }
-    body.innerHTML =
-      (d.build === 'building' ? '<p style="color:var(--warning)">⏳ 镜像还在 GitHub Actions 构建中（通常 3~8 分钟），完成后本按钮自动可用。</p>' : '') +
-      (d.build === 'failed' ? '<p style="color:var(--danger)">✗ 最新提交的 CI 构建失败，镜像未发布；请到 GitHub Actions 查看失败原因。</p>' : '') +
-      '<p style="margin-bottom:6px"><b>更新内容（' + d.commits.length + ' 个提交）：</b></p>' +
-      d.commits.map(cm =>
-        '<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);align-items:baseline">' +
-        '<code style="color:var(--text-3);flex:none">' + String(cm.sha).slice(0, 7) + '</code>' +
-        '<span>' + escHtml(cm.message) + '</span></div>').join('');
-  } catch (e) {
-    body.innerHTML = '<p>获取失败：' + escHtml(e.message) + '</p>';
-  }
-}
-let updatePollTimer = null;
-let updateBuildPollTimer = null;
-function closeUpdateModal() {
-  document.getElementById('update-modal').style.display = 'none';
-  if (updatePollTimer) { clearInterval(updatePollTimer); updatePollTimer = null; }
-  if (updateBuildPollTimer) { clearTimeout(updateBuildPollTimer); updateBuildPollTimer = null; }
-}
-
-async function applyUpdate(btn) {
-  btn.disabled = true; btn.textContent = '更新中...';
-  const body = document.getElementById('update-modal-body');
-  let latest = '';
-  try {
-    const d = await api('/update/apply', { method: 'POST' });
-    if (d.message && d.message.includes('已是最新')) {
-      btn.textContent = '已是最新'; body.insertAdjacentHTML('afterbegin', '<p>✓ ' + escHtml(d.message) + '</p>');
-      return;
-    }
-    latest = d.latest || '';
-    body.insertAdjacentHTML('afterbegin',
-      '<p>✓ 镜像已拉取，容器重启中（预计 10~30 秒）…页面将自动刷新。</p>');
-    btn.textContent = '重启中...';
-  } catch (e) {
-    // 无 docker.sock 等场景：错误信息自带配置指引
-    btn.disabled = false; btn.textContent = '立即更新';
-    body.insertAdjacentHTML('afterbegin',
-      '<p style="color:var(--danger);white-space:pre-line">✗ ' + escHtml(e.message || '更新失败') + '</p>');
-    return;
-  }
-  // 轮询服务恢复：版本变化或服务可达即刷新（关闭弹窗即取消，
-  // 此前关掉弹窗后最长 3 分钟仍会自动 reload）
-  let tries = 0;
-  updatePollTimer = setInterval(async () => {
-    tries++;
-    try {
-      const d = await api('/version');
-      const v = String(d.version || '');
-      if (v && v !== 'dev' && (!latest || v.slice(0, 7) === latest.slice(0, 7))) {
-        clearInterval(updatePollTimer); updatePollTimer = null;
-        toast('✓ 已更新到 v' + v.slice(0, 7));
-        setTimeout(() => location.reload(), 800);
-      }
-    } catch (e) { /* 重启期间不可达，继续等 */ }
-    if (tries > 60) {
-      clearInterval(updatePollTimer); updatePollTimer = null;
-      btn.disabled = false; btn.textContent = '重试';
-    }
-  }, 3000);
 }
 
 // ==================== 日志 ====================
@@ -3673,7 +3533,7 @@ async function re0SaveConfig(btn) {
   finally { if (btn) { btn.disabled = false; btn.textContent = orig; } }
 }
 
-// 跳转 RE0 官方授权页；回调地址 = 当前 StrmHub 地址 + /api/re0/oauth/callback
+// 跳转 RE0 官方授权页；回调地址 = 当前 115-Station 地址 + /api/re0/oauth/callback
 async function re0Authorize(btn) {
   try {
     const redirectUri = location.origin + '/api/re0/oauth/callback';

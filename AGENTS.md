@@ -2,7 +2,7 @@
 
 面向 AI 编码助手与新加入的开发者。阅读本文即可掌握项目定位、目录结构、关键约定与雷区。
 用户向文档见 [README.md](README.md) 与 [USAGE.md](USAGE.md)。
-**动 115 接口前先看 [REFERENCES.md](REFERENCES.md)** —— 外部参考项目清单与已验证的接口事实。
+**动 115 接口前先看维护者本地的 `REFERENCES.md`**（不入库，在仓库同级的 `115-station-notes/`）—— 外部参考项目清单与已验证的接口事实。
 
 ---
 
@@ -24,13 +24,29 @@
 - **不要**建议发布预构建二进制或公共镜像；
 - README 的「许可证与再分发声明」章节是刻意这样写的，修改前先与维护者确认。
 
+### 不入库的维护者文档
+
+`REFERENCES.md`（外部参考项目与 115 接口事实）和 `INCR-SYNC-UPGRADE.md`
+（增量同步改造记录）放在仓库**同级**的 `115-station-notes/` 目录，刻意不提交：
+它们含本机绝对路径、逆向结论与内部开发流水，对使用者无意义。
+本文里引用到它们的地方都指的是那个目录下的副本。
+
+但**第三方组件的许可证义务是独立的**，不受上述限制，也不要删：
+
+- [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 与 [`licenses/`](licenses/) 目录
+  是嵌入字体（OFL 1.1）、CodeMirror / Mermaid（MIT，压缩时许可头被剥掉）、
+  ECharts（Apache-2.0）要求随附的版权声明与许可证副本。新增任何 vendor 进来的
+  第三方文件时，同步在这两处登记。
+- `.github/workflows/docker.yml` 的 `PUBLISH` 开关默认 `false`：docker job 只验证
+  多架构构建能过，不推 ghcr。上游补许可证前不要打开。
+
 ---
 
 ## 2. 技术栈
 
 | 层 | 选型 |
 |---|---|
-| 语言 | Go 1.25（`go.mod` module 名仍是 `strmhub`，二进制名也是 `strmhub`） |
+| 语言 | Go 1.25（module 名与二进制名都是 `115-station`） |
 | Web 框架 | Gin（`gin.New()`，**不是** `gin.Default()`） |
 | ORM / DB | GORM + SQLite（纯 Go 驱动 `glebarez/sqlite`，`CGO_ENABLED=0`） |
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
@@ -53,7 +69,6 @@
 ├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + Naive UI）
 ├── web/                        # 管理后台前端·旧版，已停用，保留供对照实现（WEBUI=legacy 可切回）
 ├── wiki/index.html             # 完整版使用 Wiki（单文件）
-├── strmhub-proposal/           # 方案设计文档（单文件 HTML + 内嵌 echarts/mermaid）
 ├── .github/workflows/docker.yml# CI：测试门禁 → 多架构镜像构建
 ├── Dockerfile                  # 多阶段交叉编译 → alpine + ffmpeg
 └── docker-compose.yml
@@ -72,7 +87,7 @@
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、离线下载、**下载链接台账**、媒体库封面生成、115 签到、容器内自更新 |
+| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、离线下载、**下载链接台账**、媒体库封面生成、115 签到 |
 
 ### 数据模型（`internal/model/model.go`）
 
@@ -160,8 +175,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 6. **别用 `gin.Default()`**：它自带的访问日志会让每个 HTTP 请求刷一行，实时日志页会被淹没。
    另：代码里的 `orphan*`（`orphan115.go`、`detect_orphans`、`/sync/orphans`）在界面和日志里一律叫
    **「失效 STRM」**，改这块时别把两套词混进用户可见的文案。
-7. **自更新路径**：`selfupdate.go` + `main.go` 的 `update-finish` 子命令依赖挂载 Docker socket。
-   主容器不能停自己，收尾必须由独立进程完成——改动这条链路前先读懂两处注释。
+7. **没有应用内自更新**：这条链路（`selfupdate.go`、`update-finish` 子命令、Docker socket、
+   企微「更 新」菜单、前端更新弹窗）已整条删除。它依赖发布公共镜像，与本仓库的许可证立场
+   冲突。更新方式是 `git pull && docker compose up -d --build`，**不要再把它加回来**。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刮削 → 刷 Emby），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename 都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
@@ -206,9 +222,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
-| 查某个 115 接口怎么调 | [REFERENCES.md](REFERENCES.md) 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
-| 做同步/整理类功能 | [REFERENCES.md](REFERENCES.md) 的「STRM 同步类项目」，里面有五个项目的策略对比 |
-| 动增量同步任何一环 | 先读 [INCR-SYNC-UPGRADE.md](INCR-SYNC-UPGRADE.md) —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
+| 查某个 115 接口怎么调 | 本地 `REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
+| 做同步/整理类功能 | 本地 `REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
+| 动增量同步任何一环 | 先读本地 `INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
 | 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
 
 ---

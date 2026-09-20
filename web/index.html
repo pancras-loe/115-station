@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>StrmHub</title>
+  <title>115-Station</title>
   <link rel="icon" href="/cms-115.png">
   <link rel="stylesheet" href="/css/style.css?v=32">
 </head>
@@ -53,7 +53,7 @@
       <div class="menu-item" data-page="config-extension"><span class="icon">＋</span><span>扩展功能</span></div>
       <div class="menu-item" data-page="logs" style="display:none"><span class="icon">▤</span><span>实时日志</span></div>
     </div>
-    <div class="footer" id="footer-version">StrmHub</div>
+    <div class="footer" id="footer-version">115-Station</div>
   </aside>
 
   <!-- 内容区 -->
@@ -720,7 +720,7 @@ tv:
       <div class="tab-panel" data-panel="mt-re0">
         <div class="card">
           <div class="form-row"><div class="label">RE0 应用配置<i class="help-tip" tabindex="0">?<span class="tip-bubble">RE0（影视资料与分享社区）官方 OpenAPI。需先在 re0.me「个人面板 → OPENAPI → 我的应用」创建应用并等站方审核通过（公开且站内用户 6+ 的应用，或长期 v 用户），再把 client_id 和应用 Secret 填到这里。站点地址默认 https://re0.me。</span></i></div><div class="control"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="text" id="re0-base" placeholder="站点地址" style="width:180px" autocomplete="off"><input type="text" id="re0-client-id" placeholder="client_id（app_xxx）" style="width:200px" autocomplete="off"><input type="password" id="re0-secret" placeholder="应用 Secret" style="width:200px" autocomplete="new-password"><button class="btn btn-primary" onclick="re0SaveConfig(this)">保存配置</button></div></div></div>
-          <div class="form-row"><div class="label">账号授权<i class="help-tip" tabindex="0">?<span class="tip-bubble">保存应用信息后点「授权」，会跳转 RE0 官方授权页确认一次。授权后 StrmHub 以你的身份查询/解锁资源（消耗站内积分），Token 自动续期。解锁的资源若为 115 分享会自动转存到接收目录。</span></i></div><div class="control"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn btn-primary" onclick="re0Authorize(this)">授权 RE0 账号</button> <button class="btn btn-outline" onclick="re0Check(this)">检查状态</button> <span id="re0-status" style="font-size:12.5px;color:var(--text-3);align-self:center"></span></div></div></div>
+          <div class="form-row"><div class="label">账号授权<i class="help-tip" tabindex="0">?<span class="tip-bubble">保存应用信息后点「授权」，会跳转 RE0 官方授权页确认一次。授权后 115-Station 以你的身份查询/解锁资源（消耗站内积分），Token 自动续期。解锁的资源若为 115 分享会自动转存到接收目录。</span></i></div><div class="control"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn btn-primary" onclick="re0Authorize(this)">授权 RE0 账号</button> <button class="btn btn-outline" onclick="re0Check(this)">检查状态</button> <span id="re0-status" style="font-size:12.5px;color:var(--text-3);align-self:center"></span></div></div></div>
         </div>
         <div class="card">
           <div class="form-row"><div class="label">搜索站内资源<i class="help-tip" tabindex="0">?<span class="tip-bubble">输入影视名称先经 TMDB 匹配条目（也支持直接输入 TMDB ID），再查 RE0 站内资源：显示网盘类型、分辨率、大小与解锁积分。点「解锁并转存」消耗站内积分解锁 115 分享并自动转存到接收目录（完成后自动整理入库）；已解锁资源不重复扣积分。</span></i></div><div class="control"><div class="form-inline-group"><input type="text" id="re0-query" placeholder="影视名称（中英文均可）或 TMDB ID" onkeydown="if(event.key==='Enter')re0Search()" class="inline-input" style="flex:1"><button class="btn btn-primary" onclick="re0Search()">搜索</button></div></div></div>
@@ -944,9 +944,9 @@ tv:
       <!-- EMBY 入库刷新 -->
       <div class="tab-panel" data-panel="emby-manage">
         <div class="card">
-          <div class="form-row"><div class="label"><span class="required-mark">*</span> Emby 服务器地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">Emby 访问地址（StrmHub 容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。</span></i></div><div class="control"><input type="text" id="emby-server-url" placeholder="如 http://192.168.1.100:8096"></div></div>
+          <div class="form-row"><div class="label"><span class="required-mark">*</span> Emby 服务器地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">Emby 访问地址（115-Station 容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。</span></i></div><div class="control"><input type="text" id="emby-server-url" placeholder="如 http://192.168.1.100:8096"></div></div>
           <div class="form-row"><div class="label">API 密钥<i class="help-tip" tabindex="0">?<span class="tip-bubble">Emby 后台「设置 → API 密钥」生成，用于按库刷新与连接测试。</span></i></div><div class="control"><div class="form-inline-group"><input type="password" id="emby-api-key" autocomplete="off" title="双击显示/隐藏明文" placeholder="Emby 设置 → API 密钥 中生成" class="inline-input"><button class="btn btn-outline" onclick="testEmbyConnection()">测试连接</button></div><span id="emby-test-result" class="test-result"></span></div></div>
-          <div class="form-row"><div class="label">本地路径映射<i class="help-tip" tabindex="0">?<span class="tip-bubble">StrmHub 本地路径#Emby 路径（# 分隔）。入库刷新与建库插件共用此规则，把本地路径转换为 Emby 路径。</span></i></div><div class="control"><input type="text" id="emby-path-mapping" placeholder="/media#/media（本地路径#Emby路径，#分隔）" oninput="testEmbyPath()"></div></div>
+          <div class="form-row"><div class="label">本地路径映射<i class="help-tip" tabindex="0">?<span class="tip-bubble">115-Station 本地路径#Emby 路径（# 分隔）。入库刷新与建库插件共用此规则，把本地路径转换为 Emby 路径。</span></i></div><div class="control"><input type="text" id="emby-path-mapping" placeholder="/media#/media（本地路径#Emby路径，#分隔）" oninput="testEmbyPath()"></div></div>
           <div class="form-row"><div class="label">路径风格<i class="help-tip" tabindex="0">?<span class="tip-bubble">通知 Emby 的路径分隔符：Unix（/）或 Windows（\），与 Emby 挂载方式一致。</span></i></div><div class="control"><div class="segmented-control" id="emby-refresh-style-switch"><div class="seg-item active" data-value="unix" onclick="setEmbyStyle('unix')">Unix 风格</div><div class="seg-item" data-value="windows" onclick="setEmbyStyle('windows')">Windows 风格</div></div></div></div>
           <div class="form-row"><div class="label">路径转换测试<i class="help-tip" tabindex="0">?<span class="tip-bubble">输入一个本地路径，下方显示转换后的 Emby 路径，一致则说明映射正确。</span></i></div><div class="control control-wide"><input type="text" id="emby-path-test-input" placeholder="如 /media/电影/钢铁侠.mkv" oninput="testEmbyPath()"><code id="emby-path-test-output" class="url-box" style="display:none;color:var(--success)"></code></div></div>
           <div class="form-row"><div class="label">入库时刷新<i class="help-tip" tabindex="0">?<span class="tip-bubble">启用后 STRM 生成时自动通知 Emby 刷新对应媒体库（用上方服务器地址与 API 密钥）。</span></i></div><div class="control"><div class="segmented-control" id="emby-refresh-enabled-switch"><div class="seg-item active" data-value="true" onclick="setEmbyEnabled(true)">启用</div><div class="seg-item" data-value="false" onclick="setEmbyEnabled(false)">禁用</div></div></div></div>
@@ -1007,7 +1007,7 @@ tv:
       <div class="tab-panel" data-panel="msg-onebot">
         <div class="card">
           <div class="alert alert-info">对接 NapCat / Lagrange / LLOneBot 等OneBot 实现：需要你自己运行一个 QQ 客户端容器并登录。支持通知推送 + 私聊指令（整理/同步/状态等，与管理后台互斥）。</div>
-          <div class="form-row"><div class="label">HTTP 地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">OneBot 实现的 HTTP 服务地址，如 http://127.0.0.1:3000（与 StrmHub 同一 compose 网络时用容器名）。</span></i></div><div class="control"><input type="text" id="msg-onebot-url" placeholder="http://127.0.0.1:3000"></div></div>
+          <div class="form-row"><div class="label">HTTP 地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">OneBot 实现的 HTTP 服务地址，如 http://127.0.0.1:3000（与 115-Station 同一 compose 网络时用容器名）。</span></i></div><div class="control"><input type="text" id="msg-onebot-url" placeholder="http://127.0.0.1:3000"></div></div>
           <div class="form-row"><div class="label">Access Token<i class="help-tip" tabindex="0">?<span class="tip-bubble">OneBot 服务端配置的 access_token，未设置则留空。</span></i></div><div class="control"><input type="password" id="msg-onebot-token" autocomplete="off" title="双击显示/隐藏明文" placeholder="与服务端 access_token 一致，可留空"></div></div>
           <div class="form-row"><div class="label">消息目标类型</div><div class="control"><div class="segmented-control" id="msg-onebot-target-type-switch"><div class="seg-item active" data-value="group" onclick="setMsgOnebotTargetType('group')">群聊</div><div class="seg-item" data-value="private" onclick="setMsgOnebotTargetType('private')">私聊</div></div></div></div>
           <div class="form-row"><div class="label">目标群号 / QQ 号</div><div class="control"><input type="text" id="msg-onebot-target" placeholder="接收通知的群号或 QQ 号"></div></div>
@@ -1246,18 +1246,6 @@ tv:
   <div style="padding:9px 14px;font-size:14px;cursor:pointer" onmouseover="this.style.background='var(--fill-2)'" onmouseout="this.style.background=''" onclick="menuNetworkTest()">🌐 网络连接测试</div>
   <div style="padding:9px 14px;font-size:14px;cursor:pointer" onmouseover="this.style.background='var(--fill-2)'" onmouseout="this.style.background=''" onclick="menuDocs()"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:-1.5px;margin-right:6px"><path d="M8 2.5c-1.5-1-4-1-5.5 0v10c1.5-1 4-1 5.5 0 1.5-1 4-1 5.5 0v-10c-1.5-1-4-1-5.5 0z"/><line x1="8" y1="2.5" x2="8" y2="12.5"/></svg> 使用文档</div>
   <div style="padding:9px 14px;font-size:14px;color:var(--danger);cursor:pointer" onmouseover="this.style.background='var(--fill-2)'" onmouseout="this.style.background=''" onclick="logoutNow()">退出登录</div>
-</div>
-<div class="modal-mask" id="update-modal" style="display:none" onclick="if(event.target===this)closeUpdateModal()">
-  <div class="modal" style="max-width:600px">
-    <h3 id="update-modal-title">发现新版本</h3>
-    <div id="update-modal-body" style="font-size:13px;max-height:48vh;overflow-y:auto">获取更新内容中...</div>
-    <div class="actions">
-      <a id="update-modal-gh" href="https://github.com/DaisyYijin/STRMhub/commits/main" target="_blank" rel="noopener" class="btn btn-outline" style="text-decoration:none">查看 GitHub</a>
-      <span class="spacer"></span>
-      <button class="btn btn-outline" onclick="closeUpdateModal()">关闭</button>
-      <button class="btn btn-primary" id="update-apply-btn" onclick="applyUpdate(this)">立即更新</button>
-    </div>
-  </div>
 </div>
 <div class="modal-mask" id="emby-lib-modal" style="display:none">
   <div class="modal" style="max-width:680px">

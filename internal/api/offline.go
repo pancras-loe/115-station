@@ -100,7 +100,7 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 	}
 
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
-	offlineMineAdd(h, rawURL)      // 归属标记：完成通知只发给 StrmHub 内提交的任务
+	offlineMineAdd(h, rawURL)      // 归属标记：完成通知只发给 115-Station 内提交的任务
 	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
 	// 链接台账：离线任务页回看链接、整理记录按 fid 反查来源都靠它
 	dlLinkRecord(h, rawURL, linkType, "", target, source)
@@ -304,7 +304,7 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 // ==================== 离线任务「归属」标记 ====================
 //
 // 115 的离线任务列表是账号级的：用户直接在 115 App 里提交的任务也会出现。
-// 通知与自动整理只应响应 StrmHub 内提交的任务——提交时把任务指纹
+// 通知与自动整理只应响应 115-Station 内提交的任务——提交时把任务指纹
 // （磁力 btih / ed2k hash / 原始 URL）写入持久化标记，监视器比对后才动作。
 
 const offlineMineKey = "offline-mine"
@@ -408,7 +408,7 @@ func offlineMineAdd(h *Handler, rawURL string) {
 	offlineArmFastPoll() // 新任务提交：监视器切快速轮询（10s×5）
 }
 
-// offlineMineMatch 任务是否属于 StrmHub 提交（info_hash / 任务名指纹 / URL 任一命中；
+// offlineMineMatch 任务是否属于 115-Station 提交（info_hash / 任务名指纹 / URL 任一命中；
 // 115 对磁力任务返回的 info_hash 即 btih；名称兜底用于 HTTP/ed2k 无 hash 场景）
 func offlineMineMatch(h *Handler, marks map[string]int64, key, name string) bool {
 	if _, ok := marks["btih:"+strings.ToUpper(key)]; ok {
@@ -518,7 +518,7 @@ func StartOfflineTaskMonitor(h *Handler) {
 			if err != nil {
 				continue // 网络抖动/接口拒绝：下轮再看
 			}
-			mine := offlineMineLoad(h) // StrmHub 提交的归属标记（App 里提交的不在标记内 → 不通知）
+			mine := offlineMineLoad(h) // 115-Station 提交的归属标记（App 里提交的不在标记内 → 不通知）
 			// 本轮新完成的任务（聚合为一条通知+一次整理触发，防止批量完成时
 			// 一秒内发几十条企微消息、并发几十个整理触发）
 			var doneNames, failedNames []string
@@ -529,7 +529,7 @@ func StartOfflineTaskMonitor(h *Handler) {
 				if notified[key] || (seen && prev == t.status) {
 					continue
 				}
-				// 归属过滤：只响应 StrmHub 内提交的任务（用户直接在 115 App
+				// 归属过滤：只响应 115-Station 内提交的任务（用户直接在 115 App
 				// 提交的磁力/链接不发通知、不触发整理）
 				if !offlineMineMatch(h, mine, key, t.name) {
 					continue

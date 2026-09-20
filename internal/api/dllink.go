@@ -87,7 +87,7 @@ func dlLinkSetFids(h *Handler, id uint, fids []string) {
 
 // dlLinkSyncTask 离线监视器回填：按 info_hash（磁力 btih / ed2k hash）或任务名
 // 定位台账行，补上 115 才知道的任务名、产物 fid 与终态。
-// 找不到对应行说明这个任务不是 StrmHub 提交的（用户在 115 App 里加的），跳过
+// 找不到对应行说明这个任务不是 115-Station 提交的（用户在 115 App 里加的），跳过
 func dlLinkSyncTask(h *Handler, t offlineTaskInfo) {
 	if h == nil || h.DB == nil {
 		return

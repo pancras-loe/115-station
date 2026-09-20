@@ -336,7 +336,7 @@ func testExtraChannels(cfg *MessageConfig, testMsg string) (string, int) {
 	errMsg := ""
 	okCount := 0
 	if feishuEnabled(cfg.Feishu) {
-		if err := sendFeishu(cfg.Feishu, testMsg, "来自 StrmHub 的测试消息"); err != nil {
+		if err := sendFeishu(cfg.Feishu, testMsg, "来自 115-Station 的测试消息"); err != nil {
 			errMsg += "飞书: " + err.Error() + "; "
 		} else {
 			okCount++

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>StrmHub 使用文档 · 完整版</title>
-<meta name="description" content="StrmHub 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、画质补全、Emby 对接、企微/TG 机器人、自更新——部署、配置、排障全覆盖">
+<title>115-Station 使用文档 · 完整版</title>
+<meta name="description" content="115-Station 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、画质补全、Emby 对接、企微/TG 机器人——部署、配置、排障全覆盖">
 <style>
 :root{
   --bg:#f6f7fb; --card:#ffffff; --text:#1d2129; --text2:#4e5969; --text3:#86909c;
@@ -93,9 +93,9 @@ details[open] summary{margin-bottom:8px}
 
 <div class="layout">
 <nav class="sidebar" id="toc">
-  <div class="logo">🎬 StrmHub <span class="v">使用文档</span></div>
+  <div class="logo">🎬 115-Station <span class="v">使用文档</span></div>
   <input id="search" type="search" placeholder="搜索文档…">
-  <div class="sec">认识 StrmHub</div>
+  <div class="sec">认识 115-Station</div>
   <a href="#intro">这是什么 · 能做什么</a>
   <a href="#concept">核心概念与术语</a>
   <a href="#arch">工作原理详解</a>
@@ -120,7 +120,7 @@ details[open] summary{margin-bottom:8px}
   <a href="#transfer">离线下载与转存</a>
   <a href="#monitor">监控上传</a>
   <div class="sec">运维排障</div>
-  <a href="#update">应用内更新</a>
+  <a href="#update">更新与升级</a>
   <a href="#backup">备份与迁移</a>
   <a href="#logs">日志与排障</a>
   <a href="#faq">常见问题</a>
@@ -130,9 +130,9 @@ details[open] summary{margin-bottom:8px}
 <main class="main">
 
 <div class="doc-hero">
-  <h1>StrmHub 完整使用文档</h1>
-  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带企微/TG 机器人与应用内自更新。</p>
-  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>企业微信机器人</span><span>应用内更新</span></div>
+  <h1>115-Station 完整使用文档</h1>
+  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带企微/TG 机器人。</p>
+  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>企业微信机器人</span></div>
 </div>
 
 <!-- ============================================================ 1 -->
@@ -140,8 +140,8 @@ details[open] summary{margin-bottom:8px}
   <h2><span class="num">1</span>这是什么 · 能做什么</h2>
 
   <h3>解决什么问题</h3>
-  <p>网盘存片有两个老矛盾：<strong>下载到本地</strong>费硬盘费带宽；<strong>网盘在线看</strong>没有海报墙、没有刮削、没有继续观看。StrmHub 的答案是把两头接起来——视频留在 115 网盘，本地只生成几乎不占空间的 <code>.strm</code> 直链文件，Emby/Jellyfin 刮削这些 STRM 就像刮削本地视频一样，点开播放时由 StrmHub 的 302 代理把播放器重定向到 115 直链，<strong>边下边播、零空间占用</strong>。</p>
-  <p>在此基础上，StrmHub 内建了一整套自动化流水线：网盘里的「待整理目录」放入新内容后，自动 TMDB 识别 → 重命名 → 分类入库 → 云端 SHA1 去重 → 洗版 → 画质补全 → 生成 STRM → 通知你，全程无需人工。</p>
+  <p>网盘存片有两个老矛盾：<strong>下载到本地</strong>费硬盘费带宽；<strong>网盘在线看</strong>没有海报墙、没有刮削、没有继续观看。115-Station 的答案是把两头接起来——视频留在 115 网盘，本地只生成几乎不占空间的 <code>.strm</code> 直链文件，Emby/Jellyfin 刮削这些 STRM 就像刮削本地视频一样，点开播放时由 115-Station 的 302 代理把播放器重定向到 115 直链，<strong>边下边播、零空间占用</strong>。</p>
+  <p>在此基础上，115-Station 内建了一整套自动化流水线：网盘里的「待整理目录」放入新内容后，自动 TMDB 识别 → 重命名 → 分类入库 → 云端 SHA1 去重 → 洗版 → 画质补全 → 生成 STRM → 通知你，全程无需人工。</p>
 
   <h3>功能总览</h3>
   <table class="tw">
@@ -157,7 +157,7 @@ details[open] summary{margin-bottom:8px}
     <tr><td>消息机器人</td><td>企微图文通知（带海报）+ 双向机器人；TG 通知；批量入库聚合防抖</td></tr>
     <tr><td>离线/转存</td><td>磁力/ed2k/HTTP 离线下载、115 分享转存，完成自动整理闭环；失败告警</td></tr>
     <tr><td>监控上传</td><td>Emby 刮削产生的海报/NFO 自动回传 115（本地网盘双侧一致）</td></tr>
-    <tr><td>运维</td><td>应用内自更新（CI 构建门控+失败回滚）；一键备份 zip；失效 STRM 检测与清理；优雅退出</td></tr>
+    <tr><td>运维</td><td>一键备份 zip；失效 STRM 检测与清理；优雅退出</td></tr>
   </table>
 
   <h3>适合谁</h3>
@@ -172,11 +172,11 @@ details[open] summary{margin-bottom:8px}
 <!-- ============================================================ 2 -->
 <section id="concept">
   <h2><span class="num">2</span>核心概念与术语</h2>
-  <p>五个关键词读懂 StrmHub，详细释义见文末<a href="#glossary">术语表</a>。</p>
+  <p>五个关键词读懂 115-Station，详细释义见文末<a href="#glossary">术语表</a>。</p>
   <table class="tw">
     <tr><th style="width:120px">术语</th><th>一句话理解</th></tr>
     <tr><td><strong>STRM</strong></td><td>只有一行 URL 的文本文件，扩展名 <code>.strm</code>。播放器打开它等于打开那行 URL 指向的视频——本地零占用</td></tr>
-    <tr><td><strong>302 直链</strong></td><td>STRM 里存的是 StrmHub 自己的短链（<code>http://IP:6086/d/xxx</code>），播放器请求时 StrmHub 查台账把请求<strong>重定向</strong>到 115 真实下载地址</td></tr>
+    <tr><td><strong>302 直链</strong></td><td>STRM 里存的是 115-Station 自己的短链（<code>http://IP:6086/d/xxx</code>），播放器请求时 115-Station 查台账把请求<strong>重定向</strong>到 115 真实下载地址</td></tr>
     <tr><td><strong>pick_code</strong></td><td>115 每个文件的唯一取件码，直链的参数就是它</td></tr>
     <tr><td><strong>台账（SyncedFile）</strong></td><td>「网盘文件 ↔ 本地 STRM」的对照表。删除/移动/改名都靠它精确定位，是整个系统的账本</td></tr>
     <tr><td><strong>生活事件</strong></td><td>115 官方的网盘操作流水（谁在什么时候上传/删/移/改名了什么），增量同步的数据源</td></tr>
@@ -206,7 +206,7 @@ details[open] summary{margin-bottom:8px}
   <ol class="steps">
     <li>Emby 里点播放，Emby 读到的是 <code>.strm</code> 文件，把里面的 URL 交给播放端直接访问（DirectPlay，不转码不耗 Emby 资源）</li>
     <li>播放端请求 <code>http://服务器:6086/d/&lt;pick_code&gt;/文件名</code></li>
-    <li>StrmHub 查台账拿到 pick_code，向 115 请求<strong>该播放端 UA 对应的</strong>下载直链（115 直链与 UA 绑定）</li>
+    <li>115-Station 查台账拿到 pick_code，向 115 请求<strong>该播放端 UA 对应的</strong>下载直链（115 直链与 UA 绑定）</li>
     <li>返回 HTTP 302 重定向 → 播放端直连 115 CDN 拉流</li>
     <li>后续流量不经过你的服务器——服务器只出「一次重定向」，带宽压力≈0</li>
   </ol>
@@ -245,11 +245,12 @@ details[open] summary{margin-bottom:8px}
   </table>
 
   <h3>Docker Compose 部署（推荐）</h3>
-  <p>新建目录 <code>strmhub</code>，保存为 <code>docker-compose.yml</code>，然后 <code>docker compose up -d</code>：</p>
+  <p>本仓库不发布预构建镜像，先在仓库根目录构建：<code>docker build -t 115-station:local .</code></p>
+  <p>新建目录 <code>115-station</code>，保存为 <code>docker-compose.yml</code>，然后 <code>docker compose up -d</code>：</p>
   <pre><code class="lang-yaml">services:
-  strmhub:
-    image: ghcr.io/daisyyijin/strmhub:latest
-    container_name: strmhub
+  station:
+    image: 115-station:local
+    container_name: 115-station
     restart: unless-stopped
     stop_grace_period: 20s        # 优雅退出窗口：SIGTERM 后程序停后台任务、
                                   # 冲刷待发通知再退出（约 3 秒收尾）
@@ -257,27 +258,23 @@ details[open] summary{margin-bottom:8px}
       - "6060:6060"   # 管理后台（你自己用）
       - "6086:6086"   # 302 直链代理 + Emby 反代 + 企微回调（播放器/Emby/企微服务器访问）
     volumes:
-    volumes:
       - ./config:/config           # ★ 全部配置：setting.yaml / auth.yaml(管理员) /
                                     #   jwt.key / 115-cookie.txt
       - ./data:/data               # ★ 数据库 strmhub.db（台账/媒体库/事件）
       - ./media:/media             # ★ STRM 本地目录（Emby 要挂载同一目录）
       - ./logs:/logs               # 日志 app.log（10MB 自动轮转 × 3 份）
-      - /var/run/docker.sock:/var/run/docker.sock
-                                  # 应用内自更新必需；不挂载则只能手动更新
     environment:
       - TZ=Asia/Shanghai
       - AUTH_USER=admin          # ★ 管理后台账号（环境变量管理，无网页注册）
       - AUTH_PASSWORD=change-me  # ★ 改成强密码，改后 docker compose up -d 生效</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 
   <h4>docker run 等价命令</h4>
-  <pre><code>docker run -d --name strmhub --restart unless-stopped --stop-grace-period 20s \
+  <pre><code>docker run -d --name 115-station --restart unless-stopped --stop-grace-period 20s \
   -p 6060:6060 -p 6086:6086 \
   -v $(pwd)/config:/config -v $(pwd)/data:/data \
   -v $(pwd)/media:/media -v $(pwd)/logs:/logs \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   -e TZ=Asia/Shanghai \
-  ghcr.io/daisyyijin/strmhub:latest</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
+  115-station:local</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 
   <h3>环境变量</h3>
   <table>
@@ -291,7 +288,7 @@ details[open] summary{margin-bottom:8px}
   </table>
 
   <h3>目录结构与数据</h3>
-  <pre><code>strmhub/
+  <pre><code>115-station/
 ├── config/
 │   ├── setting.yaml      # 全部界面配置（保存配置按钮写这里）
 │   ├── auth.yaml         # 管理员账号（用户名+密码哈希）
@@ -306,8 +303,8 @@ details[open] summary{margin-bottom:8px}
 
   <h3>启动验证</h3>
   <ol class="steps">
-    <li><code>docker logs -f strmhub</code>，看到 <code>StrmHub 管理后台: http://localhost:6060</code> 即正常</li>
-    <li>浏览器开 <code>http://服务器IP:6060</code> → 用环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 配置的账号登录（未配置时首启自动生成随机密码，<code>docker logs strmhub</code> 查看）</li>
+    <li><code>docker logs -f 115-station</code>，看到 <code>115-Station 管理后台: http://localhost:6060</code> 即正常</li>
+    <li>浏览器开 <code>http://服务器IP:6060</code> → 用环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 配置的账号登录（未配置时首启自动生成随机密码，<code>docker logs 115-station</code> 查看）</li>
     <li>云服务器记得放行两个端口的安全组/防火墙规则</li>
   </ol>
 
@@ -792,14 +789,14 @@ tv:
     <tr><th style="width:120px">配置</th><th>说明</th></tr>
     <tr><td>服务器地址</td><td>Emby 的访问地址，如 <code>http://192.168.1.20:8096</code></td></tr>
     <tr><td>API 密钥</td><td>Emby 后台「设置 → API 密钥」新建；填完点「测试连接」验证</td></tr>
-    <tr><td>路径映射</td><td>StrmHub 的 STRM 路径 ↔ Emby 看到的路径。两边挂同一目录（都叫 /media）时留空即可；Docker 路径不一致时填 <code>/media=/mnt/media</code> 这种对应</td></tr>
+    <tr><td>路径映射</td><td>115-Station 的 STRM 路径 ↔ Emby 看到的路径。两边挂同一目录（都叫 /media）时留空即可；Docker 路径不一致时填 <code>/media=/mnt/media</code> 这种对应</td></tr>
     <tr><td>路径风格</td><td>unix / windows——影响通知 Emby 刷新时的路径格式，按 Emby 所在系统选</td></tr>
     <tr><td>入库时刷新</td><td>开启后 STRM 生成完成自动触发对应库刷新（刷的是映射后的目录，精准不整库扫）</td></tr>
   </table>
 
   <h3>Emby 建库步骤</h3>
   <ol class="steps">
-    <li>Emby 所在容器/主机挂载 StrmHub 的 <code>./media</code> 目录</li>
+    <li>Emby 所在容器/主机挂载 115-Station 的 <code>./media</code> 目录</li>
     <li>Emby 控制台 → 媒体库 → 添加媒体库 → 类型选电影/剧集 → 目录指到 <code>media</code> 下对应分类目录</li>
     <li>库设置建议：勾选「允许以 strm 播放的真实媒体」等选项视版本而定；元数据下载语言中文</li>
     <li>扫库——strm 被当作真实媒体刮削，出海报即成功</li>
@@ -921,29 +918,19 @@ tv:
 
 <!-- ============================================================ 22 -->
 <section id="update">
-  <h2><span class="num">22</span>应用内更新</h2>
+  <h2><span class="num">22</span>更新与升级</h2>
 
-  <h3>更新入口与徽章</h3>
-  <p>后台左下角版本号即更新中心（点击可随时手动检查）。徽章由 <strong>GitHub Actions 构建状态</strong>驱动：</p>
-  <table class="tw">
-    <tr><th style="width:150px">徽章</th><th>含义</th><th>你能做什么</th></tr>
-    <tr><td><span class="tag o">镜像构建中…</span></td><td>新代码已推送、CI 正在构建镜像（3~8 分钟）</td><td>等——构建完成徽章自动变「有新版本」（页脚每分钟自动复查）</td></tr>
-    <tr><td><span class="tag r">构建失败</span></td><td>CI 构建失败，镜像未发布</td><td>去 GitHub Actions 看失败原因，等修复提交</td></tr>
-    <tr><td><span class="tag p">有新版本</span></td><td>镜像已就绪</td><td>点开看更新内容（提交清单）→「立即更新」</td></tr>
-    <tr><td>无徽章</td><td>已是最新</td><td>—</td></tr>
-  </table>
+  <p>本项目不提供应用内自更新，也不发布预构建镜像（理由见 README 的「许可证与再分发声明」）。
+  更新＝<strong>拉最新代码、重新构建、重启容器</strong>，配置与数据都在挂载卷里，不会丢。</p>
 
-  <h3>更新流程与安全保障</h3>
-  <ol class="steps">
-    <li>拉取新镜像 → 创建新容器（此时旧容器照常运行，服务不中断）</li>
-    <li>启动<strong>独立辅助容器</strong>完成「停旧 → 启新」（主容器不能停自己）</li>
-    <li><strong>新容器 20 秒内确认运行</strong>才删除旧容器；起不来则保留现场并尝试拉起旧容器（自动回滚）</li>
-    <li>更新失败（拉取/创建失败）时一切保持原样，界面明确报错</li>
-  </ol>
-  <p>前提：compose 挂载了 <code>/var/run/docker.sock</code>。更新后页面自动刷新。</p>
+  <pre><code>cd 115-station
+git pull
+docker compose up -d --build</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
 
-  <h3>手动更新（备选）</h3>
-  <pre><code>docker compose pull && docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
+  <p>构建约 3~8 分钟（首次更久）。期间旧容器照常运行，构建完成才重启。
+  升级前建议先做一次「一键备份」（见下一章），出问题可直接回滚配置与数据库。</p>
+
+  <div class="tip">容器重启后左下角版本号会变成新的提交号，据此确认跑的是哪一版。</div>
 </section>
 
 <!-- ============================================================ 23 -->
@@ -963,7 +950,7 @@ tv:
 
   <h3>换机迁移步骤</h3>
   <ol class="steps">
-    <li>新机器按「部署安装」起一套全新 StrmHub（跑起来即可，不用配置）</li>
+    <li>新机器按「部署安装」起一套全新 115-Station（跑起来即可，不用配置）</li>
     <li><code>docker compose down</code> 停掉新实例</li>
     <li>把 zip 里的 <code>config/</code>、<code>data/</code> 解压覆盖到新机器对应目录</li>
     <li><code>docker compose up -d</code>——账号、配置、台账、登录态全部原样恢复</li>
@@ -994,7 +981,6 @@ tv:
     <tr><td><code>✦ 洗版替换 / ○ 新版不优于库内版本</code></td><td>洗版判定结论</td></tr>
     <tr><td><code>▣ 补全探测 / ✓ 补全 … → …</code></td><td>画质补全动作</td></tr>
     <tr><td><code>[守望] ⚑ …触发自动整理</code></td><td>转存守望者触发（正常节奏）</td></tr>
-    <tr><td><code>[自更新] ✗ …</code></td><td>更新失败原因（通常按提示检查 docker.sock）</td></tr>
   </table>
 
   <h3>排障决策树</h3>
@@ -1038,7 +1024,7 @@ tv:
   <details><summary>STRM 会占多少本地空间？</summary><p>单个 strm 只有几十字节（一行 URL）。附属文件（字幕/封面/NFO）是实体，视库大小一般几百 MB 以内。</p></details>
   <details><summary>可以和 AList/OpenList 共用同一个 115 账号吗？</summary><p>可以，但要意识：多处同时高频调用会共享风控额度。建议错峰，或重要任务走 OpenAPI 通道。</p></details>
   <details><summary>为什么整理/同步这么慢？</summary><p>115 有接口频率限制，全局限速是防风控的保护（读约 1 秒/次、写强制 ≥3 秒/次）。首次全量几千文件约十几分钟属正常；日常增量秒级。</p></details>
-  <details><summary>外网播放卡吗？</summary><p>播放流量走 115 CDN 直连，不经过你的服务器——速度取决于 115 给该文件的下载速度与你本地带宽，和 StrmHub 服务器基本无关。服务器只出一次 302。</p></details>
+  <details><summary>外网播放卡吗？</summary><p>播放流量走 115 CDN 直连，不经过你的服务器——速度取决于 115 给该文件的下载速度与你本地带宽，和 115-Station 服务器基本无关。服务器只出一次 302。</p></details>
   <details><summary>重新放回同样的文件还是提示「已存在」？</summary><p>去重按<strong>网盘目标目录里的 SHA1</strong> 比对：你删了库里的 A 文件，但目标目录还有同 SHA1 的 B 文件（或内容被移进了「已存在」目录）。清掉目标目录/已存在目录里的同内容即可。</p></details>
   <details><summary>网盘手动改了名，本地 STRM 会更新吗？</summary><p>会——增量同步的「改名/移动」事件会删旧建新；没开增量就跑一次全量，再用「失效 STRM 检测」清掉残留。</p></details>
   <details><summary>整理后字幕没挂上？</summary><p>字幕必须与视频<strong>同基名</strong>（语言后缀保留，如 <code>片名.chs.srt</code>）。整理会自动跟随改名；自己后放的字幕注意命名要与视频一致。</p></details>
@@ -1048,8 +1034,8 @@ tv:
   <details><summary>识别失败的文件去哪了？</summary><p>「冗余」目录。人工把文件/目录改成更规范的名字（带片名+年份）再丢回待整理即可重试；网络原因失败的会留在待整理自动重试。</p></details>
   <details><summary>支持别的网盘吗？</summary><p>当前 115 专属；界面上「规划中」的卡片即未来方向（OpenList）。</p></details>
   <details><summary>忘记管理员密码 / 想改密码？</summary>
-    <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec strmhub ./strmhub --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
-  <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec strmhub ./strmhub --reset-admin</code> 后重启重建。</p></details>
+    <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec 115-station ./strmhub --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
+  <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec 115-station ./strmhub --reset-admin</code> 后重启重建。</p></details>
   <details><summary>多个人能用吗？</summary><p>管理后台单管理员（个人工具定位）；Emby 侧多用户由 Emby 自己管理。</p></details>
 </section>
 
@@ -1058,7 +1044,7 @@ tv:
   <h2><span class="num">26</span>术语表</h2>
   <dl class="glossary">
     <dt>STRM</dt><dd>只含一行 URL 的文本文件（扩展名 .strm）。播放器把它当作「重定向到该 URL 的媒体」播放——Emby/Jellyfin/Kodi 原生支持。</dd>
-    <dt>302 直链 / 短链</dt><dd>StrmHub 代理地址（<code>6086/d/&lt;pick_code&gt;</code>）。播放器请求它，服务端即时换取 115 真实直链并返回 HTTP 302 重定向。好处：STRM 内容永不过期、播放流量不过服务器、直链按请求端 UA 正确签发。</dd>
+    <dt>302 直链 / 短链</dt><dd>115-Station 代理地址（<code>6086/d/&lt;pick_code&gt;</code>）。播放器请求它，服务端即时换取 115 真实直链并返回 HTTP 302 重定向。好处：STRM 内容永不过期、播放流量不过服务器、直链按请求端 UA 正确签发。</dd>
     <dt>pick_code</dt><dd>115 文件的取件码，网盘侧每个文件唯一，短链与取流都靠它。</dd>
     <dt>TMDB</dt><dd>The Movie Database，影视元数据库（标题/年份/海报/分类/评分）。识别、命名、分类、入库通知的元数据来源。</dd>
     <dt>SHA1</dt><dd>文件内容指纹。去重与秒传的基础：相同 SHA1 = 相同内容（不论文件名）。</dd>
@@ -1068,12 +1054,12 @@ tv:
     <dt>生活事件</dt><dd>115 官方操作流水（上传/删除/移动/改名…），增量同步的数据源，保留 30 天。</dd>
     <dt>OpenAPI</dt><dd>115 官方开放平台接口（open.115.com），应用凭 AppID+OAuth 授权访问，无 Cookie 风控。</dd>
     <dt>工作区目录</dt><dd>待整理 / 已存在 / 冗余三个目录，整理流水线的工作槽位。</dd>
-    <dt>辅助容器（updater）</dt><dd>应用内更新时启动的一次性容器，代替主容器完成「停旧启新」（主容器不能停自己）。</dd>
   </dl>
 
   <div class="footer">
-    StrmHub 完整使用文档 · 项目主页
-    <a href="https://github.com/DaisyYijin/STRMhub" target="_blank" rel="noopener">GitHub · DaisyYijin/STRMhub</a>
+    115-Station 完整使用文档 · 本项目基于
+    <a href="https://github.com/DaisyYijin/STRMhub" target="_blank" rel="noopener">DaisyYijin/STRMhub</a>
+    二次开发，核心架构与绝大部分代码由上游作者编写
     · 本页为单文件静态文档，可部署到任意静态托管（如热铁盒）作为线上 Wiki · 内容随版本更新
   </div>
 </section>

@@ -99,14 +99,6 @@ func (w *rotatingWriter) rotate() {
 }
 
 func main() {
-	// 子命令：update-finish <旧容器ID> <新容器ID>
-	// 由「更新辅助容器」执行（同一镜像 + docker.sock），负责停旧容器→启动新容器→清理。
-	// 更新流程里主容器不能停自己（进程会被杀，后续步骤无法执行），收尾必须由独立进程完成。
-	if len(os.Args) >= 4 && os.Args[1] == "update-finish" {
-		api.RunUpdateFinish(os.Args[2], os.Args[3])
-		return
-	}
-
 	// 初始化配置
 	cfg := config.Load()
 
@@ -120,7 +112,7 @@ func main() {
 		return
 	}
 
-	log.Printf("StrmHub 启动中... 版本:%s 管理端口:%d 代理端口:%d", BuildSHA, cfg.Port, cfg.ProxyPort)
+	log.Printf("115-Station 启动中... 版本:%s 管理端口:%d 代理端口:%d", BuildSHA, cfg.Port, cfg.ProxyPort)
 
 	// 确保配置目录存在
 	if err := cfg.EnsureConfigDir(); err != nil {
@@ -274,7 +266,7 @@ func main() {
 	// 企微聊天底栏菜单默认自动生成（自动整理 / 增量同步）
 	go api.WecomMenuAutoEnsure()
 
-	// 优雅退出：docker stop / 自更新收尾发 SIGTERM——直接杀进程会把
+	// 优雅退出：docker stop 发 SIGTERM——直接杀进程会把
 	// 「115 已搬移、台账未写」的中间态留在云端（下次去重/洗版判定失据），
 	// 防抖队列里的入库通知也全部丢失。停 worker → 冲刷通知 → 留收尾窗口
 	sigCh := make(chan os.Signal, 1)

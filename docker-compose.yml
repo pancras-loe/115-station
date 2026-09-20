@@ -1,6 +1,8 @@
 services:
   station:
-    # 本仓库不发布预构建镜像，先本地构建：docker build -t 115-station:local .
+    # 本仓库不发布预构建镜像（理由见 README「许可证与再分发声明」），
+    # 直接在本地构建：docker compose up -d --build
+    build: .
     image: 115-station:local
     container_name: 115-station
     restart: unless-stopped

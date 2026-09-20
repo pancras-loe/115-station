@@ -3,7 +3,7 @@ package api
 // ==================== 入库通知：聚合防抖 + Emby 封面优先 ====================
 //
 // 两级入库语义（借鉴 EmbyPulse）：
-//   第一级：整理完成（StrmHub 移库成功）——TMDB 封面（无封面走纯文本）
+//   第一级：整理完成（115-Station 移库成功）——TMDB 封面（无封面走纯文本）
 //   第二级：Emby 扫描入库完成（Webhook item.added）——封面/评分直接取自 Emby
 // 同级通知 15 秒防抖聚合（上限 120 秒强制发送）：多部影视合并为一条，
 // 企微 news 多卡片（每部一张封面），TG 一图 + 汇总列表。
@@ -244,7 +244,7 @@ func sendWecomNewsMulti(cfg WecomConfig, title string, items []mediaNotifEntry) 
 		}
 		link := e.Link
 		if link == "" {
-			link = "https://github.com/DaisyYijin/STRMhub"
+			link = wecomCardFallbackLink()
 		}
 		articles = append(articles, map[string]string{
 			"title":       truncateStr(t, 90),

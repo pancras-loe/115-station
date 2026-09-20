@@ -153,10 +153,6 @@ func wecomMenuCreate(cfg WecomConfig) error {
 				{Type: "click", Name: "创建 Emby 媒体库", Key: "建库"},
 				{Type: "click", Name: "使用帮助", Key: "帮助"},
 			}},
-			{Name: "更 新", SubButton: []btn{
-				{Type: "click", Name: "检查更新", Key: "检查更新"},
-				{Type: "click", Name: "执行更新", Key: "执行更新"},
-			}},
 		},
 	}
 	payload, _ := json.Marshal(menu)
@@ -342,60 +338,6 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 			return
 		}
 		h.wecomHandleGySearch(user, kw, reply)
-
-	case lower == "检查更新":
-		go func() {
-			latest, ferr := fetchLatestSHA(true)
-			if ferr != "" || latest == "" {
-				NotifyMessage("", "✗ 无法获取最新版本信息（GitHub 不可达），请稍后再试")
-				return
-			}
-			// dev 构建 buildVersion 长度不足 7，切片会越界 panic（本 goroutine
-			// 无 recover，会带崩整个进程）
-			if len(buildVersion) >= 7 && strings.HasPrefix(latest, buildVersion[:7]) {
-				NotifyMessage("", "✓ 当前 v"+shortSha(buildVersion)+" 已是最新版本")
-				return
-			}
-			switch imageBuildState(latest) {
-			case "building":
-				NotifyMessage("", "⏳ 新版本 v"+shortSha(latest)+" 镜像构建中，完成后会再通知")
-			case "failed":
-				NotifyMessage("", "✗ 新版本 v"+shortSha(latest)+" 构建失败，请到 GitHub Actions 查看")
-			default:
-				commits := fetchCommitsBetween(buildVersion, latest)
-				var b strings.Builder
-				fmt.Fprintf(&b, "↑ 有新版本 v%s → v%s（%d 个提交）", shortSha(buildVersion), shortSha(latest), len(commits))
-				for i, cm := range commits {
-					if i >= 8 {
-						fmt.Fprintf(&b, "\n…等共 %d 个提交", len(commits))
-						break
-					}
-					fmt.Fprintf(&b, "\n• %s %s", shortSha(cm.Sha), truncateStr(cm.Message, 50))
-				}
-				b.WriteString("\n\n点「更 新」菜单可直接执行更新")
-				NotifyMessage("", b.String())
-			}
-		}()
-
-	case lower == "执行更新" || lower == "更新":
-		go func() {
-			if running, tname, _, _ := TaskStatus(); running {
-				NotifyMessage("", "○ 暂不能更新：正在执行「"+tname+"」，完成后会通知")
-				return
-			}
-			code, payload := h.applyUpdateFlow()
-			if code >= 400 {
-				if e, ok := payload["error"].(string); ok {
-					NotifyMessage("", "✗ 更新失败："+e)
-				} else {
-					NotifyMessage("", "✗ 更新失败，请查看服务日志")
-				}
-				return
-			}
-			if msg, ok := payload["message"].(string); ok {
-				NotifyMessage("", msg)
-			}
-		}()
 
 	case lower == "建库" || lower == "创建媒体库":
 		reply("已开始创建 Emby 媒体库，完成后通知。")

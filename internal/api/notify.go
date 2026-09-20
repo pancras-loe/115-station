@@ -317,7 +317,7 @@ func sendWecomNewsArticles(cfg WecomConfig, articles []NewsArticle) error {
 	for _, a := range articles {
 		link := a.Link
 		if link == "" {
-			link = "https://github.com/DaisyYijin/STRMhub"
+			link = wecomCardFallbackLink()
 		}
 		list = append(list, map[string]string{
 			"title":       truncateStr(a.Title, 90),
@@ -393,6 +393,10 @@ func wecomAccessToken(cfg WecomConfig) (string, error) {
 	return tokenResult.AccessToken, nil
 }
 
+// wecomCardFallbackLink 企微图文卡片的 url 字段必填，条目自身没有链接时用它兜底。
+// 指向 115 首页——内容本来就在那儿，也不会把用户导去无关项目。
+func wecomCardFallbackLink() string { return "https://115.com" }
+
 // sendWecomNews 发送企业微信图文卡片（封面 + 标题 + 描述 + 链接）
 func sendWecomNews(cfg WecomConfig, title, desc, picurl, linkURL string) error {
 	token, err := wecomAccessToken(cfg)
@@ -400,7 +404,7 @@ func sendWecomNews(cfg WecomConfig, title, desc, picurl, linkURL string) error {
 		return err
 	}
 	if linkURL == "" {
-		linkURL = "https://github.com/DaisyYijin/STRMhub"
+		linkURL = wecomCardFallbackLink()
 	}
 	payload := map[string]interface{}{
 		"touser":  "@all",
@@ -620,7 +624,7 @@ func (h *Handler) TestMessage(c *gin.Context) {
 		return
 	}
 
-	testMsg := "StrmHub 消息通知测试"
+	testMsg := "115-Station 消息通知测试"
 	successCount := 0
 	errorMsg := ""
 

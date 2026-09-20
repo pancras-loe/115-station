@@ -6,7 +6,7 @@ package api
 // 接入模型：OpenAPI 应用（X-API-Key = 应用 Secret）+ OAuth 用户授权（Bearer 用户 Token）：
 //
 //	1. 在 RE0「个人面板 → 我的应用」创建应用并等站方审核通过（公开且用户 6+，或长期 v 用户）
-//	2. StrmHub 配置 client_id / Secret
+//	2. 115-Station 配置 client_id / Secret
 //	3. 点「授权」跳转 re0.me/openapi/authorize → 回调 /api/re0/oauth/callback 换取用户 Token
 //	4. 搜索 = TMDB 片名 → tmdb_id → GET /api/open/resources/{type}/{tmdb_id}
 //	5. 解锁 = POST /api/open/resources/unlock → full_url(115 分享链接) → 现有分享转存引擎
@@ -316,7 +316,7 @@ func re0StateTake(state string) (string, bool) {
 }
 
 // Re0OAuthStart GET /re0/oauth/start?redirect_uri=...
-// 前端传 StrmHub 公网地址 + /api/re0/oauth/callback（RE0 应用支持动态回调）
+// 前端传 115-Station 公网地址 + /api/re0/oauth/callback（RE0 应用支持动态回调）
 func (h *Handler) Re0OAuthStart(c *gin.Context) {
 	cfg := loadRe0Cfg()
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
@@ -352,7 +352,7 @@ func (h *Handler) Re0OAuthCallback(c *gin.Context) {
 	redirectURI, ok := re0StateTake(state)
 	if !ok {
 		c.Data(http.StatusBadRequest, "text/html; charset=utf-8",
-			[]byte(`<!DOCTYPE html><meta charset="utf-8"><body style="font-family:system-ui;text-align:center;padding-top:60px"><h3>✗ RE0 授权失败</h3><p>state 无效或已过期（10 分钟内有效），请回 StrmHub 重新点「授权」。</p></body>`))
+			[]byte(`<!DOCTYPE html><meta charset="utf-8"><body style="font-family:system-ui;text-align:center;padding-top:60px"><h3>✗ RE0 授权失败</h3><p>state 无效或已过期（10 分钟内有效），请回 115-Station 重新点「授权」。</p></body>`))
 		return
 	}
 	if code == "" {
@@ -419,7 +419,7 @@ func (h *Handler) Re0OAuthCallback(c *gin.Context) {
 	}
 	log.Printf("[RE0] ✓ OAuth 授权完成（用户: %s）", cfg.AuthorizedAs)
 	c.Data(http.StatusOK, "text/html; charset=utf-8",
-		[]byte(`<!DOCTYPE html><meta charset="utf-8"><body style="font-family:system-ui;text-align:center;padding-top:60px"><h3>✓ RE0 授权成功</h3><p>已绑定用户 `+htmlEscape(cfg.AuthorizedAs)+`，请关闭此页返回 StrmHub。</p></body>`))
+		[]byte(`<!DOCTYPE html><meta charset="utf-8"><body style="font-family:system-ui;text-align:center;padding-top:60px"><h3>✓ RE0 授权成功</h3><p>已绑定用户 `+htmlEscape(cfg.AuthorizedAs)+`，请关闭此页返回 115-Station。</p></body>`))
 }
 
 func htmlEscape(s string) string {

@@ -183,7 +183,7 @@ const localDirLimit = 1000
 
 // ListLocalDirs 浏览本地文件系统目录
 // GET /storage/local/dirs?path=C:\media
-// 注意：浏览的是 StrmHub 进程所在机器（Docker 部署时是容器内文件系统，卷挂载点也在其中）
+// 注意：浏览的是 115-Station 进程所在机器（Docker 部署时是容器内文件系统，卷挂载点也在其中）
 func (h *Handler) ListLocalDirs(c *gin.Context) {
 	path := c.Query("path")
 	if path == "" {

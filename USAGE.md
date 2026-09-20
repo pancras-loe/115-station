@@ -1,4 +1,4 @@
-# StrmHub 使用说明
+# 115-Station 使用说明
 
 面向日常使用的操作手册。部署方式见 [README.md](README.md)。
 
@@ -20,8 +20,8 @@ environment:
 
 1. 浏览器打开 `http://IP:6060`，用上面的账号密码登录
 2. **改密码 = 改环境变量后重启容器**（启动时自动同步，环境变量为权威来源）
-3. 忘记密码：改环境变量重启即可；或 `docker exec strmhub ./strmhub --reset-admin` 删除凭据文件后重启重建
-4. 从未配置环境变量且无历史账号时，首次启动会自动生成随机密码（用户名 `admin`），在容器启动日志中查看：`docker logs strmhub`
+3. 忘记密码：改环境变量重启即可；或 `docker exec 115-station ./strmhub --reset-admin` 删除凭据文件后重启重建
+4. 从未配置环境变量且无历史账号时，首次启动会自动生成随机密码（用户名 `admin`），在容器启动日志中查看：`docker logs 115-station`
 
 ## 2. 账号管理（登录 115）
 
@@ -169,8 +169,8 @@ OpenAI 是 `https://api.openai.com/v1`（→ `/v1/chat/completions`），硅基�
 ### 监控上传（Emby 元数据回传 115）
 Emby 刮削生成的 NFO 与图片保存到媒体目录后，自动回传到 115 对应目录，形成闭环：
 
-1. Emby 媒体库勾选「将媒体封面保存到媒体文件夹」（StrmHub 已对目录设置宽松权限 777/666，Emby 可写）
-2. StrmHub 监控本地媒体目录，识别标准 Emby 命名（`poster.jpg`、`fanart.jpg`、`seasonXX-xxx.jpg`、`*.nfo` 等）
+1. Emby 媒体库勾选「将媒体封面保存到媒体文件夹」（115-Station 已对目录设置宽松权限 777/666，Emby 可写）
+2. 115-Station 监控本地媒体目录，识别标准 Emby 命名（`poster.jpg`、`fanart.jpg`、`seasonXX-xxx.jpg`、`*.nfo` 等）
 3. 检测到新文件即上传到 115 同路径目录
 
 无需配置上传目标目录，自动对应全量同步的网盘目录结构。
@@ -182,9 +182,9 @@ Emby 刮削生成的 NFO 与图片保存到媒体目录后，自动回传到 115
 - 支持企业微信机器人远程提交（直接发链接即可，见消息配置）
 
 ### 按需离线（边下边播）
-提交离线下载成功的那一刻，媒体根的「按需离线/」目录会立即生成占位 STRM，内容指向 StrmHub 自己的播放端点（`http://NAS_IP:6086/ed2k/play/<id>`），Emby 扫到即可见可点：
+提交离线下载成功的那一刻，媒体根的「按需离线/」目录会立即生成占位 STRM，内容指向 115-Station 自己的播放端点（`http://NAS_IP:6086/ed2k/play/<id>`），Emby 扫到即可见可点：
 
-1. 播放时 StrmHub 查 115 离线任务状态——没下过就自动提交，下载中返回进度提示（秒传/小文件当场开播）
+1. 播放时 115-Station 查 115 离线任务状态——没下过就自动提交，下载中返回进度提示（秒传/小文件当场开播）
 2. 下载完成后自动定位文件 pickcode，302 跳转 115 直链开播
 3. 正式 STRM 由整理 + 同步生成后，占位 STRM 自动移除，不留重复条目
 
@@ -198,7 +198,7 @@ RE0（影视资料与分享社区，re0.me）官方 OpenAPI 接入。前提：�
 3. 搜索：片名先经 TMDB 匹配，再查 RE0 站内资源（网盘类型/分辨率/大小/解锁积分）
 4. 点「解锁并转存」消耗站内积分解锁，115 分享自动转存到接收目录并整理入库；已解锁资源不重复扣积分
 
-RE0 常态屏蔽大陆 IP：StrmHub 部署需能直连或为其配置代理。
+RE0 常态屏蔽大陆 IP：115-Station 部署需能直连或为其配置代理。
 
 ## 6. 系统配置
 
@@ -213,9 +213,9 @@ RE0 常态屏蔽大陆 IP：StrmHub 部署需能直连或为其配置代理。
 ## 7. 消息配置
 
 ### 企业微信（双向机器人）
-1. 企业微信后台创建自建应用，获取 **CorpID / Secret / AgentID**；「接收消息服务器配置」的 URL 填 `http://<StrmHub公网IP>:6086/wecom/callback`（注意端口是 6086），Token 与 EncodingAESKey 抄到本卡对应输入框
+1. 企业微信后台创建自建应用，获取 **CorpID / Secret / AgentID**；「接收消息服务器配置」的 URL 填 `http://<115-Station公网IP>:6086/wecom/callback`（注意端口是 6086），Token 与 EncodingAESKey 抄到本卡对应输入框
 2. **API 地址**默认官方 `https://qyapi.weixin.qq.com`，海外部署访问慢时可改反代地址
-3. 在 StrmHub 填入凭据并将状态设为「启用」；腾讯要求把服务器 IP 加入应用的「企业可信IP」，否则发送报 60020
+3. 在 115-Station 填入凭据并将状态设为「启用」；腾讯要求把服务器 IP 加入应用的「企业可信IP」，否则发送报 60020
 
 对机器人发消息即可远程控制：
 
@@ -263,4 +263,4 @@ RE0 常态屏蔽大陆 IP：StrmHub 部署需能直连或为其配置代理。
 Emby 媒体库需勾选「将媒体封面保存到媒体文件夹」+ 元数据下载器启用；生成后监控上传会自动回传 115。
 
 **忘记密码 / 想改密码？**
-修改 compose 里的 `AUTH_PASSWORD` 后 `docker compose up -d` 重启即生效（环境变量为准）。或执行 `docker exec strmhub ./strmhub --reset-admin` 后重启，按环境变量重建（`/data` 内的同步数据保留）。
+修改 compose 里的 `AUTH_PASSWORD` 后 `docker compose up -d` 重启即生效（环境变量为准）。或执行 `docker exec 115-station ./strmhub --reset-admin` 后重启，按环境变量重建（`/data` 内的同步数据保留）。

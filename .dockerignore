@@ -14,3 +14,10 @@ reference-projects/
 webui/node_modules/
 webui/dist/
 webui/dist-mock/
+
+# 文档不参与构建：Dockerfile 的 builder 阶段是 COPY . .，排掉可缩小构建上下文
+*.md
+wiki/
+licenses/
+.github/
+.claude/

@@ -61,7 +61,7 @@ func (c *Config) EnsureTLSCert() (string, string, error) {
 	}
 	tpl := x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "StrmHub"},
+		Subject:      pkix.Name{CommonName: "115-Station"},
 		NotBefore:    time.Now().Add(-time.Hour), // 容器时钟略偏也不至于"尚未生效"
 		NotAfter:     time.Now().AddDate(10, 0, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

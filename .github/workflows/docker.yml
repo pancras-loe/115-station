@@ -9,6 +9,14 @@ on:
 
 env:
   IMAGE_NAME: 115-station
+  # 是否把镜像推到 ghcr。
+  #
+  # 默认 false：上游 DaisyYijin/STRMhub 未附带 LICENSE，按「保留所有权利」处理，
+  # 本仓库不对外分发预构建镜像（README「许可证与再分发声明」一节）。
+  # 这里保持 false，docker job 只验证多架构构建能过，不产出可拉取的包。
+  #
+  # 上游补充开源许可证后，把这里改成 true 即可恢复发布。
+  PUBLISH: 'false'
 
 jobs:
   # 测试门禁：构建/vet/测试全过才允许出镜像（坏提交拦在 master 之外）
@@ -52,6 +60,7 @@ jobs:
         run: npm run build
         working-directory: webui
 
+  # 只验证多架构构建能过；是否推送由上面的 PUBLISH 开关决定
   docker:
     runs-on: ubuntu-latest
     needs: test
@@ -72,13 +81,15 @@ jobs:
         run: |
           echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
 
+      # GITHUB_TOKEN 配合 job 的 packages: write 就够推 ghcr，不需要自建 PAT
+      # （用自定义 secret 的话，别人 fork 本仓库后这个 job 必红）
       - name: Login to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true' && github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.CR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -97,7 +108,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ env.PUBLISH == 'true' && github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

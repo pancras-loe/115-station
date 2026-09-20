@@ -391,7 +391,7 @@ func directURLContainer(u string) string {
 
 // directURLFromLedger 同步台账反查直链：按 strm 文件名（xxx.mkv.strm）
 // 查 SyncedFile 的 pick_code，按 STRM 直链配置拼 URL。
-// Emby 与 StrmHub 容器的媒体路径不一致导致文件读不到时的兜底
+// Emby 与 115-Station 容器的媒体路径不一致导致文件读不到时的兜底
 func directURLFromLedger(db *gorm.DB, cfg *config.Config, strmBase string) string {
 	if db == nil || strmBase == "" {
 		return ""
@@ -598,7 +598,7 @@ func registerEmbyProxy(r *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		target := getEmbyTarget(db, cfg)
 		if target == "" {
 			c.Header("Content-Type", "text/html; charset=utf-8")
-			c.String(http.StatusOK, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>StrmHub</title></head><body style="font-family:system-ui;max-width:640px;margin:60px auto;padding:0 20px"><h2>StrmHub 302 代理</h2><p style="color:#e74c3c">未配置 Emby 服务器地址，暂无法反代</p><p>请在「系统配置 → EMBY管理」填写 Emby 服务器地址（如 http://192.168.1.100:8096）后刷新本页。</p><hr style="border:none;border-top:1px solid #eee"><p>本端口提供两个服务：</p><ul><li><b>Emby 反代</b>：<code>http://本机IP:6086/</code> 与 <code>/emby</code> — 配置后直接打开即 Emby</li><li><b>302 直连</b>：<code>http://本机IP:6086/d/文件ID</code> — strm 播放地址（自动生成）</li></ul><p>管理后台在 <code>http://本机IP:6060</code></p></body></html>`)
+			c.String(http.StatusOK, `<!DOCTYPE html><html><head><meta charset="utf-8"><title>115-Station</title></head><body style="font-family:system-ui;max-width:640px;margin:60px auto;padding:0 20px"><h2>115-Station 302 代理</h2><p style="color:#e74c3c">未配置 Emby 服务器地址，暂无法反代</p><p>请在「系统配置 → EMBY管理」填写 Emby 服务器地址（如 http://192.168.1.100:8096）后刷新本页。</p><hr style="border:none;border-top:1px solid #eee"><p>本端口提供两个服务：</p><ul><li><b>Emby 反代</b>：<code>http://本机IP:6086/</code> 与 <code>/emby</code> — 配置后直接打开即 Emby</li><li><b>302 直连</b>：<code>http://本机IP:6086/d/文件ID</code> — strm 播放地址（自动生成）</li></ul><p>管理后台在 <code>http://本机IP:6060</code></p></body></html>`)
 			return
 		}
 		targetURL, _ := url.Parse(target)

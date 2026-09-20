@@ -34,7 +34,9 @@ func TestGyPowLoopMath(t *testing.T) {
 	}
 }
 
-// TestGyExtractTorrentsSample 用真实搜索页样本验证内嵌 _obj.search 解析
+// TestGyExtractTorrentsSample 用脱敏搜索页样本验证内嵌 _obj.search 解析。
+// 样本保留站点真实的页面结构（_obj.* 内嵌 JSON、并行数组、数字型 seeds），
+// 片名/ID/用户名全部换成占位值——真实抓包含站点账号与版权片源，不入库。
 func TestGyExtractTorrentsSample(t *testing.T) {
 	raw, err := os.ReadFile("testdata/gy_search.html")
 	if err != nil {
@@ -42,20 +44,20 @@ func TestGyExtractTorrentsSample(t *testing.T) {
 	}
 	items := gyExtractTorrents(string(raw))
 	if len(items) == 0 {
-		t.Fatalf("真实样本解析出 0 个条目")
+		t.Fatalf("样本解析出 0 个条目")
 	}
 	var found bool
 	for _, it := range items {
-		if title, _ := it["title"].(string); strings.HasPrefix(title, "流浪地球2") && it["size"] == "10.49G" {
+		if title, _ := it["title"].(string); strings.HasPrefix(title, "示例影片2") && it["size"] == "10.49G" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("未解析到流浪地球2种子（10.49G），得到 %v", items)
+		t.Errorf("未解析到示例影片2种子（10.49G），得到 %v", items)
 	}
 }
 
-// TestGyExtractMagnetSample 用真实种子详情页样本验证磁力提取
+// TestGyExtractMagnetSample 用脱敏种子详情页样本验证磁力提取
 func TestGyExtractMagnetSample(t *testing.T) {
 	raw, err := os.ReadFile("testdata/gy_detail.html")
 	if err != nil {
@@ -64,9 +66,9 @@ func TestGyExtractMagnetSample(t *testing.T) {
 	body := string(raw)
 	m := reGyMagnet.FindStringSubmatch(body)
 	if m == nil {
-		t.Fatalf("真实样本未提取到磁力链接")
+		t.Fatalf("样本未提取到磁力链接")
 	}
-	if !strings.HasPrefix(m[0], "magnet:?xt=urn:btih:94C6789B") {
+	if !strings.HasPrefix(m[0], "magnet:?xt=urn:btih:0123456789ABCDEF") {
 		t.Errorf("磁力哈希异常: %s", m[0])
 	}
 	title := ""
@@ -78,7 +80,7 @@ func TestGyExtractMagnetSample(t *testing.T) {
 			title = d.Title
 		}
 	}
-	if !strings.Contains(title, "流浪地球2") {
+	if !strings.Contains(title, "示例影片2") {
 		t.Errorf("标题解析异常: %q", title)
 	}
 }
@@ -94,4 +96,3 @@ func TestGyObjJSONBalanced(t *testing.T) {
 		t.Errorf("提取范围异常: %q", objStr)
 	}
 }
-

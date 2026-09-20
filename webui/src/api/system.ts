@@ -6,7 +6,6 @@ export interface VersionInfo {
 }
 
 export const version = () => http.get<VersionInfo>('/version')
-export const latestVersion = () => http.get<VersionInfo>('/version/latest')
 
 export interface LogsResult {
   logs: string[] | string

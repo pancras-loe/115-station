@@ -26,13 +26,18 @@ flowchart LR
 | 项目 | 地址 | 说明 |
 |---|---|---|
 | 上游（Upstream） | <https://github.com/DaisyYijin/STRMhub> | 原始项目，核心架构与绝大部分代码由其作者编写 |
-| 本仓库（Fork） | 本项目 | 在上游基础上裁剪网盘支持范围，仅保留 115 链路 |
+| 本仓库 | 本项目 | 在上游基础上裁剪网盘支持范围，仅保留 115 链路 |
 
 本项目的所有核心能力——STRM 同步引擎、302 直链代理、TMDB 整理流水线、洗版策略、
 ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来自上游 STRMhub。
 在此向原作者 [@DaisyYijin](https://github.com/DaisyYijin) 表示感谢。
 
 如果这个工具对你有用，**请优先去上游仓库点 Star**。
+
+> **关于提交历史**：本仓库是独立新建的，不是 GitHub 意义上的 fork，**没有保留上游的
+> commit 历史**——第一个提交就包含了上游的全部代码。这意味着 `git blame` / `git log`
+> 会把上游作者写的代码归到本仓库维护者名下，这是仓库形态导致的，不是署名主张。
+> 代码作者身份以本节与上游仓库为准。
 
 ---
 
@@ -85,14 +90,14 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 
 ### 第三方组件
 
-本项目（含上游代码）依赖以下第三方组件，各自遵循其原始许可证：
+本项目（含上游代码）依赖以下第三方组件。**它们的许可证义务独立于上游的授权状况**——
+本仓库不给自己的代码发许可证，但这些组件要求的版权声明与许可证副本必须随附，
+全文见 [`licenses/`](licenses/)，逐项说明见 **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**。
 
 | 组件 | 用途 | 许可证 |
 |---|---|---|
 | Go 依赖（见 [`go.mod`](go.mod)） | Gin、GORM、115driver、jwt 等 | 各依赖自有许可证 |
 | [CodeMirror 5](https://codemirror.net/5/)（`web/vendor/cm5/`） | YAML 配置编辑器 | MIT |
-| [ECharts](https://echarts.apache.org/)（`strmhub-proposal/_shared/js/`） | 方案文档图表 | Apache-2.0 |
-| [Mermaid](https://mermaid.js.org/)（`strmhub-proposal/_shared/js/`） | 方案文档流程图 | MIT |
 | 思源黑体 Source Han Sans（`internal/api/assets/`） | 媒体库封面生成字体 | SIL OFL 1.1 |
 | FFmpeg（运行镜像内） | 媒体信息探测 | LGPL / GPL（Alpine 包） |
 
@@ -103,7 +108,7 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 由于上文所述的许可证状况，本仓库不发布预构建镜像，请自行构建。
 
 ```bash
-git clone <本仓库地址> 115-station
+git clone https://github.com/<你的用户名>/115-station.git && cd 115-station
 ```
 
 ```bash
@@ -115,6 +120,7 @@ docker build -t 115-station:local .
 ```yaml
 services:
   station:
+    build: .                  # 本仓库不发布预构建镜像，compose 直接现场构建
     image: 115-station:local
     container_name: 115-station
     restart: unless-stopped
@@ -228,6 +234,10 @@ docker compose up -d
 > **管理员账号说明**：网页注册已移除。账号以环境变量 `AUTH_USER` / `AUTH_PASSWORD` 为准，每次启动自动同步；
 > 两者都未配置且无历史账号时，首次启动会自动生成随机密码并打印在容器日志（`docker logs 115-station`）。
 > 改环境变量即改密码，重启生效。容器内也可执行 `./strmhub --reset-admin` 只删账号文件而保留其他配置。
+
+> **关于更新**：本项目没有应用内自更新——它依赖发布公共镜像，与本仓库的许可证立场冲突，
+> 已整条移除。更新方式是 `git pull && docker compose up -d --build`，
+> 配置与数据都在挂载卷里，不受影响。
 
 ## 基本使用流程
 

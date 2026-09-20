@@ -15,7 +15,7 @@ import (
 // 需要真实账号，默认跳过。跑法：
 //
 //	STRMHUB_TEST_115_COOKIE='UID=...; CID=...; SEID=...' \
-//	STRMHUB_TEST_115_CID=3246689479146077331 \
+//	STRMHUB_TEST_115_CID=<你要对拍的 115 目录 ID> \
 //	go test ./internal/api/ -run TestFastVsNormal -v -timeout 2h
 //
 // 标准模式要逐个目录遍历，大库会跑很久。第一次对拍建议挑个中等大小的

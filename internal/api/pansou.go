@@ -9,7 +9,7 @@ package api
 //	→ {"code":0,"message":"success","data":{"total":N,"merged_by_type":
 //	    {"115":[{url,password,note,datetime}],...}}}
 //
-// 常见类型：baidu/xunlei/uc（115 偶见）。StrmHub 只能自动
+// 常见类型：baidu/xunlei/uc（115 偶见）。115-Station 只能自动
 // 处理 115 分享（转存）与磁力/ed2k（离线下载），其余类型点击打开原链接
 // 手动转存到对应网盘。
 
@@ -194,7 +194,7 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 	}
 	if lastErr != "" {
 		if strings.Contains(lastErr, "503") || strings.Contains(lastErr, "502") {
-			lastErr += "——公开实例可能过载/限流，请稍后重试；或到 StrmHub 网页端「影视转存 → 盘搜」配置自建实例（docker run ghcr.io/fish2018/pansou）"
+			lastErr += "——公开实例可能过载/限流，请稍后重试；或到 115-Station 网页端「影视转存 → 盘搜」配置自建实例（docker run ghcr.io/fish2018/pansou）"
 		}
 		return nil, fmt.Errorf("%s", lastErr)
 	}
