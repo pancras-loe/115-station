@@ -547,13 +547,3 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 		"pending_events": pendingEvents,
 	})
 }
-
-// saveProxyConfigToDB 把代理配置写入 DB（TMDB / AI 增强识别请求共用）
-func saveProxyConfigToDB(h *Handler, proxyURL string) {
-	var s model.Setting
-	if err := h.DB.Where("`key` = ?", "proxy").First(&s).Error; err == nil {
-		h.DB.Model(&s).Update("value", fmt.Sprintf(`{"url":%q}`, proxyURL))
-	} else {
-		h.DB.Create(&model.Setting{Key: "proxy", Value: fmt.Sprintf(`{"url":%q}`, proxyURL)})
-	}
-}
