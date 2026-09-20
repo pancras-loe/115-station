@@ -245,6 +245,13 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     Emby 扫库发现文件不在也发它，挂载抖一下就能连发一整批。
     神医助手的 `deep.delete` 是用户显式点按钮触发的，**只有它**能跳过两轮确认之间的等待
     （立即 `runDeepDelScanNow`），挂载探针与阈值照旧。新增任何事件来源时守住这条线。
+    （2026-09 实测：Emby 扫库清理失效条目**确实会发** `library.deleted`，
+    原生事件流里「用户删的」和「文件不见了」分辨不出来。这不是假想风险。）
+
+    第三个入口是整理记录页的「深度删除」（`DeepDeleteOrganizeRecord`）：
+    用户指定一条记录、文件都还在，所以两轮确认与阈值不适用，但守卫 #2 照旧 ——
+    记录里的 fid 只用来**查台账**，查不到的一概不删（`deepDelRowsForRecord`）。
+    别把它和同一行里的 `DeleteOrganizeRecord` 搞混：后者只删记录、不动任何文件。
 
 ---
 
@@ -261,7 +268,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
-| 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`） |
+| 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`）。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，三个页签在 `webui/src/pages/strm/` |
 | 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `fullSyncMu`，整理抢不到锁会置位 `organizeMissed` 稍后补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |

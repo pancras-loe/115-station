@@ -128,6 +128,25 @@ async function doRedo(pick: TmdbCandidate) {
   }
 }
 
+/**
+ * 深度删除：删这条记录整理出来的**网盘源文件**，与下面 removeRecord（只删记录）
+ * 完全两回事，所以按钮文案、颜色、确认框都要把差别摆明。
+ */
+const deepDeleting = ref(0)
+
+async function deepDeleteRecord(r: OrganizeRecord) {
+  deepDeleting.value = r.id
+  try {
+    const d = await organizeApi.deepDeleteRecord(r.id)
+    message.success(d.message || '深度删除完成')
+    await load()
+  } catch (e) {
+    toastError(e, '深度删除失败')
+  } finally {
+    deepDeleting.value = 0
+  }
+}
+
 async function removeRecord(r: OrganizeRecord) {
   try {
     await organizeApi.deleteRecord(r.id)
@@ -240,6 +259,24 @@ async function clearAll() {
                 </template>
                 指定正确的 TMDB 条目，把这 {{ r.file_list.length }} 个文件从当前位置改名并搬到正确目录
               </NTooltip>
+              <!-- 两个删除按钮差别极大，必须让人一眼分清：
+                   这个删网盘真文件（实心红 + 文字），下面那个只删记录（弱化图标） -->
+              <NPopconfirm v-if="r.file_list?.length" @positive-click="void deepDeleteRecord(r)">
+                <template #trigger>
+                  <NButton
+                    size="small"
+                    type="error"
+                    ghost
+                    :disabled="busy"
+                    :loading="deepDeleting === r.id"
+                  >
+                    <Trash2 :size="14" /><span class="btn-label">深度删除</span>
+                  </NButton>
+                </template>
+                连同 <b>115 网盘上的源文件</b>一起删掉《{{ r.title || r.source }}》的
+                {{ r.file_list.length }} 个文件，本地 STRM 与台账一并清理。<br />
+                文件进入 115 回收站，可以还原。
+              </NPopconfirm>
               <NPopconfirm @positive-click="void removeRecord(r)">
                 <template #trigger>
                   <NButton size="small" quaternary type="error"><Trash2 :size="14" /></NButton>

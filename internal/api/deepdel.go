@@ -710,6 +710,96 @@ func (h *Handler) RunDeepDelete(c *gin.Context) {
 	})
 }
 
+// DeepDeleteOrganizeRecord 按整理记录深度删除。POST /organize/records/:id/deep-delete
+//
+// 与触发器 A/B 不同源：那两个的前提是「本地文件已经没了」，这里是**用户指定一条
+// 整理记录，把它整理出来的东西彻底删掉**（整理识别错了、片源不想要了，想连带
+// 网盘一起清干净重来）。所以两轮确认与量级阈值都不适用 —— 用户点的是具体某一行，
+// 范围由那条记录自己的文件清单界定，不存在「误判一大片」的形态。
+//
+// 仍然守住的：**只删台账里有的 fid**。记录里的 fid 是整理自己写下的（`OrganizeRecord.Files`，
+// fid 在 115 上移动改名后不变），再与台账对一遍，对不上就拒绝 —— 那说明这些文件
+// 压根没进过媒体库（整理失败/未识别，东西还在待整理里），不该从这里删。
+func (h *Handler) DeepDeleteOrganizeRecord(c *gin.Context) {
+	var req struct {
+		DryRun bool `json:"dry_run"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	var rec model.OrganizeRecord
+	if h.DB.First(&rec, c.Param("id")).Error != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		return
+	}
+	rows, total, err := deepDelRowsForRecord(h.DB, rec)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(rows) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "这些文件不在媒体库台账里，深度删除不处理：整理失败或未识别的内容还在待整理目录，请到 115 里直接处理",
+		})
+		return
+	}
+
+	if !fullSyncMu.TryLock() {
+		c.JSON(http.StatusConflict, gin.H{"error": "同步任务进行中，请稍后再试"})
+		return
+	}
+	defer fullSyncMu.Unlock()
+
+	res, err := h.runDeepDelete(rows, "manual_record", req.DryRun)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !res.DryRun {
+		// 记录本身留着（它是流水，删了就查不到这次整理发生过什么），但要标一笔 ——
+		// 否则用户回头看到一条 success 记录，点「重新整理」却发现文件早没了
+		note := strings.TrimSpace(rec.Message + " ｜ 已深度删除：网盘源文件在 115 回收站")
+		h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).
+			Update("message", truncateStr(strings.TrimPrefix(note, "｜ "), 480))
+	}
+	msg := fmt.Sprintf("已删除《%s》的网盘源文件 %d 个（视频 %d / 附属 %d），在 115 回收站可还原",
+		rec.Title, res.Fids, res.Videos, res.Assets)
+	if res.DryRun {
+		msg = fmt.Sprintf("预演：将删除《%s》的 %d 个网盘源文件（视频 %d / 附属 %d），未做任何改动",
+			rec.Title, res.Fids, res.Videos, res.Assets)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": msg, "dry_run": res.DryRun, "removed": res.Fids,
+		"videos": res.Videos, "assets": res.Assets, "pan_dirs": res.PanDirs,
+		// 台账里查不到的那些 fid：整理时落过盘、后来被移走或删掉了，如实报出来
+		"skipped": total - len(rows),
+	})
+}
+
+// deepDelRowsForRecord 整理记录 → 可删的台账行，以及记录里一共有几个 fid。
+//
+// **守卫在这里**：记录里的 fid 只用来查台账，查得到的才删。查不到说明这些文件
+// 没进过媒体库（整理失败/未识别，东西还在待整理里）或早被移走了，都不该从这里删。
+// 抽成函数是为了能单测这条判断 —— handler 里要真 115 通道，测不了。
+func deepDelRowsForRecord(db *gorm.DB, rec model.OrganizeRecord) (rows []model.SyncedFile, total int, err error) {
+	var fids []string
+	for _, f := range unmarshalRecordFiles(rec.Files) {
+		if f.Fid != "" {
+			fids = append(fids, f.Fid)
+		}
+	}
+	if len(fids) == 0 {
+		return nil, 0, fmt.Errorf("这条记录没有留下文件信息，无法定位要删什么")
+	}
+	for _, batch := range chunkStrings(fids, 400) {
+		var part []model.SyncedFile
+		if e := db.Where("file_id IN ?", batch).Find(&part).Error; e != nil {
+			return nil, len(fids), fmt.Errorf("读取台账失败: %w", e)
+		}
+		rows = append(rows, part...)
+	}
+	return rows, len(fids), nil
+}
+
 // ListDeepDeleteRecords 深度删除流水。GET /sync/deep-delete/records
 func (h *Handler) ListDeepDeleteRecords(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))

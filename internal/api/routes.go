@@ -304,6 +304,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/organize/records/:id", h.GetOrganizeRecord)
 		protected.POST("/organize/records/:id/redo", h.RedoOrganizeRecord)
 		protected.DELETE("/organize/records/:id", h.DeleteOrganizeRecord)
+		// 深度删除：删这条记录整理出来的网盘源文件（进回收站），与上面「只删记录」两回事
+		protected.POST("/organize/records/:id/deep-delete", h.DeepDeleteOrganizeRecord)
 		protected.POST("/organize/records/clear", h.ClearOrganizeRecords)
 
 		// TMDB 搜索（影视转存页与整理记录的「重新整理」共用：名称或 TMDB ID → 条目选择）

@@ -259,3 +259,30 @@ func TestChunkStrings(t *testing.T) {
 		t.Fatal("空输入应当得到空批次")
 	}
 }
+
+// 按整理记录深度删除：记录里的 fid 只用来查台账，查不到的一概不删
+func TestDeepDelRowsForRecord(t *testing.T) {
+	deepDelTestDB(t, []model.SyncedFile{
+		{FileID: "f1", RelPath: "影视/电影/A/a.mkv.strm", Kind: "video"},
+		{FileID: "f2", RelPath: "影视/电影/A/a.nfo", Kind: "asset"},
+	})
+
+	rec := model.OrganizeRecord{Files: marshalRecordFiles([]orgRecordFile{
+		{Fid: "f1", Name: "a.mkv", Kind: "video"},
+		{Fid: "f2", Name: "a.nfo", Kind: "asset"},
+		// 整理时落过盘、后来被移走的：台账里查不到，不能跟着删
+		{Fid: "f3-不在台账", Name: "b.mkv", Kind: "video"},
+	})}
+	rows, total, err := deepDelRowsForRecord(model.DB, rec)
+	if err != nil {
+		t.Fatalf("不该报错: %v", err)
+	}
+	if total != 3 || len(rows) != 2 {
+		t.Fatalf("total=%d rows=%d，期望 3/2", total, len(rows))
+	}
+
+	// 没留文件信息的记录必须报错拒绝，不能静默当成「没什么可删」
+	if _, _, err := deepDelRowsForRecord(model.DB, model.OrganizeRecord{}); err == nil {
+		t.Fatal("空文件清单必须报错")
+	}
+}

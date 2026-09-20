@@ -106,6 +106,21 @@ export const deleteRecord = (id: number) => http.del(`/organize/records/${id}`)
 export const clearRecords = (status: string) =>
   http.post<{ message?: string; removed: number }>('/organize/records/clear', { status })
 
+/**
+ * 深度删除：删掉这条记录整理出来的**网盘源文件**（进 115 回收站），
+ * 连同本地 STRM/附属与台账。和上面的 deleteRecord（只删记录）是两回事。
+ */
+export const deepDeleteRecord = (id: number, dryRun = false) =>
+  http.post<{
+    message?: string
+    dry_run: boolean
+    removed: number
+    videos: number
+    assets: number
+    pan_dirs: number
+    skipped: number
+  }>(`/organize/records/${id}/deep-delete`, { dry_run: dryRun }, { timeoutMs: 10 * 60_000 })
+
 /** 重新整理会动网盘与本地文件，和整理/同步互斥，耗时按分钟计 */
 export const redoRecord = (id: number, tmdbId: number, mediaType: string) =>
   http.post<{ message?: string; data: OrganizeRecord }>(
