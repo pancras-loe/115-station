@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"bytes"
 	"fmt"
 	"log"
 	"io"
@@ -633,16 +632,17 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		return nil, fmt.Errorf("无法从文件名提取标题")
 	}
 
-	// movieThenTV：先电影后剧集（CMS 同款兜底顺序）
-	movieThenTV := func(q string) (*TmdbMedia, error) {
-		media, err := tc.SearchMovie(q, parsed.Year)
+	// movieThenTV：先电影后剧集（CMS 同款兜底顺序）。
+	// 年份单独传——AI 增强识别那一轮用的是模型给的年份，不是文件名里解析出来的。
+	movieThenTV := func(q, year string) (*TmdbMedia, error) {
+		media, err := tc.SearchMovie(q, year)
 		if err != nil {
 			return nil, err
 		}
 		if media != nil {
 			return media, nil
 		}
-		return tc.SearchTV(q, parsed.Year)
+		return tc.SearchTV(q, year)
 	}
 
 	// 第一轮：原始标题（剧集直接搜 TV）
@@ -651,7 +651,7 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 	if parsed.IsTV {
 		media, err = tc.SearchTV(parsed.Title, parsed.Year)
 	} else {
-		media, err = movieThenTV(parsed.Title)
+		media, err = movieThenTV(parsed.Title, parsed.Year)
 	}
 	if err != nil || media != nil {
 		return media, err
@@ -688,7 +688,7 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		if parsed.IsTV {
 			media, err = tc.SearchTV(cleaned, parsed.Year)
 		} else {
-			media, err = movieThenTV(cleaned)
+			media, err = movieThenTV(cleaned, parsed.Year)
 		}
 		if err != nil || media != nil {
 			return media, err
@@ -704,7 +704,7 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 			if parsed.IsTV {
 				media, err = tc.SearchTV(q, parsed.Year)
 			} else {
-				media, err = movieThenTV(q)
+				media, err = movieThenTV(q, parsed.Year)
 			}
 			if err != nil || media != nil {
 				return media, err
@@ -712,20 +712,20 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		}
 	}
 
-	// 第三轮：GPT 兜底（配置了 GPT 识别时）——从原始文件名提取标题/年份再搜
-	if gptCfg := loadGPTFallback(); gptCfg != nil {
-		if ext := gptExtract(gptCfg, parsed.Title); ext != nil && ext.Title != "" && ext.Title != parsed.Title {
-			log.Printf("[整理] GPT 兜底提取: %q → %q (%s)", parsed.Title, ext.Title, ext.Year)
-			p2 := *parsed
-			p2.Title = ext.Title
-			p2.Year = ext.Year
-			if p2.Year == "" {
-				p2.Year = parsed.Year
+	// 第三轮：AI 增强识别（配好模型接口时）——从原始文件名提取标题/年份再搜。
+	// 年份以模型给的为准（文件名里那个前几轮已经搜过了，搜不到才走到这），
+	// 模型没给年份才退回文件名解析出来的。
+	if aiCfg := loadAIRecognizeCfg(); aiCfg != nil {
+		if g := aiExtractTitle(aiCfg, parsed.Title); g != nil && g.Title != parsed.Title {
+			year := g.Year
+			if year == "" {
+				year = parsed.Year
 			}
+			log.Printf("[整理] AI 增强识别提取: %q → %q (%s)", parsed.Title, g.Title, year)
 			if parsed.IsTV {
-				return tc.SearchTV(p2.Title, parsed.Year)
+				return tc.SearchTV(g.Title, year)
 			}
-			return movieThenTV(p2.Title)
+			return movieThenTV(g.Title, year)
 		}
 	}
 	return media, nil
@@ -783,98 +783,6 @@ func splitCJKLatin(title string) (cjk, latin string) {
 		latin = ""
 	}
 	return cjk, latin
-}
-
-// gptFallbackCfg GPT 识别配置（org-gpt 设置）
-type gptFallbackCfg struct {
-	URL   string
-	Key   string
-	Model string
-}
-
-var gptFallbackCfgCache struct {
-	val *gptFallbackCfg
-	at  time.Time
-}
-
-// loadGPTFallback 读取 GPT 兜底配置（5 分钟缓存；未配置返回 nil）
-func loadGPTFallback() *gptFallbackCfg {
-	if gptFallbackCfgCache.val != nil && time.Since(gptFallbackCfgCache.at) < 5*time.Minute {
-		return gptFallbackCfgCache.val
-	}
-	v := settingValueCompat("org-gpt")
-	var cfg struct {
-		URL   string `json:"url"`
-		Key   string `json:"key"`
-		Model string `json:"model"`
-	}
-	gptFallbackCfgCache.val = nil
-	if v != "" && json.Unmarshal([]byte(v), &cfg) == nil && cfg.URL != "" && cfg.Key != "" {
-		if cfg.Model == "" {
-			cfg.Model = "gpt-4o-mini"
-		}
-		gptFallbackCfgCache.val = &gptFallbackCfg{URL: cfg.URL, Key: cfg.Key, Model: cfg.Model}
-	}
-	gptFallbackCfgCache.at = time.Now()
-	return gptFallbackCfgCache.val
-}
-
-// gptExtract 用 GPT 从文件名提取 标题/年份
-type gptExtractResult struct {
-	Title string
-	Year  string
-}
-
-func gptExtract(cfg *gptFallbackCfg, filename string) *gptExtractResult {
-	if filename == "" {
-		return nil
-	}
-	payload := map[string]interface{}{
-		"model": cfg.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": "从影视文件名中提取标准标题和上映/开播年份。只输出 JSON：{\"title\":\"...\",\"year\":\"...\"}，找不到年份输出空字符串。"},
-			{"role": "user", "content": filename},
-		},
-		"temperature": 0,
-	}
-	b, _ := json.Marshal(payload)
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.URL, "/")+"/chat/completions", bytes.NewReader(b))
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.Key)
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		log.Printf("[整理] 调用失败: %v", err)
-		return nil
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		log.Printf("[整理] HTTP %d: %s", resp.StatusCode, truncateStr(string(body), 100))
-		return nil
-	}
-	var r struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if json.Unmarshal(body, &r) != nil || len(r.Choices) == 0 {
-		return nil
-	}
-	content := r.Choices[0].Message.Content
-	m := regexp.MustCompile(`\{[^}]*\}`).FindString(content)
-	if m == "" {
-		return nil
-	}
-	var out gptExtractResult
-	if json.Unmarshal([]byte(m), &out) != nil || out.Title == "" {
-		return nil
-	}
-	return &out
 }
 
 // cleanSearchTitle 清洗搜索标题：仅保留中文/字母/数字/空格，压紧空白

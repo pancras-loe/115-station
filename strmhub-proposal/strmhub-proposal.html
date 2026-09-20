@@ -497,7 +497,7 @@ filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
                 </tbody>
               </table>
             </div>
-            <p style="font-size:.8rem;color:var(--muted);margin-top:.3rem">整理只处理视频和字幕（字幕需按标准命名与视频同名），不刮削图片和 nfo（交给 Emby）。0.3.4 起已去除 MoviePilot 依赖，内置识别 + GPT 识别（OpenAI 协议，推荐硅基流动）。</p>
+            <p style="font-size:.8rem;color:var(--muted);margin-top:.3rem">整理只处理视频和字幕（字幕需按标准命名与视频同名），不刮削图片和 nfo（交给 Emby）。0.3.4 起已去除 MoviePilot 依赖，内置识别 + AI 增强识别（OpenAI 协议，推荐硅基流动）。</p>
           </div>
 
           <div class="card">
@@ -1146,7 +1146,7 @@ flowchart TB
                   <strong>模式：</strong> <select style="border:1px solid var(--rule);border-radius:3px"><option>assist - 辅助识别</option><option>enforce - 仅用AI</option><option>off - 关闭</option></select><br>
                   <strong>AI Provider：</strong> <select style="border:1px solid var(--rule);border-radius:3px"><option>硅基流动 (OpenAI兼容)</option><option>OpenAI</option><option>自定义</option></select><br>
                   <strong>AI Key：</strong> <input style="border:1px solid var(--rule);border-radius:3px;width:8rem" value="sk-xxx" /><br>
-                  <strong>模型：</strong> <input style="border:1px solid var(--rule);border-radius:3px;width:6rem" value="Qwen2.5-7B" /> <strong>超时：</strong> <input style="border:1px solid var(--rule);border-radius:3px;width:3rem" value="120" />秒
+                  <strong>模型：</strong> <input style="border:1px solid var(--rule);border-radius:3px;width:6rem" value="deepseek-flash" /> <strong>超时：</strong> <input style="border:1px solid var(--rule);border-radius:3px;width:3rem" value="120" />秒
                 </div></div>
 
                 <div class="uc"><div class="uct">重命名规则 (Type: rename_rule)</div><div style="font-size:.76rem;line-height:1.9">

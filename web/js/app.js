@@ -1715,7 +1715,14 @@ async function tgSubDel(id) {
 
 
 
-// ==================== GPT 测试连接 ====================
+// ==================== AI 增强识别 ====================
+let gptEnabledVal = false;
+function setGptEnabled(v) {
+  gptEnabledVal = v;
+  document.querySelectorAll('#org-gpt-enabled-switch .seg-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.value === String(v));
+  });
+}
 async function testGPT() {
   const url = val('org-gpt-url');
   const key = val('org-gpt-key');
@@ -1725,13 +1732,14 @@ async function testGPT() {
   if (!url || !model) { toast('请先填写 API 地址和模型名称'); return; }
   btn.disabled = true;
   btn.textContent = '测试中...';
-  showTestPending(result, '正在连接 GPT 服务…');
+  showTestPending(result, '正在连接模型接口…');
   try {
-    const data = await api('/config/test-gpt', { method: 'POST', body: JSON.stringify({ url, key, model }) });
-    if (data.success) showTestResult(result, true, 'GPT 连接成功', data.message || (model + ' 可用'));
-    else showTestResult(result, false, 'GPT 连接失败', data.error || '未知错误');
+    const data = await api('/config/test-ai', { method: 'POST', body: JSON.stringify({ url, key, model }) });
+    // data.endpoint 是后端补全后实际请求的地址
+    if (data.ok) showTestResult(result, true, '连接成功', data.endpoint || (model + ' 可用'));
+    else showTestResult(result, false, '连接失败', [data.endpoint, data.error].filter(Boolean).join(' — ') || '未知错误');
   } catch (e) {
-    showTestResult(result, false, 'GPT 连接失败', e.message);
+    showTestResult(result, false, '连接失败', e.message);
   } finally {
     btn.disabled = false;
     btn.textContent = '测试连接';
@@ -2048,6 +2056,7 @@ function collectConfig(key) {
   }
   if (key === 'org-gpt') {
     return {
+      enabled: gptEnabledVal,
       url: val('org-gpt-url'),
       key: val('org-gpt-key'),
       model: val('org-gpt-model'),
@@ -2158,6 +2167,7 @@ function applyConfig(key, v) {
     setVal('org-min-size', v.min_size);
     setVal('org-release-groups', v.release_groups);
   } else if (key === 'org-gpt') {
+    setGptEnabled(v.enabled === true || v.enabled === 'true');
     setVal('org-gpt-url', v.url);
     setVal('org-gpt-key', v.key);
     setVal('org-gpt-model', v.model);
@@ -2327,7 +2337,7 @@ const DEFAULT_CONFIGS = {
   'emby-notify': { token: '' },
   'org-basic': { pending: '', pending_path: '', existing: '', existing_path: '', redundant: '', redundant_path: '', enrich: { enabled: false, mode: 'standard', missing: 'rename', conflict_low: 'rename', conflict_high: 'rename', full_named: 'keep' } },
   'org-recognize': { replace_rules: '', release_groups: '', min_size: '0' },
-  'org-gpt': { url: 'https://api.siliconflow.cn/v1', key: '', model: '' },
+  'org-gpt': { enabled: false, url: 'https://api.deepseek.com', key: '', model: '' },
   'org-rename': {
     movie_folder: '{first_letter}-{title}-{year}-[tmdb={tmdb_id}]',
     movie_file: '{title}.{year}<.{resource_pix}><.{fps}><.{resource_version}><.{resource_source}><.{resource_type}><.{resource_effect}><.{video_encode}><.{audio_encode}><-{resource_team}>{ext}',

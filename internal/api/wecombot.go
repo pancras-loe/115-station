@@ -428,7 +428,7 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 
 	case lower == "补全" || lower == "enrich":
 		if !loadEnrichPolicy().Enabled {
-			reply("补全功能未开启（自动整理 → 基础配置 → 媒体补全）")
+			reply("补全功能未开启（自动整理 → 媒体补全）")
 			return
 		}
 		go func() {

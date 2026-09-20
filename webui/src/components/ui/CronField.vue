@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { NInput } from 'naive-ui'
-import { pluginsApi } from '@/api'
+import { syncApi } from '@/api'
 
 const props = defineProps<{ modelValue: string; placeholder?: string }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
@@ -20,7 +20,7 @@ watch(
     // 防抖：cron 是一个字符一个字符敲出来的，中间态几乎都是非法表达式
     timer = window.setTimeout(async () => {
       try {
-        const d = await pluginsApi.cronPreview(expr.trim())
+        const d = await syncApi.cronPreview(expr.trim())
         next.value = d.next ?? []
         if (!next.value.length) error.value = '未来一年内不会触发，请检查表达式'
       } catch (e) {

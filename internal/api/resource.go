@@ -17,6 +17,8 @@ package api
 import (
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // ResourceInfo 从文件名中提取的结构化资源信息
@@ -134,12 +136,15 @@ func ParseResourceInfo(filename string) ResourceInfo {
 	}
 	ri.AudioEncode = strings.Join(audioParts, ".")
 
-	// 发布组（最后一个 - 后面的部分）
+	// 发布组：先查用户配置的名单（能认出 [WiKi]、.FRDS. 这类不在末尾的写法），
+	// 名单没命中再退回「最后一个 - 后面的部分」这条通用启发式
 	base := filename
 	if idx := strings.LastIndex(base, "."); idx > 0 {
 		base = base[:idx] // 去扩展名
 	}
-	if m := reTeam.FindStringSubmatch(base); m != nil {
+	if team := matchCustomTeam(base); team != "" {
+		ri.Team = team
+	} else if m := reTeam.FindStringSubmatch(base); m != nil {
 		team := m[1]
 		// 排除误匹配（纯数字或太短）
 		if len(team) >= 2 && !isAllDigits(team) {
@@ -350,4 +355,81 @@ func containsStr(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ==================== 自定义发布组名单（「识别规则」页配置） ====================
+//
+// reTeam 只认「文件名末尾 -GROUP」这一种写法，[WiKi]、.FRDS. 这类位置的发布组取不到，
+// 洗版里按 resource_team 匹配的规则就会落空。名单补的正是这一块：
+// 名单里的词只要在文件名里作为完整片段出现就算命中。
+
+var (
+	customTeams   []string
+	customTeamsAt time.Time
+	customTeamMu  sync.RWMutex
+)
+
+// ParseResourceInfo 每个文件名都会走一遍，不能每次都去读一次配置；
+// 缓存 30 秒——改完名单最迟半分钟生效，整理一轮里则是零额外读取
+const customTeamsTTL = 30 * time.Second
+
+func releaseGroups() []string {
+	customTeamMu.RLock()
+	if time.Since(customTeamsAt) < customTeamsTTL {
+		defer customTeamMu.RUnlock()
+		return customTeams
+	}
+	customTeamMu.RUnlock()
+
+	customTeamMu.Lock()
+	defer customTeamMu.Unlock()
+	if time.Since(customTeamsAt) < customTeamsTTL {
+		return customTeams // 等锁期间别人已经刷过了
+	}
+	customTeams = loadRecognizeConfig().ReleaseGroups
+	customTeamsAt = time.Now()
+	return customTeams
+}
+
+// matchCustomTeam 在（去掉扩展名的）文件名里找名单中的发布组。
+// 必须是完整片段：否则 "CR" 这种两字母组名会把 "CRUNCHYROLL" 里的前两个字母认成发布组。
+// 多条命中取位置最靠后的那条——发布组通常在名字末尾。
+func matchCustomTeam(base string) string {
+	lower := strings.ToLower(base)
+	best, bestIdx := "", -1
+	for _, g := range releaseGroups() {
+		g = strings.TrimSpace(g)
+		if g == "" {
+			continue
+		}
+		if idx := indexToken(lower, strings.ToLower(g)); idx > bestIdx {
+			best, bestIdx = g, idx
+		}
+	}
+	return best
+}
+
+// indexToken 找 word 在 s 中作为完整片段出现的位置，没有则 -1
+func indexToken(s, word string) int {
+	for i := 0; i+len(word) <= len(s); {
+		j := strings.Index(s[i:], word)
+		if j < 0 {
+			return -1
+		}
+		at := i + j
+		if isTeamBoundary(s, at-1) && isTeamBoundary(s, at+len(word)) {
+			return at
+		}
+		i = at + 1
+	}
+	return -1
+}
+
+// isTeamBoundary 字母数字之外的一切都算边界（含字符串首尾与中文等多字节内容）
+func isTeamBoundary(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return true
+	}
+	c := s[i]
+	return !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z')
 }

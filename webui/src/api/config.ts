@@ -45,8 +45,13 @@ export interface TestResult {
 }
 
 export const testTmdb = () => http.post<TestResult>('/config/test-tmdb')
-export const testGpt = (body: { url: string; key: string; model: string }) =>
-  http.post<TestResult>('/config/test-gpt', body)
+/** AI 增强识别的连通性测试。endpoint 是后端补全后实际请求的地址，回显给用户看 */
+export interface AiTestResult extends TestResult {
+  endpoint?: string
+  reply?: string
+}
+export const testAi = (body: { url: string; key: string; model: string }) =>
+  http.post<AiTestResult>('/config/test-ai', body)
 
 export const testProxy = (url: string) => http.post<TestResult>('/proxy/test', { url })
 

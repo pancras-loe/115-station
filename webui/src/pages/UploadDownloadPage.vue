@@ -19,13 +19,14 @@ import FormActions from '@/components/ui/FormActions.vue'
 import MeterBar from '@/components/ui/MeterBar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
-import { transferApi } from '@/api'
+import { storageApi, transferApi } from '@/api'
 import type { OfflineTask } from '@/api/transfer'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { confirmUnsaved } from '@/composables/confirmUnsaved'
 
 const { message } = useFeedback()
 const router = useRouter()
@@ -33,26 +34,66 @@ const tab = useTabQuery('download')
 const media = useFullSetting()
 
 // ---- 转存目录 ----
-const share = useSetting('share', { folder: '' })
+const share = useSetting('share', { folder: '', folder_path: '' })
 const shareCid = ref({ cid: '', path: '' })
 const shareInput = ref<InstanceType<typeof Cid115Input> | null>(null)
+
+/** 输入框里给人看的是路径，落库的是 cid；folder_path 只为显示而存 */
 watch(
-  () => share.model.value.folder,
-  (v) => {
-    if (v && v !== shareCid.value.cid) shareCid.value = { cid: v, path: v }
+  () => [share.model.value.folder, share.model.value.folder_path] as const,
+  async ([cid, savedPath]) => {
+    if (!cid) {
+      shareCid.value = { cid: '', path: '' }
+      return
+    }
+    const displayPath = savedPath || cid
+    if (cid !== shareCid.value.cid || displayPath !== shareCid.value.path) {
+      shareCid.value = { cid, path: displayPath }
+    }
+    // 只存过 cid 的旧配置：进页面反查一次可读路径，别让用户对着数字猜目录。
+    if (!savedPath) {
+      try {
+        const resolved = await storageApi.path115(cid)
+        if (share.model.value.folder === cid && resolved.path) {
+          shareCid.value = { cid, path: resolved.path }
+        }
+      } catch {
+        // Cookie 暂不可用时保留 cid；重新选择目录或下次保存仍可补齐。
+      }
+    }
   },
   { immediate: true },
 )
 
-async function saveShare() {
+async function saveShare(): Promise<boolean> {
   const cid = (await shareInput.value?.ensureCid()) ?? ''
   if (!cid) {
     message.error('目录路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
-    return
+    return false
   }
   share.model.value.folder = cid
-  await share.save()
+  let readablePath = shareCid.value.path.trim()
+  if (!readablePath || /^\d+$/.test(readablePath)) {
+    try {
+      readablePath = (await storageApi.path115(cid)).path
+    } catch {
+      readablePath = ''
+    }
+  }
+  share.model.value.folder_path = readablePath
+  return await share.save()
 }
+
+/**
+ * 转存目录改了没保存 = 东西会落进旧目录：提交时 target_cid 传空，
+ * 后端回落到 setting `share` 里已保存的那份（见 share.go shareReceiveCore）。
+ *
+ * 比 cid 不比 path：Cid115Input 在路径一改就把 cid 作废，改动立刻可见；
+ * 重新选中同一个目录时 cid 不变，也不会误报。
+ */
+const shareDirty = computed(
+  () => share.dirty.value || shareCid.value.cid.trim() !== (share.model.value.folder || '').trim(),
+)
 
 // ---- 监控上传 ----
 const monitor = useSetting('monitor', { enabled: false })
@@ -98,6 +139,10 @@ async function submit() {
       message.warning('115 分享链接需要提取码，请填写后重试')
       return
     }
+  }
+
+  if (shareDirty.value && !(await confirmUnsaved('直接开始会存进原来的目录。', saveShare))) {
+    return
   }
 
   submitting.value = true

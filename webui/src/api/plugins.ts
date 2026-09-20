@@ -48,6 +48,3 @@ export const coverGenList = () =>
 /** 封面预览图直接走 <img src>，带时间戳绕开浏览器缓存（重新生成后要能立刻看到） */
 export const coverPreviewUrl = (name: string) =>
   `/api/covergen/preview?name=${encodeURIComponent(name)}&t=${Date.now()}`
-
-// ---- cron 预览（与同步页共用后端接口） ----
-export const cronPreview = (cron: string) => http.post<{ next: string[] }>('/sync/cron-preview', { cron })

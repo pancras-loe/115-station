@@ -774,6 +774,9 @@ rel := path.Join(base, ev.FileName)        // → <root>/剧集/X/片.mkv
 > `runScheduledTick` 在轮询开着时只跑整理不再串增量。
 > 前端 [`IncrSyncTab.vue`](webui/src/pages/strm/IncrSyncTab.vue) 加间隔输入框，
 > 原「增量同步 Cron」改名为「自动整理 Cron」——它本来就只是整理的调度开关。
+> （**后续**：这个输入框已经搬到「自动整理 → 基础配置」，只留改名等于承认了错位却没挪窝；
+> setting key 仍是 `incr.cron`，两个页面各自走 [`incrSetting.ts`](webui/src/composables/incrSetting.ts)
+> 的 `patchIncrCfg` 只改自己那个字段。）
 > 新增 [`incr_poll_test.go`](internal/api/incr_poll_test.go)（4 个用例）。
 >
 > **§12 ② 已落地**：整理抢不到锁时置位 `organizeMissed`，之后每分钟继续尝试补跑，

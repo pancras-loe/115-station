@@ -4,8 +4,9 @@ import BasicTab from './organize/BasicTab.vue'
 import RecordsTab from './organize/RecordsTab.vue'
 import ScrapeTab from './organize/ScrapeTab.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
-import GptTab from './organize/GptTab.vue'
+import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
+import EnrichTab from './organize/EnrichTab.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML, DEFAULT_WASH_YAML } from './organize/defaultRules'
@@ -20,7 +21,7 @@ const tab = useTabQuery('basic')
     <NTabPane name="records" tab="整理记录" display-directive="if"><RecordsTab /></NTabPane>
     <NTabPane name="scrape" tab="影视刮削"><ScrapeTab /></NTabPane>
     <NTabPane name="recognize" tab="识别规则"><RecognizeTab /></NTabPane>
-    <NTabPane name="gpt" tab="GPT 识别"><GptTab /></NTabPane>
+    <NTabPane name="ai" tab="AI 增强识别"><AiTab /></NTabPane>
     <NTabPane name="rename" tab="重命名策略"><RenameTab /></NTabPane>
 
     <NTabPane name="category" tab="二级分类策略" display-directive="if">
@@ -46,5 +47,7 @@ const tab = useTabQuery('basic')
         :fallback="DEFAULT_WASH_YAML"
       />
     </NTabPane>
+
+    <NTabPane name="enrich" tab="媒体补全" display-directive="if"><EnrichTab /></NTabPane>
   </NTabs>
 </template>

@@ -144,7 +144,7 @@
         <div class="tab" data-tab="scrape">影视刮削</div>
         <div class="tab" data-tab="recognize">识别规则</div>
         <div class="tab" data-tab="enrich">媒体补全</div>
-        <div class="tab" data-tab="gpt">GPT识别</div>
+        <div class="tab" data-tab="gpt">AI 增强识别</div>
         <div class="tab" data-tab="rename">重命名策略</div>
         <div class="tab" data-tab="category">二级分类策略</div>
         <div class="tab" data-tab="wash">洗版策略</div>
@@ -249,13 +249,17 @@
       </div>
     </div>
 
-      <!-- GPT识别 -->
+      <!-- AI 增强识别 -->
       <div class="tab-panel" data-panel="gpt">
-      <div class="alert alert-info">GPT 识别：当 TMDB 无法识别媒体信息时，调用大模型辅助识别。API 地址需支持 OpenAI 协议标准。</div>
+      <div class="alert alert-info">AI 增强识别：当 TMDB 无法识别媒体信息时，调用大模型从文件名里提取标题和年份再搜一次。接口按 OpenAI 协议标准调用：地址即各家文档里给的 base_url，后面追加 /chat/completions。DeepSeek、硅基流动、Ollama、vLLM 等兼容实现都能直接填。</div>
       <div class="card">
-        <div class="form-row"><div class="label">API 地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">支持 OpenAI 协议标准的模型接口地址，当 TMDB 无法识别时调用大模型辅助识别。</span></i></div><div class="control"><input type="text" id="org-gpt-url" placeholder="如 https://api.siliconflow.cn/v1"></div></div>
-        <div class="form-row"><div class="label">API 密钥<i class="help-tip" tabindex="0">?<span class="tip-bubble">大模型 API 密钥，推荐使用硅基流动等国内平台。</span></i></div><div class="control"><input type="password" id="org-gpt-key" autocomplete="off" title="双击显示/隐藏明文" placeholder="sk-xxx"></div></div>
-        <div class="form-row"><div class="label">模型名称<i class="help-tip" tabindex="0">?<span class="tip-bubble">用于识别的模型名称，如 Qwen2.5-7B、gpt-4o-mini 等。</span></i></div><div class="control"><input type="text" id="org-gpt-model" placeholder="如 Qwen2.5-7B"></div></div>
+        <div class="form-row"><div class="label">启用<i class="help-tip" tabindex="0">?<span class="tip-bubble">关闭后整理流程完全不碰模型接口，下面填好的配置原样留着。开启时保存会先校验三项必填与接口连通性，通不过不落库。</span></i></div><div class="control"><div class="segmented-control" id="org-gpt-enabled-switch">
+            <div class="seg-item" data-value="true" onclick="setGptEnabled(true)">开启</div>
+            <div class="seg-item active" data-value="false" onclick="setGptEnabled(false)">关闭</div>
+          </div></div></div>
+        <div class="form-row"><div class="label">API 地址<i class="help-tip" tabindex="0">?<span class="tip-bubble">填各家文档给的 base_url：DeepSeek 是 https://api.deepseek.com，OpenAI 是 https://api.openai.com/v1（/v1 属于地址的一部分，这里不会替你猜）。填整条完整路径也认。</span></i></div><div class="control"><input type="text" id="org-gpt-url" placeholder="如 https://api.deepseek.com"></div></div>
+        <div class="form-row"><div class="label">API 密钥<i class="help-tip" tabindex="0">?<span class="tip-bubble">大模型 API 密钥，推荐使用硅基流动等国内平台。本地模型（Ollama / vLLM）不校验密钥，但这里仍需填一个占位串（如 ollama）。</span></i></div><div class="control"><input type="password" id="org-gpt-key" autocomplete="off" title="双击显示/隐藏明文" placeholder="sk-xxx"></div></div>
+        <div class="form-row"><div class="label">模型名称<i class="help-tip" tabindex="0">?<span class="tip-bubble">用于识别的模型名称，如 deepseek-flash、Qwen2.5-7B-Instruct 等。</span></i></div><div class="control"><input type="text" id="org-gpt-model" placeholder="如 Qwen2.5-7B"></div></div>
         <div class="form-row"><div class="label"></div><div class="control"><div class="btn-row"><button class="btn btn-primary" onclick="saveConfig('org-gpt')">保存配置</button><button class="btn btn-outline" id="gpt-test-btn" onclick="testGPT()">测试连接</button><button class="btn btn-warning" onclick="resetConfig('org-gpt', this)" style="position:relative">重置配置</button></div><span id="gpt-test-result" class="test-result"></span></div></div>
       </div>
     </div>

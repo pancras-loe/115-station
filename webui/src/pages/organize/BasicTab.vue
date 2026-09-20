@@ -1,39 +1,25 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { NAlert, NButton, NPopconfirm, NRadioButton, NRadioGroup } from 'naive-ui'
+import { computed, onMounted, ref, watch } from 'vue'
+import { NAlert, NButton, NPopconfirm } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
+import CronField from '@/components/ui/CronField.vue'
 import TaskStatusBar from '@/components/TaskStatusBar.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import { organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
+import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
 import { useTaskStore } from '@/stores/task'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { confirmUnsaved } from '@/composables/confirmUnsaved'
+import { ORG_BASIC_DEFAULTS } from './orgBasic'
 
 const { message } = useFeedback()
 const task = useTaskStore()
 
-/**
- * org-basic 同时装着三个目录和「媒体补全」策略——后端就是一个 key，
- * 所以补全页签也保存这份 model（两边都调 save 是有意的，不是重复）。
- */
-const { model, saving, save } = useSetting('org-basic', {
-  pending: '',
-  pending_path: '',
-  existing: '',
-  existing_path: '',
-  redundant: '',
-  redundant_path: '',
-  enrich: {
-    enabled: false,
-    mode: 'standard',
-    missing: 'rename',
-    conflict_low: 'rename',
-    conflict_high: 'rename',
-    full_named: 'keep',
-  },
-})
+/** 本页只用得上三个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
+const { model, saving, save, load, dirty: settingDirty } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
 
 type DirKey = 'pending' | 'existing' | 'redundant'
 const DIRS: { key: DirKey; label: string; tip: string }[] = [
@@ -76,6 +62,50 @@ watch(
 const running = ref(false)
 const busy = computed(() => running.value || task.status.running)
 
+/**
+ * 自动整理的定时开关。存在 setting `incr` 里（历史上整理与增量共用一条 cron），
+ * 所以不跟 org-basic 一起存取，只 patch 自己这个字段——见 incrSetting.ts
+ */
+const cron = ref(INCR_DEFAULTS.cron)
+/** 库里那份 cron，用来判断输入框改过没有——incr 不走 useSetting，dirty 得自己记 */
+const cronSaved = ref(INCR_DEFAULTS.cron)
+onMounted(async () => {
+  try {
+    cron.value = (await loadIncrCfg()).cron
+    cronSaved.value = cron.value
+  } catch (e) {
+    toastError(e, '定时配置读取失败')
+  }
+})
+
+async function saveCron(): Promise<boolean> {
+  try {
+    const v = cron.value.trim()
+    await patchIncrCfg({ cron: v })
+    cronSaved.value = v
+    return true
+  } catch (e) {
+    toastError(e, '定时配置保存失败')
+    return false
+  }
+}
+
+/**
+ * 三个目录输入框只写在 cids 上，要 saveAll 时才经 resolveAll 回填 model，
+ * 所以 useSetting 的 dirty 看不见它们，得单独比一次。
+ *
+ * 比 cid 不比 path：Cid115Input 在路径一改就把 cid 作废（解析成功才填回），
+ * 所以改动能立刻看出来；反过来重新选中同一个目录时 cid 不变，也不会误报。
+ */
+const dirsDirty = computed(() =>
+  DIRS.some(({ key }) => cids.value[key].cid.trim() !== (model.value[key] || '').trim()),
+)
+
+/** 整理跑的配置全部从库里读，所以本页任何一处没保存都要拦 */
+const dirty = computed(
+  () => settingDirty.value || dirsDirty.value || cron.value.trim() !== cronSaved.value,
+)
+
 /** 三个目录都要在保存前确认 cid 可信；任一失配就整体拦下 */
 async function resolveAll(): Promise<boolean> {
   for (const { key, label } of DIRS) {
@@ -92,10 +122,27 @@ async function resolveAll(): Promise<boolean> {
   return true
 }
 
-async function saveAll() {
-  if (!(await resolveAll())) return
-  await save()
+async function saveAll(): Promise<boolean> {
+  if (!(await resolveAll())) return false
+  if (!(await saveCron())) return false
+  // org-basic 是整对象覆盖存，而 enrich 那半边在「媒体补全」页签改：
+  // 先把库里最新的拉回来，再盖上本页解析好的目录，免得把对面刚存的策略还原成打开本页时的旧值
+  const dirs = pickDirs()
+  await load()
+  Object.assign(model.value, dirs)
+  const ok = await save()
   warnOverlap()
+  return ok
+}
+
+/** resolveAll 回填到 model 上的那六个目录字段 */
+function pickDirs() {
+  const d: Record<string, string> = {}
+  for (const { key } of DIRS) {
+    d[key] = model.value[key]
+    d[`${key}_path`] = model.value[`${key}_path` as const]
+  }
+  return d
 }
 
 /** 待整理目录可以在媒体库内部（常见布局），只警告「覆盖整个库」这种危险方向 */
@@ -107,10 +154,22 @@ function warnOverlap() {
   }
 }
 
+/** 按钮上的 popconfirm 文案；配置改过时这个气泡不弹，由未保存确认框接管 */
+const runHint = '确定开始整理？会扫描待整理目录并搬移文件。'
+
 async function runOrganize() {
+  // 整理接口不带参数，三个目录和补全策略全从库里读——改了没保存就是按旧配置搬文件
+  let localFirst = true
+  if (dirty.value) {
+    if (!(await confirmUnsaved('直接开始会按上次保存的配置搬文件。', saveAll))) {
+      return
+    }
+    // 保存成功后 dirty 归零；选了「按已保存配置开始」就别再拿界面值去校验/回填 model
+    localFirst = !dirty.value
+  }
   running.value = true
   try {
-    if (!(await resolveAll())) return
+    if (localFirst && !(await resolveAll())) return
     message.info('整理任务执行中…')
     task.poll()
     const d = await organizeApi.runPipeline()
@@ -126,63 +185,13 @@ async function runOrganize() {
     task.poll()
   }
 }
-
-// ---- 媒体补全 ----
-const ENRICH_ROWS = [
-  {
-    key: 'mode' as const,
-    label: '保守度',
-    tip: '保守 = 只补缺失信息；标准 = 缺失补充 + 名实冲突按探测修改（完整命名不动）；激进 = 完整命名冲突也按探测修改。',
-    options: [
-      { v: 'conservative', l: '保守' },
-      { v: 'standard', l: '标准' },
-      { v: 'aggressive', l: '激进' },
-    ],
-  },
-  {
-    key: 'missing' as const,
-    label: '缺信息时',
-    tip: '如 蜘蛛侠.2016.mkv 探测出 1080p：补充 = 把画质写进文件名；保留 = 保持原名。',
-    options: [
-      { v: 'rename', l: '补充' },
-      { v: 'keep', l: '保留' },
-    ],
-  },
-  {
-    key: 'conflict_low' as const,
-    label: '探测高于命名',
-    tip: '文件名标 1080p 但探测实际是 2160p（发布站低标）。以探测为准 = 改成 2160p。',
-    options: [
-      { v: 'rename', l: '以探测为准' },
-      { v: 'keep', l: '保留命名' },
-    ],
-  },
-  {
-    key: 'conflict_high' as const,
-    label: '探测低于命名',
-    tip: '文件名标 2160p 但探测实际是 1080p（拿 1080p 冒充 4K）。以探测为准 = 改成 1080p。',
-    options: [
-      { v: 'rename', l: '以探测为准' },
-      { v: 'keep', l: '保留命名' },
-    ],
-  },
-  {
-    key: 'full_named' as const,
-    label: '完整命名冲突',
-    tip: '文件名已含来源 + 发布组（如 BluRay-HDS）但与探测不符：专业组命名通常可信，默认保留。跨 3 档极端差异始终保留并记录日志。',
-    options: [
-      { v: 'keep', l: '保留' },
-      { v: 'rename', l: '以探测为准' },
-    ],
-  },
-]
 </script>
 
 <template>
   <div class="stack">
     <TaskStatusBar />
 
-    <SectionCard title="基础配置" hint="整理引擎的三个工作目录">
+    <SectionCard title="基础配置" hint="整理引擎的工作目录与定时">
       <NAlert class="note" type="warning" :bordered="false">
         自动整理前必须先创建好二级分类策略，并完成一次全量同步。
       </NAlert>
@@ -195,46 +204,88 @@ const ENRICH_ROWS = [
         />
       </FieldRow>
 
+      <FieldRow
+        label="自动整理 Cron"
+        tip="标准 5 字段 cron（分 时 日 月 周）。它只负责「到点跑一遍」，留空不影响下面列出的即时触发。"
+      >
+        <CronField v-model="cron" placeholder="*/10 8-23 * * *" />
+      </FieldRow>
+
+      <NAlert class="note-top" type="info" :bordered="false" title="自动整理的六种触发方式">
+        <p class="al-p">
+          不管哪种触发，跑的都是同一条流水线：识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 →
+          写 STRM / 下字幕封面 → 刮削 → 刷新 Emby。区别只在<strong>什么时候开始</strong>和<strong>扫哪个目录</strong>。
+        </p>
+        <ul class="al-ul">
+          <li>
+            <strong>定时</strong> —— 上面这条 cron，到点扫<strong>待整理目录</strong>（顺带扫一次转存目录）。
+            留空只是不再定时跑，下面五种照常工作
+          </li>
+          <li><strong>手动</strong> —— 下面的「开始整理」按钮，扫的目录同上</li>
+          <li>
+            <strong>转存完成</strong> —— 影视转存 / 分享转存时勾了「自动整理」，转存成功 3 秒后立即开整
+          </li>
+          <li>
+            <strong>离线下载</strong> —— 提交时勾了整理的话，提交后 10 秒先探一次
+            （115 秒传命中说明文件已到位，当场整理），没命中 60 秒后再试；
+            任务真正下载完成时，离线监视器会再触发一次（同时发完成通知）
+          </li>
+          <li>
+            <strong>守望者兜底</strong> —— 每分钟看一眼转存目录，有内容且没有别的任务在跑就接管。
+            下载完成时间不可控，上面那两次探测扑空时靠它接住，下载完成后约 1 分钟内必被处理（5 分钟冷却）
+          </li>
+          <li><strong>企微机器人</strong> —— 给机器人发「整理」，或点底部菜单的「自动整理」</li>
+        </ul>
+        <p class="al-p">
+          后三种扫的是<strong>转存目录</strong>（没配转存目录才退回待整理目录），并且整理完会顺手跑一次
+          增量同步收尾。整理、增量、全量共用一把任务锁，同一时刻只跑一个；cron 命中时撞上别的任务
+          不会整轮丢掉，会在之后每分钟重试直到补上。
+        </p>
+      </NAlert>
+
       <FormActions>
         <NButton type="primary" :loading="saving" @click="saveAll">保存配置</NButton>
-        <NPopconfirm @positive-click="void runOrganize()">
+        <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
+        <NPopconfirm v-if="!dirty" @positive-click="void runOrganize()">
           <template #trigger>
             <NButton type="error" ghost :disabled="busy" :loading="running">开始整理</NButton>
           </template>
-          确定开始整理？会扫描待整理目录并搬移文件。
+          {{ runHint }}
         </NPopconfirm>
-      </FormActions>
-    </SectionCard>
-
-    <SectionCard title="媒体补全" hint="ffprobe 探测真实画质">
-      <NAlert class="note" type="info" :bordered="false">
-        文件名缺分辨率 / 编码时（如 <code>蜘蛛侠.2016.mkv</code>），用 ffprobe 读取 115
-        直链头部探测真实画质（只拉几 MB，不下载全文件），按下方策略规范命名。
-        探测是「事实」、命名是「声明」：默认只在缺失或名实冲突时修改；片名 / 集数 / 年份 /
-        来源 / 发布组等原有信息一律保留。
-      </NAlert>
-
-      <FieldRow label="媒体补全" tip="文件名缺分辨率 / 编码时自动探测规范命名。开启后新整理的文件生效。">
-        <NRadioGroup v-model:value="model.enrich.enabled">
-          <NRadioButton :value="true">开启</NRadioButton>
-          <NRadioButton :value="false">关闭</NRadioButton>
-        </NRadioGroup>
-      </FieldRow>
-
-      <FieldRow v-for="r in ENRICH_ROWS" :key="r.key" :label="r.label" :tip="r.tip">
-        <NRadioGroup v-model:value="model.enrich[r.key]">
-          <NRadioButton v-for="o in r.options" :key="o.v" :value="o.v">{{ o.l }}</NRadioButton>
-        </NRadioGroup>
-      </FieldRow>
-
-      <FormActions>
-        <NButton type="primary" :loading="saving" @click="save()">保存策略</NButton>
+        <NButton
+          v-else
+          type="error"
+          ghost
+          :disabled="busy"
+          :loading="running"
+          @click="void runOrganize()"
+        >
+          开始整理
+        </NButton>
       </FormActions>
     </SectionCard>
   </div>
 </template>
 
 <style scoped>
+.note-top {
+  margin: 4px 0 12px;
+}
+.al-p {
+  margin: 0;
+  line-height: 1.85;
+}
+.al-ul {
+  margin: 8px 0;
+  padding-left: 18px;
+  line-height: 1.85;
+}
+.al-ul li + li {
+  margin-top: 4px;
+}
+.al-p + .al-p {
+  margin-top: 8px;
+}
 .stack {
   display: flex;
   flex-direction: column;

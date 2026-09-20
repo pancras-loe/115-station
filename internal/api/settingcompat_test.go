@@ -17,14 +17,14 @@ func TestSettingValueCompatYAMLFirst(t *testing.T) {
 	if settingValueCompat("nothing") != "" {
 		t.Error("empty source should return empty")
 	}
-	if err := notifyConfigSource.SaveSetting("org-recognize", `{"replace_rules":"a=>b"}`); err != nil {
+	if err := notifyConfigSource.SaveSetting("org-recognize", `{"min_size":100}`); err != nil {
 		t.Fatalf("SaveSetting: %v", err)
 	}
-	if got := settingValueCompat("org-recognize"); got != `{"replace_rules":"a=>b"}` {
+	if got := settingValueCompat("org-recognize"); got != `{"min_size":100}` {
 		t.Errorf("settingValueCompat(org-recognize) = %q, want yaml value", got)
 	}
-	// loadReplaceRules 应能从 YAML 解析出规则（replace_rules 是规则数组的 JSON 字符串）
-	cfg := `{"replace_rules":"[{\"from\":\"旧名\",\"to\":\"新名\"}]"}`
+	// loadReplaceRules 应能从 YAML 解析出规则（replace_rules 是规则数组）
+	cfg := `{"replace_rules":[{"from":"旧名","to":"新名"}]}`
 	if err := notifyConfigSource.SaveSetting("org-recognize", cfg); err != nil {
 		t.Fatalf("SaveSetting: %v", err)
 	}

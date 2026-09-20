@@ -8,6 +8,8 @@ defineProps<{
   tip?: string
   /** 控件下方的常驻说明，和 tip 的区别是不需要 hover */
   hint?: string
+  /** 校验失败的说明，红字显示在控件下方；有它时盖掉 hint（两行叠着看着乱） */
+  error?: string
   required?: boolean
   /** 控件不限宽（长 URL、回调地址等） */
   wide?: boolean
@@ -26,7 +28,8 @@ defineProps<{
     </div>
     <div class="row-control" :class="{ wide }">
       <slot />
-      <div v-if="hint" class="row-hint">{{ hint }}</div>
+      <div v-if="error" class="row-error">{{ error }}</div>
+      <div v-else-if="hint" class="row-hint">{{ hint }}</div>
     </div>
   </div>
 </template>
@@ -79,6 +82,12 @@ defineProps<{
   font-size: 11.5px;
   line-height: 1.6;
   color: var(--c-text-3);
+}
+.row-error {
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--c-danger);
 }
 
 @media (max-width: 720px) {

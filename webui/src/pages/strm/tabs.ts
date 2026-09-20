@@ -12,5 +12,5 @@ export interface StrmTab {
 export const STRM_TABS: StrmTab[] = [
   { key: 'config', label: 'STRM 配置', hint: '直链域名与格式', icon: SlidersHorizontal },
   { key: 'full', label: '全量同步', hint: '整库扫描 / 失效检测', icon: DatabaseBackup },
-  { key: 'incr', label: '增量同步', hint: '生活事件定时流水线', icon: Zap },
+  { key: 'incr', label: '增量同步', hint: '生活事件轮询 / 状态排查', icon: Zap },
 ]

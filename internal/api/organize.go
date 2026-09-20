@@ -37,13 +37,12 @@ type OrganizeResult struct {
 
 // OrgConfig 整理配置（从数据库加载）
 type OrgConfig struct {
-	Pending      string `json:"pending"`   // 待整理目录 cid
-	Library      string `json:"library"`   // 我的影视库 cid（整理后最终归宿）
-	Existing     string `json:"existing"`  // 已存在目录 cid（洗版重复）
-	Redundant    string `json:"redundant"` // 冗余目录 cid（识别失败等）
-	ReplaceRules string `json:"replace_rules"`
-	MinSize      int64  `json:"min_size"`
-	ShareCid     string `json:"-"` // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
+	Pending   string `json:"pending"`   // 待整理目录 cid
+	Library   string `json:"library"`   // 我的影视库 cid（整理后最终归宿）
+	Existing  string `json:"existing"`  // 已存在目录 cid（洗版重复）
+	Redundant string `json:"redundant"` // 冗余目录 cid（识别失败等）
+	MinSize   int64  `json:"-"`         // MB，loadOrgConfig 从「识别规则」配置注入
+	ShareCid  string `json:"-"`         // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
 }
 
 // orgCtx 一次整理运行的上下文：引擎各函数共用的只读配置 + 落盘出口。
@@ -124,6 +123,8 @@ func (h *Handler) loadOrgConfig() (*OrgConfig, error) {
 	if v := h.getSettingValue("org-basic"); v != "" {
 		json.Unmarshal([]byte(v), &cfg)
 	}
+	// 最小体积在「识别规则」页（识别前的过滤），不在 org-basic 里
+	cfg.MinSize = loadRecognizeConfig().MinSize
 	if cfg.Pending == "" {
 		return nil, fmt.Errorf("未配置待整理文件夹")
 	}
@@ -363,30 +364,64 @@ func moveQuietly(ops *pan115Ops, targetCid string, fids []string, label string, 
 	}
 }
 
-// loadReplaceRules 加载替换规则（YAML 优先，DB 回退）
-func loadReplaceRules() []ReplaceRule {
-	var cfg struct {
-		ReplaceRules string `json:"replace_rules"`
-	}
+// recognizeConfig 「识别规则」页的配置：识别链最前面那一段——文件名预处理与过滤。
+// 三项都在识别之前生效（替换 → 体积过滤 → parseFileName → TMDB 搜索）。
+type recognizeConfig struct {
+	ReplaceRules  []ReplaceRule `json:"replace_rules"`
+	ReleaseGroups []string      `json:"release_groups"`
+	MinSize       int64         `json:"min_size"` // MB，0 = 不限制
+}
+
+// loadRecognizeConfig 读识别配置（YAML 优先，DB 回退）
+func loadRecognizeConfig() recognizeConfig {
+	var cfg recognizeConfig
 	json.Unmarshal([]byte(settingValueCompat("org-recognize")), &cfg)
-	if cfg.ReplaceRules == "" {
-		return nil
-	}
-	var rules []ReplaceRule
-	json.Unmarshal([]byte(cfg.ReplaceRules), &rules)
-	return rules
+	return cfg
 }
 
-// ReplaceRule 替换规则
+// ReplaceRule 识别前的文件名替换规则。
+// Regex 为真时 From 按正则（Go RE2，不支持断言/反向引用）解释，To 里可用 $1 引用捕获组；
+// 否则 From/To 都按纯文本处理。To 为空表示「删掉这一段」。
 type ReplaceRule struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Regex bool   `json:"regex"`
+
+	re *regexp.Regexp // 正则规则加载时编译一次，编译不过的规则不进入返回值
 }
 
-// applyReplaceRules 应用替换规则到文件名
+// loadReplaceRules 加载替换规则，正则在这里一次性编译好——
+// 每个文件名都重新编译一遍的话，一次整理几千次编译全是白费
+func loadReplaceRules() []ReplaceRule {
+	rules := loadRecognizeConfig().ReplaceRules
+	out := make([]ReplaceRule, 0, len(rules))
+	for _, r := range rules {
+		if r.From == "" {
+			continue
+		}
+		if r.Regex {
+			re, err := regexp.Compile(r.From)
+			if err != nil {
+				// 丢掉这一条而不是整组失效：其余规则照常生效，日志里点名是哪条坏了
+				log.Printf("[整理] 替换规则正则无效，已跳过: %s（%v）", r.From, err)
+				continue
+			}
+			r.re = re
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// applyReplaceRules 应用替换规则到文件名（按配置顺序依次套用，后一条作用在前一条的结果上）
 func applyReplaceRules(name string, rules []ReplaceRule) string {
 	for _, r := range rules {
-		if r.From != "" {
+		switch {
+		case r.re != nil:
+			name = r.re.ReplaceAllString(name, r.To)
+		case r.Regex:
+			// 正则没编译成功（手改 YAML 绕过了 loadReplaceRules），当纯文本处理只会更糟
+		default:
 			name = strings.ReplaceAll(name, r.From, r.To)
 		}
 	}

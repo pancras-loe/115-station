@@ -2,7 +2,6 @@ package api
 
 import (
 	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -283,7 +282,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/config/tmdb", h.SaveTmdbConfig)
 		protected.GET("/config/setting", h.GetSetting)
 		protected.POST("/config/setting", h.SaveSetting)
-		protected.POST("/config/test-gpt", h.TestGPTConnection)
+		protected.POST("/config/test-ai", h.TestAIConnection)
 		protected.POST("/config/test-tmdb", h.TestTMDBConnection)
 
 		// Emby 连接测试
@@ -1144,51 +1143,6 @@ func (h *Handler) SaveScrapeRules(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
-// TestGPTConnection 测试 GPT 连接
-// POST /config/test-gpt  body: {"url":"...","key":"...","model":"..."}
-func (h *Handler) TestGPTConnection(c *gin.Context) {
-	var req struct {
-		URL   string `json:"url"`
-		Key   string `json:"key"`
-		Model string `json:"model"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.URL == "" || req.Model == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 API 地址和模型名称"})
-		return
-	}
-	// 向 OpenAI 协议的 /v1/chat/completions 发一个简单的测试请求
-	body, _ := json.Marshal(map[string]interface{}{
-		"model": req.Model,
-		"messages": []map[string]string{
-			{"role": "user", "content": "hi"},
-		},
-		"max_tokens": 5,
-	})
-	client := &http.Client{Timeout: 15 * time.Second}
-	endpoint := strings.TrimRight(req.URL, "/") + "/v1/chat/completions"
-	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "请求构建失败: " + err.Error()})
-		return
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	if req.Key != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+req.Key)
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "连接失败: " + err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "error": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "连接成功，模型响应正常"})
-}
-
 // TestTMDBConnection 测试 TMDB 连接
 // POST /config/test-tmdb  body: {"api_url":"...","api_key":"...","language":"..."}
 func (h *Handler) TestTMDBConnection(c *gin.Context) {
@@ -1648,6 +1602,10 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 	// emby 配置保存时同步更新反代缓存
 	if req.Key == "emby" {
 		UpdateEmbyConfig(req.Value)
+	}
+	// AI 增强识别配置有 5 分钟缓存，保存后立刻失效，否则刚改完还按旧地址调
+	if req.Key == aiSettingKey {
+		invalidateAICfgCache()
 	}
 	// 消息配置保存后重新生成企微聊天底栏菜单（启动时也会自动生成；
 	// 覆盖式创建，配置齐全才尝试，失败只记日志不打断保存）

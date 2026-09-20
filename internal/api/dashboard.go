@@ -548,7 +548,7 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 	})
 }
 
-// saveProxyConfigToDB 把代理配置写入 DB（TMDB/GPT 请求共用）
+// saveProxyConfigToDB 把代理配置写入 DB（TMDB / AI 增强识别请求共用）
 func saveProxyConfigToDB(h *Handler, proxyURL string) {
 	var s model.Setting
 	if err := h.DB.Where("`key` = ?", "proxy").First(&s).Error; err == nil {

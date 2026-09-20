@@ -94,7 +94,9 @@ func (h *Handler) loadIncrCfg() incrCfg {
 	return cfg
 }
 
-// loadIncrCron 自动整理的 cron（这条 cron 同时是整理的调度开关）
+// loadIncrCron 自动整理的 cron（这条 cron 同时是整理的调度开关）。
+// 它和 interval_sec 同住 setting "incr"（历史上整理与增量绑在一条 cron 上），
+// 但界面在「自动整理 → 基础配置」，不在增量页——前端两侧各改各的字段
 func (h *Handler) loadIncrCron() string {
 	return strings.TrimSpace(h.loadIncrCfg().Cron)
 }

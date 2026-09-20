@@ -1,30 +1,82 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { NAlert, NButton, NInput, NInputNumber, NPopconfirm, NTag } from 'naive-ui'
+import { computed, onMounted, ref } from 'vue'
+import { NAlert, NButton, NInputNumber, NModal, NPopconfirm, NTag } from 'naive-ui'
+import { RouterLink } from 'vue-router'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
+import IncrHelp from './IncrHelp.vue'
 import { syncApi } from '@/api'
 import type { FullSetting } from './fullSetting'
-import { useSetting } from '@/composables/useSetting'
+import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
 import { useTaskStore } from '@/stores/task'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
 
 const props = defineProps<{ full: FullSetting }>()
 
 const { message } = useFeedback()
 const task = useTaskStore()
 
-const incr = useSetting('incr', { cron: '*/10 8-23 * * *', interval_sec: 30 })
+/**
+ * 本页只管轮询间隔。同一个 setting 里的 cron 是**自动整理**的调度开关，
+ * 界面在「自动整理 → 基础配置」，所以这里只 patch 自己这个字段——见 incrSetting.ts
+ */
+const interval = ref<number | null>(INCR_DEFAULTS.interval_sec)
+/** 库里那份间隔值，用来判断输入框改过没有——incr 不走 useSetting，dirty 得自己记 */
+const intervalSaved = ref(INCR_DEFAULTS.interval_sec)
+const saving = ref(false)
 const running = ref(false)
 
+async function saveInterval(): Promise<boolean> {
+  saving.value = true
+  try {
+    await patchIncrCfg({ interval_sec: interval.value ?? 0 })
+    intervalSaved.value = interval.value ?? 0
+    message.success('保存成功')
+    void loadStatus()
+    return true
+  } catch (e) {
+    toastError(e, '保存失败')
+    return false
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 媒体库配置（全量页那份，两页共用）和本页的轮询间隔，任一改过没保存都要拦 */
+const dirty = computed(
+  () => props.full.dirty.value || (interval.value ?? 0) !== intervalSaved.value,
+)
+
+async function saveDirty(): Promise<boolean> {
+  if (props.full.dirty.value && !(await props.full.save())) return false
+  if ((interval.value ?? 0) !== intervalSaved.value) return await saveInterval()
+  return true
+}
+
+async function resetInterval() {
+  interval.value = INCR_DEFAULTS.interval_sec
+  await saveInterval()
+}
+
+/** 按钮上的 popconfirm 文案；配置改过时这个气泡不弹，由未保存确认框接管 */
+const runHint = '确定立即执行一次增量同步？'
+
 async function runIncremental() {
-  const cfg = props.full.model.value
-  // 增量走的是已保存的媒体库配置（定时任务也读同一份），没保存过就没得跑
+  // 确认框先弹：选「直接开始」时这次跑的是库里那份媒体库配置，
+  // 校验和请求体都得照着那份来（定时轮询读的也是它）
+  let cfg = props.full.model.value
+  if (dirty.value) {
+    if (!(await confirmUnsaved(UNSAVED_NOTE, saveDirty))) return
+    // 保存成功后 dirty 归零，界面值即已保存值；仍然脏 = 用户选了「直接开始」
+    if (dirty.value) cfg = props.full.saved.value
+  }
   if (!cfg.cid || cfg.cid === '0') {
     message.error('请先到「账号与媒体库」配置并保存 115 媒体库目录')
     return
   }
+
   running.value = true
   message.info('增量同步进行中…')
   task.poll()
@@ -77,86 +129,74 @@ async function probe() {
   }
 }
 
-onMounted(() => void loadStatus())
-
-// ---- cron 预览 ----
-const cronNext = ref<string[]>([])
-const cronError = ref('')
-let cronTimer: number | undefined
-
-watch(
-  () => incr.model.value.cron,
-  (expr) => {
-    clearTimeout(cronTimer)
-    cronNext.value = []
-    cronError.value = ''
-    if (!expr.trim()) return
-    cronTimer = window.setTimeout(async () => {
-      try {
-        const d = await syncApi.cronPreview(expr.trim())
-        cronNext.value = d.next ?? []
-        if (!cronNext.value.length) cronError.value = '未来一年内不会触发，请检查表达式'
-      } catch (e) {
-        cronError.value = e instanceof Error ? e.message : '表达式无效'
-      }
-    }, 500)
-  },
-  { immediate: true },
-)
+onMounted(async () => {
+  void loadStatus()
+  try {
+    interval.value = (await loadIncrCfg()).interval_sec
+    intervalSaved.value = interval.value ?? 0
+  } catch {
+    // 读不到就留在默认值上：保存时是 patch，不会把 cron 一起写坏
+  }
+})
 
 const busy = computed(() => running.value || task.status.running)
+
+/** 间隔填 0（或清空）= 关掉独立轮询，增量此时没有自己的时间表 */
+const pollingOff = computed(() => (interval.value ?? 0) <= 0)
+
+const helpVisible = ref(false)
 </script>
 
 <template>
   <div class="tab-body">
-    <SectionCard title="增量同步" hint="基于 115 生活事件的定时增量">
+    <SectionCard title="增量同步" hint="独立轮询，只管网盘端的外部变更">
+      <template #extra>
+        <NButton size="small" quaternary @click="helpVisible = true">功能介绍</NButton>
+      </template>
+
       <NAlert class="note" type="warning" :bordered="false">
         增量同步前需开启 115 生活 APP 中的「最近」（生活事件必须开启），且必须先执行一次全量同步。
       </NAlert>
 
       <FieldRow
-        label="自动整理 Cron"
-        tip="标准 5 字段 cron（分 时 日 月 周）。命中时执行自动整理（识别 → 搬移 → 写 STRM → 刮削 → 刷 Emby）。留空则整理不再定时执行。"
-      >
-        <NInput v-model:value="incr.model.value.cron" placeholder="*/10 8-23 * * *" />
-      </FieldRow>
-
-      <FieldRow
         label="增量同步间隔"
-        tip="增量同步独立轮询，只处理网盘端的外部变更（手机上传、离线下载、网页端删改），与自动整理互不影响。一轮通常只发 1~2 个请求，30 秒一轮的请求频率比旧版「10 分钟一轮、每轮 34 个请求」更低。填 0 可关闭独立轮询，退回跟着整理串行跑的旧行为。"
+        tip="每隔这么久拉一次 115 生活事件，把网盘端的变化落到本地 STRM。一轮通常只发 1~2 个请求，没有新事件时完全静默，所以跑得勤的代价很低：30 秒一轮意味着手机上传的片子最多半分钟就能进媒体库。"
         hint="0 = 关闭独立轮询；最小 15 秒，低于 15 按 15 处理"
       >
-        <NInputNumber
-          v-model:value="incr.model.value.interval_sec"
-          :min="0"
-          :step="15"
-          style="width: 160px"
-        >
+        <NInputNumber v-model:value="interval" :min="0" :step="15" style="width: 160px">
           <template #suffix>秒</template>
         </NInputNumber>
       </FieldRow>
 
-      <FieldRow label="接下来运行" tip="按当前表达式推算的未来 5 次触发时间。">
-        <div class="cron-preview">
-          <span v-if="cronError" class="cron-err">{{ cronError }}</span>
-          <template v-else-if="cronNext.length">
-            <div v-for="(t, i) in cronNext" :key="i" class="cron-row">
-              <span class="cron-idx">第 {{ i + 1 }} 次</span>{{ t }}
-            </div>
-          </template>
-          <span v-else class="cron-idle">修改表达式后显示接下来 5 次运行时间</span>
+      <NAlert v-if="pollingOff" class="note-top" type="warning" :bordered="false" title="独立轮询已关闭">
+        增量现在没有自己的时间表了：只有「自动整理」的 cron 命中时，才会在整理跑完后顺带执行一次。
+        手机上传、网页端的删除与改名要等到下一次整理才会反映到本地；
+        <strong>那条 cron 留空的话，增量就完全不会自动执行</strong>，只能靠本页的「开始增量同步」手点。
+        <div class="note-act">
+          <RouterLink class="jump" to="/organize">去看自动整理的 cron →</RouterLink>
         </div>
-      </FieldRow>
+      </NAlert>
 
       <FormActions>
-        <NButton type="primary" :loading="incr.saving.value" @click="incr.save()">保存配置</NButton>
-        <NPopconfirm @positive-click="void runIncremental()">
+        <NButton type="primary" :loading="saving" @click="void saveInterval()">保存配置</NButton>
+        <!-- 改过没保存时走 runIncremental 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
+        <NPopconfirm v-if="!dirty" @positive-click="void runIncremental()">
           <template #trigger>
             <NButton type="primary" ghost :disabled="busy" :loading="running">开始增量同步</NButton>
           </template>
-          确定立即执行一次增量同步？
+          {{ runHint }}
         </NPopconfirm>
-        <NButton :disabled="busy" @click="incr.reset">重置配置</NButton>
+        <NButton
+          v-else
+          type="primary"
+          ghost
+          :disabled="busy"
+          :loading="running"
+          @click="void runIncremental()"
+        >
+          开始增量同步
+        </NButton>
+        <NButton :disabled="busy" @click="void resetInterval()">重置配置</NButton>
       </FormActions>
     </SectionCard>
 
@@ -219,34 +259,11 @@ const busy = computed(() => running.value || task.status.running)
       <div v-else class="st-dim">正在读取状态…</div>
     </SectionCard>
 
-    <SectionCard title="两条时间表各管什么" hint="整理与增量已经拆开">
-      <div class="pipeline">
-        <div class="step">
-          <span class="step-idx">1</span>
-          <div>
-            <div class="step-title">自动整理（上面的 cron）</div>
-            <div class="step-desc">
-              识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 → 写 STRM → 刮削 → 刷 Emby。
-              一条龙自己落盘，不依赖增量（规则见「自动整理」页）
-            </div>
-          </div>
-        </div>
-        <div class="step">
-          <span class="step-idx">2</span>
-          <div>
-            <div class="step-title">增量同步（上面的间隔）</div>
-            <div class="step-desc">
-              独立轮询，只管网盘端的外部变更：手机/客户端上传、离线下载完成、网页端的删除与改名
-            </div>
-          </div>
-        </div>
-      </div>
-      <NAlert class="note-top" type="info" :bordered="false">
-        两者互不依赖，所以可以各走各的节奏：整理是重操作，低频合适；增量一轮通常只发 1~2 个请求，
-        跑得勤才能让手机上传的片子尽快出现在媒体库里。整理在网盘上做的搬移与改名会被登记下来，
-        绕回事件流时增量会跳过，不会重复处理。
-      </NAlert>
-    </SectionCard>
+    <!-- 弹窗必须留在这个根元素里：本页整体被 SyncPage 的 <Transition> 包着，
+         多个根节点会让 Transition 找不到唯一子元素，整页渲染成空白 -->
+    <NModal v-model:show="helpVisible" preset="card" title="增量同步是怎么回事" style="width: min(860px, 92vw)">
+      <IncrHelp />
+    </NModal>
   </div>
 </template>
 
@@ -319,65 +336,16 @@ const busy = computed(() => running.value || task.status.running)
   margin-top: 14px;
 }
 
-.cron-preview {
-  padding: 8px 11px;
-  border-radius: var(--radius);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
-  font-size: 12px;
-  line-height: 1.8;
+.jump {
+  font-size: 13px;
+  color: var(--c-primary);
+  text-decoration: none;
 }
-.cron-row {
-  font-variant-numeric: tabular-nums;
-  color: var(--c-text-1);
-}
-.cron-idx {
-  display: inline-block;
-  width: 62px;
-  color: var(--c-text-3);
-}
-.cron-err {
-  color: var(--c-danger);
-}
-.cron-idle {
-  color: var(--c-text-3);
+.jump:hover {
+  text-decoration: underline;
 }
 
-.pipeline {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.step {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-}
-.step-idx {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--c-primary-soft);
-  border: 1px solid var(--c-primary-border);
-  color: var(--c-primary);
-  font-size: 11.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.step-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--c-text-1);
-  line-height: 22px;
-}
-.step-desc {
-  margin-top: 1px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--c-text-3);
+.note-act {
+  margin-top: 8px;
 }
 </style>
