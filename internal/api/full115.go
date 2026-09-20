@@ -578,8 +578,13 @@ func writeAssetBytes(f remoteFile, localRoot string, data []byte) (string, error
 // getSettingValue 读取配置：yaml 优先，数据库回退（兼容旧数据）
 // 前端 saveConfig 保存到 yaml，早期版本保存到 DB，两处都要能读到
 func (h *Handler) getSettingValue(key string) string {
-	if v := h.Config.GetSetting(key); v != "" {
-		return v
+	if h.Config != nil {
+		if v := h.Config.GetSetting(key); v != "" {
+			return v
+		}
+	}
+	if h.DB == nil {
+		return ""
 	}
 	var s model.Setting
 	if err := h.DB.Where("key = ?", key).First(&s).Error; err == nil {
@@ -649,14 +654,20 @@ func rename115Batch(cookie string, names map[string]string) error {
 	return nil
 }
 
-// getStrmConfig 读取 STRM 直链配置
-func (h *Handler) getStrmConfig() (domain, format string, keepExt, exist bool) {
+// getStrmConfig 读取 STRM 直链配置。
+// 配置由前端 SaveSetting 写进 setting.yaml，只读 DB 的旧写法永远读不到
+func (h *Handler) getStrmConfig() (domain, format string, keepExt, skipExist bool) {
+	return parseStrmConfig(h.getSettingValue("strm"))
+}
+
+// parseStrmConfig 解析 STRM 直链配置 JSON。空串/坏 JSON/缺字段都回落到默认值。
+// 302 反代侧（readStrmLinkConfig）拿的是同一份配置，两边必须解析出同样的结果，
+// 否则 strm 里写的地址和播放时改写出来的地址会对不上——所以只留这一份实现
+func parseStrmConfig(raw string) (domain, format string, keepExt, skipExist bool) {
 	domain = "http://172.17.0.1:6086"
 	format = "pick_code_name"
 	keepExt = true
-	exist = false // false=覆盖
-	// 配置由前端 SaveSetting 写进 setting.yaml，只读 DB 的旧写法永远读不到
-	raw := h.getSettingValue("strm")
+	skipExist = false // false=覆盖
 	if raw == "" {
 		return
 	}
@@ -680,7 +691,7 @@ func (h *Handler) getStrmConfig() (domain, format string, keepExt, exist bool) {
 			keepExt = v == "true"
 		}
 		if cfg.Exist == "skip" {
-			exist = true // skip=true 表示跳过已存在
+			skipExist = true // skip=true 表示跳过已存在
 		}
 	}
 	return

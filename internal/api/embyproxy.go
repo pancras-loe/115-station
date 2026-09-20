@@ -421,9 +421,9 @@ func directURLFromLedger(db *gorm.DB, cfg *config.Config, strmBase string) strin
 	return base + "/d/" + idPart + "?/" + origName
 }
 
-// readStrmLinkConfig 读取 STRM 直链配置（域名/格式/保留后缀；yaml 优先 DB 回退）
+// readStrmLinkConfig 读取 STRM 直链配置（域名/格式/保留后缀；yaml 优先 DB 回退）。
+// 反代侧没有 Handler，所以自己取值；解析用与生成侧同一个 parseStrmConfig
 func readStrmLinkConfig(db *gorm.DB, cfg *config.Config) (domain, format string, keepExt bool) {
-	domain, format, keepExt = "http://172.17.0.1:6086", "pick_code_name", true
 	raw := ""
 	if cfg != nil {
 		raw = cfg.GetSetting("strm")
@@ -434,29 +434,7 @@ func readStrmLinkConfig(db *gorm.DB, cfg *config.Config) (domain, format string,
 			raw = s.Value
 		}
 	}
-	if raw == "" {
-		return
-	}
-	var c struct {
-		Domain  string `json:"domain"`
-		Format  string `json:"format"`
-		KeepExt any    `json:"keep_ext"`
-	}
-	if json.Unmarshal([]byte(raw), &c) != nil {
-		return
-	}
-	if c.Domain != "" {
-		domain = c.Domain
-	}
-	if c.Format != "" {
-		format = c.Format
-	}
-	switch v := c.KeepExt.(type) {
-	case bool:
-		keepExt = v
-	case string:
-		keepExt = v == "true"
-	}
+	domain, format, keepExt, _ = parseStrmConfig(raw)
 	return
 }
 
