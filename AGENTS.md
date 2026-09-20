@@ -2,7 +2,7 @@
 
 面向 AI 编码助手与新加入的开发者。阅读本文即可掌握项目定位、目录结构、关键约定与雷区。
 用户向文档见 [README.md](README.md) 与 [USAGE.md](USAGE.md)。
-**动 115 接口前先看维护者本地的 `REFERENCES.md`**（不入库，在仓库同级的 `115-station-notes/`）—— 外部参考项目清单与已验证的接口事实。
+**动 115 接口前先看 `docs/115-station-notes/REFERENCES.md`**（仓库内，但 `/docs/` 已 gitignore，不会提交）—— 外部参考项目清单与已验证的接口事实。
 
 ---
 
@@ -27,9 +27,21 @@
 ### 不入库的维护者文档
 
 `REFERENCES.md`（外部参考项目与 115 接口事实）和 `INCR-SYNC-UPGRADE.md`
-（增量同步改造记录）放在仓库**同级**的 `115-station-notes/` 目录，刻意不提交：
-它们含本机绝对路径、逆向结论与内部开发流水，对使用者无意义。
+（增量同步改造记录）放在 `docs/115-station-notes/`，整个 `/docs/` 目录被 `.gitignore`
+排除，刻意不提交：它们含本机绝对路径、逆向结论与内部开发流水，对使用者无意义。
 本文里引用到它们的地方都指的是那个目录下的副本。
+
+**怎么读**：直接读工作区里的文件，不需要联网——
+
+```bash
+cat docs/115-station-notes/REFERENCES.md        # 外部参考项目清单：哪个项目解决哪类问题
+cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
+```
+
+`REFERENCES.md` 顶部写着参考项目在本机的位置（目前是 `D:\Code\115strm\` 下的
+`p115client-main` / `115driver-main` 等），115 接口的字段含义、错误码、调用形态到那里
+`grep` 最快。**读它们、不要抄它们**——理由见上面的许可证约束，用到某个做法时在代码注释里写明出处。
+如果那些副本不在本机，按 `REFERENCES.md` 里的项目名去上游仓库看同名文件。
 
 但**第三方组件的许可证义务是独立的**，不受上述限制，也不要删：
 
@@ -88,24 +100,29 @@
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、离线下载、**下载链接台账**、媒体库封面生成、115 签到 |
+| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、离线下载、**下载记录**、媒体库封面生成、115 签到 |
 
 ### 数据模型（`internal/model/model.go`）
 
 19 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
 `MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）、
-`PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（下载链接台账，见下）。
+`PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（下载记录，见下）。
 
 > `MediaLibrary` 与 `OrganizeRecord` 不是一回事：前者「一部影视一条」（去重 upsert，仪表盘用），
 > 后者「一次整理动作一条」且失败与未识别同样留痕（记录页与「重新整理」用）。
 
-> `DownloadLink`（`dllink.go`）是链接台账：磁力/ed2k/HTTP 离线与 115 分享转存提交时落库，
-> 离线监视器按 `info_hash` 回填 115 给的 `file_id`（产物落在转存目录里的 fid），分享转存则用
-> receive 前后的顶层快照差集补 fid。整理写记录时（`orgSink.note` 里的 `fillRecordLink`）
-> 按 fid 反查，把链接**冗余**进 `OrganizeRecord.SourceLink` —— 台账 90 天后被清理，记录页仍看得到链接。
-> **新增任何「提交链接 → 内容落进转存目录」的通道，记得一起登记台账**，否则那条路进来的内容
-> 在整理记录里永远查不到来源。
+> `DownloadLink`（`dllink.go`）是下载记录：磁力/ed2k/HTTP 离线与 115 分享转存提交时落一行，
+> 内容整理入库后由 `orgSink.note` 里的 `dlLinkClaim` 把识别结果（片名 / 年份 / TMDB id /
+> 分类 / 落库目录 / 整理记录 id）回写到同一行。界面在「上传下载 → 下载记录」。
+>
+> ⚠️ **认领产物不许新增任何 115 请求**，只能用已经在手的数据：离线走监视器既有的 30 秒轮询
+> （摘 `file_id` 与任务名），分享走 `/share/snap` 返回里的顶层条目名（转存后 115 保留原名）。
+> 认领因此是两级的：fid 精确、名字兜底，都对不上就让那一行停在「未认领」，不要为了配上
+> 去加一次列目录 —— 这条约束是需求方明确提的。
+>
+> **新增任何「提交链接 → 内容落进转存目录」的通道，记得一起 `dlLinkRecord`**，
+> 否则那条路进来的内容在下载记录里永远只有链接没有片名。
 
 > ⚠️ **`PathCache` 是有失效要求的缓存，不是普通的读缓存。** 目录被改名/移动/删除后
 > 必须失效或重定位对应子树，否则「已搬进冗余的目录」会被永久算成还在媒体库里 ——
@@ -226,9 +243,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
-| 查某个 115 接口怎么调 | 本地 `REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
-| 做同步/整理类功能 | 本地 `REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
-| 动增量同步任何一环 | 先读本地 `INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
+| 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
+| 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
+| 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
 | 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
 
 ---

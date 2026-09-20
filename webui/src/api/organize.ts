@@ -79,9 +79,6 @@ export interface OrganizeRecord {
   category: string
   target_dir: string
   target_cid: string
-  /** 这批内容的来源链接（磁力/ed2k/http/115 分享），按 fid 从下载链接台账反查而来 */
-  source_link: string
-  source_link_kind: string
   video_count: number
   total_size: number
   strm_created: number

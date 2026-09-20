@@ -535,7 +535,7 @@ func (h *Handler) submitOfflineLink(rawURL string) error {
 	log.Printf("[机器人] ✓ 离线下载已提交: %s", truncateStr(rawURL, 60))
 	offlineMineAdd(h, rawURL)      // 归属标记（企微提交的同样只在本项目内通知）
 	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
-	// 链接台账：与 offlineSubmitCore 同样登记，机器人提交的也要能在整理记录里回看来源
-	dlLinkRecord(h, rawURL, "", "", h.shareFolderCid(), "机器人")
+	// 下载记录：与 offlineSubmitCore 同样登记，机器人提交的也要进记录表
+	dlLinkRecord(h, rawURL, "", "", h.shareFolderCid(), "机器人", "submitted", nil)
 	return nil
 }

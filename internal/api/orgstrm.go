@@ -382,12 +382,12 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		return
 	}
 	rec.BatchID = s.batchID
-	// 来源链接：按 fid 到下载链接台账反查，冗余存进记录（台账清理后仍看得到）
-	fillRecordLink(model.DB, rec)
 	if err := model.DB.Create(rec).Error; err != nil {
 		log.Printf("[整理] ○ 整理记录写入失败（不影响整理本身）: %v", err)
 		return
 	}
+	// 回写下载记录：这批内容如果是某条离线/分享链接下来的，把识别结果记到那一行上
+	dlLinkClaim(model.DB, rec)
 	s.mu.Lock()
 	s.records = append(s.records, rec)
 	s.mu.Unlock()

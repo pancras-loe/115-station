@@ -102,8 +102,8 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
 	offlineMineAdd(h, rawURL)      // 归属标记：完成通知只发给 115-Station 内提交的任务
 	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
-	// 链接台账：离线任务页回看链接、整理记录按 fid 反查来源都靠它
-	dlLinkRecord(h, rawURL, linkType, "", target, source)
+	// 下载记录：链接本身先落一行，产物 fid / 任务名由离线监视器的既有轮询回填
+	dlLinkRecord(h, rawURL, linkType, "", target, source, "submitted", nil)
 
 	// 离线下载是异步的：提交后 10 秒先试探一轮（115 秒传命中时文件已就位，
 	// CMS 同款极速响应——秒传场景 ~15 秒即开始整理）；未命中则 60 秒后再试，
@@ -165,8 +165,7 @@ func (h *Handler) offlineTaskList(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "查询失败: " + err.Error()})
 		return
 	}
-	// 规范化：name / size / percent / status(-1失败 1下载中 2完成) / url
-	var ledger *linkLedger // 台账索引懒加载：115 都给了 url 时一次库都不用查
+	// 规范化：name / size / percent / status(-1失败 1下载中 2完成)
 	items := make([]gin.H, 0, len(raws))
 	for _, m := range raws {
 		name := firstStr(m, "name", "task_name")
@@ -194,21 +193,7 @@ func (h *Handler) offlineTaskList(c *gin.Context) {
 		case string:
 			delTime, _ = strconv.ParseInt(v, 10, 64)
 		}
-		// 原始链接：115 任务列表自带 url 字段；它没给（老任务/HTTP 任务偶发）
-		// 就回台账按 info_hash / 任务名兜底，前端任务卡片才能显示来源链接
-		link := firstStr(m, "url", "source_url")
-		kind := classifyLink(link)
-		if link == "" {
-			if ledger == nil {
-				ledger = newLinkLedger(h)
-			}
-			link, kind = ledger.lookup(firstStr(m, "info_hash", "infoHash"), name)
-		}
-		items = append(items, gin.H{
-			"name": name, "size": m["size"], "percent": m["percent"], "status": status, "del_time": delTime,
-			"url": link, "link_kind": kind,
-			"file_id": firstStr(m, "file_id", "fileId"), "add_time": m["add_time"],
-		})
+		items = append(items, gin.H{"name": name, "size": m["size"], "percent": m["percent"], "status": status, "del_time": delTime})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
@@ -534,9 +519,9 @@ func StartOfflineTaskMonitor(h *Handler) {
 				if !offlineMineMatch(h, mine, key, t.name) {
 					continue
 				}
-				// 台账对账：补任务名、产物 fid（整理记录靠它反查来源链接）与终态。
-				// 放在下面的「启动前旧任务」闸门之前——重启前提交、重启后才完成的
-				// 任务不通知不整理，但 fid 该回填还是要回填
+				// 下载记录回填：补任务名、产物 fid（整理认领靠它）与下载状态，
+				// 数据都出自这次轮询，不额外请求 115。放在下面的「启动前旧任务」
+				// 闸门之前——重启前提交、重启后才完成的任务不通知不整理，但该回填还是要填
 				dlLinkSyncTask(h, t)
 				// 排队 → 下载中：115 真正开始下载，再给 5 次快速轮询
 				//（完成后 10 秒内即可发现并整理）

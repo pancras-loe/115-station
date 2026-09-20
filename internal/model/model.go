@@ -184,27 +184,47 @@ type SyncedFile struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
-// DownloadLink 下载链接台账：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载或
-// 115 分享转存。提交时落库，离线监视器轮询时把 115 返回的 file_id（产物在转存
-// 目录里的 fid）与终态回填；整理写记录时按 fid 反查，把链接冗余进 OrganizeRecord。
+// DownloadLink 下载记录：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载，
+// 或一次 115 分享转存。提交时落库，内容被整理入库后把识别结果（片名 / 年份 /
+// TMDB id / 分类 / 落库目录）回写到同一行 —— 一条链接从「提交了什么」到
+// 「最后成了哪部片」都在这一行上。
+//
+// ⚠️ 认领产物**不允许新增任何 115 请求**，只能用已经在手的数据：
+//   - 离线任务：监视器本来就在 30 秒轮询任务列表，顺手摘 file_id（产物 fid）与任务名
+//   - 分享转存：/share/snap 的返回里本来就有顶层条目名，转存后 115 保留原名
 //
 // 为什么不复用 OfflinePlay：那张表是「按需离线播放端点」的登记（主键是链接指纹、
-// 不含分享链接、也没有落盘 fid），职责不同，混用会把两件事绑死。
+// 不含分享链接、也没有产物信息），职责不同，混用会把两件事绑死。
 type DownloadLink struct {
 	ID   uint   `json:"id" gorm:"primaryKey"`
-	Kind string `json:"kind" gorm:"index;size:16"`  // magnet / ed2k / http / ftp / share
-	URL  string `json:"url" gorm:"size:1000"`       // 原始链接（分享链接不含提取码）
-	Hash string `json:"hash" gorm:"index;size:64"`  // 磁力 btih / ed2k 文件 hash / 分享 share_code，用于与 115 任务列表对账
-	Name string `json:"name" gorm:"size:500"`       // 任务名 / 分享标题 / 链接文件名（提交时能取到多少算多少，回填时补全）
+	Kind string `json:"kind" gorm:"index;size:16"` // magnet / ed2k / http / ftp / share
+	URL  string `json:"url" gorm:"size:1000"`      // 原始链接（分享链接不含提取码）
+	Hash string `json:"hash" gorm:"index;size:64"` // 磁力 btih / ed2k 文件 hash / 分享 share_code，与 115 任务列表对账用
+	Name string `json:"name" gorm:"size:500"`      // 任务名 / 分享标题 / 链接文件名（提交时取得到多少算多少，回填时补全）
 
 	TargetCid string `json:"target_cid" gorm:"size:64"` // 提交时指定的转存目录
-	// ResultFids 产物在转存目录里的 fid（JSON 数组）。离线任务取 115 返回的
-	// file_id；分享转存取 receive 前后目录快照的差集。这是与整理记录对账的键
-	ResultFids string `json:"result_fids" gorm:"type:text"`
+	Source    string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 影巢 / TG订阅 / 按需离线
+	// Status 下载/转存侧的状态：submitted（已提交）/ downloading / done / failed。
+	// 分享转存是同步完成的，登记即 done
+	Status string `json:"status" gorm:"index;size:16"`
+	Note   string `json:"note" gorm:"size:500"` // 失败原因或补充说明
 
-	Source string `json:"source" gorm:"size:32"`       // 提交来源：web / bot / 影巢 / 按需离线 …
-	Status string `json:"status" gorm:"index;size:16"` // submitted / downloading / done / failed
-	Note   string `json:"note" gorm:"size:500"`        // 失败原因或补充说明
+	// ResultFids / ResultNames 产物在转存目录里的定位信息（JSON 数组），
+	// 整理认领时用：fid 精确（离线任务的 file_id），名字兜底（分享转存只有名字）
+	ResultFids  string `json:"result_fids" gorm:"type:text"`
+	ResultNames string `json:"result_names" gorm:"type:text"`
+
+	// ---- 整理结果（内容被整理入库后回写，纯本地 DB 操作）----
+	OrganizeStatus string     `json:"organize_status" gorm:"index;size:16"` // ""（还没整理）/ success / exists / failed / unrecognized
+	OrganizedAt    *time.Time `json:"organized_at"`
+	RecordID       uint       `json:"record_id" gorm:"index"` // 对应的 OrganizeRecord.ID，前端跳整理记录用
+	TmdbID         int        `json:"tmdb_id" gorm:"index"`
+	Title          string     `json:"title" gorm:"size:255"`
+	Year           string     `json:"year" gorm:"size:10"`
+	MediaType      string     `json:"media_type" gorm:"size:20"`
+	PosterPath     string     `json:"poster_path" gorm:"size:255"` // 列表直接出图，走 /tmdb/img 代理
+	Category       string     `json:"category" gorm:"size:50"`
+	TargetDir      string     `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -262,12 +282,6 @@ type OrganizeRecord struct {
 	Category   string `json:"category" gorm:"size:50"`
 	TargetDir  string `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 	TargetCid  string `json:"target_cid" gorm:"size:64"`
-
-	// SourceLink 这批内容的来源链接（磁力/ed2k/http/115 分享），写记录时从
-	// DownloadLink 台账按 fid 反查填入。冗余存一份而不是只存外键：台账过期
-	// 清理后记录页仍看得到链接，与 Files 快照同一个思路
-	SourceLink     string `json:"source_link" gorm:"size:1000"`
-	SourceLinkKind string `json:"source_link_kind" gorm:"size:16"` // magnet / ed2k / http / ftp / share
 
 	// Files 是 []{fid,name,kind} 的 JSON。fid 在 115 上移动/改名后不变，
 	// 所以这就是「重新整理」原地捞回文件所需的全部定位信息

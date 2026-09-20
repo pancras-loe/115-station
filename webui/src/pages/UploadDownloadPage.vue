@@ -18,8 +18,8 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import MeterBar from '@/components/ui/MeterBar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import SourceLink from '@/components/ui/SourceLink.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
+import DownloadRecordsTab from '@/pages/transfer/DownloadRecordsTab.vue'
 import { storageApi, transferApi } from '@/api'
 import type { OfflineTask } from '@/api/transfer'
 import { useSetting } from '@/composables/useSetting'
@@ -312,7 +312,6 @@ onUnmounted(() => clearInterval(timer))
                     <span>{{ Number(t.size) > 0 ? bytes(Number(t.size)) : '—' }}</span>
                     <span v-if="doneTime(t)">{{ doneTime(t) }}</span>
                   </div>
-                  <SourceLink v-if="t.url" class="task-link" :link="t.url" :kind="t.link_kind" />
                 </div>
                 <div v-if="stateOf(t) === 'downloading'" class="task-side">
                   {{ Number(t.size) > 0 ? bytes(Number(t.size)) : '' }}
@@ -330,6 +329,10 @@ onUnmounted(() => clearInterval(timer))
           </template>
         </SectionCard>
       </div>
+    </NTabPane>
+
+    <NTabPane name="records" tab="下载记录">
+      <DownloadRecordsTab />
     </NTabPane>
 
     <NTabPane name="upload" tab="监控上传">
@@ -435,9 +438,6 @@ onUnmounted(() => clearInterval(timer))
   font-size: 11.5px;
   color: var(--c-text-2);
   font-variant-numeric: tabular-nums;
-}
-.task-link {
-  margin-top: 3px;
 }
 .task-meta {
   margin-top: 2px;
