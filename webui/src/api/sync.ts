@@ -28,6 +28,31 @@ export interface FullSyncConfig {
   /** 定时全量开关。只在 detect_orphans 打开时生效，后端同样按此判定 */
   cron_enabled: boolean
   cron: string
+  /** 深度删除（本地已删 → 删网盘源文件）。与后端 deepDelCfg 同构 */
+  deep_delete: DeepDeleteConfig
+}
+
+/**
+ * 深度删除配置。
+ *
+ * 后端字段是指针（区分「没配过」和「显式填零值」），前端一律整份下发明确值，
+ * 所以这里都是必填 —— 默认值见 fullSetting.ts 的 defaultFull()。
+ */
+export interface DeepDeleteConfig {
+  enabled: boolean
+  /** mark = 只标记（默认）；auto = 扫到就自动删 */
+  mode: 'mark' | 'auto'
+  /** 预演：只打日志不动手 */
+  dry_run: boolean
+  /** 本地消失扫描间隔（秒）；0 = 关掉后台扫描，只留手动按钮 */
+  scan_interval_sec: number
+  /** 自动模式单轮可删视频数上限 */
+  max_batch: number
+  /** 自动模式单轮可删文件数占台账的比例上限（0~1） */
+  max_ratio: number
+  /** 顺带清理因此变空的网盘目录 */
+  prune_pan_dirs: boolean
+  notify: boolean
 }
 
 export interface FullSyncResult {
@@ -108,6 +133,54 @@ export const cleanOrphans = () =>
     '/sync/orphans/clean',
     {},
     { timeoutMs: 10 * 60_000 },
+  )
+
+/** 深度删除报告（本地已删、网盘还在）—— 失效 STRM 的镜像 */
+export interface DeepDeleteReport {
+  enabled: boolean
+  mode: string
+  dry_run: boolean
+  /** 本次请求有没有真的重扫一遍；全量同步占着锁时为 false */
+  scanned: boolean
+  /** 扫描被守卫拦下时的原因（挂载掉线等），直接展示给用户 */
+  scan_error: string
+  total: number
+  ledger_total: number
+  ratio: number
+  sample: OrphanEntry[]
+  sample_limit: number
+}
+
+/** GET 会顺带跑一轮本地扫描（纯 os.Stat，不发 115 请求），所以超时放宽 */
+export const deepDelete = () => http.get<DeepDeleteReport>('/sync/deep-delete', { timeoutMs: 60_000 })
+
+export const runDeepDelete = (dryRun: boolean) =>
+  http.post<{
+    message?: string
+    dry_run: boolean
+    removed: number
+    videos: number
+    assets: number
+    pan_dirs: number
+  }>('/sync/deep-delete/run', { dry_run: dryRun }, { timeoutMs: 10 * 60_000 })
+
+export interface DeepDeleteRecord {
+  id: number
+  reason: string
+  title: string
+  video_cnt: number
+  asset_cnt: number
+  pan_dirs: number
+  status: string
+  message: string
+  rel_paths: string[]
+  created_at: string
+}
+
+export const deepDeleteRecords = (page = 1, size = 20) =>
+  http.get<{ data: DeepDeleteRecord[]; total: number; page: number; size: number }>(
+    '/sync/deep-delete/records',
+    { params: { page, size }, timeoutMs: 15_000 },
   )
 
 /** 增量事件流状态：回答「为什么没同步」 */

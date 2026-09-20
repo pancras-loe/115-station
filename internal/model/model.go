@@ -179,9 +179,34 @@ type SyncedFile struct {
 	// 非空即为失效 STRM 候选：本地 strm/附属还在，源文件没了（网页版手动删除、
 	// 增量同步停机期间的变动等生活事件漏掉的情况）。只做标记不自动删除，
 	// 由用户在同步页看过预览后手动触发清理
-	OrphanAt  *time.Time `json:"orphan_at" gorm:"index"`
+	OrphanAt *time.Time `json:"orphan_at" gorm:"index"`
+	// VanishAt 最近一次本地扫描中该文件在【本地】已不存在、而网盘源文件仍在的时刻。
+	// 与 OrphanAt 互为镜像，是「深度删除」的候选标记：在 Emby 里删掉条目会连带
+	// 删掉磁盘上的 strm/nfo/海报，网盘源文件却纹丝不动，下一次全量同步又把 STRM
+	// 生成回来。同样只标记不自动删（自动模式要用户显式打开，见 deepdel.go）
+	VanishAt  *time.Time `json:"vanish_at" gorm:"index"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// DeepDeleteRecord 深度删除流水：一条 = 一次执行（一批文件）。
+//
+// 留痕不是为了好看：删除进的是 115 回收站，用户事后要还原时得知道
+// 当时删的是哪几个 fid —— 台账行那时已经跟着删掉了，不留这张表就再也查不出来。
+type DeepDeleteRecord struct {
+	ID     uint   `json:"id" gorm:"primaryKey"`
+	Reason string `json:"reason" gorm:"index;size:16"` // local_scan / emby_webhook / manual
+	Title  string `json:"title" gorm:"size:255"`       // 从 rel_path 推出的片名，给人看的
+	// RelPaths / Fids 都是 JSON 数组。Fids 是回收站还原的凭据，别省
+	RelPaths string `json:"rel_paths" gorm:"type:text"`
+	Fids     string `json:"fids" gorm:"type:text"`
+
+	VideoCnt  int       `json:"video_cnt"`
+	AssetCnt  int       `json:"asset_cnt"`
+	PanDirs   int       `json:"pan_dirs"`                    // 顺带清理掉的网盘空目录数
+	Status    string    `json:"status" gorm:"index;size:16"` // done / dry_run / rejected / failed
+	Message   string    `json:"message" gorm:"size:500"`     // 被阈值拦下或失败时写原因
+	CreatedAt time.Time `json:"created_at" gorm:"index"`
 }
 
 // DownloadLink 下载记录：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载，
@@ -355,6 +380,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&OrganizeRecord{},
 		&EventSuppress{},
 		&PathCache{},
+		&DeepDeleteRecord{},
 	); err != nil {
 		return nil, err
 	}

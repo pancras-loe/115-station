@@ -235,6 +235,12 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "ok（已进入入库通知队列）"})
 		return
 	}
+	if category == "deleted" {
+		// 深度删除的前期采样。Emby 原生删除事件带不带 Item.Path、删整季是发一条
+		// Season 还是每集一条，各版本/各 webhook 插件都不一样，只能实测。
+		// 打整包（截断）而不是挑字段——挑错字段就什么也采不到
+		log.Printf("[Emby Webhook] 删除事件原始载荷: %s", truncateStr(string(body), 1500))
+	}
 	content := itemName
 	if content == "" {
 		content = event

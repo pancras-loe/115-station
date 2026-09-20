@@ -223,6 +223,7 @@ func StartSyncScheduler(h *Handler) {
 		}
 	}()
 	h.startIncrPoller()
+	h.startDeepDelScanner()
 	log.Println("[调度] 调度器已启动（cron 触发 自动整理 / 全量同步）")
 }
 
@@ -417,6 +418,7 @@ func (h *Handler) pruneSyncEvents() {
 	pruneEventSuppress()
 	pruneOrganizeRecords()
 	pruneDownloadLinks()
+	pruneDeepDeleteRecords()
 }
 
 // nextCronTime 计算给定时刻之后下一次 cron 触发时间

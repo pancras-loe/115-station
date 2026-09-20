@@ -191,6 +191,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 失效 STRM（本地还在、网盘已删）预览与清理：全量同步只打标，删除必须用户确认
 		protected.GET("/sync/orphans", h.ListOrphans)
 		protected.POST("/sync/orphans/clean", h.CleanOrphans)
+		// 深度删除（本地已删、网盘还在）：上一条的镜像，删的是网盘源文件。
+		// run 不收「删哪些」的入参，删什么完全由台账与扫描决定（见 deepdel.go）
+		protected.GET("/sync/deep-delete", h.ListDeepDelete)
+		protected.POST("/sync/deep-delete/run", h.RunDeepDelete)
+		protected.GET("/sync/deep-delete/records", h.ListDeepDeleteRecords)
 
 		// Cron 未来运行时间预览（校验表达式是否正确）
 		protected.POST("/sync/cron-preview", func(c *gin.Context) {
