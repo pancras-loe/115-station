@@ -184,6 +184,32 @@ type SyncedFile struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// DownloadLink 下载链接台账：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载或
+// 115 分享转存。提交时落库，离线监视器轮询时把 115 返回的 file_id（产物在转存
+// 目录里的 fid）与终态回填；整理写记录时按 fid 反查，把链接冗余进 OrganizeRecord。
+//
+// 为什么不复用 OfflinePlay：那张表是「按需离线播放端点」的登记（主键是链接指纹、
+// 不含分享链接、也没有落盘 fid），职责不同，混用会把两件事绑死。
+type DownloadLink struct {
+	ID   uint   `json:"id" gorm:"primaryKey"`
+	Kind string `json:"kind" gorm:"index;size:16"`  // magnet / ed2k / http / ftp / share
+	URL  string `json:"url" gorm:"size:1000"`       // 原始链接（分享链接不含提取码）
+	Hash string `json:"hash" gorm:"index;size:64"`  // 磁力 btih / ed2k 文件 hash / 分享 share_code，用于与 115 任务列表对账
+	Name string `json:"name" gorm:"size:500"`       // 任务名 / 分享标题 / 链接文件名（提交时能取到多少算多少，回填时补全）
+
+	TargetCid string `json:"target_cid" gorm:"size:64"` // 提交时指定的转存目录
+	// ResultFids 产物在转存目录里的 fid（JSON 数组）。离线任务取 115 返回的
+	// file_id；分享转存取 receive 前后目录快照的差集。这是与整理记录对账的键
+	ResultFids string `json:"result_fids" gorm:"type:text"`
+
+	Source string `json:"source" gorm:"size:32"`       // 提交来源：web / bot / 影巢 / 按需离线 …
+	Status string `json:"status" gorm:"index;size:16"` // submitted / downloading / done / failed
+	Note   string `json:"note" gorm:"size:500"`        // 失败原因或补充说明
+
+	CreatedAt time.Time `json:"created_at" gorm:"index"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // OfflinePlay 按需离线（边下边播）登记：ed2k/磁力链接 ↔ 播放端点 id。
 // 入库（提交离线）时创建，STRM 占位内容指向 /ed2k/play/{id}；
 // Emby 播放时端点查任务状态，没下过就提交 115 离线，完成后定位
@@ -236,6 +262,12 @@ type OrganizeRecord struct {
 	Category   string `json:"category" gorm:"size:50"`
 	TargetDir  string `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 	TargetCid  string `json:"target_cid" gorm:"size:64"`
+
+	// SourceLink 这批内容的来源链接（磁力/ed2k/http/115 分享），写记录时从
+	// DownloadLink 台账按 fid 反查填入。冗余存一份而不是只存外键：台账过期
+	// 清理后记录页仍看得到链接，与 Files 快照同一个思路
+	SourceLink     string `json:"source_link" gorm:"size:1000"`
+	SourceLinkKind string `json:"source_link_kind" gorm:"size:16"` // magnet / ed2k / http / ftp / share
 
 	// Files 是 []{fid,name,kind} 的 JSON。fid 在 115 上移动/改名后不变，
 	// 所以这就是「重新整理」原地捞回文件所需的全部定位信息
@@ -304,6 +336,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&SyncEvent{},
 		&SyncedFile{},
 		&OfflinePlay{},
+		&DownloadLink{},
 		&UploadMark{},
 		&OrganizeRecord{},
 		&EventSuppress{},

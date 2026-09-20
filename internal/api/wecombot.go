@@ -498,7 +498,7 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 		organize := true // 机器人触发的转存默认走「整理+增量」闭环
 		reply("⏳ 开始转存 115 分享…", truncateStr(shareURL, 70))
 		go func() {
-			msg, ok, fail, err := h.shareReceiveCore(shareURL, code, "", organize)
+			msg, ok, fail, err := h.shareReceiveCore(shareURL, code, "", "机器人", organize)
 			if err != nil {
 				NotifyMessage("", "✗ 转存失败: "+err.Error())
 				return
@@ -593,5 +593,7 @@ func (h *Handler) submitOfflineLink(rawURL string) error {
 	log.Printf("[机器人] ✓ 离线下载已提交: %s", truncateStr(rawURL, 60))
 	offlineMineAdd(h, rawURL)      // 归属标记（企微提交的同样只在本项目内通知）
 	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
+	// 链接台账：与 offlineSubmitCore 同样登记，机器人提交的也要能在整理记录里回看来源
+	dlLinkRecord(h, rawURL, "", "", h.shareFolderCid(), "机器人")
 	return nil
 }

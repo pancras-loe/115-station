@@ -416,6 +416,7 @@ func (h *Handler) pruneSyncEvents() {
 	}
 	pruneEventSuppress()
 	pruneOrganizeRecords()
+	pruneDownloadLinks()
 }
 
 // nextCronTime 计算给定时刻之后下一次 cron 触发时间

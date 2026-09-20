@@ -664,7 +664,7 @@ func (h *Handler) Re0Unlock(c *gin.Context) {
 	}
 	// 115 链接自动进分享转存引擎（整理收尾由转存流程自理）
 	if req.Transfer && data.FullURL != "" && is115ShareLink(data.FullURL) {
-		msg, ok, fail, err := h.shareReceiveCore(data.FullURL, data.AccessCode, "", true)
+		msg, ok, fail, err := h.shareReceiveCore(data.FullURL, data.AccessCode, "", "影巢", true)
 		if err != nil {
 			out["transfer_error"] = err.Error()
 		} else {

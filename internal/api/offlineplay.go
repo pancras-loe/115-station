@@ -235,7 +235,7 @@ func (h *Handler) handleOfflinePlay(c *gin.Context) {
 	// 从未提交过（登记早于提交的记录/历史遗留）：此处按需提交
 	if rec.Status == "pending" {
 		offlinePlayMu.Lock()
-		if code, msg := h.offlineSubmitCore(rec.Link, "", true); code != http.StatusOK {
+		if code, msg := h.offlineSubmitCore(rec.Link, "", "按需离线", true); code != http.StatusOK {
 			// 「任务已存在」类拒绝 = 实际已在下载，不算失败
 			if !strings.Contains(msg, "已存在") && !strings.Contains(strings.ToLower(msg), "exist") {
 				h.DB.Model(&rec).Updates(map[string]interface{}{"status": "failed", "error_msg": truncateStr(msg, 500)})

@@ -25,6 +25,14 @@ export interface OfflineTask {
   size?: number | string
   /** 完成时间，秒级时间戳 */
   del_time?: number | string
+  /** 提交这条任务的原始链接：115 任务列表自带，缺失时由下载链接台账兜底 */
+  url?: string
+  /** magnet / ed2k / http / ftp */
+  link_kind?: string
+  /** 下载产物在转存目录里的 fid */
+  file_id?: string
+  /** 提交时间，秒级时间戳 */
+  add_time?: number | string
 }
 
 export const offlineTasks = () =>

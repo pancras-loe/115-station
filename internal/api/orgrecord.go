@@ -52,7 +52,8 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	}
 	if kw := strings.TrimSpace(c.Query("q")); kw != "" {
 		like := "%" + kw + "%"
-		q = q.Where("source LIKE ? OR title LIKE ?", like, like)
+		// 来源链接也进搜索范围：拿一条磁力/分享链接回来查「这个链接整理成了什么」
+		q = q.Where("source LIKE ? OR title LIKE ? OR source_link LIKE ?", like, like, like)
 	}
 	var total int64
 	q.Count(&total)

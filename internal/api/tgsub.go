@@ -193,7 +193,7 @@ func (h *Handler) tgSubAutoSave(link, pass string) {
 		if strings.TrimSpace(target) == "" {
 			target = h.shareFolderCid()
 		}
-		msg, ok, fail, err := h.shareReceiveCore(link, pass, target, true)
+		msg, ok, fail, err := h.shareReceiveCore(link, pass, target, "TG订阅", true)
 		if err != nil {
 			log.Printf("[TG订阅] ✗ 自动转存失败: %v", err)
 			return

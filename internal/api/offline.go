@@ -23,9 +23,10 @@ import (
 )
 
 // offlineSubmitCore 提交离线下载任务核心（/offline/add 与影巢磁力转存共用）。
-// target 空则回落分享同步接收文件夹；organize 时挂秒传试探与延迟整理。
+// target 空则回落分享同步接收文件夹；organize 时挂秒传试探与延迟整理；
+// source 是提交来源（web / 机器人 / 按需离线…），只用于台账留痕。
 // 返回 (HTTP 状态码, 成功消息或错误信息)。
-func (h *Handler) offlineSubmitCore(rawURL, target string, organize bool) (int, string) {
+func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool) (int, string) {
 	// 验证链接类型
 	linkType := classifyLink(rawURL)
 	if linkType == "" {
@@ -101,6 +102,8 @@ func (h *Handler) offlineSubmitCore(rawURL, target string, organize bool) (int, 
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
 	offlineMineAdd(h, rawURL)      // 归属标记：完成通知只发给 StrmHub 内提交的任务
 	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
+	// 链接台账：离线任务页回看链接、整理记录按 fid 反查来源都靠它
+	dlLinkRecord(h, rawURL, linkType, "", target, source)
 
 	// 离线下载是异步的：提交后 10 秒先试探一轮（115 秒传命中时文件已就位，
 	// CMS 同款极速响应——秒传场景 ~15 秒即开始整理）；未命中则 60 秒后再试，
@@ -136,7 +139,7 @@ func (h *Handler) offlineAddTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写链接"})
 		return
 	}
-	status, msg := h.offlineSubmitCore(req.URL, req.Target, req.Organize)
+	status, msg := h.offlineSubmitCore(req.URL, req.Target, "web", req.Organize)
 	if status != http.StatusOK {
 		c.JSON(status, gin.H{"error": msg})
 		return
@@ -162,7 +165,8 @@ func (h *Handler) offlineTaskList(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "查询失败: " + err.Error()})
 		return
 	}
-	// 规范化：name / size / percent / status(-1失败 1下载中 2完成)
+	// 规范化：name / size / percent / status(-1失败 1下载中 2完成) / url
+	var ledger *linkLedger // 台账索引懒加载：115 都给了 url 时一次库都不用查
 	items := make([]gin.H, 0, len(raws))
 	for _, m := range raws {
 		name := firstStr(m, "name", "task_name")
@@ -190,7 +194,21 @@ func (h *Handler) offlineTaskList(c *gin.Context) {
 		case string:
 			delTime, _ = strconv.ParseInt(v, 10, 64)
 		}
-		items = append(items, gin.H{"name": name, "size": m["size"], "percent": m["percent"], "status": status, "del_time": delTime})
+		// 原始链接：115 任务列表自带 url 字段；它没给（老任务/HTTP 任务偶发）
+		// 就回台账按 info_hash / 任务名兜底，前端任务卡片才能显示来源链接
+		link := firstStr(m, "url", "source_url")
+		kind := classifyLink(link)
+		if link == "" {
+			if ledger == nil {
+				ledger = newLinkLedger(h)
+			}
+			link, kind = ledger.lookup(firstStr(m, "info_hash", "infoHash"), name)
+		}
+		items = append(items, gin.H{
+			"name": name, "size": m["size"], "percent": m["percent"], "status": status, "del_time": delTime,
+			"url": link, "link_kind": kind,
+			"file_id": firstStr(m, "file_id", "fileId"), "add_time": m["add_time"],
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items})
 }
@@ -516,6 +534,10 @@ func StartOfflineTaskMonitor(h *Handler) {
 				if !offlineMineMatch(h, mine, key, t.name) {
 					continue
 				}
+				// 台账对账：补任务名、产物 fid（整理记录靠它反查来源链接）与终态。
+				// 放在下面的「启动前旧任务」闸门之前——重启前提交、重启后才完成的
+				// 任务不通知不整理，但 fid 该回填还是要回填
+				dlLinkSyncTask(h, t)
 				// 排队 → 下载中：115 真正开始下载，再给 5 次快速轮询
 				//（完成后 10 秒内即可发现并整理）
 				if seen && prev == 0 && t.status == 1 {
@@ -647,6 +669,7 @@ func unwrapItems(v interface{}) ([]map[string]interface{}, bool) {
 type offlineTaskInfo struct {
 	key     string // info_hash 优先，空则 name
 	name    string
+	fileID  string // 产物落在转存目录里的 fid（115 的 file_id），台账与整理记录靠它对账
 	status  int
 	percent int   // 下载进度 0-100（下载中提示用）
 	delTime int64 // 完成时间戳（秒；115 任务列表会长期保留历史任务，用它区分新旧）
@@ -698,7 +721,8 @@ func fetchOfflineTaskList(cookie string) ([]offlineTaskInfo, error) {
 		case string:
 			delTime, _ = strconv.ParseInt(v, 10, 64)
 		}
-		tasks = append(tasks, offlineTaskInfo{key: key, name: name, status: status, percent: percent, delTime: delTime})
+		tasks = append(tasks, offlineTaskInfo{key: key, name: name, fileID: firstStr(m, "file_id", "fileId"),
+			status: status, percent: percent, delTime: delTime})
 	}
 	return tasks, nil
 }

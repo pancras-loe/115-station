@@ -118,7 +118,7 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 		switch it.Action {
 		case "transfer":
 			reply("⏳ 正在转存 115…")
-			msg, success, _, err := h.shareReceiveCore(it.URL, it.Password, h.shareFolderCid(), true)
+			msg, success, _, err := h.shareReceiveCore(it.URL, it.Password, h.shareFolderCid(), "机器人", true)
 			if err != nil {
 				reply("✗ 转存失败: " + err.Error())
 				return

@@ -124,7 +124,7 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 	}
 	// 提取码允许为空：无密码分享可直接转存（与机器人通道一致），
 	// 码错误时 115 会返回明确报错
-	msg, success, fail, err := h.shareReceiveCore(req.URL, req.Code, req.Target, req.Organize)
+	msg, success, fail, err := h.shareReceiveCore(req.URL, req.Code, req.Target, "web", req.Organize)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
@@ -138,8 +138,9 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 }
 
 // shareReceiveCore 转存核心（HTTP 接口与企微机器人共用）：
-// 解析分享码 → info → snap（翻页收全）→ sharepost → 逐项 receive；organize=true 时转存后触发整理+增量
-func (h *Handler) shareReceiveCore(shareURL, code, target string, organize bool) (msg string, success, fail int, err error) {
+// 解析分享码 → info → snap（翻页收全）→ sharepost → 逐项 receive；organize=true 时转存后触发整理+增量。
+// source 是提交来源（web / 机器人 / 影巢 / TG 订阅…），只用于链接台账留痕
+func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
 	shareCode := extractShareCode(shareURL)
 	if shareCode == "" {
 		return "", 0, 0, fmt.Errorf("无法从链接解析分享码")
@@ -168,6 +169,10 @@ func (h *Handler) shareReceiveCore(shareURL, code, target string, organize bool)
 	}{organize}
 
 	log.Printf("[上传] ▶ 分享转存开始: %s（提取码 %q）", truncateStr(shareURL, 70), code)
+
+	// 转存前的目标目录快照（链接台账用，见下方差集）：取不到就退化成
+	// 「这一单没有 fid」，整理记录那边还有按名字的兜底
+	before := h.shareTargetSnapshot(target)
 
 	// 1. 文件列表 + 分享信息（GET /share/snap）。
 	//    此前的 POST /share/info 与 POST /share/snap 均已失效（信息端点恒返
@@ -245,6 +250,16 @@ func (h *Handler) shareReceiveCore(shareURL, code, target string, organize bool)
 	msg = fmt.Sprintf("「%s」转存完成: 成功 %d（共 %d 项）", shareTitle, success, len(allItems))
 	log.Printf("[上传] %s", msg)
 
+	// 链接台账：分享转存不产生 115 离线任务，产物 fid 只能靠转存前后的顶层
+	// 快照做差集（目录里原有的条目在 before 里，不会被算进这一单）。
+	// 必须在触发整理之前做完——整理写记录时要按 fid 反查这条链接
+	linkID := dlLinkRecord(h, shareURL, "share", shareTitle, target, source)
+	if linkID != 0 {
+		if fids := h.shareNewFids(target, before); len(fids) > 0 {
+			dlLinkSetFids(h, linkID, fids)
+		}
+	}
+
 	// 转存成功且开启自动整理 → 触发「整理+增量」
 	if success > 0 && req.Organize {
 		go h.triggerOrganizeAndSync()
@@ -269,4 +284,55 @@ func extractShareCode(raw string) string {
 // is115ShareLink 判断链接是否为 115 分享（可自动转存的域）
 func is115ShareLink(raw string) bool {
 	return re115Share.MatchString(raw)
+}
+
+// shareTargetSnapshot 取目标目录顶层条目 fid 集合（转存前拍一张）。
+// 失败返回 nil——此时差集会把目录里原有条目也算进来，所以 shareNewFids
+// 对 nil 快照直接放弃，不硬凑
+func (h *Handler) shareTargetSnapshot(cid string) map[string]bool {
+	if cid == "" {
+		return nil
+	}
+	ops, err := h.newPan115Ops()
+	if err != nil {
+		return nil
+	}
+	entries, err := listPendingTopLevel(ops, cid)
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		set[e.Fid] = true
+	}
+	return set
+}
+
+// shareNewFids 转存后的新增 fid（与 before 快照的差集）。
+// 115 建索引有延迟，最多重试 3 轮；before 为 nil（转存前没拍到快照）直接放弃
+func (h *Handler) shareNewFids(cid string, before map[string]bool) []string {
+	if cid == "" || before == nil {
+		return nil
+	}
+	ops, err := h.newPan115Ops()
+	if err != nil {
+		return nil
+	}
+	for i := 0; i < 3; i++ {
+		time.Sleep(1500 * time.Millisecond)
+		entries, err := listPendingTopLevel(ops, cid)
+		if err != nil {
+			continue
+		}
+		var out []string
+		for _, e := range entries {
+			if !before[e.Fid] {
+				out = append(out, e.Fid)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
 }

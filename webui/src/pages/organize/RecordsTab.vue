@@ -13,6 +13,7 @@ import {
 import { RotateCcw, Search, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
 import { organizeApi, resourcesApi } from '@/api'
 import type { OrganizeRecord } from '@/api/organize'
@@ -219,6 +220,13 @@ async function clearAll() {
 
               <div class="src" :title="r.source">{{ r.source }}</div>
 
+              <SourceLink
+                v-if="r.source_link"
+                class="from"
+                :link="r.source_link"
+                :kind="r.source_link_kind"
+              />
+
               <div class="meta">
                 <span>{{ humanTime(r.created_at) }}</span>
                 <span v-if="r.target_dir">→ {{ r.target_dir }}</span>
@@ -337,6 +345,10 @@ async function clearAll() {
 }
 .link:hover {
   color: var(--c-primary);
+}
+.from {
+  margin-top: 2px;
+  max-width: 520px;
 }
 .src {
   margin-top: 4px;

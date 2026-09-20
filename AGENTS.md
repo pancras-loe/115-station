@@ -72,17 +72,24 @@
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `offline.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、离线下载、媒体库封面生成、115 签到、容器内自更新 |
+| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` `selfupdate.go` | 仪表盘、离线下载、**下载链接台账**、媒体库封面生成、115 签到、容器内自更新 |
 
 ### 数据模型（`internal/model/model.go`）
 
-18 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
+19 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
 `MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）、
-`PathCache`（115 目录 id → 网盘绝对路径）。
+`PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（下载链接台账，见下）。
 
 > `MediaLibrary` 与 `OrganizeRecord` 不是一回事：前者「一部影视一条」（去重 upsert，仪表盘用），
 > 后者「一次整理动作一条」且失败与未识别同样留痕（记录页与「重新整理」用）。
+
+> `DownloadLink`（`dllink.go`）是链接台账：磁力/ed2k/HTTP 离线与 115 分享转存提交时落库，
+> 离线监视器按 `info_hash` 回填 115 给的 `file_id`（产物落在转存目录里的 fid），分享转存则用
+> receive 前后的顶层快照差集补 fid。整理写记录时（`orgSink.note` 里的 `fillRecordLink`）
+> 按 fid 反查，把链接**冗余**进 `OrganizeRecord.SourceLink` —— 台账 90 天后被清理，记录页仍看得到链接。
+> **新增任何「提交链接 → 内容落进转存目录」的通道，记得一起登记台账**，否则那条路进来的内容
+> 在整理记录里永远查不到来源。
 
 > ⚠️ **`PathCache` 是有失效要求的缓存，不是普通的读缓存。** 目录被改名/移动/删除后
 > 必须失效或重定位对应子树，否则「已搬进冗余的目录」会被永久算成还在媒体库里 ——
