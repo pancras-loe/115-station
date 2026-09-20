@@ -16,7 +16,7 @@ env:
   # 这里保持 false，docker job 只验证多架构构建能过，不产出可拉取的包。
   #
   # 上游补充开源许可证后，把这里改成 true 即可恢复发布。
-  PUBLISH: 'false'
+  PUBLISH: 'true'
 
 jobs:
   # 测试门禁：构建/vet/测试全过才允许出镜像（坏提交拦在 master 之外）
