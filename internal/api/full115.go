@@ -310,7 +310,14 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 
 	totalNew := strmCreated + downloaded
 	if totalNew > 0 {
-		h.notifyEmbyRefresh(p.LocalPath)
+		// 全量传的是媒体库根，会把根下面每个库都整库扫一遍（万级库很贵），
+		// 所以做成开关且默认关 —— p115strmhelper、qmediasync 的同类开关同样默认关
+		if h.fullRefreshEmbyEnabled() {
+			h.notifyEmbyRefresh(p.LocalPath)
+		} else {
+			log.Printf("[同步] ○ 未通知 Emby 刷新：「全量后刷新 Emby」开关没开（整库扫描很贵，默认关；" +
+				"需要就到 Strm 管理 → 全量同步 打开）")
+		}
 	}
 	// 全量已覆盖一切：把事件窗口内的生活事件标记为已处理，
 	// 之后的增量同步只处理此后发生的新事件
@@ -591,6 +598,17 @@ func (h *Handler) getSettingValue(key string) string {
 		return s.Value
 	}
 	return ""
+}
+
+// fullRefreshEmbyEnabled 全量同步结束后是否通知 Emby 刷新（setting「full」.refresh_emby，默认关）。
+//
+// 增量同步不受这个开关管：它传的是本轮真正变动的最浅目录，刷新范围小得多，
+// 不通知反而会让「网盘删了片子 Emby 里条目还在」这个坑一直在
+func (h *Handler) fullRefreshEmbyEnabled() bool {
+	var cfg struct {
+		RefreshEmby bool `json:"refresh_emby"`
+	}
+	return json.Unmarshal([]byte(h.getSettingValue("full")), &cfg) == nil && cfg.RefreshEmby
 }
 
 // markEventsCoveredByFullSync 全量同步完成后调用：整库扫描已经覆盖了一切，

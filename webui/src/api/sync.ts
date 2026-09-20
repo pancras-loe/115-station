@@ -25,6 +25,8 @@ export interface FullSyncConfig {
   mode: FullSyncMode
   /** 失效 STRM 检测：全量同步后标出「本地还在、网盘已删」的条目，只打标不删 */
   detect_orphans: boolean
+  /** 全量同步结束后通知 Emby 刷新。全量传的是媒体库根 = 根下每个库整库扫一遍，很贵，默认关 */
+  refresh_emby: boolean
   /** 定时全量开关。只在 detect_orphans 打开时生效，后端同样按此判定 */
   cron_enabled: boolean
   cron: string

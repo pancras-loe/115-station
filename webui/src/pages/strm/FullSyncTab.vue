@@ -268,6 +268,13 @@ const helpVisible = ref(false)
         </FieldRow>
       </template>
 
+      <FieldRow
+        label="全量后刷新 Emby"
+        tip="全量同步结束时通知 Emby 扫描入库。全量给出的范围是整个媒体库根，等于把根下面每个媒体库都整库扫一遍，万级库很慢，所以默认关着。增量同步不受这个开关影响——它只刷本轮真正变动的那个目录，删除条目也靠它通知。"
+      >
+        <NSwitch v-model:value="cfg.refresh_emby" />
+      </FieldRow>
+
       <FormActions>
         <NButton type="primary" :loading="full.saving.value" @click="saveFull">保存配置</NButton>
         <!-- 配置改过没保存时由 runFull 里的确认框接管（那个框里也带着同一句话），

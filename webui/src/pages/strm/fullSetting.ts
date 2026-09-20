@@ -19,6 +19,7 @@ export function defaultFull(): FullSyncConfig {
     data_ext: ['ass', 'srt', 'ssa', 'sub'],
     mode: 'normal',
     detect_orphans: false,
+    refresh_emby: false,
     cron_enabled: false,
     cron: '0 4 * * *',
   }

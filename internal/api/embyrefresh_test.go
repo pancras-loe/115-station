@@ -261,6 +261,30 @@ func TestNotifyEmbyRefreshClimbsToKnownAncestor(t *testing.T) {
 	}
 }
 
+// 反向包含：全量同步传的是媒体库根，而库建在根下面第二层。
+// 正向判断一个都不命中，得把根「盖住」的库都整库刷一遍
+func TestNotifyEmbyRefreshCoversLibrariesBelowRoot(t *testing.T) {
+	root := t.TempDir()
+	lib := filepath.Join(root, "电影", "国产剧")
+	f := newFakeEmby(t, []string{filepath.ToSlash(lib)}, true)
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	(&Handler{}).notifyEmbyRefresh(root)
+
+	if !f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("媒体根之下的库没被刷新，实际请求: %v", f.hits)
+	}
+	if len(f.itemPathQ) != 0 {
+		t.Fatalf("目标在库之上，没有更小的条目可刷，不该按路径查条目: %v", f.itemPathQ)
+	}
+	if len(f.updates) != 0 {
+		t.Fatalf("已经命中媒体库，不该再走路径通知回退: %v", f.updates)
+	}
+}
+
 func TestNearestExistingDir(t *testing.T) {
 	root := t.TempDir()
 	deep := filepath.Join(root, "a", "b")

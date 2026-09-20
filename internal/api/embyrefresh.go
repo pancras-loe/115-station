@@ -128,8 +128,16 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	libs := embyMediaFolders(cfg)
 	byID := map[string]embyMediaFolder{}
 	buckets := map[string][]embyTarget{}
+	wholeLib := map[string]bool{} // 只能整库刷的桶（目标路径在库之上，没有更小的条目可刷）
 	var order []string
 	var unmatched []string
+	add := func(lib embyMediaFolder, t embyTarget) {
+		if _, seen := buckets[lib.ID]; !seen {
+			order = append(order, lib.ID)
+			byID[lib.ID] = lib
+		}
+		buckets[lib.ID] = append(buckets[lib.ID], t)
+	}
 	for _, t := range targets {
 		var hit embyMediaFolder
 		for _, lib := range libs {
@@ -138,22 +146,31 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 				break
 			}
 		}
-		if hit.ID == "" {
-			unmatched = append(unmatched, t.path)
+		if hit.ID != "" {
+			add(hit, t)
 			continue
 		}
-		if _, seen := buckets[hit.ID]; !seen {
-			order = append(order, hit.ID)
-			byID[hit.ID] = hit
+		// 反向包含：目标路径在媒体库【之上】。全量同步传的就是媒体库根，
+		// 而一键建库把库建在根下面第二层 —— 只做正向判断的话一个都不命中，
+		// 路径通知又落不到任何库上，整轮等于白发
+		covered := false
+		for _, lib := range libs {
+			if embyLocationsUnder(lib.Locations, t.path) {
+				add(lib, t)
+				wholeLib[lib.ID] = true
+				covered = true
+			}
 		}
-		buckets[hit.ID] = append(buckets[hit.ID], t)
+		if !covered {
+			unmatched = append(unmatched, t.path)
+		}
 	}
 
 	var refreshed []string
 	for _, libID := range order {
 		lib, paths := byID[libID], buckets[libID]
-		// 少量变更精确到条目刷
-		if len(paths) <= embyItemRefreshMax {
+		// 少量变更精确到条目刷（目标在库之上时没这个选项，只能整库刷）
+		if !wholeLib[libID] && len(paths) <= embyItemRefreshMax {
 			var rest []string
 			for _, t := range paths {
 				id, name := embyResolveItem(cfg, t, lib.Locations)
@@ -322,6 +339,22 @@ func embyPathUnder(embyPath string, locations []string) bool {
 			continue
 		}
 		if p == l || strings.HasPrefix(p, l+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// embyLocationsUnder 媒体库的目录是否在 ancestor 【下面】（反向包含）。
+// 只算严格在下面的：相等那种情况由 embyPathUnder 的正向判断先接走了
+func embyLocationsUnder(locations []string, ancestor string) bool {
+	a := strings.TrimRight(strings.ReplaceAll(ancestor, "\\", "/"), "/")
+	if a == "" {
+		return false
+	}
+	for _, loc := range locations {
+		l := strings.TrimRight(strings.ReplaceAll(loc, "\\", "/"), "/")
+		if l != "" && strings.HasPrefix(l, a+"/") {
 			return true
 		}
 	}
