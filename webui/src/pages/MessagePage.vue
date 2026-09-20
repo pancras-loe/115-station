@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   NAlert,
   NButton,
@@ -29,6 +29,26 @@ const { model, saving, save, reset } = useSetting<MessageConfig>('message', MESS
 
 const banner = ref<BannerState | null>(null)
 const testing = ref(false)
+const tgStatus = ref('正在读取连接状态…')
+let tgStatusTimer: ReturnType<typeof setInterval> | undefined
+let refreshingTgStatus = false
+async function refreshTgStatus() {
+  if (refreshingTgStatus) return
+  refreshingTgStatus = true
+  try {
+    const result = await http.get<{ state: string; detail: string }>('/message/tg-status')
+    tgStatus.value = result.detail || '接收器尚未启动'
+  } catch {
+    tgStatus.value = '连接状态读取失败'
+  } finally {
+    refreshingTgStatus = false
+  }
+}
+onMounted(() => {
+  void refreshTgStatus()
+  tgStatusTimer = setInterval(() => { if (tab.value === 'tg') void refreshTgStatus() }, 5000)
+})
+onUnmounted(() => { if (tgStatusTimer) clearInterval(tgStatusTimer) })
 
 async function test() {
   testing.value = true
@@ -140,14 +160,18 @@ const channels = computed(() => ({
       <template #tab>
         <span class="tab-label">TG 机器人<i v-if="channels.tg" class="dot" /></span>
       </template>
-      <SectionCard title="Telegram 机器人">
+      <SectionCard title="Telegram 机器人" hint="通知推送 + 私聊指令">
+        <NAlert class="note-top" type="info" :bordered="false">
+          {{ tgStatus }}。私聊发送 /help 查看指令，搜索结果可点击按钮或回复序号。
+          服务重启或重新启用后不补执行离线期间的指令，请重新发送。
+        </NAlert>
         <FieldRow label="Bot Token" tip="Telegram BotFather 创建机器人后的 Token。">
           <SecretInput v-model="model.tg.token" name="tg-bot-token" placeholder="123456:ABC..." />
         </FieldRow>
-        <FieldRow label="Chat ID" tip="Telegram 目标会话 ID，向 @userinfobot 发消息可查到。">
+        <FieldRow label="Chat ID" tip="通知接收目标。填写个人私聊 ID 时，该会话同时可以操作机器人；群和频道只接收通知。启用后可私聊机器人发送 /id 查询。">
           <NInput v-model:value="model.tg.chat_id" placeholder="接收消息的 chat id" />
         </FieldRow>
-        <FieldRow label="状态" tip="启用后任务完成推送 Telegram 通知。">
+        <FieldRow label="状态" tip="启用后同时提供通知推送和私聊指令，仅配置的个人 Chat ID 可以操作。">
           <NRadioGroup v-model:value="model.tg.enabled">
             <NRadioButton :value="true">启用</NRadioButton>
             <NRadioButton :value="false">禁用</NRadioButton>

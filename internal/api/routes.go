@@ -1,6 +1,8 @@
 package api
 
 import (
+	"115-station/internal/config"
+	"115-station/internal/model"
 	"archive/zip"
 	"encoding/json"
 	"fmt"
@@ -11,8 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"115-station/internal/config"
-	"115-station/internal/model"
 	"sync"
 	"time"
 
@@ -175,6 +175,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 消息通知
 		protected.POST("/message/test", h.TestMessage)
+		protected.GET("/message/tg-status", func(c *gin.Context) {
+			c.JSON(http.StatusOK, TelegramBotStatus())
+		})
 
 		// 归档同步
 		protected.GET("/sync/tasks", h.ListSyncTasks)

@@ -204,11 +204,15 @@ func WecomMenuAutoEnsure() {
 
 // wecomHandleCommand 指令路由（异步执行，结果用应用消息推回）
 func (h *Handler) wecomHandleCommand(user, text string) {
+	h.handleBotCommand(user, text, func(lines ...string) {
+		NotifyMessage("", strings.Join(lines, "\n"))
+	})
+}
+
+// handleBotCommand 注入回复出口，避免私聊指令结果广播到其他通知渠道。
+func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	if text == "" {
 		return
-	}
-	reply := func(lines ...string) {
-		NotifyMessage("", strings.Join(lines, "\n"))
 	}
 	lower := strings.ToLower(text)
 	// 直接发链接（无需"下载"前缀）：磁力/ed2k/http/115分享 一键触发
@@ -344,7 +348,7 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 		go func() {
 			cands, err := h.scanLibCandidates()
 			if err != nil {
-				NotifyMessage("", "✗ 建库扫描失败: "+err.Error())
+				reply("✗ 建库扫描失败: " + err.Error())
 				return
 			}
 			var items []embyLibCandidate
@@ -354,7 +358,7 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 				}
 			}
 			if len(items) == 0 {
-				NotifyMessage("", "没有需要创建的媒体库（Emby 里都已存在）")
+				reply("没有需要创建的媒体库（Emby 里都已存在）")
 				return
 			}
 			created, skipped := h.embyLibrariesCreateItems(items)
@@ -362,7 +366,7 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 			if len(skipped) > 0 {
 				msg += fmt.Sprintf("，跳过 %d 个", len(skipped))
 			}
-			NotifyMessage("", msg)
+			reply(msg)
 		}()
 
 	case lower == "alist" || lower == "清空115":
@@ -375,9 +379,9 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 		}
 		go func() {
 			if _, _, err := h.executeEnrichScan(); err != nil {
-				NotifyMessage("", "✗ 补全扫描失败: "+err.Error())
+				reply("✗ 补全扫描失败: " + err.Error())
 			} else {
-				NotifyMessage("", "✓ 补全扫描完成，任务已入队（详见日志）")
+				reply("✓ 补全扫描完成，任务已入队（详见日志）")
 			}
 		}()
 		reply("已开始扫描媒体库，缺画质信息的文件将入队探测。")
@@ -388,16 +392,16 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 			// 必须取任务互斥锁：此前直接调执行函数，可与全量同步/定时任务
 			// 并发搬动同一棵 115 目录树
 			if !fullSyncMu.TryLock() {
-				NotifyMessage("", "○ 整理未开始：已有任务运行中")
+				reply("○ 整理未开始：已有任务运行中")
 				return
 			}
 			defer fullSyncMu.Unlock()
-			beginTask("企微指令-整理")
+			beginTask("机器人指令-整理")
 			defer endTask()
 			if _, _, err := h.executeOrganize(); err != nil {
-				NotifyMessage("", "✗ 整理失败: "+err.Error())
+				reply("✗ 整理失败: " + err.Error())
 			} else {
-				NotifyMessage("", "✓ 整理完成（详见日志）")
+				reply("✓ 整理完成（详见日志）")
 			}
 		}()
 
@@ -406,17 +410,17 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 		go func() {
 			// 同上：增量同步与全量共用事件流与本地树，必须互斥
 			if !fullSyncMu.TryLock() {
-				NotifyMessage("", "○ 增量同步未开始：已有任务运行中")
+				reply("○ 增量同步未开始：已有任务运行中")
 				return
 			}
 			defer fullSyncMu.Unlock()
-			beginTask("企微指令-增量同步")
+			beginTask("机器人指令-增量同步")
 			defer endTask()
 			p := h.incrParamsFromConfig()
 			if _, err := h.executeIncrementalSync(p); err != nil {
-				NotifyMessage("", "✗ 增量同步失败: "+err.Error())
+				reply("✗ 增量同步失败: " + err.Error())
 			} else {
-				NotifyMessage("", "✓ 增量同步完成（详见日志）")
+				reply("✓ 增量同步完成（详见日志）")
 			}
 		}()
 
@@ -442,14 +446,14 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 		go func() {
 			msg, ok, fail, err := h.shareReceiveCore(shareURL, code, "", "机器人", organize)
 			if err != nil {
-				NotifyMessage("", "✗ 转存失败: "+err.Error())
+				reply("✗ 转存失败: " + err.Error())
 				return
 			}
 			if ok == 0 && fail == 0 {
-				NotifyMessage("", "分享为空，未转存任何内容")
+				reply("分享为空，未转存任何内容")
 				return
 			}
-			NotifyMessage("", "✓ "+msg+"（整理入库已自动触发）")
+			reply("✓ " + msg + "（整理入库已自动触发）")
 		}()
 		return
 	}

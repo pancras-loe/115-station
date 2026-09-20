@@ -265,6 +265,7 @@ func main() {
 
 	// 企微聊天底栏菜单默认自动生成（自动整理 / 增量同步）
 	go api.WecomMenuAutoEnsure()
+	(&api.Handler{DB: db, Config: cfg}).StartTelegramBot()
 
 	// 优雅退出：docker stop 发 SIGTERM——直接杀进程会把
 	// 「115 已搬移、台账未写」的中间态留在云端（下次去重/洗版判定失据），
@@ -274,6 +275,7 @@ func main() {
 	go func() {
 		sig := <-sigCh
 		log.Printf("收到信号 %v，优雅退出中（停止后台任务、冲刷待发通知）…", sig)
+		api.StopTelegramBot()
 		api.ShutdownWorkers()
 		time.Sleep(3 * time.Second) // 在途 115 请求收尾窗口（compose stop_grace_period 应≥此值）
 		log.Printf("✓ 退出完成")
