@@ -30,6 +30,7 @@ type stubIncrDeps struct {
 	gateCalls  int
 	walkCalls  int
 	refreshed  []string
+	deleted    []string
 	saved      map[string]string
 }
 
@@ -92,6 +93,7 @@ func (s *stubIncrDeps) invalidateDirCache()                    {}
 func (s *stubIncrDeps) setting(key string) string              { return s.settings[key] }
 func (s *stubIncrDeps) saveSetting(key, val string)            { s.saved[key] = val }
 func (s *stubIncrDeps) notifyRefresh(base string)              { s.refreshed = append(s.refreshed, base) }
+func (s *stubIncrDeps) notifyDeleted(base string)              { s.deleted = append(s.deleted, base) }
 func (s *stubIncrDeps) downloadAsset(remoteFile, string) error { return nil }
 
 func (s *stubIncrDeps) strmConfig() (string, string, bool, bool) {

@@ -343,6 +343,10 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string, dryRun b
 		log.Printf("[深度删除] ○ 顺带清理本地残留 %d 个", len(removed))
 	}
 	h.cleanDeepDelMarks(rels)
+	// 本地文件消失的原因不一定是 Emby 自己删的（定时扫描 scanVanished 发现的
+	// 那批就不是），补一次删除通知。Emby 触发的那条链路上这是一次重复刷新，
+	// 代价只有一个后台任务；漏通知的代价是条目永远挂在库里点不动
+	go notifyEmbyDeleted(absUnder(root, rels)...)
 
 	if cfg.prunePanDirs() {
 		res.PanDirs = h.pruneDeepDelDirs(ops, panPaths)

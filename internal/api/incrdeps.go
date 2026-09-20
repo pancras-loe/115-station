@@ -50,6 +50,9 @@ type incrDeps interface {
 
 	// ---- 通知 ----
 	notifyRefresh(base string)
+	// notifyDeleted 本地 strm 被删/移走了：通知 Emby 清掉对应条目。
+	// 跟 notifyRefresh 分开是因为两者的目标路径处理不一样（删除要上移到存活父目录）
+	notifyDeleted(base string)
 }
 
 // errAssetExists 附属文件本地已存在，无需下载。
@@ -164,3 +167,5 @@ func (d *realIncrDeps) applyResults(videos, assets []remoteFile, localPath, doma
 }
 
 func (d *realIncrDeps) notifyRefresh(base string) { d.h.notifyEmbyRefresh(base) }
+
+func (d *realIncrDeps) notifyDeleted(base string) { notifyEmbyDeleted(base) }

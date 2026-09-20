@@ -98,21 +98,14 @@ func (h *Handler) mapFromEmbyPath(embyPath string) string {
 	return embyPathToLocal(embyCfg.PathMapping, embyPath)
 }
 
-// mapToEmbyPath 本地路径 → Emby 路径（复用 emby 配置的映射规则）
+// mapToEmbyPath 本地路径 → Emby 路径（复用 emby 配置的映射规则）。
+// 实现在 mapLocalToEmbyPath：包级的刷新通知也要用同一套规则
 func (h *Handler) mapToEmbyPath(local string) string {
-	// 统一为正斜杠再比较（Windows 下 filepath.Join 产生反斜杠）
-	local = strings.ReplaceAll(local, "\\", "/")
 	var embyCfg struct {
 		PathMapping string `json:"path_mapping"`
 	}
 	_ = json.Unmarshal([]byte(h.getSettingValue("emby")), &embyCfg)
-	if embyCfg.PathMapping != "" {
-		src, dst := embyPathRoots(embyCfg.PathMapping)
-		if src != "" && dst != "" && (strings.HasPrefix(local, src+"/") || local == src) {
-			return dst + strings.TrimPrefix(local, src)
-		}
-	}
-	return local
+	return mapLocalToEmbyPath(embyCfg.PathMapping, local)
 }
 
 // scanLibCandidates 扫描媒体库根下第二层目录（根/分类/子类 形态；

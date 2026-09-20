@@ -159,12 +159,14 @@ func (h *Handler) CleanOrphans(c *gin.Context) {
 
 	removed, missing, failed := 0, 0, 0
 	var doneIDs []uint
+	var removedPaths []string
 	for _, r := range rows {
 		full := filepath.Join(root, filepath.FromSlash(r.RelPath))
 		err := os.Remove(full)
 		switch {
 		case err == nil:
 			removed++
+			removedPaths = append(removedPaths, full)
 			removeEmptyDirsUp(filepath.Dir(full), root)
 		case os.IsNotExist(err):
 			missing++ // 本地早就没了，台账清掉即可
@@ -179,6 +181,9 @@ func (h *Handler) CleanOrphans(c *gin.Context) {
 		h.DB.Where("id IN ?", batch).Delete(&model.SyncedFile{})
 	}
 	log.Printf("[同步] ○ 失效 STRM 清理完成：删除 %d 个，本地已不存在 %d 个，失败 %d 个", removed, missing, failed)
+	// 通知 Emby 清条目。不通知的话这一步等于只删了文件：
+	// Emby 里失效条目照样列着，点进去播放 404 —— 正是用户要清理掉的东西
+	go notifyEmbyDeleted(removedPaths...)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "失效 STRM 清理完成", "removed": removed, "missing": missing, "failed": failed,
 	})

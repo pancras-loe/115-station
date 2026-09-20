@@ -719,13 +719,19 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 那批事件下轮还要重来，游标跟着不动才补得回来
 	d.saveSetting("incr-cursor", encodeLifeCursor(nextCur))
 
-	if sum.StrmCreated+sum.AssetsDownloaded+sum.Deleted+sum.Moved > 0 {
-		// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）
-		refreshBase := p.LocalPath
-		if shallowest != "" {
-			refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
-		}
+	// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）
+	refreshBase := p.LocalPath
+	if shallowest != "" {
+		refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
+	}
+	if sum.StrmCreated+sum.AssetsDownloaded > 0 {
 		d.notifyRefresh(refreshBase)
+	}
+	// 删除/移动要单独报一次「删除」：Emby 侧的条目不会因为文件没了自己消失，
+	// 不通知的话网盘删了片子、strm 也删了，Emby 里条目还在，点进去播放 404。
+	// 与新增分开发是因为删除场景要先把目标上移到还存在的父目录（见 notifyEmbyDeleted）
+	if sum.Deleted+sum.Moved > 0 {
+		d.notifyDeleted(refreshBase)
 	}
 	sum.Elapsed = time.Since(incrStart).Truncate(time.Second).String()
 

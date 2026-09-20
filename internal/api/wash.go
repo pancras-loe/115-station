@@ -415,6 +415,7 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, t
 		localRoot := localMediaRoot()
 		ids := make([]uint, 0, len(sfs))
 		cleaned := 0
+		var cleanedPaths []string
 		for _, sf := range sfs {
 			ids = append(ids, sf.ID)
 			if sf.RelPath == "" {
@@ -426,11 +427,15 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, t
 				continue
 			}
 			cleaned++
+			cleanedPaths = append(cleanedPaths, full)
 			onLog(fmt.Sprintf("○ 洗版：已删除旧版本地文件 %s", sf.RelPath))
 			removeEmptyParents(filepath.Dir(full), localRoot)
 		}
 		if cleaned > 0 {
 			onLog(fmt.Sprintf("○ 洗版：共清理 %d 个旧版本地文件（本地根 %s）", cleaned, localRoot))
+			// 旧版删了不通知 Emby 的话，同一集在库里会挂着两个源，
+			// 点到旧的那个就是播放 404 —— 洗版最典型的翻车现场
+			go notifyEmbyDeleted(cleanedPaths...)
 		}
 		model.DB.Where("id IN ?", ids).Delete(&model.SyncedFile{})
 	}

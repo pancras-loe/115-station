@@ -302,6 +302,11 @@ func dropLocalByFidsExcept(localRoot string, fids []string, keepPaths map[string
 		}
 		model.DB.Delete(&model.SyncedFile{}, sf.ID)
 	}
+	// 旧产出删掉了就得告诉 Emby：本地文件没了条目不会自己消失，
+	// 留着的话用户点进去就是播放 404（洗版让位、重新整理都会走到这里）
+	if len(removed) > 0 {
+		go notifyEmbyDeleted(absUnder(localRoot, removed)...)
+	}
 	return removed, kept
 }
 
