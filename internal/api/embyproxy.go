@@ -345,11 +345,8 @@ func readStrmDirectURL(db *gorm.DB, cfg *config.Config, embyPath string) string 
 		var embyCfg struct {
 			PathMapping string `json:"path_mapping"`
 		}
-		if json.Unmarshal([]byte(cfg.GetSetting("emby")), &embyCfg) == nil && embyCfg.PathMapping != "" {
-			localPart, embyPart := embyPathRoots(embyCfg.PathMapping)
-			if embyPart != "" && (strings.HasPrefix(embyPath, embyPart+"/") || embyPath == embyPart) {
-				local = localPart + embyPath[len(embyPart):]
-			}
+		if json.Unmarshal([]byte(cfg.GetSetting("emby")), &embyCfg) == nil {
+			local = embyPathToLocal(embyCfg.PathMapping, embyPath)
 		}
 	}
 	for _, cand := range []string{local, embyPath} {

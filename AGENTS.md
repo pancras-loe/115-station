@@ -238,6 +238,14 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     不互斥的话判定就踩在半轮全量的中间状态上。守卫由 `deepdel_test.go` 覆盖，
     改这块同样**先把测试跑绿**。
 
+    **Emby webhook 那条线（`deepdelemby.go`）只是加速通道，不是第二条删除逻辑。**
+    它收到删除事件后只做两件事：`os.Stat` 确认本地文件真没了之后打 `vanish_at`、
+    必要时触发一次扫描；删不删仍由 `runDeepDelete` + 上面那套守卫决定。
+    原因是 `library.deleted` 的含义是「条目没了」而不是「用户要删它」——
+    Emby 扫库发现文件不在也发它，挂载抖一下就能连发一整批。
+    神医助手的 `deep.delete` 是用户显式点按钮触发的，**只有它**能跳过两轮确认之间的等待
+    （立即 `runDeepDelScanNow`），挂载探针与阈值照旧。新增任何事件来源时守住这条线。
+
 ---
 
 ## 7. 常见任务入口
@@ -259,7 +267,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
-| 改深度删除 | `internal/api/deepdel.go`：扫描在 `scanVanished`、执行在 `runDeepDelete`、守卫在 `checkLibRoots` / `deepDelOverLimit`。**先读 §6.10 再动**，配套测试 `deepdel_test.go`；整体设计见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
+| 改深度删除 | `internal/api/deepdel.go`：扫描在 `scanVanished`、执行在 `runDeepDelete`、守卫在 `checkLibRoots` / `deepDelOverLimit`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |

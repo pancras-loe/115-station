@@ -65,6 +65,39 @@ func embyPathRoots(pathMapping string) (string, string) {
 	return localRoot, strings.TrimRight(strings.ReplaceAll(parts[1], "\\", "/"), "/")
 }
 
+// embyPathToLocal Emby 路径 → 本地路径（mapToEmbyPath 的逆向）。
+//
+// 抽成纯函数是因为有两个调用方：302 反代读 strm 内容（readStrmDirectURL）
+// 与 webhook 删除联动（deepdelemby.go）。两边各写一份的话，
+// 修对一处另一处照旧出错 —— STRM 配置解析就是这么踩过一次的。
+// 映射没配或前缀对不上时原样返回：调用方一律按「就是本地路径」处理。
+func embyPathToLocal(pathMapping, embyPath string) string {
+	embyPath = strings.ReplaceAll(embyPath, "\\", "/")
+	if pathMapping == "" || embyPath == "" {
+		return embyPath
+	}
+	localRoot, embyRoot := embyPathRoots(pathMapping)
+	if localRoot == "" || embyRoot == "" {
+		return embyPath
+	}
+	if embyPath == embyRoot {
+		return localRoot
+	}
+	if strings.HasPrefix(embyPath, embyRoot+"/") {
+		return localRoot + embyPath[len(embyRoot):]
+	}
+	return embyPath
+}
+
+// mapFromEmbyPath Emby 路径 → 本地路径（读当前 emby 配置）
+func (h *Handler) mapFromEmbyPath(embyPath string) string {
+	var embyCfg struct {
+		PathMapping string `json:"path_mapping"`
+	}
+	_ = json.Unmarshal([]byte(h.getSettingValue("emby")), &embyCfg)
+	return embyPathToLocal(embyCfg.PathMapping, embyPath)
+}
+
 // mapToEmbyPath 本地路径 → Emby 路径（复用 emby 配置的映射规则）
 func (h *Handler) mapToEmbyPath(local string) string {
 	// 统一为正斜杠再比较（Windows 下 filepath.Join 产生反斜杠）

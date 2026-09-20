@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -236,10 +237,25 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		return
 	}
 	if category == "deleted" {
-		// 深度删除的前期采样。Emby 原生删除事件带不带 Item.Path、删整季是发一条
-		// Season 还是每集一条，各版本/各 webhook 插件都不一样，只能实测。
-		// 打整包（截断）而不是挑字段——挑错字段就什么也采不到
-		log.Printf("[Emby Webhook] 删除事件原始载荷: %s", truncateStr(string(body), 1500))
+		itemPath := getNested([]string{"Item"}, []string{"Path"})
+		itemType := getNested([]string{"Item"}, []string{"Type"})
+		log.Printf("[Emby Webhook] 删除事件: event=%s type=%s path=%s", event, itemType, itemPath)
+		// 原始载荷只在详细日志里打：字段形态已经实测清楚（见 DEEP-DELETE-PLAN.md §8），
+		// 常驻打整包会把实时日志页淹掉——Overview 一个字段就上千字
+		vlog("[Emby Webhook] 删除事件原始载荷: %s", truncateStr(string(body), 2000))
+
+		// 深度删除的 webhook 加速通道：只打标 + 必要时触发扫描，
+		// 删不删仍由守卫决定（见 deepdelemby.go 开头那段）
+		go h.deepDelOnEmbyDelete(payload, strings.Contains(event, "deep.delete"))
+
+		// 装了神医助手时 deep.delete 与 library.deleted 两条都发（实测，不是替换），
+		// 同一次删除会推两条一模一样的卡片。按条目 id 去重，先到的那条赢——
+		// 两条的 Date 只差几毫秒且到达顺序不保证，不能假设谁先谁后
+		if embyDeleteDuplicate(getNested([]string{"Item"}, []string{"Id"})) {
+			log.Printf("[Emby Webhook] 同一条目的重复删除事件（%s），已跳过通知", itemName)
+			c.JSON(http.StatusOK, gin.H{"message": "ok（重复删除事件，已跳过通知）"})
+			return
+		}
 	}
 	content := itemName
 	if content == "" {
@@ -251,6 +267,39 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	log.Printf("[Emby Webhook] %s %s", title, content)
 	go NotifyMessage(title, content)
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+}
+
+// ---- 删除事件去重 ----
+//
+// 只管删除：装了神医助手时一次删除会连发 deep.delete 与 library.deleted 两条，
+// 内容完全一样。播放/暂停那些天然就会重复出现，不能一并去重。
+
+const embyDeleteDedupeWindow = 2 * time.Minute
+
+var (
+	embyDeleteSeenMu sync.Mutex
+	embyDeleteSeen   = map[string]time.Time{}
+)
+
+// embyDeleteDuplicate 同一条目在窗口内是否已经报过一次删除。
+// 拿不到条目 id 时一律返回 false —— 宁可重复通知，也不要把两次真实删除吃掉一次
+func embyDeleteDuplicate(itemID string) bool {
+	if itemID == "" {
+		return false
+	}
+	embyDeleteSeenMu.Lock()
+	defer embyDeleteSeenMu.Unlock()
+	now := time.Now()
+	for k, t := range embyDeleteSeen {
+		if now.Sub(t) > embyDeleteDedupeWindow {
+			delete(embyDeleteSeen, k)
+		}
+	}
+	if t, ok := embyDeleteSeen[itemID]; ok && now.Sub(t) <= embyDeleteDedupeWindow {
+		return true
+	}
+	embyDeleteSeen[itemID] = now
+	return false
 }
 
 // queueEmbyAddedNotif Emby 入库事件 → 聚合队列（Emby 封面优先 + 播放链接）

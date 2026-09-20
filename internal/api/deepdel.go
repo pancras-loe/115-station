@@ -553,6 +553,21 @@ func (h *Handler) runDeepDelScanTick() {
 	if !cfg.Enabled || cfg.interval() <= 0 {
 		return
 	}
+	h.runDeepDelScan(cfg)
+}
+
+// runDeepDelScanNow webhook 加速通道用的即时入口（deepdelemby.go）。
+// 与定时轮询的区别只有一个：**不看 interval**。把间隔填 0 是关掉「后台定时扫描」，
+// 而 webhook 是用户在 Emby 里的明确动作触发的，不属于后台轮询
+func (h *Handler) runDeepDelScanNow() {
+	cfg := h.loadDeepDelCfg()
+	if !cfg.Enabled {
+		return
+	}
+	h.runDeepDelScan(cfg)
+}
+
+func (h *Handler) runDeepDelScan(cfg deepDelCfg) {
 	if !fullSyncMu.TryLock() {
 		return
 	}
