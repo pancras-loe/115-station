@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // 二级分类 YAML → 规则表：顺序、前缀剥离、无条件兜底

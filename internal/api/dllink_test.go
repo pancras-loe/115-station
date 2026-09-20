@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 )
 
 // 台账主链路：提交登记 → 离线任务回填 file_id → 整理记录按 fid 反查到链接。

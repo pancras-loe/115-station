@@ -123,7 +123,7 @@ src/
 新前端出问题时可以立刻切回去对照：
 
 ```bash
-WEBUI=legacy ./strmhub        # PowerShell: $env:WEBUI="legacy"; .\strmhub.exe
+WEBUI=legacy ./115-station        # PowerShell: $env:WEBUI="legacy"; .\115-station.exe
 ```
 
 `webui/dist/index.html` 不存在时（没跑 `npm run build`）Go 会打一行日志自动回退旧前端，

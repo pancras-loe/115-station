@@ -14,17 +14,17 @@ import (
 //
 // 需要真实账号，默认跳过。跑法：
 //
-//	STRMHUB_TEST_115_COOKIE='UID=...; CID=...; SEID=...' \
-//	STRMHUB_TEST_115_CID=<你要对拍的 115 目录 ID> \
+//	STATION115_TEST_COOKIE='UID=...; CID=...; SEID=...' \
+//	STATION115_TEST_CID=<你要对拍的 115 目录 ID> \
 //	go test ./internal/api/ -run TestFastVsNormal -v -timeout 2h
 //
 // 标准模式要逐个目录遍历，大库会跑很久。第一次对拍建议挑个中等大小的
 // 子目录（几百个文件），确认等价后再拿整库跑。
 func TestFastVsNormalEquivalence(t *testing.T) {
-	cookie := strings.TrimSpace(os.Getenv("STRMHUB_TEST_115_COOKIE"))
-	cid := strings.TrimSpace(os.Getenv("STRMHUB_TEST_115_CID"))
+	cookie := strings.TrimSpace(os.Getenv("STATION115_TEST_COOKIE"))
+	cid := strings.TrimSpace(os.Getenv("STATION115_TEST_CID"))
 	if cookie == "" || cid == "" {
-		t.Skip("未设置 STRMHUB_TEST_115_COOKIE / STRMHUB_TEST_115_CID，跳过对拍")
+		t.Skip("未设置 STATION115_TEST_COOKIE / STATION115_TEST_CID，跳过对拍")
 	}
 
 	filter := &syncFilter{

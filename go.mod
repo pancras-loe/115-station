@@ -1,4 +1,4 @@
-module strmhub
+module 115-station
 
 go 1.25.0
 

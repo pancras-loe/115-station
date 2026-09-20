@@ -33,7 +33,7 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 //go:embed assets/sourcehansans.otf

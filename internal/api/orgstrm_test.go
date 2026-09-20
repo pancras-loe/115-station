@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 func newTestDB(t *testing.T, name string) {

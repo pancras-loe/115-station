@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"strmhub/internal/api"
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/api"
+	"115-station/internal/config"
+	"115-station/internal/model"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-contrib/gzip"
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	// 初始化数据库（分类策略、洗版策略、同步记录）
-	db, err := model.InitDB(filepath.Join(cfg.DataDir, "strmhub.db"))
+	db, err := model.InitDB(filepath.Join(cfg.DataDir, "115-station.db"))
 	if err != nil {
 		log.Fatalf("数据库初始化失败: %v", err)
 	}

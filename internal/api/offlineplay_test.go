@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 )
 
 // 播放端点 <id> 的稳定性：同一链接必须得到同一指纹（库内去重的根基），

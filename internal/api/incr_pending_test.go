@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // insertSyncEvents 只能返回【真正新插入】的行。

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 )

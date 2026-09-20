@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // TestLibraryFilesOfPrefix 验证洗版台账查询的库名前缀拼接：

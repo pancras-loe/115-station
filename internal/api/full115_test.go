@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // TestUpsertSyncedFiles 批量 upsert：插入 → 同 file_id 更新 → 批间去重

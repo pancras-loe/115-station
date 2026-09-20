@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 )

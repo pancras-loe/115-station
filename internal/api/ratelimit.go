@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"gorm.io/gorm"
 )
@@ -19,7 +19,7 @@ import (
 // 所有对 webapi.115.com / proapi.115.com 的请求必须经过 throttle115()，
 // 保证任意两次请求之间的最小间隔。
 //
-// 可通过环境变量 STRMHUB_115_INTERVAL（毫秒）调整，默认 1000ms。
+// 可通过环境变量 STATION115_INTERVAL（毫秒）调整，默认 1000ms。
 // 登录相关域名（qrcodeapi / passportapi）不节流，不影响扫码体验。
 
 var (
@@ -34,7 +34,7 @@ var (
 // loadThrottleInterval 读取节流间隔配置
 func loadThrottleInterval() time.Duration {
 	ms := 1000
-	if v := os.Getenv("STRMHUB_115_INTERVAL"); v != "" {
+	if v := os.Getenv("STATION115_INTERVAL"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 100 && n <= 60000 {
 			ms = n
 		}
@@ -193,7 +193,7 @@ func Set115Interval(d time.Duration) {
 }
 
 // Apply115Interval 从数据库读取用户设置的 API 请求间隔并应用
-// 优先级：数据库设置 > STRMHUB_115_INTERVAL 环境变量 > 默认 1 秒
+// 优先级：数据库设置 > STATION115_INTERVAL 环境变量 > 默认 1 秒
 func Apply115Interval(db *gorm.DB) {
 	var storage model.Storage
 	if err := db.Where("type = ?", "115").First(&storage).Error; err != nil || storage.Interval <= 0 {

@@ -22,7 +22,7 @@ package api
 // 增量提频之后，整理的 cron 撞上一轮正在遍历大目录的增量是常态。
 
 import (
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"encoding/json"
 	"log"

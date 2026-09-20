@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 )
 
 // 地址补全是这条链路踩过的坑：测试连接与实际识别曾经各拼各的 URL

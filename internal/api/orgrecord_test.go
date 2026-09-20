@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // useDefaultRenameTpl 让用例走硬编码降级模板，并在结束后还原全局

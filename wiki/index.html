@@ -260,7 +260,7 @@ details[open] summary{margin-bottom:8px}
     volumes:
       - ./config:/config           # ★ 全部配置：setting.yaml / auth.yaml(管理员) /
                                     #   jwt.key / 115-cookie.txt
-      - ./data:/data               # ★ 数据库 strmhub.db（台账/媒体库/事件）
+      - ./data:/data               # ★ 数据库 115-station.db（台账/媒体库/事件）
       - ./media:/media             # ★ STRM 本地目录（Emby 要挂载同一目录）
       - ./logs:/logs               # 日志 app.log（10MB 自动轮转 × 3 份）
     environment:
@@ -295,7 +295,7 @@ details[open] summary{margin-bottom:8px}
 │   ├── jwt.key           # 登录令牌密钥（自动生成）
 │   └── 115-cookie.txt    # Cookie 通道凭据（扫码登录后生成）
 ├── data/
-│   └── strmhub.db        # SQLite：同步台账 / 媒体库记录 / 生活事件 / 补全队列
+│   └── 115-station.db        # SQLite：同步台账 / 媒体库记录 / 生活事件 / 补全队列
 ├── media/                # STRM 与附属文件（Emby 挂载这里建库）
 └── logs/
     └── app.log           # 运行日志（日志页看的尾 500 行）</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
@@ -939,14 +939,14 @@ docker compose up -d --build</code><button class="copy-btn" onclick="cp(this)">�
 
   <h3>一键备份</h3>
   <p>仪表盘「快捷操作」→「⬇ 备份」得到 zip，内容：</p>
-  <pre><code>strmhub-backup-20260829-120000.zip
+  <pre><code>115-station-backup-20260829-120000.zip
 ├── config/
 │   ├── setting.yaml      # 全部界面配置
 │   ├── auth.yaml         # 管理员账号
 │   ├── jwt.key           # 登录密钥（带走则迁移后免重登）
 │   └── 115-cookie.txt    # Cookie 凭据
 └── data/
-    └── strmhub.db        # 数据库一致性快照（VACUUM INTO，不锁库）</code></pre>
+    └── 115-station.db        # 数据库一致性快照（VACUUM INTO，不锁库）</code></pre>
 
   <h3>换机迁移步骤</h3>
   <ol class="steps">
@@ -1034,8 +1034,8 @@ docker compose up -d --build</code><button class="copy-btn" onclick="cp(this)">�
   <details><summary>识别失败的文件去哪了？</summary><p>「冗余」目录。人工把文件/目录改成更规范的名字（带片名+年份）再丢回待整理即可重试；网络原因失败的会留在待整理自动重试。</p></details>
   <details><summary>支持别的网盘吗？</summary><p>当前 115 专属；界面上「规划中」的卡片即未来方向（OpenList）。</p></details>
   <details><summary>忘记管理员密码 / 想改密码？</summary>
-    <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec 115-station ./strmhub --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
-  <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec 115-station ./strmhub --reset-admin</code> 后重启重建。</p></details>
+    <p>账号由环境变量 <code>AUTH_USER/AUTH_PASSWORD</code> 管理：修改 compose 里的值后 <code>docker compose up -d</code> 重启即生效。或执行 <code>docker exec 115-station ./115-station --reset-admin</code> 删除凭据文件，重启后按环境变量重建（未配置环境变量则生成随机密码，见启动日志）。</p></details>
+  <details><summary>如何完全重置？</summary><p>停容器删掉 <code>config/</code> 与 <code>data/</code> 再启动＝全新安装；<code>media/</code> 建议一并清空重同步。只重置管理员：改 <code>AUTH_USER/AUTH_PASSWORD</code> 重启，或 <code>docker exec 115-station ./115-station --reset-admin</code> 后重启重建。</p></details>
   <details><summary>多个人能用吗？</summary><p>管理后台单管理员（个人工具定位）；Emby 侧多用户由 Emby 自己管理。</p></details>
 </section>
 

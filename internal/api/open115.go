@@ -30,8 +30,8 @@ import (
 	"sync"
 	"time"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -393,7 +393,7 @@ func (o *open115Client) rawCall(token, method, path string, query url.Values, fo
 func openGenVerifier() string {
 	b := make([]byte, 48)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("strmhub%d", time.Now().UnixNano())
+		return fmt.Sprintf("station115%d", time.Now().UnixNano())
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }

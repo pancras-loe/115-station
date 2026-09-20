@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // ==================== removeSyncedItem 的四级兜底 ====================

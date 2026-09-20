@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 )
 
 // 回归测试：配置保存在 YAML（前端 SaveSetting 的落点），

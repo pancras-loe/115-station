@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"gopkg.in/yaml.v3"
 )

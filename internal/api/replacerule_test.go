@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 )
 
 // setRecognize 写一份「识别规则」配置并让发布组缓存立即失效

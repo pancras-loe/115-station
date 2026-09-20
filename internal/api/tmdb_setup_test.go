@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 func tmdbSetupRequest(t *testing.T, handler gin.HandlerFunc, body string) *httptest.ResponseRecorder {

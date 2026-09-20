@@ -1,7 +1,7 @@
 # 二进制文件
 *.exe
-strmhub
-strmhub.exe
+115-station
+115-station.exe
 
 # 数据文件
 data/
@@ -28,7 +28,7 @@ reference-projects/
 *.log
 
 # 本地测试构建产物
-strmhub-test.exe
+115-station-test.exe
 *.exe~
 
 

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // mkTree 在本地造一棵已同步过的目录树（文件 + 台账行）

@@ -20,7 +20,7 @@ environment:
 
 1. 浏览器打开 `http://IP:6060`，用上面的账号密码登录
 2. **改密码 = 改环境变量后重启容器**（启动时自动同步，环境变量为权威来源）
-3. 忘记密码：改环境变量重启即可；或 `docker exec 115-station ./strmhub --reset-admin` 删除凭据文件后重启重建
+3. 忘记密码：改环境变量重启即可；或 `docker exec 115-station ./115-station --reset-admin` 删除凭据文件后重启重建
 4. 从未配置环境变量且无历史账号时，首次启动会自动生成随机密码（用户名 `admin`），在容器启动日志中查看：`docker logs 115-station`
 
 ## 2. 账号管理（登录 115）
@@ -263,4 +263,4 @@ RE0 常态屏蔽大陆 IP：115-Station 部署需能直连或为其配置代理�
 Emby 媒体库需勾选「将媒体封面保存到媒体文件夹」+ 元数据下载器启用；生成后监控上传会自动回传 115。
 
 **忘记密码 / 想改密码？**
-修改 compose 里的 `AUTH_PASSWORD` 后 `docker compose up -d` 重启即生效（环境变量为准）。或执行 `docker exec 115-station ./strmhub --reset-admin` 后重启，按环境变量重建（`/data` 内的同步数据保留）。
+修改 compose 里的 `AUTH_PASSWORD` 后 `docker compose up -d` 重启即生效（环境变量为准）。或执行 `docker exec 115-station ./115-station --reset-admin` 后重启，按环境变量重建（`/data` 内的同步数据保留）。

@@ -33,7 +33,7 @@ RUN go mod download
 COPY . .
 
 # 编译（CGO 禁用，按目标架构交叉编译；注入版本标识）
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.BuildSHA=${BUILD_SHA}" -o strmhub .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.BuildSHA=${BUILD_SHA}" -o 115-station .
 
 # 运行阶段：最小镜像
 FROM alpine:latest
@@ -44,7 +44,7 @@ RUN apk add --no-cache ffmpeg ca-certificates tzdata
 WORKDIR /app
 
 # 复制编译好的二进制
-COPY --from=builder /build/strmhub .
+COPY --from=builder /build/115-station .
 # 新前端产物（默认服务的就是它）
 COPY --from=webbuilder /webui/dist ./webui/dist
 # 旧前端保留：WEBUI=legacy 时回退用，新前端出问题可立刻切回
@@ -55,4 +55,4 @@ EXPOSE 6060 6086
 
 VOLUME ["/config", "/data", "/media", "/logs"]
 
-ENTRYPOINT ["./strmhub"]
+ENTRYPOINT ["./115-station"]

@@ -40,7 +40,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // flexStatus 兼容数字/字符串两种 status 形态

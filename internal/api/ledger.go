@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 	"sync"
 	"time"
 )

@@ -228,12 +228,12 @@ docker compose up -d
 | `CONFIG_DIR` | /config | 配置目录 |
 | `JWT_SECRET` | 自动生成 | 登录令牌密钥；未设置时首启自动生成随机密钥存于 `/config/jwt.key`，重启不失效 |
 | `TLS_ENABLE` | 关闭 | 置 `1` 启用 HTTPS（自签证书自动生成） |
-| `STRMHUB_115_INTERVAL` | 1000 | 115 读接口最小间隔（毫秒），数据库设置优先 |
+| `STATION115_INTERVAL` | 1000 | 115 读接口最小间隔（毫秒），数据库设置优先 |
 | `TZ` | — | 时区，建议 `Asia/Shanghai` |
 
 > **管理员账号说明**：网页注册已移除。账号以环境变量 `AUTH_USER` / `AUTH_PASSWORD` 为准，每次启动自动同步；
 > 两者都未配置且无历史账号时，首次启动会自动生成随机密码并打印在容器日志（`docker logs 115-station`）。
-> 改环境变量即改密码，重启生效。容器内也可执行 `./strmhub --reset-admin` 只删账号文件而保留其他配置。
+> 改环境变量即改密码，重启生效。容器内也可执行 `./115-station --reset-admin` 只删账号文件而保留其他配置。
 
 > **关于更新**：本项目没有应用内自更新——它依赖发布公共镜像，与本仓库的许可证立场冲突，
 > 已整条移除。更新方式是 `git pull && docker compose up -d --build`，

@@ -7,7 +7,7 @@ import (
 	"image/png"
 	"os"
 	"testing"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 func fakePoster(c color.RGBA) image.Image {

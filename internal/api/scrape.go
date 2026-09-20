@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 type scrapeCfg struct {

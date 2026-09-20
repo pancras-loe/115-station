@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 func TestTgSubParseChannel(t *testing.T) {

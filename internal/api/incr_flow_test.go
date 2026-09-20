@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // ==================== 增量同步主流程测试 ====================

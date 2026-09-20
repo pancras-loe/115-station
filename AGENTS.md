@@ -254,7 +254,7 @@ Go 默认服务 `webui/dist/index.html`；产物不存在时打日志自动回�
 排查「旧版这里是怎么做的」也不必翻 git 历史。它不再接收任何新功能。
 
 ```bash
-WEBUI=legacy ./strmhub     # PowerShell: $env:WEBUI="legacy"; .\strmhub.exe
+WEBUI=legacy ./115-station     # PowerShell: $env:WEBUI="legacy"; .\115-station.exe
 ```
 
 确认新前端稳定后可以整体删除 `web/`、`main.go` 的 `inlinedIndexHTML` / `indexHTMLMarker`

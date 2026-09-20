@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // 刮削依赖台账，覆盖不同目录深度以及剧集聚合，避免遗漏片目。

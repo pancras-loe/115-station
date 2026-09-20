@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // 抑制表的核心约定：查的时候**不消费**。

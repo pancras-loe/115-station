@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // ==================== 整理落盘（一条龙） ====================

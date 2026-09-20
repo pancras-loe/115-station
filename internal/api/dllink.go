@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"gorm.io/gorm"
 )

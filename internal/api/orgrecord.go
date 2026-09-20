@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

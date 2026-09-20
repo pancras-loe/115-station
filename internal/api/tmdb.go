@@ -15,7 +15,7 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // ==================== TMDB 客户端 ====================

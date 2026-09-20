@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // 缺集计算：段合并、段过多时汇总为数量

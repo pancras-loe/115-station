@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"strmhub/internal/config"
-	"strmhub/internal/model"
+	"115-station/internal/config"
+	"115-station/internal/model"
 	"sync"
 	"time"
 
@@ -917,11 +917,11 @@ func (h *Handler) GetSyncLogs(c *gin.Context) {
 }
 
 // SystemBackup 导出配置+数据库备份（zip 下载）。
-// 内容：setting.yaml（全部配置）、strmhub.db（VACUUM INTO 一致性快照）、
+// 内容：setting.yaml（全部配置）、115-station.db（VACUUM INTO 一致性快照）、
 // auth.yaml（管理员账号，含密码哈希）。换机迁移 = 下载后放到新机器对应目录
 // GET /system/backup
 func (h *Handler) SystemBackup(c *gin.Context) {
-	tmp, err := os.CreateTemp("", "strmhub-backup-*.zip")
+	tmp, err := os.CreateTemp("", "115-station-backup-*.zip")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建临时文件失败"})
 		return
@@ -947,17 +947,17 @@ func (h *Handler) SystemBackup(c *gin.Context) {
 	addFile(filepath.Join(h.Config.ConfigDir, "115-cookie.txt"), "config/115-cookie.txt")
 
 	// sqlite 一致性快照（VACUUM INTO 不锁库）
-	dbSnap := filepath.Join(os.TempDir(), fmt.Sprintf("strmhub-db-%d.db", time.Now().UnixNano()))
+	dbSnap := filepath.Join(os.TempDir(), fmt.Sprintf("115-station-db-%d.db", time.Now().UnixNano()))
 	defer os.Remove(dbSnap)
 	if err := h.DB.Exec("VACUUM INTO ?", dbSnap).Error; err == nil {
-		addFile(dbSnap, "data/strmhub.db")
+		addFile(dbSnap, "data/115-station.db")
 	} else {
 		log.Printf("[备份] ○ 数据库快照失败（只导出配置）: %v", err)
 	}
 	_ = zw.Close()
 
 	info, _ := tmp.Stat()
-	c.Header("Content-Disposition", "attachment; filename=strmhub-backup-"+time.Now().Format("20060102-150405")+".zip")
+	c.Header("Content-Disposition", "attachment; filename=115-station-backup-"+time.Now().Format("20060102-150405")+".zip")
 	c.Header("Content-Type", "application/zip")
 	c.Data(http.StatusOK, "application/zip", func() []byte {
 		data, _ := os.ReadFile(tmp.Name())

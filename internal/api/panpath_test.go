@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"strmhub/internal/model"
+	"115-station/internal/model"
 )
 
 // seedChain 往缓存里塞一条祖先链（等价于一次成功的 fetch115Ancestors）
