@@ -167,19 +167,22 @@ func TestNotifyEmbyRefreshUsesItemsEndpoint(t *testing.T) {
 	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != filepath.ToSlash(dir) {
 		t.Fatalf("按路径查条目用的路径不对: %v", f.itemPathQ)
 	}
-	// 入库一律如实报一次：Emby 查得到条目不等于影片已经入库
-	// （文件监控会先建一个 Type=Folder 的目录条目），按条目在不在去筛
-	// 恰好会在最需要通知的时候跳过通知
-	want := []map[string]string{{"Path": filepath.ToSlash(dir), "UpdateType": "Created"}}
-	if !reflect.DeepEqual(f.updates, want) {
-		t.Fatalf("新增没如实报出去：期望 %v，实际 %v", want, f.updates)
+	// 路径上已经是影视条目（默认 Type=Movie）→ 精确刷它，不必整库扫。
+	// 对应 MoviePilot「剧集已存在就刷那个 Series 条目」的情形
+	if f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("目标已经是影视条目，不该退到整库刷新: %v", f.hits)
+	}
+	if len(f.updates) != 0 {
+		t.Fatalf("不该走路径通知回退: %v", f.updates)
 	}
 }
 
 // Emby 的文件监控几秒内就会给新影片目录建一个 Type=Folder 的条目 ——
-// 那恰恰是「目录建了、影片还没被解析成 Movie」的未入库状态。
-// 2026-09-21 实测就栽在这儿：按「查得到条目」去跳过通知，片子晚了 4 分钟才进库
-func TestNotifyEmbyRefreshAnnouncesWhenOnlyFolderItemExists(t *testing.T) {
+// 那恰恰是「目录建了、影片还没被解析成 Movie」的未入库状态，
+// 刷这个 Folder 条目不会让 Emby 重新判定它是部电影（那属于库扫描）。
+// 2026-09-21 实测就栽在这儿：片子晚了 4 分钟才进库。
+// 参考项目一致的做法是刷媒体库条目（MoviePilot / qmediasync / p115strmhelper）
+func TestNotifyEmbyRefreshFallsBackToLibraryWhenOnlyFolderItem(t *testing.T) {
 	root := t.TempDir()
 	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
 	f.itemType = "Folder"
@@ -191,12 +194,28 @@ func TestNotifyEmbyRefreshAnnouncesWhenOnlyFolderItemExists(t *testing.T) {
 	}
 	(&Handler{}).notifyEmbyRefresh(dir)
 
-	want := []map[string]string{{"Path": filepath.ToSlash(dir), "UpdateType": "Created"}}
-	if !reflect.DeepEqual(f.updates, want) {
-		t.Fatalf("只有目录条目时更要报新增：期望 %v，实际 %v", want, f.updates)
+	if f.sawHit("POST /Items/item9/Refresh") {
+		t.Fatalf("不该去刷那个 Folder 条目（刷了也不会被识别成电影）: %v", f.hits)
 	}
+	if !f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("没有退到媒体库刷新，实际请求: %v", f.hits)
+	}
+}
+
+// 删除场景不受「只有 Folder 条目」这条规则影响：删的就是目录条目本身
+func TestNotifyEmbyDeletedStillRefreshesFolderItem(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.itemType = "Folder" // deleteOK 关着 → 删不掉，退回刷新
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.MkdirAll(filepath.Join(root, "电影"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(filepath.Join(root, "电影", "已删.2020"))
+
 	if !f.sawHit("POST /Items/item9/Refresh") {
-		t.Fatalf("刷新仍然要提交: %v", f.hits)
+		t.Fatalf("删除退回刷新时仍要刷命中的条目: %v", f.hits)
 	}
 }
 
@@ -355,17 +374,16 @@ func TestNotifyEmbyRefreshClimbsToKnownAncestor(t *testing.T) {
 	if len(f.itemPathQ) != 2 || f.itemPathQ[0] != want[0] || f.itemPathQ[1] != want[1] {
 		t.Fatalf("上溯顺序不对：期望 %v，实际 %v", want, f.itemPathQ)
 	}
-	if !f.sawHit("POST /Items/item9/Refresh") {
-		t.Fatalf("没有刷新上溯命中的条目，实际请求: %v", f.hits)
+	// 入库场景命中的是【祖先】而不是目标本身 —— 说明 Emby 压根不知道这个新目录，
+	// 刷祖先只会复核它已知的子条目。按参考项目的做法退到媒体库刷新
+	if f.sawHit("POST /Items/item9/Refresh") {
+		t.Fatalf("入库不该只刷上溯命中的祖先: %v", f.hits)
 	}
-	if f.sawHit("POST /Items/lib1/Refresh") {
-		t.Fatalf("上溯已命中，不该再整库扫描: %v", f.hits)
+	if !f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("没有退到媒体库刷新，实际请求: %v", f.hits)
 	}
-	// 刷新上级只会复核它【已知】的子条目，新建出来的片目目录还得单独报一次，
-	// 否则整理落盘了、Emby 里就是没有这部片（2026-09-21 用户实测）
-	want1 := []map[string]string{{"Path": filepath.ToSlash(fresh), "UpdateType": "Created"}}
-	if !reflect.DeepEqual(f.updates, want1) {
-		t.Fatalf("新路径没如实报新增：期望 %v，实际 %v", want1, f.updates)
+	if len(f.updates) != 0 {
+		t.Fatalf("已经命中媒体库，不该再走路径通知回退: %v", f.updates)
 	}
 }
 
@@ -517,10 +535,8 @@ func TestNotifyEmbyRefreshMappedSecondLevelLibraries(t *testing.T) {
 	if f.sawHit("POST /Items/tv/Refresh") {
 		t.Fatalf("不该连带刷新剧集库: %v", f.hits)
 	}
-	// Emby 还不认识这个新片目录 → 除了整库刷新，还要按【映射后】的路径报一次新增
-	wantUp := []map[string]string{{"Path": "/映射目录/影视/电影/新片 (2026)", "UpdateType": "Created"}}
-	if !reflect.DeepEqual(f.updates, wantUp) {
-		t.Fatalf("新路径没如实报新增：期望 %v，实际 %v", wantUp, f.updates)
+	if len(f.updates) != 0 {
+		t.Fatalf("已经命中媒体库，不该回退路径通知: %v", f.updates)
 	}
 	// 查条目用的必须是映射后的 Emby 路径，且到库根为止不再上溯
 	want := []string{"/映射目录/影视/电影/新片 (2026)", "/映射目录/影视/电影"}
@@ -635,9 +651,9 @@ func TestNotifyEmbyDeletedRemovesAllItemsOnPath(t *testing.T) {
 	}
 }
 
-// 一批变更超过 embyItemRefreshMax 时跳过逐条查条目、直接整库刷新 ——
-// 整库刷新同样发现不了 Emby 还不知道的新目录，所以这些路径要一律如实报新增
-func TestNotifyEmbyRefreshAnnouncesLargeAddBatch(t *testing.T) {
+// 一批变更超过 embyItemRefreshMax 时跳过逐条查条目、直接刷媒体库 ——
+// 新增本来就以媒体库刷新为主，这里只确认不会退化成逐条查
+func TestNotifyEmbyRefreshLargeAddBatchRefreshesLibrary(t *testing.T) {
 	root := t.TempDir()
 	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
 	setupEmbyRefreshCfg(t, f.srv.URL, root)
@@ -658,13 +674,8 @@ func TestNotifyEmbyRefreshAnnouncesLargeAddBatch(t *testing.T) {
 	if !f.sawHit("POST /Items/lib1/Refresh") {
 		t.Fatalf("没有整库刷新，实际请求: %v", f.hits)
 	}
-	if len(f.updates) != len(dirs) {
-		t.Fatalf("新增路径没全部报出去：期望 %d 条，实际 %v", len(dirs), f.updates)
-	}
-	for _, u := range f.updates {
-		if u["UpdateType"] != "Created" {
-			t.Fatalf("UpdateType 不对: %v", u)
-		}
+	if len(f.updates) != 0 {
+		t.Fatalf("已经命中媒体库，不该回退路径通知: %v", f.updates)
 	}
 }
 

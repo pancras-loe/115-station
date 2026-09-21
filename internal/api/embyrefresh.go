@@ -35,12 +35,35 @@ import (
 // 立刻生效。怕删错是对的，护栏是 embyDeleteItems 里那道「本地路径确实已经不存在」
 // 的检查 —— 只删我们自己刚删掉的那一个路径，路径还在就一律不碰。
 //
-// 新增为什么也不能只靠刷新（2026-09-21）：刷新的 ValidateChildren 复核的是
-// 【已知】子条目，整理刚建出来的片目目录 Emby 根本不知道它存在，刷上级目录
-// 或整库都扫不到它；此前「看着正常」是 Emby 自己的实时监控兜的底，而 strm 的
-// 媒体卷多半是网络盘，inotify 收不到，定时扫库又默认关着 —— 于是片子落盘了、
-// Emby 里就是没有。新增因此额外走一次 /Library/Media/Updated 报 Created，
-// 那是 Emby 给外部程序报「这个路径有新内容」的正式通道。
+// ⚠️ **新增不能刷新「刚建出来的那个片目目录」——要刷媒体库**（2026-09-21 定稿）。
+//
+// 实测现象：整理落盘几秒后 Emby 的文件监控就会在影片目录上建一个 Type=Folder
+// 的目录条目，于是「按路径查得到条目」成立、我们把刷新打在了它身上，
+// 结果片子晚了 4 分钟才真正进库。原因是刷新走 ValidateChildren、复核的是
+// 【已知】子条目，把一个 Folder 条目刷一遍不会让 Emby 重新判定
+// 「这目录其实是部电影」—— 那个判定属于库扫描。
+//
+// 五个参考项目在这一步的做法高度一致，没有一个刷新新建目录自己：
+//
+//   MoviePilot 2 refresh_library_by_items → POST /Items/{媒体库Id}/Refresh?Recursive=true
+//                                           剧集已存在就刷那个 Series 条目；电影已存在干脆不刷
+//   p115strmhelper refresh_mediaserver    → 走 MoviePilot 上面那条；识别不了才回退
+//                                           trigger_refresh_by_path，而它是从 Path.parents
+//                                           爬的 —— **刻意不含路径自己**。全量收尾直接
+//                                           refresh_root_library()，还带可配置的刷新延迟
+//   qmediasync RefreshLibrary             → POST /emby/Items/{libraryId}/Refresh
+//   MediaSync115 refresh_library          → POST /emby/Library/Refresh（全库扫描）
+//   openStrm refreshEmbyNow               → POST /Library/Refresh（全库扫描，增量侧 30s 静默防抖）
+//
+// 所以入库只保留一种精确刷新：**目标路径上已经是影视条目**（Movie/Series/…）。
+// 那正是 MoviePilot「剧集已存在就刷 Series」的情形 —— 条目在，
+// ValidateChildren 能发现它下面的新集。其余一律刷媒体库条目。
+// 我们的新增本来就是按轮聚合的（整理一轮只传最浅目录、增量一轮只传一个 base），
+// 不像 openStrm 那样一条生活事件一次，所以不需要再加防抖。
+//
+// 顺带记一笔：/Library/Media/Updated 看起来像是「报新内容」的正式通道，
+// 但五个参考项目**一个都没用**，我们也不用 —— 它在这里只作为
+// 「路径不落在任何媒体库里」的兜底（embyReportUpdated）。
 
 // embyRefreshKind 刷新场景。删除与新增有三处不一样：
 // 目标路径在本地已经不存在（得上移到最近的存活父目录才找得到 Emby 条目）、
@@ -202,14 +225,12 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	}
 
 	var refreshed []string
-	var created []string // 入库场景要如实报新增的路径（无条件收集，理由见下面 embyReportUpdated 处）
+	var verify []string // 入库场景提交完回查用（只读，不改变 Emby 行为）
 	for _, libID := range order {
 		lib, paths := byID[libID], buckets[libID]
-		if kind == embyRefreshAdded && !wholeLib[libID] {
-			// 目标在库之上（全量同步传媒体根）那种除外，其余新增路径一律报一次。
-			// **不要再按「Emby 有没有这个条目」去筛** —— 见 embyReportUpdated 处的注释
+		if kind == embyRefreshAdded {
 			for _, t := range paths {
-				created = append(created, t.path)
+				verify = append(verify, t.path)
 			}
 		}
 		// 少量变更精确到条目刷（目标在库之上时没这个选项，只能整库刷）
@@ -217,24 +238,31 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 			var rest []string
 			for _, t := range paths {
 				hit, exact := embyResolveItem(cfg, t, lib.Locations)
+				// ⚠️ 入库只认「目标路径上已经是影视条目」这一种精确刷新，
+				// 其余一律交给整库刷新 —— 理由见 embyRefreshItem 上方的长注释
+				if kind == embyRefreshAdded && !(exact && embyTypeIsMedia(hit.Type)) {
+					rest = append(rest, t.path)
+					continue
+				}
 				if hit.ID == "" || !embyRefreshItem(cfg, hit.ID) {
 					rest = append(rest, t.path)
 					continue
 				}
-				switch {
-				case !exact:
-					log.Printf("[Emby] ○ Emby 尚无 %s 的条目，已刷新上级「%s」并单独报新增", t.path, hit.Name)
-				case kind == embyRefreshAdded && !embyTypeIsMedia(hit.Type):
-					log.Printf("[Emby] ○ %s 在 Emby 里还只是个目录条目（Type=%s），已报新增并提交刷新", t.path, hit.Type)
-				default:
+				if exact {
 					log.Printf("[Emby] ○ 已提交条目刷新（%s）：%s（%s）—— %s", kind.label(), hit.Name, hit.Type, t.path)
+				} else {
+					log.Printf("[Emby] ○ 已提交条目刷新（%s）：上溯命中「%s」—— %s", kind.label(), hit.Name, t.path)
 				}
 			}
 			if len(rest) == 0 {
 				refreshed = append(refreshed, lib.Name)
 				continue
 			}
-			log.Printf("[Emby] ○ %d 个路径未定位到条目，改为刷新整个媒体库 %s", len(rest), lib.Name)
+			if kind == embyRefreshAdded {
+				log.Printf("[Emby] ○ %d 个新增路径在 Emby 里还没有影视条目，改为刷新媒体库 %s（新内容要靠库扫描才会被识别）", len(rest), lib.Name)
+			} else {
+				log.Printf("[Emby] ○ %d 个路径未定位到条目，改为刷新整个媒体库 %s", len(rest), lib.Name)
+			}
 		}
 		if embyRefreshItem(cfg, lib.ID) {
 			refreshed = append(refreshed, lib.Name)
@@ -247,24 +275,9 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		}
 	}
 
-	// ⚠️ **新增路径一律报一次，不要按「Emby 有没有这个条目」去筛。**
-	//
-	// 2026-09-21 实测：整理落盘几秒后 Emby 的文件监控就会在影片目录上建一个
-	// Type=Folder 的目录条目 —— 于是「按路径查得到条目」成立，可那恰恰是
-	// **还没入库**的状态（目录建了、影片没被解析成 Movie）。按这个条件去跳过
-	// 通知，等于专挑最需要通知的时候不通知，那一轮的片子晚了 4 分钟才进库。
-	//
-	// 而刷新本身指望不上：它走 ValidateChildren，复核的是【已知】子条目还在不在
-	// （删除那条线正是靠它），把一个 Folder 条目刷一遍并不会让 Emby 重新判定
-	// 「这个目录其实是部电影」—— 那个判定只在扫描它的父目录时才跑。
-	//
-	// /Library/Media/Updated 是 Emby 给外部程序报「这个路径有新内容」的正式通道，
-	// Emby 自带的文件夹监控内部走的也是同一套，由 Emby 自己决定要回溯校验到哪一层。
-	// 重复报无害（幂等），一次 POST 报完所有路径，比逐条查条目还便宜。
-	if len(created) > 0 {
-		created = dedupeStrings(created)
-		embyReportUpdated(cfg, created, "Created")
-		go embyVerifyIngest(cfg, created)
+	// 入库提交完回查一次，结论写进日志（纯只读，不改变 Emby 行为）
+	if kind == embyRefreshAdded && len(verify) > 0 {
+		go embyVerifyIngest(cfg, dedupeStrings(verify))
 	}
 
 	if len(unmatched) > 0 {
@@ -289,13 +302,14 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	go NotifyMessage("🎬 媒体入库", "已刷新媒体库："+names)
 }
 
-// embyVerifyDelays 入库回查的时间点（相对提交通知的时刻）。
+// embyVerifyDelays 入库回查的时间点（相对提交刷新的时刻）。
 // Emby 的文件监控在处理前有一段「等路径不再变动」的静默期，刮削紧跟着往
 // 同一个目录写 NFO/海报还会把它一次次推后，所以第一次回查放在 30 秒之后。
 // 测试里置空即关闭
 var embyVerifyDelays = []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
 
-// embyVerifyIngest 提交入库通知之后回查一次：Emby 到底收进去没有。
+// embyVerifyIngest 提交刷新之后回查：Emby 到底收进去没有。
+// 这是本项目自己加的一层，参考项目都没有 —— 但它是纯只读的，不改变 Emby 行为。
 //
 // 这条日志是给人看的 —— 入库链路上能出错的地方（路径映射、媒体库范围、库类型、
 // 实时监控开关）在提交那一刻全都表现为「提交成功」，不回查就只能靠用户
@@ -345,7 +359,7 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 				"检查这个目录是不是在某个媒体库的范围内、库类型是不是「电影/剧集」", p, t)
 			continue
 		}
-		log.Printf("[Emby] ✗ 入库未完成：提交 %s 后 Emby 仍查不到 %s 的任何条目 —— "+
+		log.Printf("[Emby] ✗ 入库未完成：刷新提交 %s 后 Emby 仍查不到 %s 的任何条目 —— "+
 			"检查「EMBY 管理」的本地路径映射，以及 Emby 那边的媒体库目录是否包含它",
 			time.Since(start).Truncate(time.Second), p)
 	}
@@ -752,11 +766,15 @@ func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
 }
 
 // embyRefreshItem POST /Items/{Id}/Refresh —— Emby 真正的条目/媒体库刷新端点。
+// {Id} 可以是媒体库条目，也可以是任意影片/剧集条目（MoviePilot、qmediasync、
+// p115strmhelper 用的都是它，见 notifyEmbyPaths 上方的对照）。
 //
 // Recursive=true 会连带校验子项：文件已经不在的子条目在这一步被清掉，
-// 「本地删了 Emby 里还挂着条目」就是靠它修的。
+// 「本地删了 Emby 里还挂着条目」就是靠它修的；打在媒体库条目上时，
+// 这一遍校验就是新内容被扫进来的时机。
 // MetadataRefreshMode 取 Default 而不是 FullRefresh：我们要的是「重新看一眼
-// 文件还在不在」，不是把整库元数据重刮一遍（那会把 TMDB 打到限流）
+// 文件还在不在」，不是把整库元数据重刮一遍（那会把 TMDB 打到限流）。
+// MoviePilot 与 qmediasync 干脆一个模式参数都不传，用的就是 Emby 的默认值
 func embyRefreshItem(cfg embyRefreshCfg, itemID string) bool {
 	q := url.Values{
 		"Recursive":           {"true"},
