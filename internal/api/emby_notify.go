@@ -125,8 +125,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		// 常驻打整包会把实时日志页淹掉——Overview 一个字段就上千字
 		vlog("[Emby Webhook] 删除事件原始载荷: %s", truncateStr(string(body), 2000))
 
-		// 深度删除的 webhook 加速通道：只打标 + 必要时触发扫描，
-		// 删不删仍由守卫决定（见 deepdelemby.go 开头那段）
+		// 事件仅处理自身命中的台账；通知去重不应吞掉神医事件的额外定位信息。
 		go h.deepDelOnEmbyDelete(payload, strings.Contains(event, "deep.delete"))
 
 		// 装了神医助手时 deep.delete 与 library.deleted 两条都发（实测，不是替换），

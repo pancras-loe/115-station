@@ -220,38 +220,19 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    - 限深 `emptyDirMaxDepth`。
    守卫逻辑全部由 `emptydir_test.go` 用假目录树覆盖（判断错一次就是误删用户文件），
    改这块**先把测试跑绿**。
-10. **深度删除会删网盘源文件**（`deepdel.go`）：这是第二条会真删用户网盘内容的链路，
-    规划全文见 `docs/115-station-notes/DEEP-DELETE-PLAN.md`。它是「失效 STRM」的镜像
-    ——本地 STRM 没了、网盘源文件还在，就把网盘那份也删掉（Emby 删片子会连带删本地
-    STRM，但网盘不动，下次全量同步又生成回来）。删除同样走 `/rb/delete` 进回收站，
-    守卫同样一条都不能松：
-    - **默认关**，开启后默认「只标记」+ 默认预演，三道开关都要用户自己关掉；
-    - **只删台账（`SyncedFile`）里有的 fid**，接口不收任何「要删哪些路径」的入参——
-      收了就等于把下面所有守卫都绕过去了；
-    - 媒体库根或任何一个库目录 `os.Stat` 失败（挂载掉线）→ **整轮放弃**，
-      绝不按「读不到 = 文件没了」继续（`checkLibRoots`）；
-    - **两轮确认**：首轮只写 `vanish_at`，下一轮仍缺失才进可删集合；
-    - 自动模式超过条数/占比阈值 → 拒绝执行 + 告警（`deepDelOverLimit`）。
-      手动确认不受阈值限制：用户已经看过预览清单了；
-    - 已被判为失效 STRM（`orphan_at` 非空）的行不进候选——网盘那份本来就没了。
-    扫描器与全量/增量共用 `fullSyncMu`：**全量同步会把被删的 STRM 重新生成回来**，
-    不互斥的话判定就踩在半轮全量的中间状态上。守卫由 `deepdel_test.go` 覆盖，
-    改这块同样**先把测试跑绿**。
+10. **深度删除会删网盘源文件**（`deepdel.go`、`deepdelemby.go`）：
+    2026-09-21 按维护者要求改为事件触发，移除定时全库扫描、预演和待删清单执行；保留整理记录入口。
+    - 默认关闭。事件只处理路径 / pickcode 命中的 `SyncedFile`，不得扩大成全库缺失扫描。
+    - 原生 `library.deleted` 也可能来自扫库清理，因此仍检查媒体库根与各库目录、本地缺失复核、事件数量/占比阈值。
+    - 原生事件使用两次短间隔检查，神医 `deep.delete` 不等待后台轮询。事件先于本地删除时有一次短暂重查。
+    - 与整理、全量、增量共用 `fullSyncMu`，事件等锁后重查，不可丢弃事件再指望定时扫描补上。
+    - 旧 `vanish_at` 仅保留数据库兼容，不读写、不参与删除；旧模式和预演配置不再生效。
+    - **空目录只检查本次文件的父目录链**，有子项即保留，禁止用 `pruneEmptyDirTree` 递归祖先目录：旧实现会遍历兄弟影片并删除无关空目录。
+    - 所有删除仍走 `ops.deleteFiles`（回收站、节流、事件抑制、缓存失效），先删网盘成功再清台账。
+    - 整理记录入口只删记录 fid 与台账的交集，不受事件开关、缺失复核和阈值限制；记录本身保留。
+    - 测试见 `deepdel_event_test.go` / `deepdel_test.go` / `deepdelemby_test.go`；改动前先跑绿。
 
-    **Emby webhook 那条线（`deepdelemby.go`）只是加速通道，不是第二条删除逻辑。**
-    它收到删除事件后只做两件事：`os.Stat` 确认本地文件真没了之后打 `vanish_at`、
-    必要时触发一次扫描；删不删仍由 `runDeepDelete` + 上面那套守卫决定。
-    原因是 `library.deleted` 的含义是「条目没了」而不是「用户要删它」——
-    Emby 扫库发现文件不在也发它，挂载抖一下就能连发一整批。
-    神医助手的 `deep.delete` 是用户显式点按钮触发的，**只有它**能跳过两轮确认之间的等待
-    （立即 `runDeepDelScanNow`），挂载探针与阈值照旧。新增任何事件来源时守住这条线。
-    （2026-09 实测：Emby 扫库清理失效条目**确实会发** `library.deleted`，
-    原生事件流里「用户删的」和「文件不见了」分辨不出来。这不是假想风险。）
-
-    第三个入口是整理记录页的「深度删除」（`DeepDeleteOrganizeRecord`）：
-    用户指定一条记录、文件都还在，所以两轮确认与阈值不适用，但守卫 #2 照旧 ——
-    记录里的 fid 只用来**查台账**，查不到的一概不删（`deepDelRowsForRecord`）。
-    别把它和同一行里的 `DeleteOrganizeRecord` 搞混：后者只删记录、不动任何文件。
+    历史设计与 Emby 真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md`，其中旧定时扫描设计已被上述流程替代。
 
 ---
 
@@ -274,7 +255,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
-| 改深度删除 | `internal/api/deepdel.go`：扫描在 `scanVanished`、执行在 `runDeepDelete`、守卫在 `checkLibRoots` / `deepDelOverLimit`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
+| 改深度删除 | `internal/api/deepdel.go`：执行在 `runDeepDelete`、事件范围在 `deepDelEventRows`、守卫在 `checkLibRoots` / `deepDelOverLimit`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
