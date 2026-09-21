@@ -23,15 +23,23 @@ type fakeEmby struct {
 	hits      []string // "METHOD /path"
 	itemPathQ []string // /Items 查询用的 Path 参数
 	updates   []map[string]string
-	locations []string // /Library/VirtualFolders/Query 返回的实际库目录
-	lookupHit bool     // /Items 是否返回匹配条目
-	hitPath   string   // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
+	libs      []map[string]any // /Library/VirtualFolders/Query 返回的虚拟库（含实际目录）
+	lookupHit bool             // /Items 是否返回匹配条目
+	hitPath   string           // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
 	srv       *httptest.Server
 }
 
 func newFakeEmby(t *testing.T, locations []string, lookupHit bool) *fakeEmby {
+	return newFakeEmbyLibs(t, []map[string]any{
+		{"ItemId": "lib1", "Name": "电影", "Locations": locations},
+	}, lookupHit)
+}
+
+// newFakeEmbyLibs 多库版。二级分类目录各建一个 Emby 库是常见摆法，
+// 单库的假服务器测不出「刷错库」——命中哪个库都只有 lib1 一个答案
+func newFakeEmbyLibs(t *testing.T, libs []map[string]any, lookupHit bool) *fakeEmby {
 	t.Helper()
-	f := &fakeEmby{locations: locations, lookupHit: lookupHit}
+	f := &fakeEmby{libs: libs, lookupHit: lookupHit}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.hits = append(f.hits, r.Method+" "+r.URL.Path)
@@ -44,11 +52,7 @@ func newFakeEmby(t *testing.T, locations []string, lookupHit bool) *fakeEmby {
 				"Items": []map[string]any{{"Id": "lib1", "Name": "电影", "Path": "/config/root/default/电影"}},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/Library/VirtualFolders/Query":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"Items": []map[string]any{
-					{"ItemId": "lib1", "Name": "电影", "Locations": f.locations},
-				},
-			})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Items": f.libs})
 		case r.Method == http.MethodGet && r.URL.Path == "/Items":
 			p := r.URL.Query().Get("Path")
 			f.mu.Lock()
@@ -385,5 +389,42 @@ func TestNotifyEmbyDeletedMappedMovieLibrary(t *testing.T) {
 	}
 	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != "/media/影视/电影" {
 		t.Fatalf("删除目标不应退回 /media: %v", f.itemPathQ)
+	}
+}
+
+// 用户最常见的摆法：媒体库建在「映射目录 / 一级分类 / 二级分类」这一层，
+// 每个二级目录各是一个 Emby 库。入库要精确落到命中的那个库，
+// 既不能整站乱刷，也不能因为路径映射没对上而退回路径通知
+func TestNotifyEmbyRefreshMappedSecondLevelLibraries(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmbyLibs(t, []map[string]any{
+		{"ItemId": "movie", "Name": "电影", "Locations": []string{"/映射目录/影视/电影"}},
+		{"ItemId": "tv", "Name": "剧集", "Locations": []string{"/映射目录/影视/剧集"}},
+	}, false) // Emby 还没给新片目录建条目 → 退到整库刷新
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	cfg, _ := json.Marshal(embyRefreshCfg{ServerURL: f.srv.URL, APIKey: "k", PathMapping: root + "#/映射目录"})
+	if err := notifyConfigSource.SaveSetting("emby", string(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(root, "影视", "电影", "新片 (2026)")
+	if err := os.MkdirAll(fresh, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	(&Handler{}).notifyEmbyRefresh(fresh)
+
+	if !f.sawHit("POST /Items/movie/Refresh") {
+		t.Fatalf("没有刷新命中的电影库，实际请求: %v", f.hits)
+	}
+	if f.sawHit("POST /Items/tv/Refresh") {
+		t.Fatalf("不该连带刷新剧集库: %v", f.hits)
+	}
+	if len(f.updates) != 0 {
+		t.Fatalf("已经命中媒体库，不该回退路径通知: %v", f.updates)
+	}
+	// 查条目用的必须是映射后的 Emby 路径，且到库根为止不再上溯
+	want := []string{"/映射目录/影视/电影/新片 (2026)", "/映射目录/影视/电影"}
+	if len(f.itemPathQ) != 2 || f.itemPathQ[0] != want[0] || f.itemPathQ[1] != want[1] {
+		t.Fatalf("上溯路径不对：期望 %v，实际 %v", want, f.itemPathQ)
 	}
 }
