@@ -240,8 +240,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// STRM 管理
 		// 302 直连（与 6086 代理同款，6060 也能作为 strm 直连地址，CMS 二合一模式）
-		r.GET("/d/:pickcode", func(c *gin.Context) { handleProxyRedirect(c, h.DB, h.Config) })
-		r.GET("/d/:pickcode/*filename", func(c *gin.Context) { handleProxyRedirect(c, h.DB, h.Config) })
+		registerDirectPlaybackRoutes(r, h.DB, h.Config)
 		// 按需离线播放端点（与 6086 代理同款；二合一部署时占位 STRM 走主端口也能播）
 		RegisterOfflinePlayRoutes(r, h)
 		// RE0 OAuth 回调（浏览器地址栏跳转，无鉴权头，必须公开；靠 state 防 CSRF）

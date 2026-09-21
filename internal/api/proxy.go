@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"115-station/internal/config"
-	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -21,9 +20,7 @@ import (
 
 // ==================== 302 代理服务 ====================
 
-// downloadLinkCache 下载链接缓存 {pickcode -> {url, expiry}}
-var downloadLinkCache = make(map[string]downloadCacheEntry)
-var downloadCacheMu = sync.Mutex{}
+// 播放缓存由 playbackLinkResolver 管理，按规范化 pickcode 与实际 UA 区分。
 
 type downloadCacheEntry struct {
 	URL    string
@@ -35,6 +32,7 @@ func StartProxy(db *gorm.DB, cfg *config.Config) {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.SetTrustedProxies(nil)
 
 	// 定期清理过期下载链接缓存（每 10 分钟），防止内存只增不减
 	go func() {
@@ -60,13 +58,7 @@ func StartProxy(db *gorm.DB, cfg *config.Config) {
 	r.GET("/wecom/callback", botHandler.WecomCallback)
 	r.POST("/wecom/callback", botHandler.WecomCallback)
 
-	// 302 代理核心路由: /d/{pickcode} 或 /d/{pickcode}/{filename}
-	r.GET("/d/:pickcode", func(c *gin.Context) {
-		handleProxyRedirect(c, db, cfg)
-	})
-	r.GET("/d/:pickcode/*filename", func(c *gin.Context) {
-		handleProxyRedirect(c, db, cfg)
-	})
+	registerDirectPlaybackRoutes(r, db, cfg)
 
 	// 按需离线播放端点: /ed2k/play/{id}（STRM 占位内容指向这里，边下边播）
 	RegisterOfflinePlayRoutes(r, botHandler)
@@ -81,8 +73,8 @@ func StartProxy(db *gorm.DB, cfg *config.Config) {
 }
 
 // handleProxyRedirect 处理 302 重定向请求
-// proxyRateLim 直链/中转限流：pickcode 是"知道即可用"的弱凭据，无鉴权端点
-// 不能让公网无限速换取直链或全量中转（带宽 DoS 面）。20 次/分/IP 足够正常
+// proxyRateLim 直链限流：pickcode 是"知道即可用"的弱凭据，无鉴权端点
+// 不能让公网无限速换取直链（请求 DoS 面）。20 次/分/IP 足够正常
 // 播放（每次起播 1 次 302），能挡住遍历抓取
 var (
 	proxyRateMu        sync.Mutex
@@ -137,189 +129,28 @@ func handleProxyRedirect(c *gin.Context, db *gorm.DB, cfg *config.Config) {
 		c.String(http.StatusBadRequest, "missing pickcode")
 		return
 	}
-	// 兼容 /d/{pickcode}.{ext}?/{name} 形态：pickcode 段可能带文件后缀，
-	// 115 pickcode 为纯字母数字，剥掉最后一个 "." 之后的部分即可
-	if i := strings.LastIndex(pickcode, "."); i > 0 {
-		pickcode = pickcode[:i]
-	}
-	// 旧版 STRM 用数字 fid 生成 /d/{fid}/...，查台账换回 pick_code
-	if isAllDigits(pickcode) {
-		var sf model.SyncedFile
-		if err := db.Where("file_id = ?", pickcode).First(&sf).Error; err == nil && sf.PickCode != "" {
-			pickcode = sf.PickCode
-		}
-	}
 
 	servePickcodeDirect(c, db, cfg, pickcode)
 }
 
-// servePickcodeDirect 已知 pickcode 的出流公共路径（/d/ 302 与 /ed2k/play 共用）：
-// 空 UA 走服务端中转，其余按请求 UA 签发直链 302（直链与 UA 绑定，缓存键含 UA）
+// servePickcodeDirect 只换链并返回 302。播放器（含空 UA）直接向 CDN 取流，
+// 失败明确报错，不再以占用服务器带宽的方式掩盖兼容性问题。
 func servePickcodeDirect(c *gin.Context, db *gorm.DB, cfg *config.Config, pickcode string) {
-	reqUA := c.Request.UserAgent()
-	vlog("302代理请求: pickcode=%s, UA=%s", pickcode, reqUA)
-
-	// UA 缺失的播放器（部分安卓内核不发自定义 UA）：115 直链与 UA 绑定，
-	// 空 UA 客户端拿到 302 后去 CDN 取流会被拒（浏览器正常、这类手机播不动）。
-	// 改为服务端中转：用统一 UA 签发直链，把字节流转发给客户端（透传 Range）
-	if strings.TrimSpace(reqUA) == "" {
-		log.Printf("302代理: %s UA 为空，转服务端中转拉流", pickcode)
-		streamVia(c, db, cfg, pickcode)
-		return
-	}
-
-	// 缓存键含 UA：115 直链与签发 UA 绑定，Emby(Lavf) 与浏览器链不可混用
-	cacheKey := pickcode + "|" + reqUA
-	downloadCacheMu.Lock()
-	cached, ok := downloadLinkCache[cacheKey]
-	downloadCacheMu.Unlock()
-	if ok && time.Now().Before(cached.Expiry) {
-		c.Redirect(http.StatusFound, cached.URL)
-		return
-	}
-
-	// 获取下载链接：按请求方 UA 签发（OpenAPI 优先，Cookie 回退）
-	downloadURL, err := proxyDownloadURL(db, cfg, pickcode, reqUA)
+	u, err := playbackLinks.resolve(c.Request.Context(), db, cfg, pickcode, c.Request.UserAgent())
 	if err != nil {
-		log.Printf("302代理获取下载链接失败: %v", err)
-		c.String(http.StatusBadGateway, "获取下载链接失败: %v", err)
+		log.Printf("[播放] ✗ 取链失败，未启用中转")
+		c.String(http.StatusBadGateway, "无法获取可直接播放的地址，请检查账号、播放器 UA 与直链通道")
 		return
 	}
-
-	if downloadURL == "" {
-		c.String(http.StatusNotFound, "无法获取下载链接")
-		return
-	}
-
-	// 缓存链接（30 分钟：115 直链约 1 小时有效，绑 UA+IP；取链要过
-	// 节流+多通道回退，是起播最贵的一步，能命中就秒开）
-	downloadCacheMu.Lock()
-	downloadLinkCache[cacheKey] = downloadCacheEntry{
-		URL:    downloadURL,
-		Expiry: time.Now().Add(30 * time.Minute),
-	}
-	downloadCacheMu.Unlock()
-
-	vlog("302代理重定向: %s -> %s", pickcode, downloadURL[:min(80, len(downloadURL))]+"...")
-	c.Redirect(http.StatusFound, downloadURL)
+	vlog("[播放] ✓ 返回 CDN 302")
+	playbackRedirect(c.Writer, c.Request, u)
 }
 
-// streamVia 服务端中转拉流：取直链并转发字节流。
-// 仅用于不发 User-Agent 的播放器（302 对它们无效），透传 Range 支持拖动。
-// 签发 UA 用浏览器 UA（ua115Download）：实测浏览器 UA 拿到的直链免 Cookie
-// （f=1/2 型）；ua115Unified 拿到的是 f=3 型（强绑 Set-Cookie，矩阵也过不去）。
-// 仍保留 Cookie 组合矩阵兜底，且免 Cookie 组合优先（快，避免播放器超时）
-func streamVia(c *gin.Context, db *gorm.DB, cfg *config.Config, pickcode string) {
-	rawURL, hdrs, err := proxyDownloadURLFull(db, cfg, pickcode, ua115Download)
-	if err != nil || rawURL == "" {
-		log.Printf("302代理中转取链失败: %v", err)
-		c.String(http.StatusBadGateway, "获取下载链接失败: %v", err)
-		return
+func registerDirectPlaybackRoutes(r gin.IRouter, db *gorm.DB, cfg *config.Config) {
+	for _, route := range []string{"/d/:pickcode", "/d/:pickcode/*filename"} {
+		r.Handle(http.MethodGet, route, func(c *gin.Context) { handleProxyRedirect(c, db, cfg) })
+		r.Handle(http.MethodHead, route, func(c *gin.Context) { handleProxyRedirect(c, db, cfg) })
 	}
-	loginCookie := proxyLoginCookie(db, cfg)
-	setCookie := hdrs["Cookie"]
-
-	fetch := func(cookie string) (*http.Response, error) {
-		outReq, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, rawURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range hdrs {
-			outReq.Header.Set(k, v)
-		}
-		if cookie != "" {
-			outReq.Header.Set("Cookie", cookie)
-		}
-		if rng := c.Request.Header.Get("Range"); rng != "" {
-			outReq.Header.Set("Range", rng)
-		}
-		return (&http.Client{}).Do(outReq) // 无整体超时：长视频流式传输
-	}
-
-	// 组合去重：免 Cookie 优先（浏览器型直链直接命中，不等重试）
-	var combos []string
-	add := func(s string) {
-		for _, e := range combos {
-			if e == s {
-				return
-			}
-		}
-		combos = append(combos, s)
-	}
-	add("")
-	if setCookie != "" {
-		add(setCookie)
-		add(setCookie + "; " + loginCookie)
-	}
-	add(loginCookie)
-
-	var resp *http.Response
-	var lastErr error
-	for _, ck := range combos {
-		resp, lastErr = fetch(ck)
-		if lastErr != nil {
-			break // 网络层错误重试无意义
-		}
-		if resp.StatusCode < 400 {
-			break
-		}
-		log.Printf("302代理中转: 上游 %d（换 Cookie 组合重试）", resp.StatusCode)
-		resp.Body.Close()
-		resp = nil
-	}
-	if lastErr != nil {
-		log.Printf("302代理中转拉流失败: %v", lastErr)
-		c.String(http.StatusBadGateway, "上游拉流失败: %v", lastErr)
-		return
-	}
-	if resp == nil {
-		log.Printf("302代理中转: 所有 Cookie 组合均被上游拒绝（no cookie value 等）")
-		c.String(http.StatusBadGateway, "上游拒绝拉流")
-		return
-	}
-	defer resp.Body.Close()
-	log.Printf("302代理中转: 上游状态=%d ContentLength=%d Range=%q", resp.StatusCode, resp.ContentLength, c.Request.Header.Get("Range"))
-	for _, h := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Content-Disposition"} {
-		if v := resp.Header.Get(h); v != "" {
-			c.Writer.Header().Set(h, v)
-		}
-	}
-	c.Writer.WriteHeader(resp.StatusCode)
-	flusher, _ := c.Writer.(http.Flusher)
-	buf := make([]byte, 64*1024)
-	sent := int64(0)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := c.Writer.Write(buf[:n]); werr != nil {
-				log.Printf("302代理中转: 客户端断开（已转发 %d 字节）", sent)
-				return // 客户端断开
-			}
-			sent += int64(n)
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if rerr != nil {
-			if rerr != io.EOF {
-				log.Printf("302代理中转: 上游读取结束（已转发 %d 字节）: %v", sent, rerr)
-			}
-			return
-		}
-	}
-}
-
-// proxyLoginCookie 取登录 Cookie（配置文件优先，回退 Storage 表），
-// 与 proxyDownloadURLFull 的 Cookie 通道同一套解析
-func proxyLoginCookie(db *gorm.DB, cfg *config.Config) string {
-	if ck, err := cfg.LoadCookie(); err == nil && ck != "" {
-		return ck
-	}
-	var storage model.Storage
-	if err := db.Where("type = ?", "115").First(&storage).Error; err == nil {
-		return storage.Cookie
-	}
-	return ""
 }
 
 // ua115Download 下载链路专用 UA（openStrm defaultUA 同款，浏览器 UA 签发的直链
@@ -380,8 +211,13 @@ func hostKey(host string) string {
 
 func get115DownloadURL(pickcode, cookie, signUA string) (string, map[string]string, error) {
 	if signUA == "" {
-		signUA = ua115Download // 默认浏览器 UA（附属文件下载等自有场景）
+		signUA = ua115Download
 	}
+	return get115DownloadURLForUA(pickcode, cookie, signUA)
+}
+
+// 播放专用入口必须保留空 UA，后台文件下载仍可使用默认 UA。
+func get115DownloadURLForUA(pickcode, cookie, signUA string) (string, map[string]string, error) {
 	// ---- 首选：App 加密接口（用签发 UA 请求，直链即绑定该 UA）----
 	// 双端点轮询：proapi.115.com（p115client/OpenList 同款）与
 	// pro.api.115.com（openStrm 同款）是独立风控的两台主机——实测一个
@@ -475,7 +311,7 @@ func get115DownloadURL(pickcode, cookie, signUA string) (string, map[string]stri
 	params := fmt.Sprintf("pickcode=%s", pickcode)
 	fullURL := apiURL + "?" + params
 
-	body, err = httpGet115(fullURL, nil, cookie, 15*time.Second)
+	body, err = httpGet115Full(fullURL, nil, cookie, signUA, 15*time.Second, map[string]string{"User-Agent": signUA})
 	if err != nil {
 		return "", nil, fmt.Errorf("获取下载链接失败 [app接口]: %s；[webapi接口]: %v", appErr, err)
 	}
@@ -560,12 +396,12 @@ func post115FormResp(api string, form url.Values, cookie, ua string, timeout tim
 
 // 清理过期缓存（定期调用）
 func cleanExpiredCache() {
-	downloadCacheMu.Lock()
-	defer downloadCacheMu.Unlock()
+	playbackLinks.mu.Lock()
+	defer playbackLinks.mu.Unlock()
 	now := time.Now()
-	for k, v := range downloadLinkCache {
-		if now.After(v.Expiry) {
-			delete(downloadLinkCache, k)
+	for key, entry := range playbackLinks.cache {
+		if !now.Before(entry.Expiry) {
+			delete(playbackLinks.cache, key)
 		}
 	}
 }

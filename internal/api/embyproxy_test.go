@@ -14,6 +14,7 @@ import (
 	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // setupEmbyProxy 起一个假 Emby（只回 PlaybackInfo）+ 本站反代，返回反代地址与 strm 的绝对路径
@@ -46,6 +47,15 @@ func setupEmbyProxy(t *testing.T) (proxyURL, strmPath string) {
 	newTestDB(t, "embyproxy.db")
 
 	cfg := &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
+	full, _ := json.Marshal(map[string]string{"local_path": dir})
+	if err := cfg.SaveSetting("full", string(full)); err != nil {
+		t.Fatal(err)
+	}
+	oldResolver := playbackLinks
+	playbackLinks = newPlaybackLinkResolver(func(_ *gorm.DB, _ *config.Config, pc, ua string) (string, map[string]string, error) {
+		return "https://cdn.example/video", map[string]string{"User-Agent": ua}, nil
+	})
+	t.Cleanup(func() { playbackLinks = oldResolver })
 	if err := cfg.SaveSetting("emby", `{"server_url":"`+emby.URL+`","api_key":"k"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +93,11 @@ func fetchRewritten(t *testing.T, url string) map[string]any {
 func assertDirectPlay(t *testing.T, ms map[string]any) {
 	t.Helper()
 	p, _ := ms["Path"].(string)
-	if !strings.Contains(p, "/d/abc123.mkv") {
-		t.Fatalf("Path 没改写成直链: %v", ms["Path"])
+	if !strings.HasPrefix(p, "/Videos/1/stream?") || ms["DirectStreamUrl"] != p {
+		t.Fatalf("播放地址未交给视频拦截入口: %v", ms)
 	}
-	if ms["SupportsDirectStream"] != false {
-		t.Fatalf("DirectStream 没关掉（会退回服务器转码）: %v", ms)
+	if ms["SupportsDirectStream"] != true || ms["SupportsDirectPlay"] != false {
+		t.Fatalf("客户端没有被引导至可重定向的流入口: %v", ms)
 	}
 	if ms["SupportsTranscoding"] != false {
 		t.Fatalf("Transcoding 没关掉: %v", ms)
@@ -108,7 +118,7 @@ func TestEmbyProxyRewritesAtRootPath(t *testing.T) {
 	assertDirectPlay(t, fetchRewritten(t, proxyURL+"/Items/1/PlaybackInfo"))
 }
 
-// 直链主机按客户端访问反代用的地址改写：strm 里残留的旧域名不该影响播放
+// 相对入口沿用客户端的协议，不把旧域名或不可信代理头拼进播放地址。
 func TestEmbyProxyRewritesHostToClientAddress(t *testing.T) {
 	proxyURL, _ := setupEmbyProxy(t)
 	ms := fetchRewritten(t, proxyURL+"/Items/1/PlaybackInfo")
@@ -116,7 +126,7 @@ func TestEmbyProxyRewritesHostToClientAddress(t *testing.T) {
 	if strings.Contains(p, "旧域名") {
 		t.Fatalf("strm 里的旧域名没被改掉: %s", p)
 	}
-	if !strings.HasPrefix(p, proxyURL) {
-		t.Fatalf("直链主机不是客户端访问的地址：%s（期望前缀 %s）", p, proxyURL)
+	if !strings.HasPrefix(p, "/Videos/") {
+		t.Fatalf("播放地址不是相对入口：%s", p)
 	}
 }

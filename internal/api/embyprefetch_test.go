@@ -12,8 +12,8 @@ func TestPickcodeOfDirectURL(t *testing.T) {
 	if pc := pickcodeOfDirectURL("http://h:6086/d/abc123?/Movie.2023.mkv"); pc != "abc123" {
 		t.Errorf("name hint: %q", pc)
 	}
-	// keepExt 的扩展名保留在 id 段（/d/ 端点自会处理）
-	if pc := pickcodeOfDirectURL("http://h:6086/d/abc123.mkv?/Movie.mkv"); pc != "abc123.mkv" {
+	// 预取和正式播放必须使用同一个规范化缓存键。
+	if pc := pickcodeOfDirectURL("http://h:6086/d/abc123.mkv?/Movie.mkv"); pc != "abc123" {
 		t.Errorf("keepExt: %q", pc)
 	}
 	// 非 /d/ 链接（如 123 盘）不误取

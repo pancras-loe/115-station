@@ -340,13 +340,13 @@ func truncateStr(s string, n int) string {
 }
 
 // apiCall 统一 API 调用：自动带 Bearer、过期刷新重试一次
-func (o *open115Client) apiCall(method, path string, query url.Values, form url.Values, out any) error {
+func (o *open115Client) apiCall(method, path string, query url.Values, form url.Values, out any, userAgent ...string) error {
 	throttle115(openBase) // 复用全局节流
 	token, err := o.ensureToken()
 	if err != nil {
 		return err
 	}
-	err = o.rawCall(token, method, path, query, form, out)
+	err = o.rawCall(token, method, path, query, form, out, userAgent...)
 	if err != nil && isOpenAuthErr(err) {
 		// token 失效：强制刷新后重试一次
 		t := o.loadToken()
@@ -357,14 +357,14 @@ func (o *open115Client) apiCall(method, path string, query url.Values, form url.
 		if rerr != nil {
 			return rerr
 		}
-		return o.rawCall(nt.AccessToken, method, path, query, form, out)
+		return o.rawCall(nt.AccessToken, method, path, query, form, out, userAgent...)
 	}
 	return err
 }
 
 // rawCall 发起一次带 Bearer 的请求（完成后推进全局节流锚点——apiCall 只在
 // 请求前 throttle，锚点不推进的话连续 OpenAPI 调用之间实际没有强制间隔）
-func (o *open115Client) rawCall(token, method, path string, query url.Values, form url.Values, out any) error {
+func (o *open115Client) rawCall(token, method, path string, query url.Values, form url.Values, out any, userAgent ...string) error {
 	full := openBase + path
 	if len(query) > 0 {
 		full += "?" + query.Encode()
@@ -377,7 +377,11 @@ func (o *open115Client) rawCall(token, method, path string, query url.Values, fo
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", openUA)
+	ua := openUA
+	if len(userAgent) > 0 {
+		ua = userAgent[0]
+	}
+	req.Header.Set("User-Agent", ua)
 	req.Header.Set("Authorization", "Bearer "+token)
 	if len(form) > 0 {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -796,10 +800,10 @@ func (o *open115Client) deleteFiles(fids []string) error {
 }
 
 // downloadURL 通过 pickcode 获取下载直链（LitePan ResolveDownload）
-func (o *open115Client) downloadURL(pickcode string) (string, error) {
+func (o *open115Client) downloadURL(pickcode string, userAgent ...string) (string, error) {
 	form := url.Values{"pick_code": {pickcode}}
 	var raw json.RawMessage
-	if err := o.apiCall(http.MethodPost, openPathDownurl, nil, form, &raw); err != nil {
+	if err := o.apiCall(http.MethodPost, openPathDownurl, nil, form, &raw, userAgent...); err != nil {
 		return "", err
 	}
 	u := openParseDownloadURL(raw)
@@ -1058,7 +1062,11 @@ func (o *pan115Ops) downloadURL(pickcode string) (string, error) {
 // ua 为签发 UA（空则用默认浏览器 UA）；直链与签发 UA 绑定，302 场景应传播放端 UA
 func (o *pan115Ops) downloadURLFull(pickcode, ua string) (string, map[string]string, error) {
 	if o.open != nil {
-		u, err := o.open.downloadURL(pickcode)
+		if ua == "" {
+			u, err := o.open.downloadURL(pickcode)
+			return u, nil, err
+		}
+		u, err := o.open.downloadURL(pickcode, ua)
 		return u, nil, err
 	}
 	return get115DownloadURL(pickcode, o.cookie, ua)
@@ -1088,7 +1096,7 @@ func proxyDownloadURL(db *gorm.DB, cfg *config.Config, pickcode, ua string) (str
 }
 
 // proxyDownloadURLFull 同 proxyDownloadURL，但一并返回直链要求的请求头
-// （含必须绑定的 User-Agent，服务端中转拉流时使用）
+// （含必须绑定的 User-Agent，后台下载时使用，播放出口会校验能否纯重定向）
 func proxyDownloadURLFull(db *gorm.DB, cfg *config.Config, pickcode, ua string) (string, map[string]string, error) {
 	// OpenAPI 通道（失败不直接报错——回退 Cookie 通道；OpenAPI 撞限流/额度
 	// 时 302 与补全探测不能整体失败，而 Cookie 明明可用）
@@ -1096,13 +1104,13 @@ func proxyDownloadURLFull(db *gorm.DB, cfg *config.Config, pickcode, ua string) 
 		// 通道粘滞：Cookie 通道近期成功过 → 先走 Cookie（OpenAPI 撞限流/
 		// 额度后短时间内大概率仍失败，跳过这次必败尝试）
 		if pref, ok := dlFastGet(); ok && pref.kind == "web" {
-			u, hdrs, err := get115DownloadURL(pickcode, cfgCookie(db, cfg), ua)
+			u, hdrs, err := get115DownloadURLForUA(pickcode, cfgCookie(db, cfg), ua)
 			if err == nil && u != "" {
 				return u, hdrs, nil
 			}
 			log.Printf("[直链] ○ 粘滞 Cookie 通道失败，回退 OpenAPI: %v", err)
 		}
-		u, err := oc.downloadURL(pickcode)
+		u, err := oc.downloadURL(pickcode, ua)
 		if err == nil && u != "" {
 			dlFastSet("open", 10*time.Minute)
 			return u, map[string]string{"User-Agent": ua}, nil
@@ -1114,5 +1122,5 @@ func proxyDownloadURLFull(db *gorm.DB, cfg *config.Config, pickcode, ua string) 
 	if cookie == "" {
 		return "", nil, fmt.Errorf("115 账号未绑定")
 	}
-	return get115DownloadURL(pickcode, cookie, ua)
+	return get115DownloadURLForUA(pickcode, cookie, ua)
 }

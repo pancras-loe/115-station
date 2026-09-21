@@ -220,7 +220,7 @@ func (h *Handler) handleOfflinePlay(c *gin.Context) {
 		return
 	}
 
-	// 快路径：已定位到 pickcode —— 与 /d/{pickcode} 同一条 302/中转出流路径
+	// 快路径：已定位到 pickcode —— 与 /d/{pickcode} 同一条纯 302 播放路径
 	if rec.PickCode != "" {
 		servePickcodeDirect(c, h.DB, h.Config, rec.PickCode)
 		return
