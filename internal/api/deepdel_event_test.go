@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,6 +20,7 @@ func eventTestHandler(t *testing.T, root string, rows []model.SyncedFile) *Handl
 	h := deepDelEmbyTestDB(t, root, rows)
 	h.DB.Model(&model.Setting{}).Where("key = ?", "deepdel").Update("value", `{"enabled":true,"notify":false}`)
 	h.DB.Exec("DELETE FROM deep_delete_records")
+	setDeepDelTestLibraries(t, h, []string{root}, http.StatusOK)
 	return h
 }
 

@@ -30,14 +30,16 @@ const reasonLabel: Record<string, string> = { local_scan: '历史扫描', emby_w
     <SectionCard title="深度删除" hint="收到 Emby 删除事件后，联动删除对应的网盘源文件">
       <NAlert type="info" :bordered="false">
         需先配置 Emby webhook。仅处理本次事件对应且本地已消失的文件，删除进入 115 回收站。
-        原生删除事件会在几秒内复核；同步任务正在运行时会等待其结束。
+        仅接受电影、单集、季、剧集事件；移除媒体库和普通文件夹不会触发源文件删除。
+        执行前核验 Emby 当前媒体库及本地缺失；同步任务运行时会等待其结束。
         不再定时扫描，直接在磁盘上删除 STRM 不会触发网盘删除。
       </NAlert>
       <FieldRow label="启用事件联动" tip="开启后接收原生 library.deleted 和神医助手 deep.delete。整理记录的深度删除按钮独立可用。">
         <NSwitch v-model:value="cfg.enabled" />
       </FieldRow>
       <NAlert v-if="cfg.enabled" type="warning" :bordered="false">
-        Emby 扫库清理失效条目也会发原生删除事件。系统会检查媒体库目录并复核本地确实已缺失，但无法仅凭原生事件区分删除原因。
+        请配置有效的 Emby 地址与 API 密钥，查询失败、媒体库已移除或目录不可访问时会拦截删除。
+        原生事件仍可能来自扫库清理，无法仅凭事件区分主动删除与文件丢失；剧/季目录缺少台账布局证据时也会拦截。
       </NAlert>
       <FieldRow label="清理网盘空目录" tip="影片/季目录空了就跟着删，再往上只删完全为空的目录，不会进入其他影片。也适用于整理记录删除。">
         <NSwitch v-model:value="cfg.prune_pan_dirs" />

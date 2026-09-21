@@ -37,6 +37,11 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	if !h.loadDeepDelCfg().Enabled {
 		return
 	}
+	kind, err := deepDelMediaType(payload)
+	if err != nil {
+		h.rejectDeepDelEvent(err.Error())
+		return
+	}
 	rels, pcs := h.deepDelLocators(payload, deep)
 	if len(rels) == 0 && len(pcs) == 0 {
 		log.Printf("[深度删除] ○ 事件缺少有效路径或 pickcode，跳过")
@@ -53,6 +58,10 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	defer fullSyncMu.Unlock()
 	cfg := h.loadDeepDelCfg()
 	if !cfg.Enabled {
+		return
+	}
+	if err := h.checkDeepDelScope(kind, rels); err != nil {
+		h.rejectDeepDelEvent(err.Error())
 		return
 	}
 	rows, matched, err := h.deepDelEventRows(rels, pcs)
@@ -110,6 +119,38 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	if !cfg.Enabled {
 		return
 	}
+	// pickcode 命中的行也必须经过真实库边界校验，不能绕过路径守卫。
+	targets := append([]string(nil), rels...)
+	for _, row := range rows {
+		targets = append(targets, row.RelPath)
+	}
+	if err := h.checkDeepDelLibraries(targets); err != nil {
+		h.rejectDeepDelEvent(err.Error())
+		return
+	}
+	// 网络核验期间本地文件可能恢复、开关也可能关闭；最后只收缩候选。
+	if !h.loadDeepDelCfg().Enabled {
+		return
+	}
+	current, _, err := h.deepDelEventRows(rels, pcs)
+	if err != nil {
+		h.rejectDeepDelEvent(err.Error())
+		return
+	}
+	missing := make(map[uint]bool, len(current))
+	for _, row := range current {
+		missing[row.ID] = true
+	}
+	confirmed := rows[:0]
+	for _, row := range rows {
+		if missing[row.ID] {
+			confirmed = append(confirmed, row)
+		}
+	}
+	rows = confirmed
+	if len(rows) == 0 {
+		return
+	}
 	videos, assets := countKinds(rows)
 	log.Printf("[深度删除] ○ 处理本次 Emby 事件：视频 %d / 附属 %d", videos, assets)
 	if _, err := execute(rows, "emby_webhook"); err != nil {
@@ -148,7 +189,12 @@ func (h *Handler) deepDelEventRows(rels, pcs []string) ([]model.SyncedFile, int,
 			return nil, 0, fmt.Errorf("事件路径越界或指向库根: %s", rel)
 		}
 		var part []model.SyncedFile
-		if err := h.DB.Where(`rel_path = ? OR rel_path LIKE ? ESCAPE '\'`, rel, likeEscape(rel)+"/%").Find(&part).Error; err != nil {
+		query := h.DB.Where("rel_path = ?", rel)
+		// STRM 文件永远精确匹配；目录范围已由媒体类型和剧/季布局单独核验。
+		if !strings.EqualFold(path.Ext(rel), ".strm") {
+			query = h.DB.Where(`rel_path LIKE ? ESCAPE '\'`, likeEscape(rel)+"/%")
+		}
+		if err := query.Find(&part).Error; err != nil {
 			return nil, 0, err
 		}
 		matches = append(matches, part...)
