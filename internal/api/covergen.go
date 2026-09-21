@@ -8,6 +8,7 @@ package api
 import (
 	"bytes"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -15,6 +16,7 @@ import (
 	"image/draw"
 	_ "image/jpeg"
 	"image/png"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -350,46 +352,37 @@ func (h *Handler) coverPushEmby(name string, pngData []byte) {
 	if !ok || apiKey == "" {
 		return
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
-	// 媒体库列表 → 名称匹配 ItemId
-	resp, err := client.Get(base + "/Library/VirtualFolders?api_key=" + url.QueryEscape(apiKey))
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-	var folders []struct {
-		Name   string `json:"Name"`
-		ItemID string `json:"ItemId"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&folders) != nil {
-		return
-	}
-	itemID := ""
-	for _, f := range folders {
-		if f.Name == name && f.ItemID != "" {
-			itemID = f.ItemID
-			break
-		}
-	}
+	// 媒体库列表 → 名称匹配 ItemId（解析形态见 embyVirtualFolderIds 的注释，
+	// 这里曾经自己抄过一份，两份对同一个端点的解析形状还不一样）
+	itemID := embyVirtualFolderIds(base, apiKey)[name]
 	if itemID == "" {
 		log.Printf("[封面生成] ○ Emby 中未找到同名媒体库「%s」，跳过推送", name)
 		return
 	}
+	// ⚠️ **图片要 base64 再发**：Emby / Jellyfin 的 POST /Items/{Id}/Images/{Type}
+	// 是把整个请求体当文本读进去再 Convert.FromBase64String 的，
+	// 直接 POST 原始 PNG 字节在服务端解码就会炸（此前一直这么发，推送必失败）。
+	// Emby Web 自己上传封面走的也是 FileReader.readAsDataURL 去掉头部的 base64
+	body := []byte(base64.StdEncoding.EncodeToString(pngData))
 	req, err := http.NewRequest(http.MethodPost,
 		base+"/Items/"+itemID+"/Images/Primary?api_key="+url.QueryEscape(apiKey),
-		bytes.NewReader(pngData))
+		bytes.NewReader(body))
 	if err != nil {
 		return
 	}
 	req.Header.Set("Content-Type", "image/png")
-	if resp2, err := client.Do(req); err == nil {
-		resp2.Body.Close()
-		if resp2.StatusCode >= 400 {
-			log.Printf("[封面生成] ✗ Emby 推送「%s」失败: HTTP %d", name, resp2.StatusCode)
-		} else {
-			log.Printf("[封面生成] ✓ 已推送 Emby 媒体库「%s」封面", name)
-		}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: %v", name, err)
+		return
 	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 400 {
+		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: HTTP %d", name, resp.StatusCode)
+		return
+	}
+	log.Printf("[封面生成] ✓ 已推送 Emby 媒体库「%s」封面", name)
 }
 
 // runCoverGen 生成全部媒体库封面；返回（生成数、库名列表、跳过的库名、错误）

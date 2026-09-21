@@ -86,23 +86,13 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		itemName = series + " " + ep
 	}
 
-	// 事件归类（stop 归入暂停/停止，需先于 play 判断，避免 "Playback start" 误命中；resume 归入播放）
-	category, title := "", ""
-	switch {
-	case strings.Contains(event, "test"):
+	category, title := embyEventCategory(event)
+	if category == "test" {
 		// Emby 侧点「测试通知」发来的连通测试事件：转发一条测试消息，方便确认全链路
 		log.Printf("[Emby Webhook] 收到 Emby 测试事件，转发连通测试通知")
 		go NotifyMessage("✅ Emby Webhook 连通测试", "Emby → 115-Station → 企微/TG 链路正常")
 		c.JSON(http.StatusOK, gin.H{"message": "ok（测试事件，已转发）"})
 		return
-	case strings.Contains(event, "add"):
-		category, title = "added", "🎬 Emby 入库"
-	case strings.Contains(event, "delete"), strings.Contains(event, "remove"):
-		category, title = "deleted", "🗑️ Emby 删除"
-	case strings.Contains(event, "pause"), strings.Contains(event, "stop"):
-		category, title = "pause", "⏸️ Emby 暂停/停止"
-	case strings.Contains(event, "play"), strings.Contains(event, "start"), strings.Contains(event, "resume"):
-		category, title = "play", "▶️ Emby 播放"
 	}
 	if category == "" {
 		log.Printf("[Emby Webhook] 未识别的事件类型 %q，已忽略", event)
@@ -147,6 +137,50 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	log.Printf("[Emby Webhook] %s %s", title, content)
 	go NotifyMessage(title, content)
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+}
+
+// embyEventCategory webhook 事件 → 归类 + 通知标题（event 已转小写）。
+//
+// ⚠️ **Emby 的入库事件叫 `library.new`，不叫 `item.added`。**
+// 此前这里判的是 `Contains(event, "add")`，`library.new` 一个字都对不上，
+// 于是整条 Emby 入库通知从来没响过 —— 更坑的是 embyrefresh 那边一旦发现
+// 配了 webhook 就会把自己那条「🎬 媒体入库」压掉（让位给带海报的富卡片），
+// 结果是配了 webhook 反而彻底收不到入库消息。事件名对照 qmediasync
+// `internal/controllers/emby.go`（`library.new` / `library.deleted`）。
+//
+// 判定取「最后一段动作词」而不是整串 Contains：Emby 事件形如 `playback.stop`、
+// `playback.unpause`，整串里都带着 "play"，按 Contains 的顺序去猜必然出错 ——
+// `playback.unpause`（继续播放）此前就被判成了「暂停」。
+// Jellyfin 的 NotificationType 没有点号（`ItemAdded` / `PlaybackStart`），
+// 整串就是动作词，同一套判定也能吃下。
+func embyEventCategory(event string) (category, title string) {
+	action := event
+	if i := strings.LastIndex(event, "."); i >= 0 {
+		action = event[i+1:]
+	}
+	has := func(sub string) bool { return strings.Contains(action, sub) }
+	switch {
+	case has("test"):
+		return "test", ""
+	case has("delete"), has("remove"):
+		return "deleted", "🗑️ Emby 删除"
+	// `library.new` 是 Emby 的入库事件；`device.new` 同样以 new 结尾，
+	// 但那是「发现新设备」，不能当入库报
+	case has("new") && !strings.HasPrefix(event, "device."), has("add"):
+		return "added", "🎬 Emby 入库"
+	// markplayed/markunplayed 是「标记已看」，带着 play 但不是播放事件
+	case has("mark"), has("progress"):
+		return "", ""
+	case has("stop"):
+		return "pause", "⏸️ Emby 暂停/停止"
+	case has("unpause"), has("resume"):
+		return "play", "▶️ Emby 播放"
+	case has("pause"):
+		return "pause", "⏸️ Emby 暂停/停止"
+	case has("play"), has("start"):
+		return "play", "▶️ Emby 播放"
+	}
+	return "", ""
 }
 
 // ---- 删除事件去重 ----

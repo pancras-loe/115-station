@@ -267,25 +267,38 @@ func embyRequest(method, base, apiKey, path string, query url.Values, body []byt
 	return (&http.Client{Timeout: 20 * time.Second}).Do(req)
 }
 
-// embyVirtualFolderIds 已有媒体库 名字 → ItemId（用于创建后固化库选项）
+// embyVirtualFolderIds 已有媒体库 名字 → ItemId（建库后固化库选项、推送库封面共用）。
+//
+// ⚠️ **`/Library/VirtualFolders` 回的是裸 JSON 数组**，不是 `{"Items":[…]}`；
+// 带 `{"Items":…}` 外层的是另一个端点 `/Library/VirtualFolders/Query`
+// （embyrefresh.go 用的那个）。此前这里按 Items 解析，解出来永远是空表，
+// 建库后那一步「固化库选项」于是静默跳过 —— 中文元数据 / NFO 本地保存
+// 这些选项压根没落到新建的库上。裸数组的形态见 qmediasync
+// `internal/embyclient-rest-go/emby_api.go` 的 GetLibraryVirtualFolders
 func embyVirtualFolderIds(base, apiKey string) map[string]string {
 	resp, err := embyRequest(http.MethodGet, base, apiKey, "/Library/VirtualFolders", nil, nil)
 	if err != nil {
+		log.Printf("[Emby] ✗ 取媒体库列表失败: %v", err)
 		return nil
 	}
 	defer resp.Body.Close()
-	var libs struct {
-		Items []struct {
-			Name   string `json:"Name"`
-			ItemID string `json:"ItemId"`
-		} `json:"Items"`
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[Emby] ✗ 取媒体库列表 HTTP %d（API 密钥填对了吗）", resp.StatusCode)
+		return nil
 	}
-	if json.NewDecoder(resp.Body).Decode(&libs) != nil {
+	var libs []struct {
+		Name   string `json:"Name"`
+		ItemID string `json:"ItemId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&libs); err != nil {
+		log.Printf("[Emby] ✗ 解析媒体库列表失败: %v", err)
 		return nil
 	}
 	m := map[string]string{}
-	for _, it := range libs.Items {
-		m[it.Name] = it.ItemID
+	for _, it := range libs {
+		if it.Name != "" && it.ItemID != "" {
+			m[it.Name] = it.ItemID
+		}
 	}
 	return m
 }

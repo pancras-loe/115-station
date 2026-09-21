@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -574,5 +575,38 @@ func TestNotifyEmbyDeletedRemovesAllItemsOnPath(t *testing.T) {
 
 	if len(f.deleted) != 2 {
 		t.Fatalf("同一路径上的条目应当全部删掉，实际 %v", f.deleted)
+	}
+}
+
+// 一批变更超过 embyItemRefreshMax 时跳过逐条查条目、直接整库刷新 ——
+// 整库刷新同样发现不了 Emby 还不知道的新目录，所以这些路径要一律如实报新增
+func TestNotifyEmbyRefreshAnnouncesLargeAddBatch(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+
+	var dirs []string
+	for i := 0; i < embyItemRefreshMax+1; i++ {
+		d := filepath.Join(root, "电影", fmt.Sprintf("新片%d (2026)", i))
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, d)
+	}
+	notifyEmbyPaths(dirs, embyRefreshAdded)
+
+	if len(f.itemPathQ) != 0 {
+		t.Fatalf("超过阈值就不该再逐条查条目: %v", f.itemPathQ)
+	}
+	if !f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("没有整库刷新，实际请求: %v", f.hits)
+	}
+	if len(f.updates) != len(dirs) {
+		t.Fatalf("新增路径没全部报出去：期望 %d 条，实际 %v", len(dirs), f.updates)
+	}
+	for _, u := range f.updates {
+		if u["UpdateType"] != "Created" {
+			t.Fatalf("UpdateType 不对: %v", u)
+		}
 	}
 }

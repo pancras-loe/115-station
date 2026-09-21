@@ -227,6 +227,13 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 				continue
 			}
 			log.Printf("[Emby] ○ %d 个路径未定位到条目，改为刷新整个媒体库 %s", len(rest), lib.Name)
+		} else if kind == embyRefreshAdded && !wholeLib[libID] {
+			// 变更太多、跳过了逐条查条目这一步：条目在不在无从得知，
+			// 一律如实报一次新增。整库刷新同样发现不了 Emby 还不知道的新目录，
+			// 而这条通知一次 POST 就报完所有路径，并不比逐条查贵
+			for _, t := range paths {
+				created = append(created, t.path)
+			}
 		}
 		if embyRefreshItem(cfg, lib.ID) {
 			refreshed = append(refreshed, lib.Name)
