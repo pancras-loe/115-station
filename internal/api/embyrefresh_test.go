@@ -23,8 +23,10 @@ type fakeEmby struct {
 	hits      []string // "METHOD /path"
 	itemPathQ []string // /Items 查询用的 Path 参数
 	updates   []map[string]string
+	deleted   []string         // 收到的删条目请求（条目 id）
 	libs      []map[string]any // /Library/VirtualFolders/Query 返回的虚拟库（含实际目录）
 	lookupHit bool             // /Items 是否返回匹配条目
+	deleteOK  bool             // 删条目是否放行；false = 模拟没开「允许删除媒体」
 	hitPath   string           // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
 	srv       *httptest.Server
 }
@@ -65,6 +67,16 @@ func newFakeEmbyLibs(t *testing.T, libs []map[string]any, lookupHit bool) *fakeE
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"Items": items})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/Refresh"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/Items/"):
+			if !f.deleteOK {
+				// 401 = API 密钥对应的用户没勾「允许删除媒体」，真实 Emby 的回法
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			f.mu.Lock()
+			f.deleted = append(f.deleted, strings.TrimPrefix(r.URL.Path, "/Items/"))
+			f.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/Library/Media/Updated":
 			body, _ := io.ReadAll(r.Body)
@@ -174,8 +186,10 @@ func TestNotifyEmbyDeletedClimbsToExistingParent(t *testing.T) {
 
 	notifyEmbyDeleted(gone)
 
-	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != filepath.ToSlash(alive) {
-		t.Fatalf("删除刷新的目标应当上移到 %s，实际 %v", filepath.ToSlash(alive), f.itemPathQ)
+	// 先按被删路径试删条目（本例模拟 Emby 不放行），再上移到存活父目录刷新
+	want := []string{filepath.ToSlash(gone), filepath.ToSlash(alive)}
+	if len(f.itemPathQ) != 2 || f.itemPathQ[0] != want[0] || f.itemPathQ[1] != want[1] {
+		t.Fatalf("删除应先试被删路径、再上移到存活父目录：期望 %v，实际 %v", want, f.itemPathQ)
 	}
 	if !f.sawHit("POST /Items/item9/Refresh") {
 		t.Fatalf("没有提交刷新，实际请求: %v", f.hits)
@@ -197,8 +211,18 @@ func TestNotifyEmbyDeletedDedupesTargets(t *testing.T) {
 		filepath.Join(alive, "某片 (2020)", "b.mkv.strm"),
 		filepath.Join(alive, "另一片 (2021)", "c.mkv.strm"),
 	)
-	if len(f.itemPathQ) != 1 {
+	// 三次删条目各查一次（本例模拟不放行），回退刷新时才折叠成一个目标
+	if len(f.itemPathQ) != 4 || f.itemPathQ[3] != filepath.ToSlash(alive) {
 		t.Fatalf("三个删除应折叠成一个刷新目标，实际 %v", f.itemPathQ)
+	}
+	refreshes := 0
+	for _, h := range f.hits {
+		if strings.HasSuffix(h, "/Refresh") {
+			refreshes++
+		}
+	}
+	if refreshes != 1 {
+		t.Fatalf("只该提交一次刷新，实际 %v", f.hits)
 	}
 }
 
@@ -213,7 +237,8 @@ func TestNotifyEmbyDeletedFallbackUsesDeletedUpdateType(t *testing.T) {
 	if err := os.MkdirAll(alive, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	notifyEmbyDeleted(filepath.Join(alive, "某片 (2020)", "a.mkv.strm"))
+	gone := filepath.Join(alive, "某片 (2020)", "a.mkv.strm")
+	notifyEmbyDeleted(gone)
 
 	if len(f.updates) != 1 {
 		t.Fatalf("应回退路径通知，实际 updates=%v hits=%v", f.updates, f.hits)
@@ -221,8 +246,10 @@ func TestNotifyEmbyDeletedFallbackUsesDeletedUpdateType(t *testing.T) {
 	if f.updates[0]["UpdateType"] != "Deleted" {
 		t.Fatalf("UpdateType 应为 Deleted，实际 %v", f.updates[0])
 	}
-	if f.updates[0]["Path"] != filepath.ToSlash(alive) {
-		t.Fatalf("回退通知的路径不对: %v", f.updates[0])
+	// 报的必须是被删的那个路径。报上移后的 电影/ 等于告诉 Emby
+	// 「整个电影目录没了」，它照着清库就是一场事故
+	if f.updates[0]["Path"] != filepath.ToSlash(gone) {
+		t.Fatalf("回退通知应报被删路径而不是存活父目录: %v", f.updates[0])
 	}
 }
 
@@ -387,7 +414,7 @@ func TestNotifyEmbyDeletedMappedMovieLibrary(t *testing.T) {
 	if !f.sawHit("POST /Items/lib1/Refresh") || len(f.updates) != 0 {
 		t.Fatalf("删除应命中电影库刷新，不应回退路径通知: hits=%v updates=%v", f.hits, f.updates)
 	}
-	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != "/media/影视/电影" {
+	if len(f.itemPathQ) != 2 || f.itemPathQ[1] != "/media/影视/电影" {
 		t.Fatalf("删除目标不应退回 /media: %v", f.itemPathQ)
 	}
 }
@@ -426,5 +453,94 @@ func TestNotifyEmbyRefreshMappedSecondLevelLibraries(t *testing.T) {
 	want := []string{"/映射目录/影视/电影/新片 (2026)", "/映射目录/影视/电影"}
 	if len(f.itemPathQ) != 2 || f.itemPathQ[0] != want[0] || f.itemPathQ[1] != want[1] {
 		t.Fatalf("上溯路径不对：期望 %v，实际 %v", want, f.itemPathQ)
+	}
+}
+
+// 删除的主路径：按被删路径查到条目就直接删掉，不再等 Emby 自己扫。
+// 实测只提交刷新的话，条目能在库里多挂几分钟，这期间点进去就是播放 404
+func TestNotifyEmbyDeletedRemovesItemDirectly(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+
+	alive := filepath.Join(root, "电影")
+	if err := os.MkdirAll(alive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(alive, "美国队长2.2014.{tmdbid=100402}")
+
+	notifyEmbyDeleted(gone)
+
+	if len(f.deleted) != 1 || f.deleted[0] != "item9" {
+		t.Fatalf("没有精确删掉条目，实际 deleted=%v hits=%v", f.deleted, f.hits)
+	}
+	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != filepath.ToSlash(gone) {
+		t.Fatalf("查条目用的应当是被删的那个路径: %v", f.itemPathQ)
+	}
+	for _, h := range f.hits {
+		if strings.HasSuffix(h, "/Refresh") {
+			t.Fatalf("条目已删掉，不该再刷新: %v", f.hits)
+		}
+	}
+	if len(f.updates) != 0 {
+		t.Fatalf("条目已删掉，不该再发路径通知: %v", f.updates)
+	}
+}
+
+// 本地路径还在 = 不是真删除，绝不能让 Emby 去删（它会连磁盘文件一起删）
+func TestNotifyEmbyDeletedNeverDeletesLivingPath(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+
+	live := filepath.Join(root, "电影", "还在的片 (2020)")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(live)
+
+	if len(f.deleted) != 0 {
+		t.Fatalf("本地还在的路径不该删条目: %v", f.deleted)
+	}
+}
+
+// 挂载掉线：整个库的路径都会「不存在」，这时候一个删除请求都不许发
+func TestNotifyEmbyDeletedNeverDeletesWhenRootGone(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(filepath.Join(root, "电影", "某片 (2020)", "a.mkv.strm"))
+
+	if len(f.hits) != 0 {
+		t.Fatalf("挂载掉线时一个请求都不该发，实际: %v", f.hits)
+	}
+}
+
+// 网盘上删掉一整个分类目录时，媒体库目录自己绝不能被当成条目删掉 ——
+// 删一个库条目就是整个媒体库从 Emby 消失
+func TestNotifyEmbyDeletedNeverDeletesLibraryRoot(t *testing.T) {
+	root := t.TempDir()
+	lib := filepath.Join(root, "影视", "电影")
+	f := newFakeEmbyLibs(t, []map[string]any{
+		{"ItemId": "movie", "Name": "电影", "Locations": []string{filepath.ToSlash(lib)}},
+	}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.MkdirAll(filepath.Join(root, "影视"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(lib) // 电影/ 整个没了
+
+	if len(f.deleted) != 0 {
+		t.Fatalf("媒体库目录不该被当成条目删掉: %v", f.deleted)
 	}
 }

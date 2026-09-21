@@ -21,10 +21,18 @@ import (
 // 表现就是新增看着像正常（实际是 Emby 自己的实时监控/定时扫库兜的底），
 // 删除完全不生效 —— 文件没了条目还在，点进去播放 404。
 //
-// 删除为什么还是走「刷新」而不是「删条目」：Emby 对文件夹条目做 Recursive 刷新
-// 时会跑一遍 ValidateChildren，文件已经不在的子条目就是在这一步被清掉的。
-// 三个参考项目都没有调删除条目的 API，我们也不调 —— 自己判断该删哪个条目，
-// 判错一次就是把用户还在的片子从库里抹掉。
+// 删除为什么不能只靠刷新（2026-09-21 实测改的结论）：刷新只是把「重新扫一遍」
+// 排进 Emby 的队列，什么时候扫到是 Emby 说了算。实测网盘删片 → 本地 strm 立刻没了，
+// Emby 里的条目又挂了 9 分钟才消失（library.deleted webhook 为证），这期间点进去
+// 就是播放 404 —— 正是用户要我们解决的那个现象。
+//
+// 参考项目在这一步都是空白：MoviePilot 的 emby 模块全文没有删除条目的调用，
+// p115strmhelper 的 refresh_mediaserver 只在新增 strm 的分支里调，remove() 删完
+// 本地文件就结束了。它们都在等 Emby 自己的媒体库监控/定时扫描。
+//
+// 所以删除走「先精确删条目、删不掉再刷新」：按路径查到条目 id 再 DELETE /Items/{Id}，
+// 立刻生效。怕删错是对的，护栏是 embyDeleteItems 里那道「本地路径确实已经不存在」
+// 的检查 —— 只删我们自己刚删掉的那一个路径，路径还在就一律不碰。
 
 // embyRefreshKind 刷新场景。删除与新增有三处不一样：
 // 目标路径在本地已经不存在（得上移到最近的存活父目录才找得到 Emby 条目）、
@@ -106,7 +114,8 @@ func notifyEmbyDeleted(localPaths ...string) {
 
 // notifyEmbyPaths 通知 Emby 一批本地路径发生了变化。
 //
-// 三级策略，逐级降级：
+// 删除场景先试一次「按路径精确删条目」，成功的就不必再刷新了。
+// 剩下的（以及全部新增场景）走三级策略，逐级降级：
 //  1. 按路径定位到具体条目，只刷那一个（万级库不必整库扫）
 //  2. 定位不到就刷该路径所属的媒体库条目
 //  3. 路径不属于任何媒体库（路径映射配错了？）→ /Library/Media/Updated 报路径
@@ -119,13 +128,31 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		return
 	}
 
+	// 媒体库列表懒加载：删条目与下面的分桶共用一次查询，
+	// 而挂载掉线那种「一个请求都不该发」的情况下一次也不查
+	var libs []embyMediaFolder
+	libsLoaded := false
+	loadLibs := func() []embyMediaFolder {
+		if !libsLoaded {
+			libs, libsLoaded = embyMediaFolders(cfg), true
+		}
+		return libs
+	}
+
+	if kind == embyRefreshDeleted {
+		// 精确删掉的路径不再进入刷新流程；全删干净就整轮结束
+		if localPaths = embyDeleteItems(cfg, loadLibs, localPaths); len(localPaths) == 0 {
+			return
+		}
+	}
+
 	targets := embyTargetPaths(localPaths, cfg, kind)
 	if len(targets) == 0 {
 		return
 	}
 
 	// 变更路径分桶到所属媒体库
-	libs := embyMediaFolders(cfg)
+	libs = loadLibs()
 	byID := map[string]embyMediaFolder{}
 	buckets := map[string][]embyTarget{}
 	wholeLib := map[string]bool{} // 只能整库刷的桶（目标路径在库之上，没有更小的条目可刷）
@@ -162,7 +189,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 			}
 		}
 		if !covered {
-			unmatched = append(unmatched, t.path)
+			unmatched = append(unmatched, t.reportPaths()...)
 		}
 	}
 
@@ -193,7 +220,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		}
 		log.Printf("[Emby] ✗ 媒体库刷新失败：%s（%s），回退路径通知", lib.Name, lib.ID)
 		for _, t := range paths {
-			unmatched = append(unmatched, t.path)
+			unmatched = append(unmatched, t.reportPaths()...)
 		}
 	}
 
@@ -224,8 +251,20 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 // 刚落盘的新片目录 Emby 还没建条目，这时候命中的是它的父目录 —— 刷父目录
 // 同样能让 Emby 发现新文件，比整库扫一遍便宜得多
 type embyTarget struct {
-	path      string   // 主目标（分桶与回退通知用它）
+	path      string   // 主目标（分桶用它）
 	ancestors []string // path 自己排第一，之后逐级向上，到本地媒体库根为止
+	// origins 删除场景里上移之前那些真正被删掉的 Emby 路径。
+	// 回退通知必须报它们而不是 path：path 是还活着的父目录，
+	// 拿它去报 UpdateType=Deleted 等于告诉 Emby「整个 电影 目录没了」
+	origins []string
+}
+
+// reportPaths 回退给 /Library/Media/Updated 的路径
+func (t embyTarget) reportPaths() []string {
+	if len(t.origins) > 0 {
+		return t.origins
+	}
+	return []string{t.path}
 }
 
 // embyTargetPaths 本地路径 → 去重后的刷新目标。
@@ -239,21 +278,17 @@ func embyTargetPaths(localPaths []string, cfg embyRefreshCfg, kind embyRefreshKi
 	underRoot := func(x string) bool {
 		return x == root || strings.HasPrefix(x, root+string(filepath.Separator))
 	}
-	toEmby := func(local string) string {
-		ep := mapLocalToEmbyPath(cfg.PathMapping, local)
-		if cfg.Style == "windows" {
-			ep = strings.ReplaceAll(ep, "/", "\\")
-		}
-		return ep
-	}
+	toEmby := func(local string) string { return embyPathOf(cfg, local) }
 
 	out := make([]embyTarget, 0, len(localPaths))
-	seen := map[string]bool{}
+	seen := map[string]int{} // Emby 路径 → out 下标
 	for _, p := range localPaths {
 		if p == "" {
 			continue
 		}
+		origin := ""
 		if kind == embyRefreshDeleted {
+			origin = toEmby(filepath.Clean(p))
 			if p = nearestExistingDir(p, root); p == "" {
 				continue
 			}
@@ -278,13 +313,105 @@ func embyTargetPaths(localPaths []string, cfg embyRefreshCfg, kind embyRefreshKi
 			continue
 		}
 		t.path = t.ancestors[0]
-		if seen[t.path] {
+		if origin != "" {
+			t.origins = []string{origin}
+		}
+		// 同一个存活父目录下的多次删除折叠成一个刷新目标，
+		// 但各自被删的原路径都要留下 —— 回退通知一条都不能少
+		if i, dup := seen[t.path]; dup {
+			out[i].origins = append(out[i].origins, t.origins...)
 			continue
 		}
-		seen[t.path] = true
+		seen[t.path] = len(out)
 		out = append(out, t)
 	}
 	return out
+}
+
+// embyPathOf 本地路径 → Emby 看到的路径（映射规则 + 路径风格）
+func embyPathOf(cfg embyRefreshCfg, local string) string {
+	ep := mapLocalToEmbyPath(cfg.PathMapping, local)
+	if cfg.Style == "windows" {
+		ep = strings.ReplaceAll(ep, "/", "\\")
+	}
+	return ep
+}
+
+// embyDeleteItems 按路径精确删除 Emby 条目，返回没删成、要回退刷新的本地路径。
+//
+// 这是删除链路上唯一「立刻生效」的手段：刷新只是排队等 Emby 扫，
+// 实测能拖到 9 分钟，这期间条目还在库里挂着，点进去播放 404。
+//
+// 安全护栏只有一条，但够用：**本地路径必须确实已经不存在**。
+// Emby 的 DELETE /Items/{Id} 连带删磁盘文件，所以绝不能对还活着的路径动手；
+// 而走到这里的路径都是本站自己刚删掉的，再 Stat 一次确认没了才发请求。
+// 条目路径也要与映射后的路径【完全相等】才算命中（embyItemIDByPath 里比的）
+func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, localPaths []string) []string {
+	root := filepath.Clean(localMediaRoot())
+	rest := make([]string, 0, len(localPaths))
+	for _, local := range dedupeStrings(localPaths) {
+		if local == "" {
+			continue
+		}
+		// 「本地没了」这个判断在挂载掉线时对整个库都成立 —— 那一刻按路径删条目
+		// 就是把整个媒体库从 Emby 里抹掉。nearestExistingDir 要求路径在库内、
+		// 且往上能找到一个还活着的目录，根都没了就返回空，这一轮谁也不碰
+		if nearestExistingDir(local, root) == "" {
+			rest = append(rest, local)
+			continue
+		}
+		if _, err := os.Stat(local); err == nil {
+			// 还在：不是真删除（可能只是整理搬走了同名文件），交给刷新
+			rest = append(rest, local)
+			continue
+		}
+		ep := embyPathOf(cfg, local)
+		// 只删严格在媒体库目录【之下】的东西。库目录自己对应的是 Emby 的库条目，
+		// 删它等于整个媒体库从 Emby 消失 —— 网盘上删掉一整个分类目录时就会撞上
+		if !embyPathStrictlyUnder(ep, loadLibs()) {
+			rest = append(rest, local)
+			continue
+		}
+		id, name := embyItemIDByPath(cfg, ep)
+		if id == "" || !embyDeleteItem(cfg, id) {
+			rest = append(rest, local)
+			continue
+		}
+		log.Printf("[Emby] ○ 已删除条目：%s —— %s", name, ep)
+	}
+	return rest
+}
+
+// embyDeleteItem DELETE /Items/{Id}。
+// Emby 同时注册了 POST /Items/{Id}/Delete，DELETE 被反代拦掉（405）时用它兜底。
+// 403/401 一般是 API 密钥对应的用户没开「允许删除媒体」，日志里说清楚，
+// 调用方会退回刷新，不至于整条链路哑掉
+func embyDeleteItem(cfg embyRefreshCfg, itemID string) bool {
+	try := func(method, path string) (int, bool) {
+		resp, err := embyRequest(method, cfg.ServerURL, cfg.APIKey, path, nil, nil)
+		if err != nil {
+			log.Printf("[Emby] ✗ 删除条目请求失败 %s: %v", itemID, err)
+			return 0, false
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, resp.StatusCode >= 200 && resp.StatusCode < 300
+	}
+	code, ok := try(http.MethodDelete, "/Items/"+itemID)
+	if ok {
+		return true
+	}
+	if code == http.StatusMethodNotAllowed || code == http.StatusNotFound {
+		if _, ok := try(http.MethodPost, "/Items/"+itemID+"/Delete"); ok {
+			return true
+		}
+	}
+	if code == http.StatusUnauthorized || code == http.StatusForbidden {
+		log.Printf("[Emby] ✗ 删除条目被拒（HTTP %d，条目 %s）—— API 密钥对应的用户要勾上「允许删除媒体」", code, itemID)
+		return false
+	}
+	log.Printf("[Emby] ✗ 删除条目失败（HTTP %d，条目 %s），回退刷新", code, itemID)
+	return false
 }
 
 // embyResolveItem 沿祖先链找第一个 Emby 认识的条目，出了媒体库就停。
@@ -361,6 +488,24 @@ func embyLocationsUnder(locations []string, ancestor string) bool {
 	return false
 }
 
+// embyPathStrictlyUnder 路径是否严格落在某个媒体库目录【之下】。
+// 与 embyPathUnder 的区别就是不含库目录本身，删条目前的护栏专用
+func embyPathStrictlyUnder(embyPath string, libs []embyMediaFolder) bool {
+	p := strings.TrimRight(strings.ReplaceAll(embyPath, "\\", "/"), "/")
+	if p == "" {
+		return false
+	}
+	for _, lib := range libs {
+		for _, loc := range lib.Locations {
+			l := strings.TrimRight(strings.ReplaceAll(loc, "\\", "/"), "/")
+			if l != "" && strings.HasPrefix(p, l+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // embyMediaFolder 使用虚拟库的实际目录，而不是 MediaFolders 的条目路径。
 // 官方 VirtualFolders/Query 返回 Locations 与 ItemId；MediaFolders 的 BaseItemDto
 // 没有 Locations，按它匹配会把所有媒体库都当成路径映射错误。
@@ -410,9 +555,13 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 // 会把整个库倒出来。比不中就返回空，调用方退到整库刷新，不会误刷别的条目
 func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
 	q := url.Values{
-		"Path":                   {embyPath},
-		"Recursive":              {"true"},
-		"Fields":                 {"Path"},
+		"Path":      {embyPath},
+		"Recursive": {"true"},
+		"Fields":    {"Path"},
+		// 不带类型过滤时 Emby 不一定把 Folder 吐出来，而网盘里删掉的常常
+		// 正是「片名.年份.{tmdbid=…}」这种目录（实测它在 Emby 里就是 Type=Folder）。
+		// 类型清单抄 p115strmhelper 的 get_item_id_by_path，另加剧集季与裸视频
+		"IncludeItemTypes":       {"Movie,Series,Season,Episode,Video,Folder"},
 		"Limit":                  {"50"},
 		"EnableTotalRecordCount": {"false"},
 	}
