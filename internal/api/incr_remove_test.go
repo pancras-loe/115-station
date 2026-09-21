@@ -25,7 +25,7 @@ func TestRemoveSyncedItemLevel2UsesLibPrefix(t *testing.T) {
 	os.WriteFile(abs, []byte("x"), 0o644)
 
 	ev := model.SyncEvent{Type: evDelete, FileID: "无台账", Cid: "d1", FileName: "片.mkv"}
-	if !h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) {
+	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) == "" {
 		t.Fatal("应能通过路径推导定位并删除")
 	}
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
@@ -48,7 +48,7 @@ func TestRemoveSyncedItemLevel2DeletesDirectory(t *testing.T) {
 	}
 
 	ev := model.SyncEvent{Type: evDelete, FileID: "dir-x", Cid: "d1", FileName: "某剧", FileCat: "0"}
-	if !h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) {
+	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) == "" {
 		t.Fatal("整目录删除应成功")
 	}
 	if _, err := os.Stat(filepath.Join(p.LocalPath, "媒体库", "剧集", "X", "某剧")); !os.IsNotExist(err) {
@@ -94,7 +94,7 @@ func TestRemoveSyncedItemGivesUpWithoutScope(t *testing.T) {
 
 	// cid 解析不出相对路径
 	ev := model.SyncEvent{Type: evDelete, FileID: "无台账", Cid: "未知目录", FileName: "片.mkv"}
-	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) {
+	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) != "" {
 		t.Fatal("推不出范围时不该报告删除成功")
 	}
 	if _, err := os.Stat(abs); err != nil {
@@ -112,7 +112,7 @@ func TestRemoveSyncedItemLevel1LedgerFirst(t *testing.T) {
 	model.DB.Create(&model.SyncedFile{FileID: "f-1", RelPath: rel, Kind: "video"})
 
 	ev := model.SyncEvent{Type: evDelete, FileID: "f-1", Cid: "d1", FileName: "片.mkv"}
-	if !h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) {
+	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) == "" {
 		t.Fatal("台账有记录时应直接命中第 1 级")
 	}
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {

@@ -401,6 +401,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		return path.Join(libName, strings.TrimPrefix(panAbs, base+"/")), true
 	}
 
+	// 删除与移动旧路径单独收集，避免新增目录或同步根覆盖实际清理范围。
+	var deletedPaths []string
+	var relocatedPaths []string
 	// relocateDir 目录改名/移动：本地跟着搬。oldPanAbs 来自路径缓存，
 	// 拿不到就返回 false 让调用方回退重遍历
 	relocateDir := func(ev model.SyncEvent, oldPanAbs string) bool {
@@ -416,7 +419,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if !ok1 || !ok2 {
 			return false
 		}
-		return h.relocateLocalDir(oldRel, newRel, p.LocalPath)
+		if !h.relocateLocalDir(oldRel, newRel, p.LocalPath) {
+			return false
+		}
+		deletedPaths = append(deletedPaths, filepath.Join(p.LocalPath, filepath.FromSlash(oldRel)))
+		relocatedPaths = append(relocatedPaths, filepath.Join(p.LocalPath, filepath.FromSlash(newRel)))
+		return true
 	}
 
 	// 本轮受影响的最浅目录（Emby 定向刷新用，传库根=全刷）。
@@ -514,11 +522,13 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				continue
 			case "library":
 				// 精确删除：台账 → 路径推导（支持整目录删除与无台账的旧文件）
-				if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, false, false) {
+				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, false, false); removed != "" {
+					deletedPaths = append(deletedPaths, removed)
 					sum.Deleted++
 				}
 			default: // unknown（cid=0 等）：仅按台账名称匹配，静默处理
-				if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, false) {
+				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, false); removed != "" {
+					deletedPaths = append(deletedPaths, removed)
 					sum.Deleted++
 				} else {
 					sum.Ignored++
@@ -539,7 +549,8 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			}
 			// 移动/改名：清理旧位置只按台账精确匹配（事件的 Cid/FileName 均为
 			// 新位置信息，模糊删除会误删库内同名字幕树），新位置精确重建或回退遍历
-			if h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, true) {
+			if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, true); removed != "" {
+				deletedPaths = append(deletedPaths, removed)
 				sum.Moved++
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
@@ -727,11 +738,15 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	if sum.StrmCreated+sum.AssetsDownloaded > 0 {
 		d.notifyRefresh(refreshBase)
 	}
+	// 目录整体搬迁没有重新生成 STRM，也需要让 Emby 发现新位置。
+	for _, movedPath := range dedupeStrings(relocatedPaths) {
+		d.notifyRefresh(movedPath)
+	}
 	// 删除/移动要单独报一次「删除」：Emby 侧的条目不会因为文件没了自己消失，
 	// 不通知的话网盘删了片子、strm 也删了，Emby 里条目还在，点进去播放 404。
 	// 与新增分开发是因为删除场景要先把目标上移到还存在的父目录（见 notifyEmbyDeleted）
-	if sum.Deleted+sum.Moved > 0 {
-		d.notifyDeleted(refreshBase)
+	if len(deletedPaths) > 0 {
+		d.notifyDeleted(dedupeStrings(deletedPaths)...)
 	}
 	sum.Elapsed = time.Since(incrStart).Truncate(time.Second).String()
 
@@ -838,22 +853,23 @@ func (h *Handler) relocateLocalDir(oldRel, newRel, localRoot string) bool {
 }
 
 // removeSyncedFile 按文件 id 从台账定位并删除本地文件（仅删除本工具生成过的文件）
-func (h *Handler) removeSyncedFile(fileID, localRoot string) bool {
+// 返回清理成功的本地路径，供调用方通知 Emby；空串表示未清理。
+func (h *Handler) removeSyncedFile(fileID, localRoot string) string {
 	if fileID == "" {
-		return false
+		return ""
 	}
 	var sf model.SyncedFile
 	if err := h.DB.Where("file_id = ?", fileID).First(&sf).Error; err != nil {
-		return false // 台账无记录（从未同步过），无需处理
+		return "" // 台账无记录（从未同步过），无需处理
 	}
 	full := filepath.Join(localRoot, filepath.FromSlash(sf.RelPath))
 	if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
 		vlog("[同步] 清理失败 %s: %v", full, err)
-		return false
+		return ""
 	}
 	h.DB.Delete(&sf)
 	vlog("[同步] 已清理: %s", sf.RelPath)
-	return true
+	return full
 }
 
 // removeSyncedItem 清理 move/rename/delete 事件的旧位置，三级定位：
@@ -868,16 +884,17 @@ func (h *Handler) removeSyncedFile(fileID, localRoot string) bool {
 // （LIKE %/名/% 整树删、全盘同名删）都会指向错误目标——工作区里与库内
 // 同名的文件（重复转存同名片名极常见）会被误删媒体库 STRM 树。
 // delete 事件（Cid=被删位置）才允许全级联
-func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libName, localRoot string, quiet, ledgerOnly bool) bool {
+// 返回实际清理路径，保留台账/兜底定位的结果，避免通知时重新猜测目录。
+func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libName, localRoot string, quiet, ledgerOnly bool) string {
 	// 1) 台账精确匹配
-	if ev.FileID != "" && h.removeSyncedFile(ev.FileID, localRoot) {
-		return true
+	if removed := h.removeSyncedFile(ev.FileID, localRoot); removed != "" {
+		return removed
 	}
 	if ledgerOnly {
 		if !quiet {
 			log.Printf("[同步] ○ 移动/改名无台账记录，跳过清理: %s（file_id=%s）", ev.FileName, ev.FileID)
 		}
-		return false
+		return ""
 	}
 	// 事件所在目录的本地相对路径（**含库名前缀**）。
 	// 台账里的 rel_path 一律带库名（applySyncResults 写的是 path.Join(f.Path, …)，
@@ -899,11 +916,11 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 			if st, err := os.Stat(local); err == nil && st.IsDir() {
 				if err := os.RemoveAll(local); err != nil {
 					log.Printf("[同步] 删除本地目录失败 %s: %v", rel, err)
-					return false
+					return ""
 				}
 				h.DB.Where("rel_path = ? OR rel_path LIKE ?", rel, rel+"/%").Delete(&model.SyncedFile{})
 				log.Printf("[同步] 目录删除-执行成功: %s", rel)
-				return true
+				return local
 			}
 			// 文件：strm 与附属实体两种形态
 			for _, cand := range []struct{ rel, suffix string }{{rel, ".strm"}, {rel, ""}} {
@@ -911,11 +928,11 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				if _, err := os.Stat(full); err == nil {
 					if err := os.Remove(full); err != nil {
 						log.Printf("[同步] 删除本地文件失败 %s: %v", cand.rel+cand.suffix, err)
-						return false
+						return ""
 					}
 					h.DB.Where("rel_path = ?", cand.rel+cand.suffix).Delete(&model.SyncedFile{})
 					vlog("[同步] 已清理: %s", cand.rel+cand.suffix)
-					return true
+					return full
 				}
 			}
 		}
@@ -933,7 +950,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				}
 				h.DB.Delete(&sf)
 				vlog("[同步] 已清理: %s", sf.RelPath)
-				return true
+				return full
 			}
 		}
 		// 目录事件：台账中出现过该名称路径段的，按最浅前缀整树删除
@@ -957,7 +974,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 			if err := os.RemoveAll(full); err == nil {
 				h.DB.Where("rel_path = ? OR rel_path LIKE ?", bestPrefix, bestPrefix+"/%").Delete(&model.SyncedFile{})
 				log.Printf("[同步] ✓ 本地目录已清理: %s", bestPrefix)
-				return true
+				return full
 			}
 		}
 	}
@@ -993,7 +1010,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				rel, _ := filepath.Rel(localRoot, hitDir)
 				h.DB.Where("rel_path = ? OR rel_path LIKE ?", filepath.ToSlash(rel), filepath.ToSlash(rel)+"/%").Delete(&model.SyncedFile{})
 				log.Printf("[同步] ✓ 本地目录已清理: %s", rel)
-				return true
+				return hitDir
 			}
 		}
 		if hitFile != "" {
@@ -1001,7 +1018,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				rel, _ := filepath.Rel(localRoot, hitFile)
 				h.DB.Where("rel_path = ?", filepath.ToSlash(rel)).Delete(&model.SyncedFile{})
 				log.Printf("[同步] ✓ 本地文件已清理: %s", rel)
-				return true
+				return hitFile
 			}
 		}
 	}
@@ -1012,7 +1029,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 			log.Printf("[同步] ○ 本地未找到对应文件: %s", ev.FileName)
 		}
 	}
-	return false
+	return ""
 }
 
 // insertSyncEvents 批量插入生活事件（OnConflict DoNothing），返回**真正新插入**的那些行。

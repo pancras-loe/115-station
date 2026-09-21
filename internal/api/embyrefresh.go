@@ -361,16 +361,18 @@ func embyLocationsUnder(locations []string, ancestor string) bool {
 	return false
 }
 
-// embyMediaFolder /Library/MediaFolders 返回的媒体库条目。
-// Id 就是媒体库的条目 id，可以直接拿去 /Items/{Id}/Refresh（qmediasync 同款）
+// embyMediaFolder 使用虚拟库的实际目录，而不是 MediaFolders 的条目路径。
+// 官方 VirtualFolders/Query 返回 Locations 与 ItemId；MediaFolders 的 BaseItemDto
+// 没有 Locations，按它匹配会把所有媒体库都当成路径映射错误。
 type embyMediaFolder struct {
 	ID        string   `json:"Id"`
+	ItemID    string   `json:"ItemId"`
 	Name      string   `json:"Name"`
 	Locations []string `json:"Locations"`
 }
 
 func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
-	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Library/MediaFolders", nil, nil)
+	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Library/VirtualFolders/Query", nil, nil)
 	if err != nil {
 		log.Printf("[Emby] ✗ 取媒体库列表失败: %v", err)
 		return nil
@@ -384,10 +386,21 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 	var libs struct {
 		Items []embyMediaFolder `json:"Items"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&libs) != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&libs); err != nil {
+		log.Printf("[Emby] ✗ 解析媒体库目录失败: %v", err)
 		return nil
 	}
-	return libs.Items
+	valid := make([]embyMediaFolder, 0, len(libs.Items))
+	for _, lib := range libs.Items {
+		// ItemId 是供 Items 刷新使用的标识；兼容只返回 Id 的版本。
+		if lib.ItemID != "" {
+			lib.ID = lib.ItemID
+		}
+		if lib.ID != "" {
+			valid = append(valid, lib)
+		}
+	}
+	return valid
 }
 
 // embyItemIDByPath 按路径查 Emby 条目 id（做法取自 p115strmhelper 的

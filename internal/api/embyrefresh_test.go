@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,7 +23,7 @@ type fakeEmby struct {
 	hits      []string // "METHOD /path"
 	itemPathQ []string // /Items 查询用的 Path 参数
 	updates   []map[string]string
-	locations []string // /Library/MediaFolders 返回的库目录
+	locations []string // /Library/VirtualFolders/Query 返回的实际库目录
 	lookupHit bool     // /Items 是否返回匹配条目
 	hitPath   string   // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
 	srv       *httptest.Server
@@ -38,9 +39,14 @@ func newFakeEmby(t *testing.T, locations []string, lookupHit bool) *fakeEmby {
 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/Library/MediaFolders":
+			// 此接口只有条目，不能伪造 Locations 来掩盖生产代码的接口错误。
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Items": []map[string]any{{"Id": "lib1", "Name": "电影", "Path": "/config/root/default/电影"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/Library/VirtualFolders/Query":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Items": []map[string]any{
-					{"Id": "lib1", "Name": "电影", "Locations": f.locations},
+					{"ItemId": "lib1", "Name": "电影", "Locations": f.locations},
 				},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/Items":
@@ -324,5 +330,60 @@ func TestMapLocalToEmbyPath(t *testing.T) {
 	// path_mapping 形如 本地根#Emby挂载根，本地根以 full.local_path 为准
 	if got := mapLocalToEmbyPath(root+"#/media", local); got != "/media/电影/某片.strm" {
 		t.Fatalf("映射结果不对: %q", got)
+	}
+}
+
+func TestEmbyMediaFoldersVirtualLibraryResponse(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   []embyMediaFolder
+	}{
+		{"真实目录和条目标识", 200, `{"Items":[{"Id":"other-id","ItemId":"42","Name":"电影","Locations":["/media/影视/电影","/archive/电影"]}]}`,
+			[]embyMediaFolder{{ID: "42", ItemID: "42", Name: "电影", Locations: []string{"/media/影视/电影", "/archive/电影"}}}},
+		{"只有新版标识", 200, `{"Items":[{"Id":"43","Name":"剧集","Locations":["/media/影视/剧集"]}]}`,
+			[]embyMediaFolder{{ID: "43", Name: "剧集", Locations: []string{"/media/影视/剧集"}}}},
+		{"缺失标识不刷新", 200, `{"Items":[{"Name":"电影","Locations":["/media/影视/电影"]}]}`, []embyMediaFolder{}},
+		{"鉴权失败", 401, `{}`, nil},
+		{"响应损坏", 200, `{`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/Library/VirtualFolders/Query" {
+					t.Errorf("查询了错误接口: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			got := embyMediaFolders(embyRefreshCfg{ServerURL: srv.URL, APIKey: "test"})
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("媒体库解析错误: got=%+v want=%+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNotifyEmbyDeletedMappedMovieLibrary(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{"/media/影视/电影"}, false)
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	cfg, _ := json.Marshal(embyRefreshCfg{ServerURL: f.srv.URL, APIKey: "k", PathMapping: root + "#/media"})
+	if err := notifyConfigSource.SaveSetting("emby", string(cfg)); err != nil {
+		t.Fatal(err)
+	}
+	alive := filepath.Join(root, "影视", "电影")
+	if err := os.MkdirAll(alive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notifyEmbyDeleted(filepath.Join(alive, "海洋奇缘：启航.2026.{tmdbid=1108427}"))
+	if !f.sawHit("POST /Items/lib1/Refresh") || len(f.updates) != 0 {
+		t.Fatalf("删除应命中电影库刷新，不应回退路径通知: hits=%v updates=%v", f.hits, f.updates)
+	}
+	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != "/media/影视/电影" {
+		t.Fatalf("删除目标不应退回 /media: %v", f.itemPathQ)
 	}
 }
