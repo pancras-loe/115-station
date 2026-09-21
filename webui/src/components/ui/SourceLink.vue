@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 来源链接一行：类型徽标 + 截断的链接 + 复制按钮（http/分享链接再挂一个打开）。
- * 离线任务卡片与整理记录都用它，样式统一，不占版面。
+ * 下载记录与整理记录都用它，样式统一，不占版面。
  */
 import { computed, ref } from 'vue'
 import { NTooltip } from 'naive-ui'

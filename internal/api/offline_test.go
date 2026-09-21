@@ -28,6 +28,35 @@ func TestExtractTaskItems(t *testing.T) {
 	_ = json.Marshal
 }
 
+func TestExtractTaskItemsEmpty(t *testing.T) {
+	cases := []string{
+		`{"page":1,"page_count":0,"page_row":30,"page_size":30,"count":0,"quota":4995,"total":5000,"tasks":null,"state":true,"real_state":false,"errtype":"suc"}`,
+		`[]`,
+		`{"state":true,"tasks":[]}`,
+		`{"state":true,"data":[]}`,
+		`{"state":true,"info":{"list":[]}}`,
+		`{"state":true,"data":{"tasks":null,"count":0}}`,
+	}
+	for _, body := range cases {
+		items, ok := extractTaskItems([]byte(body))
+		if !ok || items == nil || len(items) != 0 {
+			t.Errorf("extractTaskItems(%s) = %v, %v; want empty array", body, items, ok)
+		}
+	}
+}
+
+func TestExtractTaskItemsInvalid(t *testing.T) {
+	for _, body := range []string{
+		`null`, `{"state":true}`, `{"count":0}`, `{"tasks":null}`,
+		`{"tasks":null,"count":1}`, `{"tasks":{},"count":0}`,
+		`{"tasks":"invalid","count":0}`, `{"tasks":`,
+	} {
+		if items, ok := extractTaskItems([]byte(body)); ok {
+			t.Errorf("extractTaskItems(%s) unexpectedly accepted: %v", body, items)
+		}
+	}
+}
+
 func TestClassifyLinkShareDomains(t *testing.T) {
 	cases := []struct {
 		link string

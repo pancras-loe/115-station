@@ -1,31 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   NAlert,
   NButton,
   NInput,
-  NPagination,
   NRadioButton,
   NRadioGroup,
   NTabPane,
   NTabs,
-  NTag,
 } from 'naive-ui'
-import { RefreshCw } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import MeterBar from '@/components/ui/MeterBar.vue'
-import EmptyState from '@/components/ui/EmptyState.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import DownloadRecordsTab from '@/pages/transfer/DownloadRecordsTab.vue'
 import { storageApi, transferApi } from '@/api'
-import type { OfflineTask } from '@/api/transfer'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
 import { useFullSetting } from '@/pages/strm/fullSetting'
-import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { confirmUnsaved } from '@/composables/confirmUnsaved'
 
@@ -154,7 +147,6 @@ async function submit() {
     message.success(d.message || '已提交')
     link.value = ''
     code.value = ''
-    loadTasks()
   } catch (e) {
     toastError(e, isShare ? '转存失败' : '离线下载失败')
   } finally {
@@ -162,73 +154,6 @@ async function submit() {
   }
 }
 
-// ---- 离线任务 ----
-const tasks = ref<OfflineTask[]>([])
-const tasksError = ref('')
-const loadingTasks = ref(false)
-const refreshedAt = ref('')
-const page = ref(1)
-const PAGE_SIZE = 20
-
-async function loadTasks() {
-  loadingTasks.value = true
-  try {
-    const d = await transferApi.offlineTasks()
-    const raw = d.data
-    tasks.value = Array.isArray(raw) ? raw : (raw?.tasks ?? raw?.list ?? [])
-    refreshedAt.value = new Date().toLocaleTimeString('zh-CN')
-    tasksError.value = ''
-  } catch (e) {
-    tasksError.value = e instanceof Error ? e.message : '加载失败'
-  } finally {
-    loadingTasks.value = false
-  }
-}
-
-function pctOf(t: OfflineTask): number {
-  const p = t.percent
-  if (typeof p === 'number') return p
-  if (typeof p === 'string' && p && !Number.isNaN(parseFloat(p))) return parseFloat(p)
-  return -1
-}
-
-function stateOf(t: OfflineTask) {
-  const pct = pctOf(t)
-  if (t.status === -1) return 'fail'
-  if (t.status === 2) return 'done'
-  if (t.status === 1 || (pct >= 0 && pct < 100)) return 'downloading'
-  return 'waiting'
-}
-
-const STATE_META = {
-  fail: { label: '失败', type: 'error' },
-  done: { label: '完成', type: 'success' },
-  downloading: { label: '下载中', type: 'info' },
-  waiting: { label: '等待', type: 'default' },
-} as const
-
-const stats = computed(() => {
-  const s = { done: 0, downloading: 0, fail: 0, waiting: 0 }
-  for (const t of tasks.value) s[stateOf(t)]++
-  return s
-})
-
-const paged = computed(() => tasks.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
-
-function doneTime(t: OfflineTask) {
-  const ts = Number(t.del_time ?? 0)
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
-let timer: number | undefined
-onMounted(() => {
-  loadTasks()
-  timer = window.setInterval(loadTasks, 30_000)
-})
-onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
@@ -277,56 +202,6 @@ onUnmounted(() => clearInterval(timer))
           <FormActions>
             <NButton type="primary" :loading="submitting" @click="submit">开始转存</NButton>
           </FormActions>
-        </SectionCard>
-
-        <SectionCard title="离线任务" :hint="refreshedAt ? `共 ${tasks.length} 个 · ${refreshedAt}` : undefined">
-          <template #extra>
-            <div class="task-tools">
-              <NTag v-if="stats.downloading" size="small" type="info" :bordered="false">
-                下载中 {{ stats.downloading }}
-              </NTag>
-              <NTag v-if="stats.done" size="small" type="success" :bordered="false">完成 {{ stats.done }}</NTag>
-              <NTag v-if="stats.fail" size="small" type="error" :bordered="false">失败 {{ stats.fail }}</NTag>
-              <NButton size="small" :loading="loadingTasks" @click="loadTasks">
-                <template #icon><RefreshCw :size="14" /></template>
-                刷新
-              </NButton>
-            </div>
-          </template>
-
-          <p v-if="tasksError" class="err">{{ tasksError }}</p>
-          <EmptyState v-else-if="!tasks.length" text="暂无离线任务" />
-          <template v-else>
-            <div class="tasks">
-              <div v-for="(t, i) in paged" :key="i" class="task">
-                <NTag size="small" :bordered="false" :type="STATE_META[stateOf(t)].type">
-                  {{ STATE_META[stateOf(t)].label }}
-                </NTag>
-                <div class="task-body">
-                  <div class="task-name" :title="t.name || t.task_name">{{ t.name || t.task_name || '?' }}</div>
-                  <div v-if="stateOf(t) === 'downloading'" class="task-progress">
-                    <MeterBar :percent="Math.max(0, pctOf(t))" />
-                    <span class="task-pct">{{ Math.max(0, pctOf(t)).toFixed(1) }}%</span>
-                  </div>
-                  <div v-else class="task-meta">
-                    <span>{{ Number(t.size) > 0 ? bytes(Number(t.size)) : '—' }}</span>
-                    <span v-if="doneTime(t)">{{ doneTime(t) }}</span>
-                  </div>
-                </div>
-                <div v-if="stateOf(t) === 'downloading'" class="task-side">
-                  {{ Number(t.size) > 0 ? bytes(Number(t.size)) : '' }}
-                </div>
-              </div>
-            </div>
-
-            <NPagination
-              v-if="tasks.length > PAGE_SIZE"
-              v-model:page="page"
-              class="pager"
-              :item-count="tasks.length"
-              :page-size="PAGE_SIZE"
-            />
-          </template>
         </SectionCard>
       </div>
     </NTabPane>
@@ -391,78 +266,5 @@ onUnmounted(() => clearInterval(timer))
 }
 .location-link {
   margin-top: 6px;
-}
-
-.task-tools {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tasks {
-  display: flex;
-  flex-direction: column;
-}
-.task {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--c-border);
-}
-.task:last-child {
-  border-bottom: none;
-}
-.task-body {
-  flex: 1;
-  min-width: 0;
-}
-.task-name {
-  font-size: 13px;
-  color: var(--c-text-1);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-}
-.task-progress > :first-child {
-  flex: 1;
-}
-.task-pct {
-  flex-shrink: 0;
-  font-size: 11.5px;
-  color: var(--c-text-2);
-  font-variant-numeric: tabular-nums;
-}
-.task-meta {
-  margin-top: 2px;
-  font-size: 11.5px;
-  color: var(--c-text-3);
-}
-.task-meta span + span::before {
-  content: '·';
-  margin: 0 6px;
-  color: var(--c-text-4);
-}
-.task-side {
-  flex-shrink: 0;
-  font-size: 11.5px;
-  color: var(--c-text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.pager {
-  margin-top: 14px;
-  justify-content: center;
-}
-.err {
-  color: var(--c-danger);
-  text-align: center;
-  padding: 20px 0;
 }
 </style>

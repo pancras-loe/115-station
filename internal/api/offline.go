@@ -151,53 +151,6 @@ func (h *Handler) offlineAddTask(c *gin.Context) {
 	})
 }
 
-// offlineTaskList 查询离线下载任务列表
-// GET /offline/tasks
-func (h *Handler) offlineTaskList(c *gin.Context) {
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	raws, err := fetchLixianTasksRaw(cookie)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "查询失败: " + err.Error()})
-		return
-	}
-	// 规范化：name / size / percent / status(-1失败 1下载中 2完成)
-	items := make([]gin.H, 0, len(raws))
-	for _, m := range raws {
-		name := firstStr(m, "name", "task_name")
-		if name == "" {
-			continue
-		}
-		status := 0
-		switch v := m["status"].(type) {
-		case float64:
-			status = int(v)
-		case string:
-			switch {
-			case strings.Contains(strings.ToLower(v), "fail") || strings.Contains(v, "失败"):
-				status = -1
-			case strings.Contains(v, "完成") || strings.Contains(strings.ToLower(v), "done"):
-				status = 2
-			case strings.Contains(v, "下载"):
-				status = 1
-			}
-		}
-		delTime := int64(0)
-		switch v := m["del_time"].(type) {
-		case float64:
-			delTime = int64(v)
-		case string:
-			delTime, _ = strconv.ParseInt(v, 10, 64)
-		}
-		items = append(items, gin.H{"name": name, "size": m["size"], "percent": m["percent"], "status": status, "del_time": delTime})
-	}
-	c.JSON(http.StatusOK, gin.H{"data": items})
-}
-
 // classifyLink 判断链接类型
 func classifyLink(raw string) string {
 	lower := strings.ToLower(raw)
@@ -604,7 +557,7 @@ func fetchLixianTasksRaw(cookie string) ([]map[string]interface{}, error) {
 func extractTaskItems(body []byte) ([]map[string]interface{}, bool) {
 	// 顶层直接是数组
 	var arr []map[string]interface{}
-	if err := json.Unmarshal(body, &arr); err == nil && len(arr) > 0 {
+	if err := json.Unmarshal(body, &arr); err == nil && arr != nil {
 		return arr, true
 	}
 	var top map[string]interface{}
@@ -635,6 +588,10 @@ func unwrapItems(v interface{}) ([]map[string]interface{}, bool) {
 		}
 		return out, true
 	case map[string]interface{}:
+		// 115 无任务时会返回 tasks:null、count:0；要求两者同时存在，避免把缺字段或异常响应当空列表。
+		if tasks, exists := t["tasks"]; exists && tasks == nil && t["count"] == float64(0) {
+			return make([]map[string]interface{}, 0), true
+		}
 		for _, k := range []string{"tasks", "list", "info"} {
 			if arr, ok := t[k].([]interface{}); ok {
 				out := make([]map[string]interface{}, 0, len(arr))

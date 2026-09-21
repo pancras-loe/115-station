@@ -370,7 +370,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 离线下载（磁力/ed2k/HTTP）
 		protected.POST("/offline/add", h.offlineAddTask)
-		protected.GET("/offline/tasks", h.offlineTaskList)
 
 		// 下载记录（离线/分享转存提交过的链接 + 整理出来的识别结果）
 		protected.GET("/download/links", h.ListDownloadLinks)
