@@ -1657,7 +1657,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 
 	// 直接查网盘去重（不依赖本地缓存表，不会过期）
 	// 检查网盘目标目录里是否有相同 SHA1 的文件
-	if checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
+	if len(videoFiles) == 1 && checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
 		if err := ops.moveFiles(cfg.Existing, []string{dir.Fid}); err != nil {
 			onLog(fmt.Sprintf("✗ %s/ - 移动到已存在失败: %v", dir.Name, err))
 		} else {
@@ -1671,32 +1671,70 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		return results
 	}
 
-	// 洗版判定：库内已有同一部影视时按优先级规则比较版本
-	// （rec.TargetPath 是文件路径，台账查询需要目录前缀，必须 path.Dir）
-	if rec, ok := lookupMediaRecord(media); ok {
-		switch tryWashReplace(ops, cfg, media, mainVideo.Name, path.Dir(rec.TargetPath), onLog) {
-		case washReplaced:
-			// 旧版已让位，落入下方正常入库
-		case washNotBetter:
-			// 库内版本更优：新文件按「已存在」处理，不再重复入库
-			if err := ops.moveFiles(cfg.Existing, []string{dir.Fid}); err != nil {
-				onLog(fmt.Sprintf("✗ %s/ - 移动到已存在失败: %v", dir.Name, err))
-			} else {
-				onLog(fmt.Sprintf("○ %s/ - 库内已有更优版本，已移到已存在目录", dir.Name))
-			}
-			for _, vf := range videoFiles {
-				results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title, Year: media.Year, MediaType: media.MediaType,
-					Message: "库内已有更优版本"})
-			}
-			failMedia("exists", "recognize", "库内已有更优版本，已移到已存在目录", media, "", "")
-			return results
-		}
-	}
-
-	// 不存在 → 分类 + 移动到我的影视库
+	// 分类 + 目标目录先算出来：洗版要按「这个新文件将要落到哪个库内目录」去查
+	// 库内现有版本，不能再依赖 MediaLibrary 记录（同步建起来的库没有那张表的行）
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, mainVideo.Name)
 	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+
+	// 必须逐文件判定：主视频重复或画质不佳，不代表同目录的新增集也应该拒收。
+	var accepted []remoteFile
+	excluded := map[string]bool{}
+	for _, vf := range videoFiles {
+		vp := parseFileName(vf.Name)
+		if vp.Season == 0 {
+			vp.Season = parsed.Season
+		}
+		vpath := buildNewNameWithTemplate(media, vp, vf.Name)
+		vdir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(vpath))
+		duplicate := len(videoFiles) > 1 && sha1ExistsInLibrary(vf.Sha1)
+		decision := washNotBetter
+		if !duplicate {
+			decision = tryWashReplace(ops, cfg, media, vf.Name, vdir, onLog)
+		}
+		if decision == washFailed {
+			failMedia("failed", "move", "洗版旧版让位失败，保留待整理文件", media, category, targetDir)
+			return append(results, OrganizeResult{FileName: vf.Name, Status: "failed", Message: "洗版旧版让位失败"})
+		}
+		if decision != washNotBetter {
+			accepted = append(accepted, vf)
+			continue
+		}
+		move := []string{vf.Fid}
+		for _, af := range files {
+			if classifyFile(af.Name) == FileTypeSubtitle && strings.HasPrefix(af.Name, baseName(vf.Name)+".") {
+				move = append(move, af.Fid)
+			}
+		}
+		if err := ops.moveFiles(cfg.Existing, move); err != nil {
+			failMedia("failed", "move", "移到已存在失败: "+err.Error(), media, category, targetDir)
+			return append(results, OrganizeResult{FileName: vf.Name, Status: "failed", Message: err.Error()})
+		}
+		var rejected []orgRecordFile
+		for _, fid := range move {
+			excluded[fid] = true
+			for _, f := range files {
+				if f.Fid == fid {
+					rejected = append(rejected, orgRecordFile{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1})
+				}
+			}
+		}
+		msg := "库内已有相同或更优版本，已移到已存在目录"
+		results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title, Year: media.Year, MediaType: media.MediaType, Message: msg})
+		ctx.sink.note(&model.OrganizeRecord{Source: vf.Name, SourceFid: vf.Fid, SourceKind: "file", Status: "exists", Message: msg,
+			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year, MediaType: media.MediaType, Files: marshalRecordFiles(rejected)})
+	}
+	if len(accepted) == 0 {
+		return results
+	}
+	videoFiles = accepted
+	remaining := make([]remoteFile, 0, len(files))
+	for _, f := range files {
+		if !excluded[f.Fid] {
+			remaining = append(remaining, f)
+		}
+	}
+	files = remaining
 
 	_ = targetDir // 目标目录在下方按新结构创建（根目录 + 季目录）
 
@@ -2112,6 +2150,20 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
 	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
 
+	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
+	switch tryWashReplace(ops, cfg, media, f.Name, targetDir, onLog) {
+	case washFailed:
+		return OrganizeResult{FileName: f.Name, Status: "failed", Message: "洗版旧版让位失败"}, nil, 0
+	case washReplaced:
+		// 旧版已让位，落入下方正常入库
+	case washNotBetter:
+		if err := ops.moveFiles(cfg.Existing, []string{f.Fid}); err != nil {
+			return OrganizeResult{FileName: f.Name, Status: "failed", Message: "移到已存在失败: " + err.Error()}, nil, 0
+		}
+		onLog(fmt.Sprintf("○ %s - 库内已有更优版本，已移到已存在目录", f.Name))
+		return OrganizeResult{FileName: f.Name, Status: "exists", Message: "库内已有更优版本"}, nil, 0
+	}
+
 	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
@@ -2237,6 +2289,32 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
 	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+
+	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
+	switch tryWashReplace(ops, cfg, media, f.Name, targetDir, onLog) {
+	case washFailed:
+		result.Status, result.Message = "failed", "洗版旧版让位失败"
+		return fail("failed", "move", result.Message)
+	case washReplaced:
+		// 旧版已让位，落入下方正常入库
+	case washNotBetter:
+		if err := ops.moveFiles(cfg.Existing, []string{f.Fid}); err != nil {
+			result.Status, result.Message = "failed", "移到已存在失败: "+err.Error()
+			return fail("failed", "move", result.Message)
+		}
+		moveSiblingAttachments(ops, cfg.Pending, oldBase, "", cfg.Existing, false, onLog)
+		result.Status = "exists"
+		result.Message = "库内已有更优版本，已移到已存在目录"
+		onLog(fmt.Sprintf("○ %s - 库内已有更优版本，已移到已存在目录", f.Name))
+		ctx.sink.note(&model.OrganizeRecord{
+			Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
+			Status: "exists", Message: "库内已有更优版本，已移到已存在目录",
+			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+			MediaType: media.MediaType, PosterPath: media.PosterPath,
+			Files: marshalRecordFiles(self),
+		})
+		return result, nil
+	}
 
 	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
 

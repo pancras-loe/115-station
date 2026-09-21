@@ -105,7 +105,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 ### 数据模型（`internal/model/model.go`）
 
 19 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
-`CategoryRule` / `WashRule` / `ScrapeRule`（YAML 规则）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
+`CategoryRule` / `ScrapeRule`（YAML 规则，洗版保存在 `type=wash_config`）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
 `MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）、
 `PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（下载记录，见下）。
 
@@ -250,7 +250,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 加一个环境变量 | `internal/config/config.go` 的 `Load()` |
 | 改文件名识别/解析 | `internal/api/resource.go`，配套测试 `recognize_test.go` / `paren_test.go` / `eprange_test.go` |
 | 改重命名模板变量 | `internal/api/rename.go`（变量体系与 CMS 对齐） |
-| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashRules` |
+| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashConfig`；默认 YAML 首次写入，已有配置（含空配置）不覆盖，保存后立即失效缓存 |
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |

@@ -110,17 +110,6 @@ type CategoryRule struct {
 	Priority  int  `json:"priority" gorm:"default:0"`       // 优先级，从小到大，先匹配到先停止
 }
 
-// WashRule 洗版策略（对齐 CMS，处理重复资源）
-type WashRule struct {
-	ID               uint   `json:"id" gorm:"primaryKey"`
-	Name             string `json:"name" gorm:"size:50"`                                   // 策略名，如 "电影洗版策略"
-	Mode             string `json:"mode" gorm:"size:20;not null"`                          // coexist, skip, replace, max_size, min_size
-	MediaType        string `json:"media_type" gorm:"size:20"`                             // movie, tv（空=匹配所有）
-	Category         string `json:"category" gorm:"size:100"`                              // 匹配二级分类名，逗号分隔（空=所有）
-	PriorityLevel    string `json:"priority_level" gorm:"type:text"`                       // JSON 数组，优先级规则
-	OldVersionTarget string `json:"old_version_target" gorm:"size:20;default:'redundant'"` // 旧版去向: redundant/existing/delete
-}
-
 // MediaLibrary 已整理的媒体记录（用于去重）
 type MediaLibrary struct {
 	ID            uint      `json:"id" gorm:"primaryKey"`
@@ -366,7 +355,6 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&Setting{},
 		&ScrapeRule{},
 		&CategoryRule{},
-		&WashRule{},
 		&MediaEnrich{},
 		&MediaLibrary{},
 		&SyncEvent{},
@@ -429,37 +417,55 @@ func InitDefaultCategories(db *gorm.DB) error {
 	return db.Create(&defaults).Error
 }
 
-// InitDefaultWashRules 初始化默认洗版策略
-func InitDefaultWashRules(db *gorm.DB) error {
+// DefaultWashYAML 默认洗版策略（首次部署播种进 ScrapeRule.wash_config）。
+// 引擎只认库里存的这份 YAML：用户改过就按用户的，清空就是不洗版——
+// 代码里不再留任何隐式兜底，否则「我明明清空了还在洗」无从解释
+const DefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace替换 / max_size最大 / min_size最小
+# scope：all=全局只留一个最优 / group=按分辨率分组各留一个（如1080p/2160p各一）
+# old_version_target：旧版去向 redundant冗余 / existing已存在（默认冗余）
+# 优先级字段说明：
+#   resource_pix: 分辨率（2160p, 1080p, 720p）
+#   resource_type: 资源质量（BluRay, WEB-DL, HDTV）
+#   video_encode: 视频编码（H265, x264, HEVC, AV1）
+#   audio_encode: 音频编码（TrueHD, Atmos, DTS-HD, AAC）
+#   resource_effect: 特效（DV.HDR, HDR10+, 排除用!前缀如!DV）
+#   resource_team: 发布组（WiKi, TnT, FRDS）
+电影洗版策略:
+  mode: replace
+  media_type: movie
+  priority_level:
+  - resource_team: "WiKi"
+    resource_effect: "!DV.HDR,!DV"
+  - resource_pix: "2160p"
+    resource_type: "BluRay"
+    resource_effect: "!DV.HDR,!DV"
+  - resource_pix: "1080p"
+    resource_type: "BluRay"
+
+剧集洗版策略:
+  mode: replace
+  media_type: tv
+  priority_level:
+  - resource_pix: "2160p"
+    resource_effect: "!DV.HDR,!DV"
+  - resource_pix: "1080p"
+`
+
+// InitDefaultWashConfig 首次部署播种默认洗版策略。
+//
+// 播种的是引擎真正读的 ScrapeRule(type=wash_config)——此前播的是 WashRule 表，
+// 而那张表没有任何代码再读，于是全新部署的洗版恒等于关闭，界面上却因为
+// 前端拿默认 YAML 兜底显示而看着像已经配好了。
+//
+// 只在「这一行压根不存在」时播种：行一旦存在（哪怕 Config 被清空）就不再碰，
+// 用户清空即表示不洗版
+func InitDefaultWashConfig(db *gorm.DB) error {
 	var count int64
-	if err := db.Model(&WashRule{}).Count(&count).Error; err != nil {
+	if err := db.Model(&ScrapeRule{}).Where("type = ?", "wash_config").Count(&count).Error; err != nil {
 		return err
 	}
 	if count > 0 {
 		return nil
 	}
-
-	defaults := []WashRule{
-		{
-			Name:      "电影洗版策略",
-			Mode:      "replace",
-			MediaType: "movie",
-			PriorityLevel: `[
-				{"resource_team":"WiKi","resource_effect":"!DV.HDR,!DV"},
-				{"resource_pix":"2160p","resource_type":"BluRay","resource_effect":"!DV.HDR,!DV"},
-				{"resource_pix":"1080p","resource_type":"BluRay"},
-				{"resource_pix":"2160p","resource_type":"WEB-DL","resource_effect":"!DV.HDR,!DV"}
-			]`,
-		},
-		{
-			Name:      "剧集洗版策略",
-			Mode:      "replace",
-			MediaType: "tv",
-			PriorityLevel: `[
-				{"resource_pix":"2160p","resource_effect":"!DV.HDR,!DV"},
-				{"resource_pix":"1080p"}
-			]`,
-		},
-	}
-	return db.Create(&defaults).Error
+	return db.Create(&ScrapeRule{Type: "wash_config", Enabled: true, Config: DefaultWashYAML}).Error
 }

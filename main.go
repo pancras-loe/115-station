@@ -167,7 +167,7 @@ func main() {
 	if err := model.InitDefaultCategories(db); err != nil {
 		log.Printf("初始化默认二级分类失败: %v", err)
 	}
-	if err := model.InitDefaultWashRules(db); err != nil {
+	if err := model.InitDefaultWashConfig(db); err != nil {
 		log.Printf("初始化默认洗版策略失败: %v", err)
 	}
 

@@ -17,14 +17,17 @@ const props = defineProps<{
   title: string
   hint?: string
   note: string
-  load: () => Promise<{ config?: string }>
+  load: () => Promise<{ config?: string; default_config?: string }>
   persist: (yaml: string) => Promise<unknown>
-  fallback: string
+  /** 库里没有配置时填入编辑器的起始模板。洗版不传：后端首次部署就播种了真实
+      配置，这里再兜底显示一份默认策略只会让「清空=不洗版」看着像还在生效 */
+  fallback?: string
 }>()
 
 const { message } = useFeedback()
 
 const yaml = ref('')
+const defaultTemplate = ref(props.fallback || '')
 const loading = ref(true)
 const saving = ref(false)
 const editor = ref<InstanceType<typeof YamlEditor>>()
@@ -35,9 +38,10 @@ async function read() {
   loading.value = true
   try {
     const d = await props.load()
-    yaml.value = d.config || props.fallback
+    defaultTemplate.value = d.default_config || props.fallback || ''
+    yaml.value = d.config || props.fallback || ''
   } catch (e) {
-    yaml.value = props.fallback
+    yaml.value = props.fallback || ''
     toastError(e, '规则读取失败')
   } finally {
     loading.value = false
@@ -84,6 +88,9 @@ onMounted(read)
     </template>
 
     <NAlert class="note" type="info" :bordered="false">{{ note }}</NAlert>
+    <NAlert v-if="kind === 'wash' && !loading && !yaml.trim()" class="note" type="warning" :bordered="false">
+      策略为空时不做版本比较或替换。编辑后请保存，保存后立即生效；重启不会恢复默认策略。
+    </NAlert>
 
     <YamlEditor v-if="!loading" ref="editor" v-model="yaml" :rows="26" :markers="issues" />
     <div v-else class="skeleton" />
@@ -125,7 +132,7 @@ onMounted(read)
     <FormActions>
       <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
       <NButton @click="read">放弃修改</NButton>
-      <NPopconfirm @positive-click="yaml = fallback">
+      <NPopconfirm v-if="defaultTemplate" @positive-click="yaml = defaultTemplate">
         <template #trigger><NButton quaternary>恢复默认模板</NButton></template>
         当前编辑器里的内容会被默认模板覆盖（不会立刻保存）。
       </NPopconfirm>

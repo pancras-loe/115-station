@@ -1266,7 +1266,7 @@ func (h *Handler) ListWashRules(c *gin.Context) {
 	// 从 ScrapeRule 表读取已保存的 YAML
 	var rule model.ScrapeRule
 	h.DB.Where("type = ?", "wash_config").First(&rule)
-	c.JSON(http.StatusOK, gin.H{"config": rule.Config})
+	c.JSON(http.StatusOK, gin.H{"config": rule.Config, "default_config": model.DefaultWashYAML})
 }
 
 // SaveWashRules 保存洗版策略（支持 YAML 字符串，对齐 CMS）
@@ -1278,16 +1278,21 @@ func (h *Handler) SaveWashRules(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	var strategies map[string]washStrategy
+	if err := yaml.Unmarshal([]byte(req.Yaml), &strategies); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "洗版策略格式错误: " + err.Error()})
+		return
+	}
 	var rule model.ScrapeRule
 	h.DB.Where("type = ?", "wash_config").First(&rule)
 	rule.Type = "wash_config"
 	rule.Enabled = true
 	rule.Config = req.Yaml
-	if rule.ID > 0 {
-		h.DB.Save(&rule)
-	} else {
-		h.DB.Create(&rule)
+	if err := h.DB.Save(&rule).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存洗版策略失败"})
+		return
 	}
+	resetWashCache() // 不失效的话点完保存最多一分钟内还在按旧策略判
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

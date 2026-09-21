@@ -9,7 +9,7 @@ import RenameTab from './organize/RenameTab.vue'
 import EnrichTab from './organize/EnrichTab.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
-import { DEFAULT_CATEGORY_YAML, DEFAULT_WASH_YAML } from './organize/defaultRules'
+import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('basic')
@@ -44,7 +44,6 @@ const tab = useTabQuery('basic')
         note="按优先级字段决定保留哪个版本。mode 决定共存 / 跳过 / 替换，scope 决定是全局只留一个还是按分辨率分组各留一个；字段含义见右上角「规则说明」。"
         :load="organizeApi.getWash"
         :persist="organizeApi.saveWash"
-        :fallback="DEFAULT_WASH_YAML"
       />
     </NTabPane>
 

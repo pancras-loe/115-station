@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -328,7 +329,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	sink.flushRefresh()
 
 	// ---- 6) 更新记录 + 修正 MediaLibrary ----
-	recordMedia(media, category, rootRel)
+	recordMedia(media, category, plan.sampleVideoPath())
 	rec.Status = "success"
 	rec.Stage = ""
 	rec.Message = fmt.Sprintf("已按手动指定的 TMDB 条目重新整理 → %s", rootRel)
@@ -378,6 +379,25 @@ type redoLayout struct {
 	renames   map[string]string          // fid → 新文件名
 	groups    map[string][]orgRecordFile // 落点相对路径 → 该目录下的视频与字幕
 	metaFiles []orgRecordFile            // NFO / 封面：一律进标题目录
+}
+
+// sampleVideoPath 取一个代表性视频的库内路径（写进 MediaLibrary.TargetPath）。
+// 必须是**文件**路径：去重与洗版都按 path.Dir 反推所在目录，存目录会被再削一层，
+// 洗版于是退到二级分类层，拿整类影片当「同一部片的旧版本」比较并搬走
+func (l *redoLayout) sampleVideoPath() string {
+	rels := make([]string, 0, len(l.groups))
+	for rel := range l.groups {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels) // map 无序，多季重整理时别每次换一个代表
+	for _, rel := range rels {
+		for _, f := range l.groups[rel] {
+			if f.Kind == "video" {
+				return rel + "/" + f.Name
+			}
+		}
+	}
+	return l.rootRel
 }
 
 // planRedoLayout 纯计算：给定 TMDB 条目与记录里的文件清单，算出重整理的目标布局。
