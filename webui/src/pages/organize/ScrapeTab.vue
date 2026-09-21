@@ -29,7 +29,10 @@ const starting = ref(false)
 async function load() {
   try {
     const res = await organizeApi.getScrapeConfig()
-    const c = res.data ?? res
+    // 后端是 { cfg, status }：此前这里取 res.data ?? res 摊平读，字段全是 undefined，
+    // 于是「整理后自动刮削」无论后端存的是什么都显示「关闭」，
+    // 点一次保存还会把实际配置按这份假显示写回去
+    const c = res.cfg ?? {}
     cfg.value = {
       local_root: c.local_root ?? '',
       // 这两项后端缺省视为开启，所以判 !== false 而不是 !!
@@ -125,7 +128,8 @@ onMounted(load)
     <NAlert class="note" type="info" :bordered="false">
       按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录；仅在允许上传时由「监控上传」回传 115
       —— 替代「Emby 刮削到本地」。Emby 侧建议把元数据读取器设为「仅 NFO」，以本站数据为准。
-      剧集生成 tvshow.nfo、整季海报与逐集同名 NFO；NFO 内含 fileinfo/streamdetails
+      电影生成与视频同名的 NFO（口径与 Emby 自己刮削一致），剧集生成 tvshow.nfo、整季海报与逐集同名
+      NFO；NFO 内含 fileinfo/streamdetails
       轨道信息（ffprobe 探测的多音轨 / 内嵌字幕），播放器无需探测 strm 远端即可显示音轨字幕。
     </NAlert>
 

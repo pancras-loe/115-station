@@ -3,7 +3,7 @@ package api
 // ==================== 影视刮削（原生 NFO + 海报到本地媒体库） ====================
 //
 // 直接生成 Emby/Kodi 标准元数据，替代"Emby 刮削到本地"这半段：
-//   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 movie.nfo / tvshow.nfo
+//   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 <视频同名>.nfo / tvshow.nfo
 //   + poster.jpg / fanart.jpg / seasonNN-poster.jpg 到本地媒体库对应片目目录，
 //   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
@@ -512,10 +512,22 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 			for _, pc := range d.ProductionCompanies {
 				nfo.Studios = append(nfo.Studios, pc.Name)
 			}
-			nfo.Fileinfo = nfoFileInfoFrom(mainProbe)
-			if b, err := marshalNFO(nfo); err == nil {
-				if _, err := writeMetaFile(dir, "movie.nfo", b, cfg.Force); err != nil {
-					scrapeAddErr("%s: 写 movie.nfo 失败 %v", title, err)
+			for i, name := range movieNFONames(videoRows) {
+				probe := mainProbe // videoRows[0] 上面已经探过，别再探一遍
+				if i > 0 {
+					if pr, perr := probeFileNow(videoRows[i].PickCode); perr == "" {
+						probe = pr
+					} else {
+						probe = nil
+					}
+				}
+				nfo.Fileinfo = nfoFileInfoFrom(probe)
+				b, err := marshalNFO(nfo)
+				if err != nil {
+					continue
+				}
+				if _, err := writeMetaFile(dir, name, b, cfg.Force); err != nil {
+					scrapeAddErr("%s: 写 %s 失败 %v", title, name, err)
 				}
 			}
 		} else {
@@ -658,6 +670,24 @@ func dateYear(d string) string {
 		return d[:4]
 	}
 	return d
+}
+
+// movieNFONames 影片目录里每个视频对应的 NFO 文件名。
+//
+// 与视频同名（xxx.mkv.strm → xxx.mkv.nfo），口径与集级 NFO 以及 Emby 自己
+// 刮削出来的产物完全一致。固定名 movie.nfo 虽然 Emby 也认，但一个片目里放了
+// 两个版本时两份元数据会打架，而且与 Emby 写出来的文件名对不上，
+// 用户一眼看不出哪份是谁写的。
+// 台账里查不到视频行（还没落盘/被清过）时才退回固定名
+func movieNFONames(rows []model.SyncedFile) []string {
+	out := make([]string, 0, len(rows))
+	for _, sf := range rows {
+		out = append(out, strings.TrimSuffix(path.Base(sf.RelPath), ".strm")+".nfo")
+	}
+	if len(out) == 0 {
+		return []string{"movie.nfo"}
+	}
+	return out
 }
 
 // scrapeDirVideoRows 台账里某片目录（key 含库名前缀）下的视频文件行，

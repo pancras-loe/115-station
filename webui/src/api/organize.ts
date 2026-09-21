@@ -42,7 +42,9 @@ export interface ScrapeConfig {
   auto_after_organize: boolean
 }
 
-export const getScrapeConfig = () => http.get<{ data?: Partial<ScrapeConfig> } & Partial<ScrapeConfig>>('/scrape/config')
+/** 后端回的是 { cfg, status } 两层结构，不是扁平配置 —— 摊平取会全部读成 undefined */
+export const getScrapeConfig = () =>
+  http.get<{ cfg?: Partial<ScrapeConfig>; status?: { running?: boolean } }>('/scrape/config')
 export const saveScrapeConfig = (cfg: ScrapeConfig) => http.post('/scrape/config', cfg)
 export const runScrape = () => http.post('/scrape/run')
 export const stopScrape = () => http.post('/scrape/stop')

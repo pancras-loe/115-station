@@ -33,6 +33,13 @@ import (
 // 所以删除走「先精确删条目、删不掉再刷新」：按路径查到条目 id 再 DELETE /Items/{Id}，
 // 立刻生效。怕删错是对的，护栏是 embyDeleteItems 里那道「本地路径确实已经不存在」
 // 的检查 —— 只删我们自己刚删掉的那一个路径，路径还在就一律不碰。
+//
+// 新增为什么也不能只靠刷新（2026-09-21）：刷新的 ValidateChildren 复核的是
+// 【已知】子条目，整理刚建出来的片目目录 Emby 根本不知道它存在，刷上级目录
+// 或整库都扫不到它；此前「看着正常」是 Emby 自己的实时监控兜的底，而 strm 的
+// 媒体卷多半是网络盘，inotify 收不到，定时扫库又默认关着 —— 于是片子落盘了、
+// Emby 里就是没有。新增因此额外走一次 /Library/Media/Updated 报 Created，
+// 那是 Emby 给外部程序报「这个路径有新内容」的正式通道。
 
 // embyRefreshKind 刷新场景。删除与新增有三处不一样：
 // 目标路径在本地已经不存在（得上移到最近的存活父目录才找得到 Emby 条目）、
@@ -194,18 +201,26 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	}
 
 	var refreshed []string
+	var created []string // 入库场景里 Emby 还不认识的新路径，收尾单独报一次 Created
 	for _, libID := range order {
 		lib, paths := byID[libID], buckets[libID]
 		// 少量变更精确到条目刷（目标在库之上时没这个选项，只能整库刷）
 		if !wholeLib[libID] && len(paths) <= embyItemRefreshMax {
 			var rest []string
 			for _, t := range paths {
-				id, name := embyResolveItem(cfg, t, lib.Locations)
+				id, name, exact := embyResolveItem(cfg, t, lib.Locations)
+				if kind == embyRefreshAdded && !exact {
+					created = append(created, t.path)
+				}
 				if id == "" || !embyRefreshItem(cfg, id) {
 					rest = append(rest, t.path)
 					continue
 				}
-				log.Printf("[Emby] ○ 已提交条目刷新（%s）：%s —— %s", kind.label(), name, t.path)
+				if exact {
+					log.Printf("[Emby] ○ 已提交条目刷新（%s）：%s —— %s", kind.label(), name, t.path)
+				} else {
+					log.Printf("[Emby] ○ Emby 尚无 %s 的条目，已刷新上级「%s」并单独报新增", t.path, name)
+				}
 			}
 			if len(rest) == 0 {
 				refreshed = append(refreshed, lib.Name)
@@ -222,6 +237,16 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		for _, t := range paths {
 			unmatched = append(unmatched, t.reportPaths()...)
 		}
+	}
+
+	// 新增的路径 Emby 还没有条目时，只刷上级/整库是不够的：刷新走的是
+	// ValidateChildren，它复核的是【已知】子条目还在不在，新建出来的目录要等
+	// Emby 自己的实时监控或定时扫库才会被发现 —— 媒体卷是网络盘/strm 时前者
+	// 常常收不到 inotify，后者默认关着，表现就是「整理完了 Emby 里没有这部片」。
+	// /Library/Media/Updated 是 Emby 给外部程序报「这个路径有新内容」的正式通道
+	// （Emby 自带的文件夹监控内部走的也是它），把新路径如实报一次才真的会去扫。
+	if len(created) > 0 {
+		embyReportUpdated(cfg, dedupeStrings(created), "Created")
 	}
 
 	if len(unmatched) > 0 {
@@ -427,17 +452,20 @@ func embyDeleteItem(cfg embyRefreshCfg, itemID string) bool {
 }
 
 // embyResolveItem 沿祖先链找第一个 Emby 认识的条目，出了媒体库就停。
-// 逐级上溯的做法取自 p115strmhelper 的 trigger_refresh_by_path
-func embyResolveItem(cfg embyRefreshCfg, t embyTarget, locations []string) (id, name string) {
-	for _, a := range t.ancestors {
+// 逐级上溯的做法取自 p115strmhelper 的 trigger_refresh_by_path。
+//
+// exact 表示命中的就是目标路径本身（ancestors[0]）。调用方必须区分这一点：
+// 命中祖先意味着 Emby 压根还不知道目标路径的存在，刷新祖先并不等于会扫到它
+func embyResolveItem(cfg embyRefreshCfg, t embyTarget, locations []string) (id, name string, exact bool) {
+	for i, a := range t.ancestors {
 		if !embyPathUnder(a, locations) {
-			return "", "" // 再往上就出了这个媒体库，交给整库刷新
+			return "", "", false // 再往上就出了这个媒体库，交给整库刷新
 		}
 		if id, name := embyItemIDByPath(cfg, a); id != "" {
-			return id, name
+			return id, name, i == 0
 		}
 	}
-	return "", ""
+	return "", "", false
 }
 
 // nearestExistingDir 从 p 往上找第一个还存在的目录，到 root 为止（含 root）。

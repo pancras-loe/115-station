@@ -643,11 +643,21 @@ func monitorOnce(h *Handler) {
 	log.Printf("[上传] 发现 %d 个新刮削文件（图片+NFO）", len(imgs))
 }
 
-// metadataUploadNames 元数据回传监听的文件名（Emby 写入媒体目录的标准名）
+// metadataUploadNames 元数据回传监听的固定名图片（Emby 写入媒体目录的标准名）。
+// NFO 不在这张表里：本站与 Emby 写的影片/集级 NFO 都跟视频同名，名字是变的，
+// 判定见 isMetadataUploadFile
 var metadataUploadNames = map[string]bool{
 	"poster.jpg": true, "poster.jpeg": true, "poster.png": true,
 	"fanart.jpg": true, "fanart.jpeg": true, "banner.jpg": true,
-	"tvshow.nfo": true, "movie.nfo": true, "season.nfo": true,
+}
+
+// isMetadataUploadFile 兜底引擎要回传的元数据文件。
+// 与监控目录引擎（上面那条 isImg/isNfo 判定）保持同一口径：固定名图片 + 任意 .nfo。
+// 此前这里只认 movie/tvshow/season.nfo 三个固定名，与视频同名的影片 NFO
+// 和逐集 NFO 一个都传不上去
+func isMetadataUploadFile(name string) bool {
+	n := strings.ToLower(name)
+	return metadataUploadNames[n] || strings.HasSuffix(n, ".nfo")
 }
 
 // StartMetadataUploader 元数据回传引擎：每 5 分钟扫描本地媒体树，
@@ -716,7 +726,7 @@ func (h *Handler) uploadMetadataOnce() {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if !metadataUploadNames[strings.ToLower(d.Name())] {
+		if !isMetadataUploadFile(d.Name()) {
 			// 每集同名 nfo（xxx.mkv.nfo）也要回传
 			if !strings.HasSuffix(strings.ToLower(d.Name()), ".mkv.nfo") &&
 				!strings.HasSuffix(strings.ToLower(d.Name()), ".mp4.nfo") {

@@ -156,6 +156,9 @@ func TestNotifyEmbyRefreshUsesItemsEndpoint(t *testing.T) {
 	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != filepath.ToSlash(dir) {
 		t.Fatalf("按路径查条目用的路径不对: %v", f.itemPathQ)
 	}
+	if len(f.updates) != 0 {
+		t.Fatalf("Emby 已经有这个路径的条目，不该再报一次新增: %v", f.updates)
+	}
 }
 
 // 条目定位不到时退回整库刷新（删整棵目录时父目录也可能刚被清掉）
@@ -299,6 +302,12 @@ func TestNotifyEmbyRefreshClimbsToKnownAncestor(t *testing.T) {
 	}
 	if f.sawHit("POST /Items/lib1/Refresh") {
 		t.Fatalf("上溯已命中，不该再整库扫描: %v", f.hits)
+	}
+	// 刷新上级只会复核它【已知】的子条目，新建出来的片目目录还得单独报一次，
+	// 否则整理落盘了、Emby 里就是没有这部片（2026-09-21 用户实测）
+	want1 := []map[string]string{{"Path": filepath.ToSlash(fresh), "UpdateType": "Created"}}
+	if !reflect.DeepEqual(f.updates, want1) {
+		t.Fatalf("新路径没如实报新增：期望 %v，实际 %v", want1, f.updates)
 	}
 }
 
@@ -450,8 +459,10 @@ func TestNotifyEmbyRefreshMappedSecondLevelLibraries(t *testing.T) {
 	if f.sawHit("POST /Items/tv/Refresh") {
 		t.Fatalf("不该连带刷新剧集库: %v", f.hits)
 	}
-	if len(f.updates) != 0 {
-		t.Fatalf("已经命中媒体库，不该回退路径通知: %v", f.updates)
+	// Emby 还不认识这个新片目录 → 除了整库刷新，还要按【映射后】的路径报一次新增
+	wantUp := []map[string]string{{"Path": "/映射目录/影视/电影/新片 (2026)", "UpdateType": "Created"}}
+	if !reflect.DeepEqual(f.updates, wantUp) {
+		t.Fatalf("新路径没如实报新增：期望 %v，实际 %v", wantUp, f.updates)
 	}
 	// 查条目用的必须是映射后的 Emby 路径，且到库根为止不再上溯
 	want := []string{"/映射目录/影视/电影/新片 (2026)", "/映射目录/影视/电影"}
