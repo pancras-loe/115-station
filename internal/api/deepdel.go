@@ -22,34 +22,18 @@ import (
 // 深度删除只处理 Emby 事件命中的台账或用户指定的整理记录，不扫描全库缺失文件。
 // 默认关闭；所有网盘删除仍经过节流、自产事件抑制与路径缓存失效钩子。
 const (
-	deepDelMaxBatchDefault = 50
-	deepDelMaxRatioDefault = 0.1
-	deepDelChunk           = 100
-	deepDelKeepDays        = 180
+	deepDelChunk    = 100
+	deepDelKeepDays = 180
 )
 
 type deepDelCfg struct {
-	Enabled      bool     `json:"enabled"`
-	MaxBatch     *int     `json:"max_batch"`
-	MaxRatio     *float64 `json:"max_ratio"`
-	PrunePanDirs *bool    `json:"prune_pan_dirs"`
-	Notify       *bool    `json:"notify"`
+	Enabled      bool  `json:"enabled"`
+	PrunePanDirs *bool `json:"prune_pan_dirs"`
+	Notify       *bool `json:"notify"`
 }
 
 func (c deepDelCfg) prunePanDirs() bool { return c.PrunePanDirs == nil || *c.PrunePanDirs }
 func (c deepDelCfg) notify() bool       { return c.Notify == nil || *c.Notify }
-func (c deepDelCfg) maxBatch() int {
-	if c.MaxBatch == nil || *c.MaxBatch <= 0 {
-		return deepDelMaxBatchDefault
-	}
-	return *c.MaxBatch
-}
-func (c deepDelCfg) maxRatio() float64 {
-	if c.MaxRatio == nil || *c.MaxRatio <= 0 {
-		return deepDelMaxRatioDefault
-	}
-	return *c.MaxRatio
-}
 func (h *Handler) loadDeepDelCfg() deepDelCfg {
 	var cfg deepDelCfg
 	_ = json.Unmarshal([]byte(h.getSettingValue("deepdel")), &cfg)
@@ -73,20 +57,6 @@ func checkLibRoots(root string, rows []model.SyncedFile) error {
 		}
 	}
 	return nil
-}
-
-func deepDelOverLimit(cfg deepDelCfg, videos, files, ledger int) (bool, string) {
-	if n := cfg.maxBatch(); videos > n {
-		return true, fmt.Sprintf("本轮有 %d 个视频待删，超过单轮上限 %d", videos, n)
-	}
-	if r := cfg.maxRatio(); ledger > 0 {
-		got := float64(files) / float64(ledger)
-		if got > r {
-			return true, fmt.Sprintf("本轮待删 %d 个文件，占台账 %.1f%%（共 %d 条），超过上限 %.0f%%",
-				files, got*100, ledger, r*100)
-		}
-	}
-	return false, ""
 }
 
 // countKinds 拆出视频数与附属数（阈值按视频数卡，比例按文件总数算）
@@ -150,12 +120,6 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 	// 而本地产物下面马上就自己清掉了（对齐整理链路 executeOrganize 的做法）
 	ops.suppress = true
 
-	// 父目录路径要在删之前算：删完之后 PathCache 里那棵子树可能已经被失效钩子清掉了
-	var panPaths []string
-	if cfg.prunePanDirs() {
-		panPaths = h.deepDelParentPaths(rows)
-	}
-
 	for _, batch := range chunkStrings(fids, deepDelChunk) {
 		if err := ops.deleteFiles(batch); err != nil {
 			h.noteDeepDelete(reason, res, rels, fids, "failed", "删除网盘文件失败: "+err.Error())
@@ -173,8 +137,10 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 	h.cleanDeepDelMarks(rels)
 	// dropLocalByFids 已发送删除通知，避免重复刷新 Emby。
 
+	// 空目录清理放在删除之后：目录要空了才判得出来，而目录本身不会因为删文件消失，
+	// 逐级按名字查 cid 这条路删完照样走得通
 	if cfg.prunePanDirs() {
-		res.PanDirs = h.pruneDeepDelDirs(ops, panPaths)
+		res.PanDirs = h.pruneDeepDelDirs(ops, h.loadFullSyncCfg().Cid, rows)
 	}
 
 	log.Printf("[深度删除] ✓ %s：删除网盘文件 %d 个（视频 %d / 附属 %d），空目录 %d 个",
@@ -205,84 +171,149 @@ func (h *Handler) cleanDeepDelMarks(rels []string) {
 	}
 }
 
-// deepDelParentPaths 待清理的网盘空目录候选（绝对路径，从深到浅）。
+// deepDelDirTargets 本次要检查的网盘目录：键是相对同步根的目录路径（如「电影/流浪地球-2019」），
+// 值表示这一级是否**直接**装过被删的文件（叶子目录），false 是它上面的祖先。
 //
-// **零额外 115 请求**：台账只有 rel_path，但 rel_path 的第一层就是同步根的目录名，
-// 而同步根的网盘绝对路径 absPathOf 走的是 PathCache 缓存。两者一拼就是文件的
-// 网盘绝对路径，再取父目录即可。拿不到就返回空 —— 宁可在网盘上留个空目录，不猜。
-func (h *Handler) deepDelParentPaths(rows []model.SyncedFile) []string {
-	fullCfg := h.loadFullSyncCfg()
-	if fullCfg.Cid == "" || fullCfg.Cid == "0" {
-		return nil
-	}
-	cookie, err := h.get115Cookie()
-	if err != nil || cookie == "" {
-		return nil
-	}
-	rootAbs := absPathOf(cookie, fullCfg.Cid)
-	if rootAbs == "" {
-		log.Printf("[深度删除] ○ 取不到媒体库的网盘绝对路径，跳过空目录清理")
-		return nil
-	}
-	seen := map[string]bool{}
-	var out []string
+// rel_path 的第一层就是同步根自己的目录名（walk115Dir 的 basePath 就是它），
+// 去掉之后剩下的正是网盘上同一棵树的相对路径 —— 本地与网盘共用一套目录结构，
+// 不必猜也不必额外请求
+func deepDelDirTargets(rows []model.SyncedFile) map[string]bool {
+	out := map[string]bool{}
 	for _, r := range rows {
 		rel := strings.Trim(filepath.ToSlash(r.RelPath), "/")
 		i := strings.Index(rel, "/")
 		if i <= 0 {
-			continue // 直接躺在库根下的文件，父目录就是库根，不清
+			continue
 		}
 		dir := path.Dir(rel[i+1:])
+		if dir == "." || dir == "/" || dir == "" {
+			continue // 文件直接躺在同步根下，父目录就是库根，不清
+		}
+		out[dir] = true
 		// 一路往上收到库根为止：删完一季 → 季目录空 → 标题目录也空，
-		// 本地侧 removeEmptyParents 同样是一路删到 root 的，两边保持一致。
-		// 工作区根与媒体库根由 pruneDeepDelDirs 的 protected 兜底，永远删不掉
-		for dir != "." && dir != "/" && dir != "" {
-			abs := path.Join(rootAbs, dir)
-			if abs != rootAbs && !seen[abs] {
-				seen[abs] = true
-				out = append(out, abs)
+		// 本地侧 removeEmptyParents 同样是一路删到 root 的，两边保持一致
+		for d := path.Dir(dir); d != "." && d != "/" && d != ""; d = path.Dir(d) {
+			if _, ok := out[d]; !ok {
+				out[d] = false
 			}
-			dir = path.Dir(dir)
 		}
 	}
 	return out
 }
 
-// pruneDeepDelDirs 清理因删除而变空的网盘目录。
-// cid 从 PathCache 按路径反查（Path 上有索引），查不到就跳过 —— 不为此新增 115 请求。
-func (h *Handler) pruneDeepDelDirs(ops dirIO, panPaths []string) int {
-	var protected []string
+// resolveDeepDelDirCids 把相对同步根的目录路径逐级列目录解析成 cid。
+//
+// **为什么不查 PathCache**：那张表只在解析生活事件的祖先链时才写入，全量同步建起来的
+// 媒体库目录压根没进去过。此前按 path 反查缓存、查不到就跳过的做法在这条链路上几乎必然落空，
+// 结果就是网盘上的影片目录、季目录删空了却一直留着（用户实测如此）。
+// 换成逐级列目录：判断「空不空」本来就得列一次目录，顺路把 cid 查出来不多花几个请求，
+// 而且拿到的是当下的真实结构，不存在缓存陈旧删错目录的风险。
+func resolveDeepDelDirCids(ops dirIO, rootCid string, rels []string) map[string]string {
+	cids := map[string]string{"": rootCid}
+	sorted := append([]string(nil), rels...)
+	sort.Strings(sorted) // 字典序天然是父目录在前，父解析完子才有得查
+	for _, rel := range sorted {
+		cur := ""
+		for _, seg := range strings.Split(rel, "/") {
+			parent := cids[cur]
+			cur = path.Join(cur, seg)
+			if c, ok := cids[cur]; ok {
+				if c == "" {
+					break // 上一轮就查不到，同层的别再列一遍
+				}
+				continue
+			}
+			c, err := findChildDirCid(ops, parent, seg)
+			if err != nil {
+				log.Printf("[深度删除] ○ 读不出目录内容，跳过空目录清理: %s（%v）", cur, err)
+			}
+			cids[cur] = c
+			if c == "" {
+				break
+			}
+		}
+	}
+	return cids
+}
+
+// findChildDirCid 在 parent 下按名字找子目录（翻页找全：一层条目超一页时只看第一页会漏）
+func findChildDirCid(ops dirIO, parent, name string) (string, error) {
+	if parent == "" {
+		return "", nil
+	}
+	offset := 0
+	for {
+		entries, total, err := ops.listEntries(parent, offset)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			if fmt.Sprint(e["f"]) == "0" && fmt.Sprint(e["n"]) == name {
+				return fmt.Sprint(e["cid"]), nil
+			}
+		}
+		offset += len(entries)
+		if len(entries) == 0 || offset >= total {
+			return "", nil
+		}
+	}
+}
+
+// pruneDeepDelDirs 清理因删除而空下来的网盘目录，返回删除数量。
+//
+// 分两种处理，界线就是「文件原本在哪一级」：
+//   - 叶子目录（影片目录 / 季目录）走 pruneEmptyDirTree —— 整棵子树没有任何文件才删，
+//     顺带把剩下的空季目录一起收掉；
+//   - 再往上的祖先（分类目录「电影」「剧集」）只接受**自己完全为空**，绝不递归进去，
+//     否则清理分类目录时会遍历兄弟影片，把无关的空目录也删了。
+func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.SyncedFile) int {
+	if rootCid == "" || rootCid == "0" {
+		return 0
+	}
+	targets := deepDelDirTargets(rows)
+	if len(targets) == 0 {
+		return 0
+	}
+	rels := make([]string, 0, len(targets))
+	for rel := range targets {
+		rels = append(rels, rel)
+	}
+	cids := resolveDeepDelDirCids(ops, rootCid, rels)
+
+	guard := map[string]bool{rootCid: true, "0": true}
 	if cfg, err := h.loadOrgConfig(); err == nil && cfg != nil {
-		protected = orgProtectedCids(cfg)
+		for _, cid := range orgProtectedCids(cfg) {
+			if cid != "" {
+				guard[cid] = true
+			}
+		}
 	}
-	protected = append(protected, h.loadFullSyncCfg().Cid, "0")
-	guard := map[string]bool{}
-	for _, cid := range protected {
-		guard[cid] = true
-	}
-	// 多个季目录必须先于共同父目录检查，否则父目录只检查一次时会漏掉收尾。
-	paths := append([]string(nil), panPaths...)
-	sort.Slice(paths, func(i, j int) bool { return strings.Count(paths[i], "/") > strings.Count(paths[j], "/") })
+	// 深的先处理：季目录删掉之后，标题目录才可能跟着空
+	sort.Slice(rels, func(i, j int) bool { return strings.Count(rels[i], "/") > strings.Count(rels[j], "/") })
+	onLog := func(msg string) { log.Printf("[深度删除] %s", msg) }
 	seen := map[string]bool{}
 	removed := 0
-	for _, abs := range paths {
-		var row model.PathCache
-		if h.DB.Where("path = ?", abs).First(&row).Error != nil {
+	for _, rel := range rels {
+		cid := cids[rel]
+		if cid == "" || guard[cid] || seen[cid] {
 			continue
 		}
-		if row.FileID == "" || seen[row.FileID] || guard[row.FileID] {
+		seen[cid] = true
+		if targets[rel] {
+			n, _ := pruneEmptyDirTree(ops, cid, guard, 0, rel, onLog)
+			removed += n
 			continue
 		}
-		seen[row.FileID] = true
-		if pruneDeepDelEmptyDir(ops, row.FileID, abs) {
+		if pruneDeepDelEmptyDir(ops, cid, rel) {
 			removed++
 		}
 	}
 	return removed
 }
 
-// 这里只检查本次文件的祖先链，不复用整理的递归清理器。
-// 旧实现检查「电影」父目录时会深入所有兄弟影片，甚至删除无关的空影片目录。
+// pruneDeepDelEmptyDir 祖先目录（分类目录那一层）专用：只删**自己一个子项都没有**的目录，
+// 绝不递归下去 —— 旧实现拿递归清理器检查「电影」父目录时会深入所有兄弟影片，
+// 把无关的空影片目录也删了。
 func pruneDeepDelEmptyDir(ops dirIO, cid, label string) bool {
 	if cid == "" || cid == "0" {
 		return false

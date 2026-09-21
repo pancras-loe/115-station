@@ -14,7 +14,7 @@ import (
 
 // 参考 qmediasync internal/controllers/emby.go 的事件定位执行、p115strmhelper
 // helper/mediasyncdel 的 deep.delete 定位方式，独立实现仅限本次事件的台账筛选。
-// 原生 library.deleted 也可能来自扫库，仍须检查挂载、缺失复核与事件数量阈值。
+// 原生 library.deleted 也可能来自扫库，仍须检查挂载并复核本地确实已缺失。
 func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool) {
 	h.processDeepDelEvent(payload, deep, h.runDeepDelete, func() bool {
 		select {
@@ -55,7 +55,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	if !cfg.Enabled {
 		return
 	}
-	rows, matched, ledger, err := h.deepDelEventRows(rels, pcs)
+	rows, matched, err := h.deepDelEventRows(rels, pcs)
 	if err != nil {
 		h.rejectDeepDelEvent(err.Error())
 		return
@@ -70,12 +70,11 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		if !pause() {
 			return
 		}
-		second, _, n, e := h.deepDelEventRows(rels, pcs)
+		second, _, e := h.deepDelEventRows(rels, pcs)
 		if e != nil {
 			h.rejectDeepDelEvent(e.Error())
 			return
 		}
-		ledger = n
 		if !deep {
 			// 只接受两次均缺失的条目；首次尚在的条目再给一次短暂落盘时间。
 			if len(rows) < len(second) {
@@ -83,7 +82,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 				if !pause() {
 					return
 				}
-				second, _, ledger, e = h.deepDelEventRows(rels, pcs)
+				second, _, e = h.deepDelEventRows(rels, pcs)
 				if e != nil {
 					h.rejectDeepDelEvent(e.Error())
 					return
@@ -112,10 +111,6 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		return
 	}
 	videos, assets := countKinds(rows)
-	if over, why := deepDelOverLimit(cfg, videos, videos+assets, ledger); over {
-		h.rejectDeepDelEvent(why)
-		return
-	}
 	log.Printf("[深度删除] ○ 处理本次 Emby 事件：视频 %d / 附属 %d", videos, assets)
 	if _, err := execute(rows, "emby_webhook"); err != nil {
 		log.Printf("[深度删除] ✗ 事件删除失败: %v", err)
@@ -131,30 +126,30 @@ func (h *Handler) rejectDeepDelEvent(why string) {
 }
 
 // 只读台账校验库根；只对本次事件的路径执行文件检查，不消费旧 vanish_at 标记。
-func (h *Handler) deepDelEventRows(rels, pcs []string) ([]model.SyncedFile, int, int, error) {
+func (h *Handler) deepDelEventRows(rels, pcs []string) ([]model.SyncedFile, int, error) {
 	root := h.orphanLocalRoot()
 	if strings.TrimSpace(root) == "" {
-		return nil, 0, 0, fmt.Errorf("未配置本地媒体目录")
+		return nil, 0, fmt.Errorf("未配置本地媒体目录")
 	}
 	if _, err := os.ReadDir(root); err != nil {
-		return nil, 0, 0, fmt.Errorf("媒体库根不可访问: %w", err)
+		return nil, 0, fmt.Errorf("媒体库根不可访问: %w", err)
 	}
 	var ledger []model.SyncedFile
 	if err := h.DB.Select("rel_path").Find(&ledger).Error; err != nil {
-		return nil, 0, 0, err
+		return nil, 0, err
 	}
 	if err := checkLibRoots(root, ledger); err != nil {
-		return nil, 0, len(ledger), err
+		return nil, 0, err
 	}
 	var matches []model.SyncedFile
 	for _, rel := range rels {
 		// 不接受库根或路径穿越，防止目录前缀匹配扩展成整库删除。
 		if path.Clean(rel) != rel || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") || !strings.Contains(rel, "/") {
-			return nil, 0, len(ledger), fmt.Errorf("事件路径越界或指向库根: %s", rel)
+			return nil, 0, fmt.Errorf("事件路径越界或指向库根: %s", rel)
 		}
 		var part []model.SyncedFile
 		if err := h.DB.Where(`rel_path = ? OR rel_path LIKE ? ESCAPE '\'`, rel, likeEscape(rel)+"/%").Find(&part).Error; err != nil {
-			return nil, 0, len(ledger), err
+			return nil, 0, err
 		}
 		matches = append(matches, part...)
 	}
@@ -164,7 +159,7 @@ func (h *Handler) deepDelEventRows(rels, pcs []string) ([]model.SyncedFile, int,
 		}
 		var part []model.SyncedFile
 		if err := h.DB.Where("pick_code = ?", pc).Find(&part).Error; err != nil {
-			return nil, 0, len(ledger), err
+			return nil, 0, err
 		}
 		matches = append(matches, part...)
 	}
@@ -183,16 +178,16 @@ func (h *Handler) deepDelEventRows(rels, pcs []string) ([]model.SyncedFile, int,
 		full := filepath.Join(root, filepath.FromSlash(r.RelPath))
 		rel, err := filepath.Rel(root, full)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-			return nil, matched, len(ledger), fmt.Errorf("台账路径越界: %s", r.RelPath)
+			return nil, matched, fmt.Errorf("台账路径越界: %s", r.RelPath)
 		}
 		if _, err := os.Stat(full); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
-			return nil, matched, len(ledger), fmt.Errorf("本地文件不可访问: %w", err)
+			return nil, matched, fmt.Errorf("本地文件不可访问: %w", err)
 		}
 		rows = append(rows, r)
 	}
-	return rows, matched, len(ledger), nil
+	return rows, matched, nil
 }
 
 // 神医事件除 Item.Path 外，还可能在 Description 中携带多版本路径和 pickcode。

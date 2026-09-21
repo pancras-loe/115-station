@@ -106,6 +106,14 @@ func (p *dirPruner) flush() int {
 	return removed
 }
 
+// vlogTo 详细日志走调用方的 onLog：模块前缀由调用方认领（整理 / 深度删除各写各的），
+// 清理器自己不该替它们决定日志里写哪个模块名
+func vlogTo(onLog func(string), format string, args ...interface{}) {
+	if onLog != nil && verboseLogging() {
+		onLog(fmt.Sprintf(format, args...))
+	}
+}
+
 // pruneEmptyDirTree 自下而上清理以 cid 为根的空目录子树。
 // 返回删除的目录总数，以及 cid 自己是否被删掉。
 //
@@ -120,7 +128,7 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 		label = "cid=" + cid
 	}
 	if protected[cid] {
-		vlog("[整理] ○ 跳过工作区目录（永不清理）: %s", label)
+		vlogTo(onLog, "○ 跳过工作区目录（永不清理）: %s", label)
 		return 0, false
 	}
 	if depth > emptyDirMaxDepth {
@@ -131,7 +139,7 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 	if err != nil {
 		// 列不出来就不删：可能是目录已经不存在（上一轮删过），也可能是风控，
 		// 两种情况下删都没有好处
-		vlog("[整理] ○ 读不出目录内容，不做清理: %s（%v）", label, err)
+		vlogTo(onLog, "○ 读不出目录内容，不做清理: %s（%v）", label, err)
 		return 0, false
 	}
 
@@ -141,7 +149,7 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 		var subDirs []subDir
 		for _, e := range entries {
 			if fmt.Sprint(e["f"]) != "0" {
-				vlog("[整理] ○ %s 里还有文件（如 %s），整棵不清理", label, fmt.Sprint(e["n"]))
+				vlogTo(onLog, "○ %s 里还有文件（如 %s），整棵不清理", label, fmt.Sprint(e["n"]))
 				return 0, false // 有文件，整棵不动
 			}
 			if sub := fmt.Sprint(e["cid"]); sub != "" && sub != "<nil>" {
@@ -155,7 +163,7 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 		// 复查：子目录没全删掉（内部有文件/受保护）时父目录仍然非空
 		entries, _, err = ops.listEntries(cid, 0)
 		if err != nil || len(entries) > 0 {
-			vlog("[整理] ○ %s 仍有 %d 个子项未清空，保留", label, len(entries))
+			vlogTo(onLog, "○ %s 仍有 %d 个子项未清空，保留", label, len(entries))
 			return removed, false
 		}
 	}

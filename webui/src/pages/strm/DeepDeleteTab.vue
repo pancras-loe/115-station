@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NButton, NInputNumber, NSwitch } from 'naive-ui'
+import { NAlert, NButton, NSwitch } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -13,10 +13,6 @@ const setting = useDeepDelSetting()
 const cfg = computed(() => setting.model.value)
 const records = ref<DeepDeleteRecord[]>([])
 const loading = ref(false)
-const ratioPct = computed({
-  get: () => Math.round(cfg.value.max_ratio * 100),
-  set: (v: number) => { cfg.value.max_ratio = v / 100 },
-})
 async function load() {
   loading.value = true
   try { records.value = (await syncApi.deepDeleteRecords(1, 20)).data }
@@ -41,15 +37,9 @@ const reasonLabel: Record<string, string> = { local_scan: '历史扫描', emby_w
         <NSwitch v-model:value="cfg.enabled" />
       </FieldRow>
       <NAlert v-if="cfg.enabled" type="warning" :bordered="false">
-        Emby 扫库清理失效条目也会发原生删除事件。系统检查媒体库目录、复核本地缺失并限制单次删除数量，无法仅凭原生事件区分删除原因。
+        Emby 扫库清理失效条目也会发原生删除事件。系统会检查媒体库目录并复核本地确实已缺失，但无法仅凭原生事件区分删除原因。
       </NAlert>
-      <FieldRow v-if="cfg.enabled" label="单次上限（视频数）" tip="超过上限时拒绝本次事件删除，并留下记录。">
-        <NInputNumber v-model:value="cfg.max_batch" :min="1" :max="100000" />
-      </FieldRow>
-      <FieldRow v-if="cfg.enabled" label="单次占比上限" tip="本次待删文件占同步台账的比例上限。被拦下后可检查原因、调整配置并重新发送事件，或在整理记录中删除对应条目。">
-        <NInputNumber v-model:value="ratioPct" :min="1" :max="100"><template #suffix>%</template></NInputNumber>
-      </FieldRow>
-      <FieldRow label="清理网盘空目录" tip="只检查本次文件的父目录链，有任何子项就保留，不进入其他影片目录。也适用于整理记录删除。">
+      <FieldRow label="清理网盘空目录" tip="影片/季目录空了就跟着删，再往上只删完全为空的目录，不会进入其他影片。也适用于整理记录删除。">
         <NSwitch v-model:value="cfg.prune_pan_dirs" />
       </FieldRow>
       <FieldRow label="删除后发通知" tip="也适用于整理记录删除。">

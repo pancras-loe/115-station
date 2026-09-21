@@ -43,8 +43,6 @@ export interface FullSyncConfig {
  */
 export interface DeepDeleteConfig {
   enabled: boolean
-  max_batch: number
-  max_ratio: number
   prune_pan_dirs: boolean
   notify: boolean
 }

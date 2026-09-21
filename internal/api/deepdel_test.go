@@ -43,29 +43,8 @@ func deepDelTestTree(t *testing.T, rels ...string) string {
 
 func TestDeepDelCfgDefaults(t *testing.T) {
 	c := deepDelCfg{}
-	if c.Enabled || c.maxBatch() != 50 || c.maxRatio() != 0.1 {
-		t.Fatal("默认关闭且保留阈值")
-	}
-}
-
-// 阈值守卫：条数、比例各拦各的，正常量级放行
-func TestDeepDelOverLimit(t *testing.T) {
-	cfg := deepDelCfg{}
-	// 一整季 24 集 + 附属，占台账很小一部分 → 放行
-	if over, why := deepDelOverLimit(cfg, 24, 60, 10000); over {
-		t.Fatalf("正常量级不该被拦: %s", why)
-	}
-	// 挂载掉线：视频数远超上限 → 拦
-	if over, _ := deepDelOverLimit(cfg, 900, 2000, 10000); !over {
-		t.Fatal("超过条数上限必须拦下")
-	}
-	// 小库：条数没超，但占比过半 → 拦
-	if over, _ := deepDelOverLimit(cfg, 40, 45, 60); !over {
-		t.Fatal("超过比例上限必须拦下")
-	}
-	// 台账为空时不能因为除零误判
-	if over, why := deepDelOverLimit(cfg, 0, 0, 0); over {
-		t.Fatalf("空台账不该被拦: %s", why)
+	if c.Enabled || !c.prunePanDirs() || !c.notify() {
+		t.Fatal("默认关闭，清理空目录与通知默认开")
 	}
 }
 

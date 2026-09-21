@@ -223,11 +223,16 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 10. **深度删除会删网盘源文件**（`deepdel.go`、`deepdelemby.go`）：
     2026-09-21 按维护者要求改为事件触发，移除定时全库扫描、预演和待删清单执行；保留整理记录入口。
     - 默认关闭。事件只处理路径 / pickcode 命中的 `SyncedFile`，不得扩大成全库缺失扫描。
-    - 原生 `library.deleted` 也可能来自扫库清理，因此仍检查媒体库根与各库目录、本地缺失复核、事件数量/占比阈值。
+    - 原生 `library.deleted` 也可能来自扫库清理，因此仍检查媒体库根与各库目录并复核本地缺失。单次数量/占比阈值已按维护者要求移除（用户不会去调它），守卫只剩「路径命中 + 本地确实没了」。
     - 原生事件使用两次短间隔检查，神医 `deep.delete` 不等待后台轮询。事件先于本地删除时有一次短暂重查。
     - 与整理、全量、增量共用 `fullSyncMu`，事件等锁后重查，不可丢弃事件再指望定时扫描补上。
-    - 旧 `vanish_at` 仅保留数据库兼容，不读写、不参与删除；旧模式和预演配置不再生效。
-    - **空目录只检查本次文件的父目录链**，有子项即保留，禁止用 `pruneEmptyDirTree` 递归祖先目录：旧实现会遍历兄弟影片并删除无关空目录。
+    - 旧 `vanish_at` 仅保留数据库兼容，不读写、不参与删除；旧模式、预演与 `max_batch` / `max_ratio` 配置不再生效。
+    - **空目录只沿本次文件的父目录链往上清**：叶子目录（影片目录 / 季目录）走 `pruneEmptyDirTree`
+      （整棵子树没有文件才删，顺带收掉空季目录），再往上的分类目录只接受「自己完全为空」，
+      禁止对祖先递归 —— 那会遍历兄弟影片并删掉无关空目录。
+    - 目录 cid 由 `resolveDeepDelDirCids` 从同步根**逐级按名字列目录**查出来，**不要再改回查 `PathCache`**：
+      那张表只在解析生活事件祖先链时才写，全量同步建起来的媒体库目录从来没进去过，
+      反查必然落空 —— 2026-09-21 之前网盘空目录一直没被清掉就是这个原因。
     - 所有删除仍走 `ops.deleteFiles`（回收站、节流、事件抑制、缓存失效），先删网盘成功再清台账。
     - 整理记录入口只删记录 fid 与台账的交集，不受事件开关、缺失复核和阈值限制；记录本身保留。
     - 测试见 `deepdel_event_test.go` / `deepdel_test.go` / `deepdelemby_test.go`；改动前先跑绿。
@@ -255,7 +260,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
-| 改深度删除 | `internal/api/deepdel.go`：执行在 `runDeepDelete`、事件范围在 `deepDelEventRows`、守卫在 `checkLibRoots` / `deepDelOverLimit`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
+| 改深度删除 | `internal/api/deepdel.go`：执行在 `runDeepDelete`、事件范围在 `deepDelEventRows`、守卫在 `checkLibRoots`、网盘空目录在 `pruneDeepDelDirs`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
 | 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
