@@ -743,6 +743,30 @@ func TestEmbyVerifyIngestConfirmsViaFolderChild(t *testing.T) {
 	}
 }
 
+// 同一次入库会被提交两次刷新（整理一次、增量同步再一次），
+// 回查只让先到的那一轮跑；那一轮结束后才能再被认领
+func TestEmbyVerifyIngestSkipsPathAlreadyBeingVerified(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	embyVerifyDelays = []time.Duration{10 * time.Millisecond}
+	p := filepath.ToSlash(filepath.Join(root, "电影", "某片"))
+	cfg, _ := loadEmbyRefreshCfg()
+
+	claimed := embyVerifyClaim([]string{p}) // 假装另一条链路的回查正在跑
+	t.Cleanup(func() { embyVerifyRelease(claimed) })
+	embyVerifyIngest(cfg, []string{p})
+	if len(f.itemPathQ) != 0 {
+		t.Fatalf("同一路径已有回查在跑，不该再查一遍: %v", f.itemPathQ)
+	}
+
+	embyVerifyRelease(claimed)
+	embyVerifyIngest(cfg, []string{p})
+	if len(f.itemPathQ) != 1 {
+		t.Fatalf("上一轮结束后应当能再认领: %v", f.itemPathQ)
+	}
+}
+
 // Folder 与 Movie 并存时挑 Movie（被删的影片目录实测就是这个形态）
 func TestPickMediaHit(t *testing.T) {
 	hits := []embyItemHit{{ID: "1", Type: "Folder"}, {ID: "2", Type: "Movie"}}

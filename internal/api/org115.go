@@ -89,20 +89,31 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	sink.flushScrape()
 	sink.flushRefresh()
 
-	// 消息通知
+	finishOrganize(sink, orgResults, successCount, orgStart)
+	return steps, orgResults, nil
+}
+
+// finishOrganize 整理收尾：新增通知 + 按部汇总 + 完成行。
+//
+// 两个整理入口（扫待整理目录的 executeOrganize、扫转存目录的
+// executeOrganizeWithConfig）共用这一段。各写各的时候，同一件事按触发来源
+// 会打出两种格式，而且转存那边既不报入库片单、也不发新增通知 ——
+// 2026-09-21 洗版验证的日志里两种格式各出现了一次
+func finishOrganize(sink *orgSink, results []OrganizeResult, successCount int, start time.Time) {
 	if successCount > 0 {
 		var titles []string
-		for _, r := range orgResults {
-			if r.Status == "success" {
-				line := r.Title
-				if r.Year != "" {
-					line += " (" + r.Year + ")"
-				}
-				if r.Category != "" {
-					line += " [" + r.Category + "]"
-				}
-				titles = append(titles, line)
+		for _, r := range results {
+			if r.Status != "success" {
+				continue
 			}
+			line := r.Title
+			if r.Year != "" {
+				line += " (" + r.Year + ")"
+			}
+			if r.Category != "" {
+				line += " [" + r.Category + "]"
+			}
+			titles = append(titles, line)
 		}
 		NotifyMessage(
 			fmt.Sprintf("整理完成，新增 %d 部", successCount),
@@ -112,7 +123,7 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	// 按部汇总（一部剧的 52 个文件归并为一行）
 	showSet := map[string]bool{}
 	var showLines []string
-	for _, r := range orgResults {
+	for _, r := range results {
 		if r.TmdbID == 0 || r.Status != "success" {
 			continue
 		}
@@ -121,19 +132,37 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 			continue
 		}
 		showSet[key] = true
-		line := fmt.Sprintf("%s (%s) → %s", r.Title, r.Year, r.TargetDir)
-		showLines = append(showLines, line)
+		showLines = append(showLines, fmt.Sprintf("%s (%s) → %s", r.Title, r.Year, r.TargetDir))
 	}
 	if len(showLines) > 0 {
 		log.Printf("[整理] 本次入库 %d 部:\n  %s", len(showLines), strings.Join(showLines, "\n  "))
 	}
-
 	// 空转静默：无任何产出时不打完成汇总（定时任务每 10 分钟一轮）
-	if totalFiles > 0 {
-		log.Printf("[整理] ✅ 整理完成（耗时 %s · %s）",
-			time.Since(orgStart).Truncate(time.Second), sink.summaryLine())
+	if len(results) == 0 {
+		return
 	}
-	return steps, orgResults, nil
+	log.Printf("[整理] ✅ 整理完成（耗时 %s · %s）",
+		time.Since(start).Truncate(time.Second), organizeSummaryLine(sink, results))
+}
+
+// organizeSummaryLine 完成行里的计数。以落盘台账（sink）为准，
+// 一条都没落盘时用引擎结果补上，不让完成行拖个空尾巴
+func organizeSummaryLine(sink *orgSink, results []OrganizeResult) string {
+	if line := sink.summaryLine(); line != "" {
+		return line
+	}
+	ok, exists, fail := 0, 0, 0
+	for _, r := range results {
+		switch r.Status {
+		case "success":
+			ok++
+		case "exists":
+			exists++
+		default:
+			fail++
+		}
+	}
+	return fmt.Sprintf("成功 %d（生成 STRM %d）· 已存在 %d · 失败 %d", ok, sink.strmTotal(), exists, fail)
 }
 
 // RunOrganizePipeline 整理流水线 HTTP 入口

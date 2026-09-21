@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -308,6 +309,35 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 // 测试里置空即关闭
 var embyVerifyDelays = []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
 
+// embyVerifyPending 正在回查的路径。同一条路径同时只跑一轮回查
+var (
+	embyVerifyMu      sync.Mutex
+	embyVerifyPending = map[string]bool{}
+)
+
+// embyVerifyClaim 认领这批路径，返回真正轮到自己回查的那些
+func embyVerifyClaim(paths []string) []string {
+	embyVerifyMu.Lock()
+	defer embyVerifyMu.Unlock()
+	var mine []string
+	for _, p := range paths {
+		if embyVerifyPending[p] {
+			continue
+		}
+		embyVerifyPending[p] = true
+		mine = append(mine, p)
+	}
+	return mine
+}
+
+func embyVerifyRelease(paths []string) {
+	embyVerifyMu.Lock()
+	defer embyVerifyMu.Unlock()
+	for _, p := range paths {
+		delete(embyVerifyPending, p)
+	}
+}
+
 // embyVerifyIngest 提交刷新之后回查：Emby 到底收进去没有。
 // 这是本项目自己加的一层，参考项目都没有 —— 但它是纯只读的，不改变 Emby 行为。
 //
@@ -319,6 +349,13 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 	if len(paths) == 0 || len(embyVerifyDelays) == 0 {
 		return
 	}
+	// 同一次入库会被提交两次刷新（整理一次、增量同步再一次）。
+	// 回查只让先到的那一轮跑，否则同一条结论要在日志里出现两遍
+	paths = embyVerifyClaim(paths)
+	if len(paths) == 0 {
+		return
+	}
+	defer embyVerifyRelease(paths)
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Emby] ✗ 入库回查异常: %v", r)

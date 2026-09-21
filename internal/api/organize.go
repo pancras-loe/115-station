@@ -2432,19 +2432,9 @@ func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) (stepsOut []gin.H, d
 	orgResults, successCount := runOrganizeEngineWithConfig(ops, cfg, sink, logFn)
 	sink.flushScrape()
 	sink.flushRefresh()
-	existsN, failN := 0, 0
-	for _, r := range orgResults {
-		if r.Status == "exists" {
-			existsN++
-		}
-		if r.Status == "failed" {
-			failN++
-		}
-	}
-	log.Printf("[整理] ✅ 整理完成（成功 %d · 已存在 %d · 失败 %d，耗时 %s）",
-		successCount, existsN, failN, time.Since(orgStart).Truncate(time.Second))
+	// 收尾与 executeOrganize 共用：同一件事不该因为触发来源不同而汇总不同
+	finishOrganize(sink, orgResults, successCount, orgStart)
 
-	steps := []gin.H{}
 	totalFiles := len(orgResults)
 	existsCount, failedCount := 0, 0
 	for _, r := range orgResults {
@@ -2455,8 +2445,8 @@ func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) (stepsOut []gin.H, d
 			failedCount++
 		}
 	}
-	steps = append(steps, gin.H{"step": "整理（转存目录）", "status": "完成",
-		"message": fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)})
+	steps := []gin.H{{"step": "整理（转存目录）", "status": "完成",
+		"message": fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)}}
 
 	return steps, orgResults, nil
 }
