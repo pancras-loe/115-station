@@ -342,9 +342,14 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 			}
 			hit := pickMediaHit(hits)
 			if !embyTypeIsMedia(hit.Type) {
-				lastType[p] = hit.Type
-				rest = append(rest, p)
-				continue
+				// 目录条目下面挂着影视条目也算入库（详见 embyMediaChildOf）
+				child, ok := embyMediaChildOf(cfg, hit.ID)
+				if !ok {
+					lastType[p] = hit.Type
+					rest = append(rest, p)
+					continue
+				}
+				hit = child
 			}
 			log.Printf("[Emby] ✓ 入库确认：%s（%s，用时 %s）—— %s",
 				hit.Name, hit.Type, time.Since(start).Truncate(time.Second), p)
@@ -754,6 +759,47 @@ func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
 		}
 	}
 	return hits
+}
+
+// embyMediaChildOf 目录条目底下有没有真正的影视条目。
+//
+// 单文件影片在 Emby 里的条目路径是那个 .strm 文件，而不是它所在的目录
+// （实测 webhook 载荷里的 Movie.Path 就是 .strm）。回查传的是目录，按路径
+// 只查得到 Type=Folder —— 据此报「影片没被识别」是误判（2026-09-21 洗版
+// 验证里就出了两条误报）。纯只读，只用于写日志
+func embyMediaChildOf(cfg embyRefreshCfg, parentID string) (embyItemHit, bool) {
+	if parentID == "" {
+		return embyItemHit{}, false
+	}
+	q := url.Values{
+		"ParentId":               {parentID},
+		"Recursive":              {"true"},
+		"IncludeItemTypes":       {"Movie,Series,Season,Episode,Video,MusicVideo"},
+		"Limit":                  {"1"},
+		"EnableTotalRecordCount": {"false"},
+	}
+	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
+	if err != nil {
+		vlog("[Emby] 查目录子条目失败 %s: %v", parentID, err)
+		return embyItemHit{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		vlog("[Emby] 查目录子条目 HTTP %d：%s", resp.StatusCode, parentID)
+		return embyItemHit{}, false
+	}
+	var out struct {
+		Items []struct{ Id, Name, Type string } `json:"Items"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return embyItemHit{}, false
+	}
+	for _, it := range out.Items {
+		if embyTypeIsMedia(it.Type) {
+			return embyItemHit{ID: it.Id, Name: it.Name, Type: it.Type}, true
+		}
+	}
+	return embyItemHit{}, false
 }
 
 // embyItemIDByPath 同一路径上的第一个条目（刷新只需要一个入口）

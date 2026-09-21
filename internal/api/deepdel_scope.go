@@ -28,11 +28,16 @@ func deepDelMediaType(payload map[string]interface{}) (string, error) {
 
 var deepDelSeasonDir = regexp.MustCompile(`(?i)^(season[ ._-]*|s)\d+$`)
 
+// deepDelDriveLetter 只有盘符开头的绝对路径才算越界。
+// 冒号本身是合法文件名字符，“美国队长.Captain America: The First Avenger…”
+// 这种带冒号的片名就是（洗版验证里它被误判成路径越界拦下了）
+var deepDelDriveLetter = regexp.MustCompile(`^[A-Za-z]:`)
+
 // 目录前缀仅对已确认的剧/季生效。没有标题或季布局证据时宁可拒绝，
 // 不能因为载荷写了 Series 就把分类目录当成整剧。
 func (h *Handler) checkDeepDelScope(kind string, rels []string) error {
 	for _, rel := range rels {
-		if path.Clean(rel) != rel || strings.Contains(rel, "\\") || strings.Contains(rel, ":") || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") || !strings.Contains(rel, "/") {
+		if path.Clean(rel) != rel || strings.Contains(rel, "\\") || deepDelDriveLetter.MatchString(rel) || strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") || !strings.Contains(rel, "/") {
 			return fmt.Errorf("事件路径越界或指向根: %s", rel)
 		}
 		if strings.EqualFold(path.Ext(rel), ".strm") {

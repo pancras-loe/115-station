@@ -32,6 +32,8 @@ type fakeEmby struct {
 	dupItems  bool             // 同一路径回两个条目（Folder 与刮削出的 Movie 并存）
 	hitPath   string           // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
 	itemType  string           // 查到的条目类型，空= Movie。Folder = Emby 只建了目录条目、影片还没入库
+	childHit  bool             // 按 ParentId 查子条目时回一个 Movie（影片条目挂在 .strm 上、不在目录上）
+	parentQ   []string         // /Items 查询用的 ParentId 参数
 	srv       *httptest.Server
 }
 
@@ -59,6 +61,17 @@ func newFakeEmbyLibs(t *testing.T, libs []map[string]any, lookupHit bool) *fakeE
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/Library/VirtualFolders/Query":
 			_ = json.NewEncoder(w).Encode(map[string]any{"Items": f.libs})
+		case r.Method == http.MethodGet && r.URL.Path == "/Items" && r.URL.Query().Get("ParentId") != "":
+			// 目录条目底下的子条目（入库回查在只查到 Folder 时再追这一手）
+			f.mu.Lock()
+			f.parentQ = append(f.parentQ, r.URL.Query().Get("ParentId"))
+			child := f.childHit
+			f.mu.Unlock()
+			items := []map[string]any{}
+			if child {
+				items = append(items, map[string]any{"Id": "child1", "Name": "某片", "Type": "Movie"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Items": items})
 		case r.Method == http.MethodGet && r.URL.Path == "/Items":
 			p := r.URL.Query().Get("Path")
 			f.mu.Lock()
@@ -707,6 +720,26 @@ func TestEmbyVerifyIngestKeepsRetryingOnFolderOnly(t *testing.T) {
 
 	if len(f.itemPathQ) != 2 {
 		t.Fatalf("只有目录条目就该继续回查：期望 2 轮，实际 %v", f.itemPathQ)
+	}
+}
+
+// 单文件影片的 Movie 条目挂在 .strm 上，目录路径上只有 Folder。
+// 那是已经入库的常态，不能报「影片没被识别」（2026-09-21 洗版验证实测）
+func TestEmbyVerifyIngestConfirmsViaFolderChild(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.itemType, f.childHit = "Folder", true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	embyVerifyDelays = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
+
+	cfg, _ := loadEmbyRefreshCfg()
+	embyVerifyIngest(cfg, []string{filepath.ToSlash(filepath.Join(root, "电影", "某片"))})
+
+	if len(f.itemPathQ) != 1 {
+		t.Fatalf("目录下已有影视条目，第一轮就该收工: %v", f.itemPathQ)
+	}
+	if len(f.parentQ) != 1 || f.parentQ[0] != "item9" {
+		t.Fatalf("没按目录条目追子条目: %v", f.parentQ)
 	}
 }
 

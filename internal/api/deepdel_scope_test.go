@@ -198,3 +198,19 @@ func TestDeepDelCurrentLibraryGuards(t *testing.T) {
 		})
 	}
 }
+
+// 冒号是合法文件名字符：“美国队长.Captain America: The First Avenger…”
+// 这种带冒号的片名曾被当成路径越界拦下（洗版验证实测）。
+// 盘符开头的绝对路径仍然要拦
+func TestDeepDelScopeAllowsColonInFilename(t *testing.T) {
+	h := &Handler{}
+	ok := "影视/电影/美国队长.2011.{tmdbid=1771}/美国队长.Captain America: The First Avenger.2011.1080p.mkv.strm"
+	if err := h.checkDeepDelScope("Movie", []string{ok}); err != nil {
+		t.Fatalf("带冒号的片名被误拦: %v", err)
+	}
+	for _, bad := range []string{"C:/影视/a.strm", "d:影视/a.strm"} {
+		if err := h.checkDeepDelScope("Movie", []string{bad}); err == nil {
+			t.Fatalf("盘符路径没拦住: %s", bad)
+		}
+	}
+}
