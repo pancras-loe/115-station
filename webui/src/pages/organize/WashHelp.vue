@@ -22,6 +22,8 @@ import { WASH_FIELDS, WASH_MODES, WASH_RULES, WASH_STRATEGY_FIELDS } from './cat
         整理时先按 <code>media_type</code> / <code>category</code> 选中第一条命中的策略，
         再拿新文件和库内同一部（剧集是同一集）的文件，沿 <code>priority_level</code>
         从上往下比：第一条能分出高下的决定胜负，新版赢才替换，全平手就保守不换。
+        <code>mode: replace</code> 未填写优先级时，同一影片（剧集同一集）直接新替旧。
+        <code>old_version_target: delete</code> 将旧版移入 115 回收站；替换后清理旧 STRM 并通知 Emby。
       </p>
     </section>
 

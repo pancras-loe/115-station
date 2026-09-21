@@ -407,12 +407,12 @@ export function lintWash(src: string): RuleIssue[] {
       if (!['redundant', 'existing', 'delete'].includes(v)) {
         issues.push({ line: target.line, level: 'warn', text: 'old_version_target 只认 redundant / existing / delete' })
       } else if (v === 'delete') {
-        issues.push({ line: target.line, level: 'info', text: 'delete 实际按移入冗余目录处理，不会在网盘真删除' })
+        issues.push({ line: target.line, level: 'info', text: 'delete 将旧版移入 115 回收站，同时清理旧 STRM 并通知 Emby' })
       }
     }
 
     if (!st.levels.length && mode !== 'coexist' && mode !== 'skip') {
-      issues.push({ line: st.line, level: 'warn', text: '没有 priority_level，这条策略分不出高下，新版一律按「已存在」处理' })
+      issues.push({ line: st.line, level: 'info', text: mode === 'replace' ? '没有 priority_level：同一影片（剧集同一集）采用新替旧' : '没有 priority_level：此模式跳过洗版' })
     }
     for (let i = 0; i < st.levels.length; i++) {
       const lv = st.levels[i]
@@ -539,9 +539,10 @@ export function outlineWash(src: string): OutlineGroup[] {
       `${MODE_LABEL[mode] ?? mode}`,
       mediaType === 'movie' ? '仅电影' : mediaType === 'tv' ? '仅剧集' : '电影 + 剧集',
       scope === 'group' ? '按分辨率各留一个' : '全局只留一个',
-      `旧版去 ${target === 'existing' ? '已存在' : '冗余'}`,
+      `旧版去 ${target === 'delete' ? '115 回收站' : target === 'existing' ? '已存在' : '冗余'}`,
     ]
     if (category) bits.push(`限分类 ${category}`)
+    if (mode === 'replace' && !st.levels.length) bits.push('无优先级，新替旧')
     return {
       title: st.name,
       subtitle: bits.join(' · '),

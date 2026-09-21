@@ -5,8 +5,8 @@ package api
 // 命中已存在时不再一律移「已存在」：
 //   1. 取库内该片的现有文件名（SyncedFile 台账，记录在 TargetPath 之下）
 //   2. 与待整理文件按优先级规则逐条比较（制作组/分辨率/来源/效果）
-//   3. 新版更好 → 旧版移冗余（洗版-旧版本/片名），新版正常入库（replace）
-//      旧版更好 → 新版移已存在（现状）；规则无判定 → 按 coexist 也移已存在
+//   3. replace 无优先级时新替旧，有优先级时新版更好才替换；旧版按配置
+//      移到冗余/已存在/115 回收站，新版正常入库；有规则但平局则新版移已存在
 
 import (
 	"fmt"
@@ -42,7 +42,7 @@ type washStrategy struct {
 	MediaType        string     `yaml:"media_type"`         // movie/tv（空=匹配所有）
 	Category         string     `yaml:"category"`           // 匹配二级分类名，逗号分隔（空=所有）
 	PriorityLevel    []washRule `yaml:"priority_level"`     // 优先级规则（上面的优先）
-	OldVersionTarget string     `yaml:"old_version_target"` // 旧版去向 redundant/existing（默认 redundant）
+	OldVersionTarget string     `yaml:"old_version_target"` // 旧版去向 redundant/existing/delete（115 回收站）
 }
 
 // loadWashStrategies 从 UI 保存的 YAML（ScrapeRule.wash_config）解析全部策略。
@@ -311,11 +311,11 @@ const (
 	washFailed    = "failed"    // 旧版未能让位，新版留在待整理，避免覆盖仍在库内的文件。
 	washReplaced  = "replaced"  // 新版更优：旧版已让位，新版落入正常入库
 	washNotBetter = "notbetter" // 库内已有更优版本：新版应移「已存在」
-	washSkip      = "skip"      // 未配置规则/库内无该片的文件：不做洗版判定
+	washSkip      = "skip"      // 未配置策略/库内无可比文件/共存：不做替换
 )
 
 // tryWashReplace 洗版判定与替换执行：
-//   - 新版更好 → 被它顶掉的旧版按策略配置的去向迁移（冗余/已存在），清理台账与
+//   - 新版更好或 replace 无优先级 → 旧版按配置迁移（冗余/已存在/回收站），清理台账与
 //     本地产物，返回 washReplaced 让调用方继续正常入库
 //   - 旧版更好 → 返回 washNotBetter，调用方应把新文件移「已存在」
 //   - 无策略/库内没有可比的版本 → 返回 washSkip
@@ -337,15 +337,24 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, t
 type washFileOps interface {
 	ensurePath(string, string) (string, error)
 	moveFiles(string, []string) error
+	deleteFiles([]string) error
 }
 
 func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, targetDir string, st *washStrategy, libFiles []model.SyncedFile, onLog func(string)) string {
+	return runWashReplaceWithNotify(ops, cfg, media, newName, targetDir, st, libFiles, onLog, notifyEmbyDeleted)
+}
+
+func runWashReplaceWithNotify(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, targetDir string, st *washStrategy, libFiles []model.SyncedFile, onLog func(string), notifyDeleted func(...string)) string {
 	mode := st.Mode
 	if mode == "" {
 		mode = "replace"
 	}
-	if mode != "skip" && mode != "coexist" && len(st.PriorityLevel) == 0 {
+	if mode != "replace" && mode != "skip" && mode != "coexist" && len(st.PriorityLevel) == 0 {
 		return washSkip
+	}
+	// 未配置优先级时明确采用新替旧；有规则时仍保留平局不换的行为。
+	newWins := func(oldName string) bool {
+		return (mode == "replace" && len(st.PriorityLevel) == 0) || washDecision(newName, []string{oldName}, st.PriorityLevel)
 	}
 	oldTarget := st.OldVersionTarget
 	if oldTarget == "" {
@@ -414,7 +423,7 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 	oldName := ledgerName(best)
 	// max_size/min_size：规则分不出高下（平局）时保守不替换——
 	// 新文件在网盘移动前拿不到可靠大小，误删更优版本代价比保守大
-	if !washDecision(newName, []string{oldName}, st.PriorityLevel) {
+	if !newWins(oldName) {
 		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（mode=%s），按已存在处理",
 			media.Title, shortLogName(newName), shortLogName(oldName), mode))
 		return washNotBetter
@@ -426,7 +435,7 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 	victims := make([]model.SyncedFile, 0, len(cands))
 	stems := make([]string, 0, len(cands))
 	for _, c := range cands {
-		if !washDecision(newName, []string{ledgerName(c)}, st.PriorityLevel) {
+		if !newWins(ledgerName(c)) {
 			continue // 和新版平手或更优的版本不动
 		}
 		victims = append(victims, c)
@@ -459,26 +468,34 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 	destCid := cfg.Redundant
 	if oldTarget == "existing" {
 		destCid = cfg.Existing
-	} else if oldTarget == "delete" {
-		// 「删除」按约定不做网盘真删除，直接移入冗余目录
-		onLog("○ 旧版去向「删除」按移入冗余目录处理（不做网盘删除）")
 	}
 	// 旧版去向目录：电影用标题目录；剧集用 标题/Season（保留季结构便于辨认）
 	destRel := path.Base(targetDir)
 	if strings.HasPrefix(strings.ToLower(destRel), "season") {
 		destRel = path.Base(path.Dir(targetDir)) + "/" + destRel
 	}
-	junkCid, err := ops.ensurePath(destCid, "洗版-旧版本/"+destRel)
-	if err != nil {
-		// 建目录失败绝不能清台账：文件还在库里，台账一删同步/去重全部失明
-		onLog(fmt.Sprintf("✗ 洗版：创建旧版目录失败: %v（本轮跳过，台账保留）", err))
-		return washFailed
+	oldDestination := destLabelOf(oldTarget) + "/洗版-旧版本/" + destRel
+	if oldTarget == "delete" {
+		// 必须走整理的 ops：成功后登记删除抑制并失效缓存，增量只消费事件，
+		// 不再按旧路径删 STRM 或刷新 Emby（同名新版可能已经落盘）。
+		if err := ops.deleteFiles(fids); err != nil {
+			onLog(fmt.Sprintf("✗ 洗版：旧版移入回收站失败: %v（台账保留）", err))
+			return washFailed
+		}
+		oldDestination = "115 回收站"
+	} else {
+		junkCid, err := ops.ensurePath(destCid, "洗版-旧版本/"+destRel)
+		if err != nil {
+			// 建目录失败绝不能清台账：文件还在库里，台账一删同步/去重全部失明
+			onLog(fmt.Sprintf("✗ 洗版：创建旧版目录失败: %v（本轮跳过，台账保留）", err))
+			return washFailed
+		}
+		if err := ops.moveFiles(junkCid, fids); err != nil {
+			onLog(fmt.Sprintf("✗ 洗版移动旧版失败: %v（台账保留）", err))
+			return washFailed
+		}
 	}
-	if err := ops.moveFiles(junkCid, fids); err != nil {
-		onLog(fmt.Sprintf("✗ 洗版移动旧版失败: %v（台账保留）", err))
-		return washFailed
-	}
-	onLog(fmt.Sprintf("○ 洗版：%d 个旧版文件已移到 %s/洗版-旧版本/%s（cid=%s）", len(fids), destLabelOf(oldTarget), destRel, junkCid))
+	onLog(fmt.Sprintf("○ 洗版：%d 个旧版文件已移到 %s", len(fids), oldDestination))
 	// 搬移成功后才清台账（按查到的行精确清理，避免前缀字符串推导）。
 	// 本地 strm/附属实体也一并删：旧版已经不在库目录下了，留着就是
 	// 指向「冗余/洗版-旧版本」的多余版本，Emby 会当成同一集的两个源。
@@ -489,7 +506,6 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 	cleaned := 0
 	var cleanedPaths []string
 	for _, sf := range victims {
-		ids = append(ids, sf.ID)
 		if sf.RelPath == "" {
 			continue
 		}
@@ -499,23 +515,34 @@ func runWashReplace(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, newName, 
 			continue
 		}
 		cleaned++
+		ids = append(ids, sf.ID)
 		cleanedPaths = append(cleanedPaths, full)
 		onLog(fmt.Sprintf("○ 洗版：已删除旧版本地文件 %s", sf.RelPath))
 		removeEmptyParents(filepath.Dir(full), localRoot)
+	}
+	if len(ids) > 0 {
+		if err := model.DB.Where("id IN ?", ids).Delete(&model.SyncedFile{}).Error; err != nil {
+			onLog(fmt.Sprintf("✗ 洗版：清理旧版台账失败: %v，本轮停止入库", err))
+			return washFailed
+		}
 	}
 	if cleaned > 0 {
 		onLog(fmt.Sprintf("○ 洗版：共清理 %d 个旧版本地文件（本地根 %s）", cleaned, localRoot))
 		// 旧版删了不通知 Emby 的话，同一集在库里会挂着两个源，
 		// 点到旧的那个就是播放 404 —— 洗版最典型的翻车现场
-		go notifyEmbyDeleted(cleanedPaths...)
+		// 先清台账再通知，避免 Emby 删除回调再次命中旧版；等待请求提交后才
+		// 允许同名新版落盘，防止异步删除旧条目的请求误碰新版文件。
+		notifyDeleted(cleanedPaths...)
 	}
-	model.DB.Where("id IN ?", ids).Delete(&model.SyncedFile{})
+	if cleaned != len(victims) {
+		onLog("✗ 洗版：旧版本地清理未完成，失败项台账保留，本轮停止入库")
+		return washFailed
+	}
 
-	destLabel := destLabelOf(oldTarget)
-	onLog(fmt.Sprintf("✦ 洗版替换: 新版 %s 优于库内旧版 %s，旧版已移到%s/洗版-旧版本",
-		shortLogName(newName), shortLogName(oldName), destLabel))
-	go NotifyMessage("🔄 洗版替换", fmt.Sprintf("新版: %s\n旧版: %s\n旧版已移到%s/洗版-旧版本",
-		truncateStr(newName, 80), truncateStr(oldName, 80), destLabel))
+	onLog(fmt.Sprintf("✦ 洗版替换: 新版 %s 替换库内旧版 %s，旧版已移到%s",
+		shortLogName(newName), shortLogName(oldName), oldDestination))
+	go NotifyMessage("🔄 洗版替换", fmt.Sprintf("新版: %s\n旧版: %s\n旧版已移到%s",
+		truncateStr(newName, 80), truncateStr(oldName, 80), oldDestination))
 	return washReplaced
 }
 

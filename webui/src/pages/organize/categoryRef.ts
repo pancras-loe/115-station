@@ -210,18 +210,18 @@ export const CATEGORY_FIELD_KEYS = [
 export const WASH_MODES: [string, string][] = [
   ['coexist', '共存，两个版本都留着，新版照常入库'],
   ['skip', '跳过，库内已有就不再收新的'],
-  ['replace', '替换，按优先级比较，新版更优才顶掉旧版'],
+  ['replace', '无优先级时新替旧；有优先级时新版更优才替换'],
   ['max_size', '按 replace 处理；体积比较尚未实现'],
   ['min_size', '按 replace 处理；体积比较尚未实现'],
 ]
 
 export const WASH_STRATEGY_FIELDS: [string, string][] = [
   ['mode', '洗版模式，见上表；留空按 replace'],
-  ['scope', 'all = 全局只留一个最优；group = 按分辨率分组各留一个'],
+  ['scope', 'all = 同一影片（剧集同一集）跨分辨率比较；group = 只比较同分辨率'],
   ['media_type', 'movie / tv，留空匹配所有'],
   ['category', '限定二级分类名，逗号分隔，留空匹配所有'],
-  ['priority_level', '优先级规则列表，从上到下越靠前越优先'],
-  ['old_version_target', '旧版去向：redundant 冗余目录 / existing 已存在目录'],
+  ['priority_level', '可选；replace 留空时新替旧，填写后从上到下比较'],
+  ['old_version_target', '旧版去向：redundant 冗余目录 / existing 已存在目录 / delete 115 回收站'],
 ]
 
 export const WASH_FIELDS: [string, string][] = [
@@ -248,7 +248,7 @@ export const WASH_RULES: [string, string][] = [
   ['优先级', 'priority_level 从上到下，第一条能分出高下的决定胜负'],
   ['多条件', '同一条优先级下多个条件为「且」关系'],
   ['多值', '逗号分隔：正值命中任一即算符合，! 前缀命中任一即排除'],
-  ['判不出时', '所有优先级都平手 → 保守不替换，新版按「已存在」处理'],
+  ['判不出时', '有优先级但全平手 → 新版按「已存在」处理；replace 未填优先级 → 新替旧'],
   ['剧集', '只与同一集比较；库内没有这一集时直接入库，不做洗版'],
 ]
 

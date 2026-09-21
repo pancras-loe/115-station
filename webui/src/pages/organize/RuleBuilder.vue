@@ -117,7 +117,7 @@ const levels = ref<Record<string, string[]>[]>([{}])
 
 const modeOptions: SelectOption[] = WASH_MODES.map(([v, l]) => ({ label: `${v} — ${l}`, value: v }))
 const scopeOptions: SelectOption[] = [
-  { label: 'all — 全局只留一个最优版本', value: 'all' },
+  { label: 'all — 同一影片（同一集）跨分辨率比较', value: 'all' },
   { label: 'group — 按分辨率分组各留一个', value: 'group' },
 ]
 const mediaOptions: SelectOption[] = [
@@ -128,6 +128,7 @@ const mediaOptions: SelectOption[] = [
 const targetOptions: SelectOption[] = [
   { label: 'redundant — 旧版移到冗余目录', value: 'redundant' },
   { label: 'existing — 旧版移到已存在目录', value: 'existing' },
+  { label: 'delete — 旧版移入 115 回收站', value: 'delete' },
 ]
 
 const washFieldOptions: Record<string, SelectOption[]> = Object.fromEntries(
@@ -344,7 +345,7 @@ watch(show, v => {
         <div class="levels">
           <div class="levels-head">
             <span>优先级阶梯</span>
-            <em>从上到下越靠前越优先；同一级内多个条件是「且」，一个条件里多选是「或」</em>
+            <em>replace 不填时新替旧；填写后从上到下比较，同一级条件是「且」，一个条件里多选是「或」</em>
           </div>
 
           <div v-for="(lv, i) in levels" :key="i" class="level">

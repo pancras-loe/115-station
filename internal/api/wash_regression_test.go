@@ -106,6 +106,8 @@ func TestWashLedgerLiteralAndDirectScope(t *testing.T) {
 
 type washFailOps struct{ moved []string }
 
+func (f *washFailOps) deleteFiles([]string) error { return errors.New("模拟删除失败") }
+
 func (f *washFailOps) ensurePath(string, string) (string, error) { return "old", nil }
 func (f *washFailOps) moveFiles(_ string, ids []string) error {
 	f.moved = append(f.moved, ids...)

@@ -422,7 +422,8 @@ func InitDefaultCategories(db *gorm.DB) error {
 // 代码里不再留任何隐式兜底，否则「我明明清空了还在洗」无从解释
 const DefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace替换 / max_size最大 / min_size最小
 # scope：all=全局只留一个最优 / group=按分辨率分组各留一个（如1080p/2160p各一）
-# old_version_target：旧版去向 redundant冗余 / existing已存在（默认冗余）
+# old_version_target：旧版去向 redundant冗余 / existing已存在 / delete移入115回收站（默认冗余）
+# replace 不配置 priority_level 时新替旧；有优先级时新版更优才替换，平局不换
 # 优先级字段说明：
 #   resource_pix: 分辨率（2160p, 1080p, 720p）
 #   resource_type: 资源质量（BluRay, WEB-DL, HDTV）
