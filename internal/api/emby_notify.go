@@ -118,6 +118,14 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		// 事件仅处理自身命中的台账；通知去重不应吞掉神医事件的额外定位信息。
 		go h.deepDelOnEmbyDelete(payload, strings.Contains(event, "deep.delete"))
 
+		// 本站自己删的（洗版让位、增量同步清 strm、深度删除）：这条事件是
+		// 我们动作的回声，不是「有人在 Emby 里删了片子」，不推通知
+		if embySelfDeleted(itemPath) {
+			log.Printf("[Emby Webhook] 本站自产的删除事件（%s），跳过通知", itemName)
+			c.JSON(http.StatusOK, gin.H{"message": "ok（自产删除事件，已跳过通知）"})
+			return
+		}
+
 		// 装了神医助手时 deep.delete 与 library.deleted 两条都发（实测，不是替换），
 		// 同一次删除会推两条一模一样的卡片。按条目 id 去重，先到的那条赢——
 		// 两条的 Date 只差几毫秒且到达顺序不保证，不能假设谁先谁后
@@ -243,12 +251,12 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 	if t := str(item, "Type"); t == "Episode" || t == "Series" {
 		typeLabel = "剧集"
 	}
-	line := "Emby 入库 · " + typeLabel
+	entry := mediaNotifEntry{Title: title, Year: year, Kind: typeLabel}
 	if r, ok := item["CommunityRating"].(float64); ok && r > 0 {
-		line += fmt.Sprintf(" · ⭐ %.1f", r)
+		entry.Rating = r
 	}
-
-	entry := mediaNotifEntry{Title: title, Year: year, Line: line}
+	// 洗版替换的说明挂到这部片的卡片上，不再单独推一条
+	entry.Notes = washNotesFor(entry.mergeKey())
 	// Emby 封面与播放链接
 	if base, apiKey, ok := h.embyServerInfo(); ok {
 		if id := str(item, "Id"); id != "" {

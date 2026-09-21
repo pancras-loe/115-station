@@ -1979,7 +1979,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			movedBytes += f.Size
 		}
 	}
-	notifyMediaStoredFull(media, dir.Name, pathBase(newPath), category, videoFiles, mainVideo.Name, movedCount, movedBytes)
+	notifyMediaStoredFull(media, category, videoFiles, mainVideo.Name, movedCount, movedBytes)
 
 	// 生成结果
 	for _, vf := range videoFiles {
@@ -2371,6 +2371,9 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	ctx.sink.note(rec)
 
 	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
+	// 入库卡片：散文件这条线此前一张都不发，同样一次入库，用户收不收得到
+	// 通知全看内容是目录还是单文件
+	notifyMediaStoredFull(media, category, []remoteFile{video}, finalName, 1+len(attachments), f.Size)
 	result.Category = category
 	result.TargetDir = targetDir
 	result.Status = "success"
@@ -2433,7 +2436,7 @@ func (h *Handler) executeOrganizeWithConfig(cfg *OrgConfig) (stepsOut []gin.H, d
 	sink.flushScrape()
 	sink.flushRefresh()
 	// 收尾与 executeOrganize 共用：同一件事不该因为触发来源不同而汇总不同
-	finishOrganize(sink, orgResults, successCount, orgStart)
+	finishOrganize(sink, orgResults, orgStart)
 
 	totalFiles := len(orgResults)
 	existsCount, failedCount := 0, 0
@@ -2794,9 +2797,9 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 	return rng, strings.Join(parts, ",")
 }
 
-// notifyMediaStoredFull 入库成功富通知：TMDB 封面（企微图文卡 / TG 图片），
-// 内容含 类型/类别/质量/文件数与大小/集数区间/重命名信息
-func notifyMediaStoredFull(media *TmdbMedia, oldName, newName, category string, videoFiles []remoteFile, mainVideoName string, movedCount int, movedBytes int64) {
+// notifyMediaStoredFull 整理入库 → 入库卡片（TMDB 封面 + 画质/文件数/集数）。
+// Emby 扫描完成后 webhook 那条会并进同一张卡片，不会各推一条
+func notifyMediaStoredFull(media *TmdbMedia, category string, videoFiles []remoteFile, mainVideoName string, movedCount int, movedBytes int64) {
 	if media == nil {
 		return
 	}
@@ -2804,36 +2807,21 @@ func notifyMediaStoredFull(media *TmdbMedia, oldName, newName, category string, 
 	if media.MediaType == "tv" {
 		typeLabel = "剧集"
 	}
-	// 质量：分辨率 + 特效 + 来源（从主视频文件名解析）
-	quality := ""
-	if mainVideoName != "" {
-		ri := ParseResourceInfo(mainVideoName)
-		q := strings.ToUpper(ri.Pix)
-		if ri.Effect != "" {
-			q += " " + strings.ToUpper(ri.Effect)
-		}
-		if ri.Type != "" {
-			q += " " + strings.ToUpper(ri.Type)
-		}
-		quality = q
-	}
-	lines := []string{fmt.Sprintf("类型：%s · 类别：%s", typeLabel, category)}
-	if quality != "" {
-		lines = append(lines, "质量："+quality)
+	entry := mediaNotifEntry{
+		Title: media.Title, Year: media.Year, Kind: typeLabel,
+		Category: category, Quality: qualityLabel(mainVideoName), Rating: media.VoteAverage,
 	}
 	if movedCount > 0 {
-		lines = append(lines, fmt.Sprintf("共计：%d 个文件 · %s", movedCount, humanSizeBytes(movedBytes)))
+		entry.Files = fmt.Sprintf("%d 个文件 · %s", movedCount, humanSizeBytes(movedBytes))
 	}
 	if ep, miss := episodeRangeWithMissing(videoFiles, media); ep != "" {
+		entry.Episodes = ep + "（全）"
 		if miss != "" {
-			lines = append(lines, "集数："+ep+"（缺 "+miss+"）")
-		} else {
-			lines = append(lines, "集数："+ep+"（全）")
+			entry.Episodes = ep + "（缺 " + miss + "）"
 		}
 	}
-	content := strings.Join(lines, "\n")
-
-	entry := mediaNotifEntry{Title: media.Title, Year: media.Year, Line: content}
+	// 洗版替换的说明挂到这部片的卡片上，不再单独推一条
+	entry.Notes = washNotesFor(entry.mergeKey())
 	if media.TmdbID != 0 && media.PosterPath != "" {
 		entry.PosterURL = tmdbImageBase() + "/t/p/w500" + media.PosterPath
 		if media.MediaType == "tv" {
@@ -2843,4 +2831,20 @@ func notifyMediaStoredFull(media *TmdbMedia, oldName, newName, category string, 
 		}
 	}
 	QueueMediaNotif(entry)
+}
+
+// qualityLabel 从文件名里提出给人看的画质标签：分辨率 + 特效 + 来源。
+// 一个都认不出来就返回空，卡片上宁可不显示这一行
+func qualityLabel(name string) string {
+	if name == "" {
+		return ""
+	}
+	ri := ParseResourceInfo(name)
+	parts := make([]string, 0, 3)
+	for _, v := range []string{ri.Pix, ri.Effect, ri.Type} {
+		if v != "" {
+			parts = append(parts, strings.ToUpper(v))
+		}
+	}
+	return strings.Join(parts, " ")
 }

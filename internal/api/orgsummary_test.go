@@ -22,7 +22,7 @@ func TestFinishOrganizeSummary(t *testing.T) {
 		{Status: "exists", Title: "美国队长", Year: "2011", TmdbID: 1771,
 			TargetDir: "电影/美国队长.2011.{tmdbid=1771}"},
 	}
-	finishOrganize(&orgSink{}, results, 1, time.Now())
+	finishOrganize(&orgSink{}, results, time.Now())
 
 	out := buf.String()
 	if !strings.Contains(out, "本次入库 1 部") {
@@ -40,7 +40,7 @@ func TestFinishOrganizeSilentWhenIdle(t *testing.T) {
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	finishOrganize(&orgSink{}, nil, 0, time.Now())
+	finishOrganize(&orgSink{}, nil, time.Now())
 
 	if out := buf.String(); strings.Contains(out, "整理完成") {
 		t.Fatalf("空转不该打完成汇总: %s", out)

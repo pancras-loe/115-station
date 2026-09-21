@@ -1,11 +1,14 @@
 package api
 
-// ==================== 入库通知：聚合防抖 + Emby 封面优先 ====================
+// ==================== 入库通知：一部影视一张卡片 ====================
 //
-// 两级入库语义（借鉴 EmbyPulse）：
-//   第一级：整理完成（115-Station 移库成功）——TMDB 封面（无封面走纯文本）
-//   第二级：Emby 扫描入库完成（Webhook library.new）——封面/评分直接取自 Emby
-// 同级通知 15 秒防抖聚合（上限 120 秒强制发送）：多部影视合并为一条，
+// 一次入库有两个来源：
+//   第一级：整理完成（115-Station 移库成功）——TMDB 封面、画质、文件数、集数
+//   第二级：Emby 扫描入库完成（Webhook library.new）——Emby 封面、评分、详情链接
+// **两级合成同一张卡片**：按媒体键合并（mergeKey），谁先到谁建卡，后到的补字段。
+// 各发各的时候一次入库要推两条几乎一样的消息，这是最招人烦的地方。
+//
+// 15 秒防抖（上限 120 秒强制发送）：同一轮的多部影视合并成一条，
 // 企微 news 多卡片（每部一张封面），TG 一图 + 汇总列表。
 
 import (
@@ -21,15 +24,141 @@ import (
 	"time"
 )
 
-// mediaNotifEntry 一条待聚合的入库通知
+// mediaNotifEntry 一部影视的入库卡片。
+// 字段是结构化的而不是拼好的文本：两级来源各填各的那几项，
+// 合并时按字段取舍，渲染统一在 lines() 里做
 type mediaNotifEntry struct {
 	Title      string
 	Year       string
-	Line       string // 一行描述（类型/分类/重命名/评分）
+	Kind       string  // 电影 / 剧集
+	Category   string  // 二级分类（整理侧）
+	Rating     float64 // 评分（Emby 侧）
+	Quality    string  // 画质：2160P HDR BLURAY（整理侧）
+	Files      string  // 1 个文件 · 27.4 GB（整理侧）
+	Episodes   string  // E01-E12（全）（整理侧）
+	Notes      []string
 	PosterURL  string // 公网封面 URL（TMDB）
 	PosterAlt  string // Emby 直链封面（内网，企微 picurl 可尝试）
 	PosterData []byte // 封面字节（Emby 下载，TG 上传用）
 	Link       string
+}
+
+// mergeKey 同一部影视的合并键。
+// 剧集不带年份：整理侧拿的是首播年，Emby 单集事件给的是这一集的年份，
+// 带上年份反而合不到一起
+func (e mediaNotifEntry) mergeKey() string {
+	t := strings.ToLower(strings.TrimSpace(e.Title))
+	if t == "" {
+		return ""
+	}
+	if e.Kind == "剧集" {
+		return "tv:" + t
+	}
+	return "mv:" + t + "|" + e.Year
+}
+
+// headline 卡片标题
+func (e mediaNotifEntry) headline() string {
+	if e.Year != "" {
+		return e.Title + "（" + e.Year + "）"
+	}
+	return e.Title
+}
+
+// lines 卡片正文。空字段不占行，别让卡片里留一堆「未知」
+func (e mediaNotifEntry) lines() []string {
+	var out []string
+	head := []string{}
+	if e.Kind != "" {
+		icon := "🎬"
+		if e.Kind == "剧集" {
+			icon = "📺"
+		}
+		head = append(head, icon+" "+e.Kind)
+	}
+	if e.Category != "" && e.Category != e.Kind {
+		head = append(head, e.Category)
+	}
+	if e.Rating > 0 {
+		head = append(head, fmt.Sprintf("⭐ %.1f", e.Rating))
+	}
+	if len(head) > 0 {
+		out = append(out, strings.Join(head, " · "))
+	}
+	if e.Quality != "" {
+		out = append(out, "📀 "+e.Quality)
+	}
+	if e.Episodes != "" {
+		out = append(out, "🎞 "+e.Episodes)
+	}
+	if e.Files != "" {
+		out = append(out, "📦 "+e.Files)
+	}
+	return append(out, e.Notes...)
+}
+
+// body 正文文本
+func (e mediaNotifEntry) body() string { return strings.Join(e.lines(), "\n") }
+
+// summary 聚合列表里的一行简述
+func (e mediaNotifEntry) summary() string {
+	parts := []string{}
+	if e.Kind != "" {
+		parts = append(parts, e.Kind)
+	}
+	if e.Quality != "" {
+		parts = append(parts, e.Quality)
+	}
+	if e.Episodes != "" {
+		parts = append(parts, e.Episodes)
+	}
+	if e.Rating > 0 {
+		parts = append(parts, fmt.Sprintf("⭐ %.1f", e.Rating))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// mergeFrom 把另一条来源补进这张卡片：已有的字段不覆盖，
+// 封面与详情链接偏向 Emby（评分、海报都是刮削完的成品）
+func (e *mediaNotifEntry) mergeFrom(o mediaNotifEntry) {
+	if e.Year == "" {
+		e.Year = o.Year
+	}
+	if e.Kind == "" {
+		e.Kind = o.Kind
+	}
+	if e.Category == "" {
+		e.Category = o.Category
+	}
+	if e.Rating == 0 {
+		e.Rating = o.Rating
+	}
+	if e.Quality == "" {
+		e.Quality = o.Quality
+	}
+	if e.Files == "" {
+		e.Files = o.Files
+	}
+	if e.Episodes == "" {
+		e.Episodes = o.Episodes
+	}
+	if len(o.PosterData) > 0 {
+		e.PosterData = o.PosterData
+	}
+	if o.PosterAlt != "" {
+		e.PosterAlt = o.PosterAlt
+	}
+	if e.PosterURL == "" {
+		e.PosterURL = o.PosterURL
+	}
+	if o.Link != "" {
+		e.Link = o.Link
+	}
+	for _, n := range o.Notes {
+		if !containsStr(e.Notes, n) {
+			e.Notes = append(e.Notes, n)
+		}
+	}
 }
 
 var mediaNotif struct {
@@ -46,7 +175,20 @@ func QueueMediaNotif(e mediaNotifEntry) {
 	}
 	mediaNotif.mu.Lock()
 	defer mediaNotif.mu.Unlock()
-	mediaNotif.items = append(mediaNotif.items, e)
+	// 同一部影视的第二个来源（整理 / Emby 扫描）并进已有卡片，不新开一条
+	merged := false
+	if key := e.mergeKey(); key != "" {
+		for i := range mediaNotif.items {
+			if mediaNotif.items[i].mergeKey() == key {
+				mediaNotif.items[i].mergeFrom(e)
+				merged = true
+				break
+			}
+		}
+	}
+	if !merged {
+		mediaNotif.items = append(mediaNotif.items, e)
+	}
 	if mediaNotif.timer != nil {
 		mediaNotif.timer.Stop()
 	}
@@ -92,47 +234,43 @@ func FlushMediaNotif() {
 }
 
 func sendMediaNotifSingle(cfg *MessageConfig, e mediaNotifEntry) {
-	title := e.Title
-	if e.Year != "" {
-		title += "（" + e.Year + "）"
-	}
+	// 标题就是片名：正文第一行已经带了类型图标，再加一个只是重复
+	title := e.headline()
+	body := e.body()
 	// 企微 news 卡片（封面转存企微图床，失败退回原 URL）
 	if cfg.Wecom.isEnabled() && cfg.Wecom.CorpID != "" && cfg.Wecom.Secret != "" {
 		go func() {
 			pic := wecomPickPic(cfg.Wecom, e)
-			_ = sendWecomNews(cfg.Wecom, title, e.Line, pic, e.Link)
+			_ = sendWecomNews(cfg.Wecom, e.headline(), body, pic, e.Link)
 		}()
 	}
 	// TG：有字节直接上传（内网 Emby 图 TG 服务器拉不到），否则 URL，再退文本
 	if cfg.TG.isEnabled() && cfg.TG.Token != "" && cfg.TG.ChatID != "" {
 		caption := title
-		if e.Line != "" {
-			caption += "\n" + e.Line
+		if body != "" {
+			caption += "\n" + body
 		}
 		switch {
 		case len(e.PosterData) > 0:
 			go sendTelegramPhotoData(cfg.TG, caption, e.PosterData)
 		case e.PosterURL != "":
-			go sendTelegramPhoto(cfg.TG, title, e.Line, e.PosterURL)
+			go sendTelegramPhoto(cfg.TG, title, body, e.PosterURL)
 		default:
 			go sendTelegram(cfg.TG, caption)
 		}
 	}
 	// 飞书 / QQ OneBot / QQ 官方：文本推送（标题+详情）
-	sendExtraChannels(cfg, title, e.Line)
-	log.Printf("[通知] 入库通知已发送: %s", title)
+	sendExtraChannels(cfg, title, body)
+	log.Printf("[通知] 入库通知已发送: %s", e.headline())
 }
 
 func sendMediaNotifBatch(cfg *MessageConfig, items []mediaNotifEntry) {
 	title := fmt.Sprintf("🎬 本轮入库 %d 部", len(items))
 	lines := make([]string, 0, len(items))
 	for i, e := range items {
-		l := fmt.Sprintf("%d. %s", i+1, e.Title)
-		if e.Year != "" {
-			l += "（" + e.Year + "）"
-		}
-		if e.Line != "" {
-			l += " — " + e.Line
+		l := fmt.Sprintf("%d. %s", i+1, e.headline())
+		if s := e.summary(); s != "" {
+			l += " — " + s
 		}
 		lines = append(lines, truncateStr(l, 120))
 	}
@@ -238,17 +376,13 @@ func sendWecomNewsMulti(cfg WecomConfig, title string, items []mediaNotifEntry) 
 	}
 	articles := []map[string]string{}
 	for _, e := range items[:min(len(items), 8)] {
-		t := e.Title
-		if e.Year != "" {
-			t += "（" + e.Year + "）"
-		}
 		link := e.Link
 		if link == "" {
 			link = wecomCardFallbackLink()
 		}
 		articles = append(articles, map[string]string{
-			"title":       truncateStr(t, 90),
-			"description": truncateStr(e.Line, 200),
+			"title":       truncateStr(e.headline(), 90),
+			"description": truncateStr(e.body(), 200),
 			"picurl":      wecomPickPic(cfg, e),
 			"url":         link,
 		})
@@ -286,11 +420,7 @@ func sendWecomNewsMulti(cfg WecomConfig, title string, items []mediaNotifEntry) 
 func lineListOf(items []mediaNotifEntry) []string {
 	lines := make([]string, 0, len(items))
 	for _, e := range items {
-		l := e.Title
-		if e.Year != "" {
-			l += "（" + e.Year + "）"
-		}
-		lines = append(lines, l)
+		lines = append(lines, e.headline())
 	}
 	return lines
 }

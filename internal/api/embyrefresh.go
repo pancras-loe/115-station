@@ -172,6 +172,12 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	}
 
 	if kind == embyRefreshDeleted {
+		// 这批删除是本站自己做的（洗版让位、增量同步清 strm、深度删除）。
+		// Emby 处理完会把 library.deleted 推回来，那条事件不该再当成
+		// 「有人在 Emby 里删了东西」推一条通知给用户
+		for _, local := range localPaths {
+			markEmbySelfDeleted(embyPathOf(cfg, local))
+		}
 		// 精确删掉的路径不再进入刷新流程；全删干净就整轮结束
 		if localPaths = embyDeleteItems(cfg, loadLibs, localPaths); len(localPaths) == 0 {
 			return
@@ -289,18 +295,12 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		embyReportUpdated(cfg, unmatched, kind.updateType())
 	}
 
-	// 配置了 Emby webhook 入库通知时，入库卡片（带海报）会随后到达，
-	// 这里只记日志避免双重通知；未配置 webhook 时才发这条提示。
-	// 删除场景不发：删除通知由 webhook 那条线负责，这里再发一条就是重复
-	if kind != embyRefreshAdded || len(refreshed) == 0 {
-		return
+	// 「已刷新媒体库：电影」这条消息不发了：它说的是「我让 Emby 去扫了一下」，
+	// 对用户没有任何信息量，却每轮入库都要占一条推送。入库本身有卡片，
+	// 刷新提交与回查结论都在日志里（MoviePilot / p115strmhelper 也都不推这个）
+	if kind == embyRefreshAdded && len(refreshed) > 0 {
+		log.Printf("[Emby] ○ 已提交刷新（入库）：%s", strings.Join(dedupeStrings(refreshed), "、"))
 	}
-	names := strings.Join(dedupeStrings(refreshed), "、")
-	if embyWebhookConfigured() {
-		log.Printf("[Emby] ○ 已提交刷新（%s）；webhook 入库通知已配置，跳过本条消息", names)
-		return
-	}
-	go NotifyMessage("🎬 媒体入库", "已刷新媒体库："+names)
 }
 
 // embyVerifyDelays 入库回查的时间点（相对提交刷新的时刻）。
@@ -487,6 +487,50 @@ func embyTargetPaths(localPaths []string, cfg embyRefreshCfg, kind embyRefreshKi
 		out = append(out, t)
 	}
 	return out
+}
+
+// ---- 自产删除标记 ----
+//
+// 本站删掉 STRM 之后会让 Emby 清条目，Emby 处理完又把 library.deleted
+// 推回来。那条事件不是「有人删了片子」，是我们自己动作的回声 ——
+// 报给用户就是噪音（洗版一次就能收到一条「🗑️ Emby 删除 美国队长」）。
+// 窗口给得比较宽：删不掉条目时走的是刷新，Emby 实测能拖到 9 分钟才扫到
+const embySelfDeleteTTL = 15 * time.Minute
+
+var (
+	embySelfDelMu sync.Mutex
+	embySelfDel   = map[string]time.Time{}
+)
+
+func markEmbySelfDeleted(embyPath string) {
+	if embyPath == "" {
+		return
+	}
+	embySelfDelMu.Lock()
+	defer embySelfDelMu.Unlock()
+	now := time.Now()
+	for k, t := range embySelfDel {
+		if now.Sub(t) > embySelfDeleteTTL {
+			delete(embySelfDel, k)
+		}
+	}
+	embySelfDel[embyDelKey(embyPath)] = now
+}
+
+// embySelfDeleted 这条删除事件是不是本站自己捅出来的
+func embySelfDeleted(embyPath string) bool {
+	if embyPath == "" {
+		return false
+	}
+	embySelfDelMu.Lock()
+	defer embySelfDelMu.Unlock()
+	t, ok := embySelfDel[embyDelKey(embyPath)]
+	return ok && time.Since(t) <= embySelfDeleteTTL
+}
+
+// embyDelKey 路径风格（windows 反斜杠）与末尾斜杠都不参与比对
+func embyDelKey(p string) string {
+	return strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/")
 }
 
 // embyPathOf 本地路径 → Emby 看到的路径（映射规则 + 路径风格）
@@ -901,17 +945,6 @@ func embyReportUpdated(cfg embyRefreshCfg, embyPaths []string, updateType string
 		return
 	}
 	log.Printf("[Emby] ○ 路径变更通知已发送（%s）：%v", updateType, embyPaths)
-}
-
-// embyWebhookConfigured 是否配置了 Emby webhook 入库通知（emby-notify 卡）
-func embyWebhookConfigured() bool {
-	var cfg struct {
-		Webhook string `json:"webhook"`
-	}
-	if json.Unmarshal([]byte(settingValueCompat("emby-notify")), &cfg) != nil {
-		return false
-	}
-	return strings.TrimSpace(cfg.Webhook) != ""
 }
 
 // mapLocalToEmbyPath 本地路径 → Emby 路径（mapToEmbyPath 的纯函数形态）。

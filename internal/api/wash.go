@@ -541,9 +541,99 @@ func runWashReplaceWithNotify(ops washFileOps, cfg *OrgConfig, media *TmdbMedia,
 
 	onLog(fmt.Sprintf("✦ 洗版替换: 新版 %s 替换库内旧版 %s，旧版已移到%s",
 		shortLogName(newName), shortLogName(oldName), oldDestination))
-	go NotifyMessage("🔄 洗版替换", fmt.Sprintf("新版: %s\n旧版: %s\n旧版已移到%s",
-		truncateStr(newName, 80), truncateStr(oldName, 80), oldDestination))
+	noteWashReplace(media, oldName, newName, oldDestination)
 	return washReplaced
+}
+
+// ---- 洗版替换说明：挂到入库卡片上，不单独推一条 ----
+//
+// 洗版本来就是「这部片入库了，顺带把旧版换掉」，拆成两条消息读起来像
+// 两件事；文件名又长，一条消息里贴两个原始文件名根本没法看。
+// 现在只留一行画质对比，跟着这部片的入库卡片一起发。
+//
+// 卡片没能在 washNoteTTL 内认领（Emby 没扫到 / 整理侧没发卡片）时，
+// 到点自己发一条兜底消息 —— 旧版去了哪儿这种事不能无声无息
+const washNoteTTL = 5 * time.Minute
+
+// washNote 一条洗版说明。整季逐集替换时 12 集的对比文字一模一样，
+// 合成一行带次数，不能在卡片上摞 12 行
+type washNote struct {
+	text string
+	n    int
+}
+
+var (
+	washNoteMu sync.Mutex
+	washNotes  = map[string][]washNote{}
+)
+
+func noteWashReplace(media *TmdbMedia, oldName, newName, destination string) {
+	text := fmt.Sprintf("♻️ 洗版替换 %s → %s · 旧版已移到 %s",
+		washQualityOf(oldName), washQualityOf(newName), destination)
+	key := washNoteKeyOf(media)
+	if key == "" {
+		go NotifyMessage("♻️ 洗版替换", text)
+		return
+	}
+	washNoteMu.Lock()
+	notes, found := washNotes[key], false
+	for i := range notes {
+		if notes[i].text == text {
+			notes[i].n++
+			found = true
+			break
+		}
+	}
+	if !found {
+		notes = append(notes, washNote{text: text, n: 1})
+	}
+	washNotes[key] = notes
+	washNoteMu.Unlock()
+	time.AfterFunc(washNoteTTL, func() {
+		for _, n := range washNotesFor(key) {
+			NotifyMessage("♻️ 洗版替换", n) // 没人认领：兜底单独发
+		}
+	})
+}
+
+// washNotesFor 取走并清空这部片待认领的洗版说明
+func washNotesFor(key string) []string {
+	if key == "" {
+		return nil
+	}
+	washNoteMu.Lock()
+	defer washNoteMu.Unlock()
+	notes := washNotes[key]
+	delete(washNotes, key)
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		if n.n > 1 {
+			out = append(out, fmt.Sprintf("%s ×%d", n.text, n.n))
+			continue
+		}
+		out = append(out, n.text)
+	}
+	return out
+}
+
+// washNoteKeyOf 与入库卡片同一套合并键
+func washNoteKeyOf(media *TmdbMedia) string {
+	if media == nil {
+		return ""
+	}
+	e := mediaNotifEntry{Title: media.Title, Year: media.Year, Kind: "电影"}
+	if media.MediaType == "tv" {
+		e.Kind = "剧集"
+	}
+	return e.mergeKey()
+}
+
+// washQualityOf 画质标签，认不出来就退回截短的文件名
+func washQualityOf(name string) string {
+	if q := qualityLabel(name); q != "" {
+		return q
+	}
+	return truncateStr(name, 40)
 }
 
 // destLabelOf 旧版去向的中文名（日志用）

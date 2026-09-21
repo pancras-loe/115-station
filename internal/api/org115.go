@@ -89,37 +89,20 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	sink.flushScrape()
 	sink.flushRefresh()
 
-	finishOrganize(sink, orgResults, successCount, orgStart)
+	finishOrganize(sink, orgResults, orgStart)
 	return steps, orgResults, nil
 }
 
-// finishOrganize 整理收尾：新增通知 + 按部汇总 + 完成行。
+// finishOrganize 整理收尾：按部汇总 + 完成行（都只进日志）。
 //
 // 两个整理入口（扫待整理目录的 executeOrganize、扫转存目录的
 // executeOrganizeWithConfig）共用这一段。各写各的时候，同一件事按触发来源
-// 会打出两种格式，而且转存那边既不报入库片单、也不发新增通知 ——
-// 2026-09-21 洗版验证的日志里两种格式各出现了一次
-func finishOrganize(sink *orgSink, results []OrganizeResult, successCount int, start time.Time) {
-	if successCount > 0 {
-		var titles []string
-		for _, r := range results {
-			if r.Status != "success" {
-				continue
-			}
-			line := r.Title
-			if r.Year != "" {
-				line += " (" + r.Year + ")"
-			}
-			if r.Category != "" {
-				line += " [" + r.Category + "]"
-			}
-			titles = append(titles, line)
-		}
-		NotifyMessage(
-			fmt.Sprintf("整理完成，新增 %d 部", successCount),
-			strings.Join(titles, "\n"),
-		)
-	}
+// 会打出两种格式，而且转存那边不报入库片单 ——
+// 2026-09-21 洗版验证的日志里两种格式各出现了一次。
+//
+// 这里不再推「整理完成，新增 N 部」那条消息：每部片入库时各自有一张卡片
+// （封面 + 画质 + 集数），同一批内容推两遍纯属打扰
+func finishOrganize(sink *orgSink, results []OrganizeResult, start time.Time) {
 	// 按部汇总（一部剧的 52 个文件归并为一行）
 	showSet := map[string]bool{}
 	var showLines []string
