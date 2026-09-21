@@ -372,12 +372,24 @@ func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, loca
 			rest = append(rest, local)
 			continue
 		}
-		id, name := embyItemIDByPath(cfg, ep)
-		if id == "" || !embyDeleteItem(cfg, id) {
+		// 同一路径上可能同时挂着两个条目（实测被删的电影目录在 Emby 里是
+		// Type=Folder，而刮削出的 Movie 也可能落在同一路径），一次删干净
+		hits := embyItemsByPath(cfg, ep)
+		if len(hits) == 0 {
 			rest = append(rest, local)
 			continue
 		}
-		log.Printf("[Emby] ○ 已删除条目：%s —— %s", name, ep)
+		done := true
+		for _, hit := range hits {
+			if !embyDeleteItem(cfg, hit.ID) {
+				done = false
+				continue
+			}
+			log.Printf("[Emby] ○ 已删除条目：%s —— %s", hit.Name, ep)
+		}
+		if !done {
+			rest = append(rest, local)
+		}
 	}
 	return rest
 }
@@ -553,7 +565,10 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 //
 // Limit 是防守：万一某个 Emby 版本压根不认 Path 参数，Recursive=true
 // 会把整个库倒出来。比不中就返回空，调用方退到整库刷新，不会误刷别的条目
-func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
+// embyItemHit 一条按路径命中的 Emby 条目
+type embyItemHit struct{ ID, Name string }
+
+func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
 	q := url.Values{
 		"Path":      {embyPath},
 		"Recursive": {"true"},
@@ -568,12 +583,12 @@ func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
 	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
 	if err != nil {
 		vlog("[Emby] 按路径查条目失败 %s: %v", embyPath, err)
-		return "", ""
+		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		vlog("[Emby] 按路径查条目 HTTP %d：%s", resp.StatusCode, embyPath)
-		return "", ""
+		return nil
 	}
 	var out struct {
 		Items []struct {
@@ -583,15 +598,24 @@ func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
 		} `json:"Items"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return "", ""
+		return nil
 	}
 	want := strings.TrimRight(strings.ReplaceAll(embyPath, "\\", "/"), "/")
 	for _, it := range out.Items {
 		if strings.TrimRight(strings.ReplaceAll(it.Path, "\\", "/"), "/") == want {
-			return it.ID, it.Name
+			hits = append(hits, embyItemHit{ID: it.ID, Name: it.Name})
 		}
 	}
-	return "", ""
+	return hits
+}
+
+// embyItemIDByPath 同一路径上的第一个条目（刷新只需要一个入口）
+func embyItemIDByPath(cfg embyRefreshCfg, embyPath string) (id, name string) {
+	hits := embyItemsByPath(cfg, embyPath)
+	if len(hits) == 0 {
+		return "", ""
+	}
+	return hits[0].ID, hits[0].Name
 }
 
 // embyRefreshItem POST /Items/{Id}/Refresh —— Emby 真正的条目/媒体库刷新端点。

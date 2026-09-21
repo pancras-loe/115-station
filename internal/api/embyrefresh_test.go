@@ -27,6 +27,7 @@ type fakeEmby struct {
 	libs      []map[string]any // /Library/VirtualFolders/Query 返回的虚拟库（含实际目录）
 	lookupHit bool             // /Items 是否返回匹配条目
 	deleteOK  bool             // 删条目是否放行；false = 模拟没开「允许删除媒体」
+	dupItems  bool             // 同一路径回两个条目（Folder 与刮削出的 Movie 并存）
 	hitPath   string           // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
 	srv       *httptest.Server
 }
@@ -64,6 +65,9 @@ func newFakeEmbyLibs(t *testing.T, libs []map[string]any, lookupHit bool) *fakeE
 			if f.lookupHit && (f.hitPath == "" || f.hitPath == p) {
 				// 回显请求路径：调用方会再比对一次完整路径才认
 				items = append(items, map[string]any{"Id": "item9", "Name": "某片", "Path": p})
+				if f.dupItems {
+					items = append(items, map[string]any{"Id": "item10", "Name": "某片", "Path": p})
+				}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"Items": items})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/Refresh"):
@@ -542,5 +546,22 @@ func TestNotifyEmbyDeletedNeverDeletesLibraryRoot(t *testing.T) {
 
 	if len(f.deleted) != 0 {
 		t.Fatalf("媒体库目录不该被当成条目删掉: %v", f.deleted)
+	}
+}
+
+// 同一路径上挂着两个条目时一次删干净：留一个下来，库里照样看得见
+func TestNotifyEmbyDeletedRemovesAllItemsOnPath(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK, f.dupItems = true, true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.MkdirAll(filepath.Join(root, "电影"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(filepath.Join(root, "电影", "美国队长2.2014.{tmdbid=100402}"))
+
+	if len(f.deleted) != 2 {
+		t.Fatalf("同一路径上的条目应当全部删掉，实际 %v", f.deleted)
 	}
 }
