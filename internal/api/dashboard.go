@@ -224,6 +224,10 @@ func memInfo() (totalMB, usedMB uint64, pct float64, ok bool) {
 	return total, used, float64(used) * 100 / float64(total), true
 }
 
+// dashMissingSample 「本地已不存在」统计的抽样条数。逐条 os.Stat 在网络挂载上很贵，
+// 万级库全量扫一遍会把 30 秒一次的仪表盘轮询拖垮
+const dashMissingSample = 500
+
 // embyDashCache Emby 仪表盘数据短缓存（60 秒；每次刷新要打 Emby 十来个接口）
 var (
 	embyDashMu   sync.Mutex
@@ -231,13 +235,66 @@ var (
 	embyDashAt   time.Time
 )
 
+// embyCountTypes 按媒体库的 CollectionType 给出「一部算一条」的条目类型。
+//
+// ⚠️ 这是「电影库显示 1243 部、实际 619 部」的根因（2026-09 修）：
+// `/Items?ParentId=..&Recursive=true` **不带 IncludeItemTypes** 时，Emby 把子树里
+// 所有条目都计进 TotalRecordCount —— 每部影片自己的那层目录（Type=Folder）也算一条，
+// 「一部影片一个目录」的库正好翻倍。剧集库更离谱：Series + Season + Episode 全算。
+// 收敛到库类型对应的条目类型，数字才和 Emby 自己界面上的一致。
+func embyCountTypes(collectionType string) string {
+	switch strings.ToLower(strings.TrimSpace(collectionType)) {
+	case "movies":
+		return "Movie"
+	case "tvshows":
+		return "Series"
+	case "boxsets":
+		return "BoxSet"
+	case "music":
+		return "MusicAlbum"
+	case "musicvideos":
+		return "MusicVideo"
+	case "homevideos", "photos":
+		return "Video,Photo"
+	case "books":
+		return "Book"
+	default:
+		// 混合库（CollectionType 为空）：Emby 自己的库视图也是按这两类展示的
+		return "Movie,Series"
+	}
+}
+
+// embyCollectionLabel CollectionType 的中文标签（前端媒体库卡片上的副标题）
+func embyCollectionLabel(collectionType string) string {
+	switch strings.ToLower(strings.TrimSpace(collectionType)) {
+	case "movies":
+		return "电影"
+	case "tvshows":
+		return "剧集"
+	case "boxsets":
+		return "合集"
+	case "music":
+		return "音乐"
+	case "musicvideos":
+		return "MV"
+	case "homevideos", "photos":
+		return "家庭影像"
+	case "books":
+		return "图书"
+	default:
+		return "混合"
+	}
+}
+
 // fetchEmbyDashboard 从 Emby 拉媒体统计/媒体库/最新入库（含封面路径）。
-// 未配置 Emby 或请求失败返回 nil（前端回退本地台账数据）
-func fetchEmbyDashboard(h *Handler) gin.H {
+// 未配置 Emby 或请求失败返回 nil（前端回退本地台账数据）。
+// force=true 跳过 60 秒缓存：界面上的「刷新」是用来核对数字的，
+// 命中缓存的话用户点了也看不到修正后的结果
+func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 	embyDashMu.Lock()
 	cached, cacheAt := embyDashData, embyDashAt
 	embyDashMu.Unlock()
-	if cached != nil && time.Since(cacheAt) < 60*time.Second {
+	if !force && cached != nil && time.Since(cacheAt) < 60*time.Second {
 		return cached
 	}
 	base, apiKey, ok := h.embyServerInfo()
@@ -307,6 +364,7 @@ func fetchEmbyDashboard(h *Handler) gin.H {
 			type libOut struct {
 				idx     int
 				name    string
+				typ     string
 				count   int
 				collage []string
 			}
@@ -317,16 +375,21 @@ func fetchEmbyDashboard(h *Handler) gin.H {
 				m, _ := it.(map[string]interface{})
 				id, _ := m["Id"].(string)
 				name, _ := m["Name"].(string)
+				typ, _ := m["CollectionType"].(string)
 				if id == "" || name == "" || idx >= 8 {
 					continue
 				}
 				wg.Add(1)
-				go func(idx int, id, name string) {
+				go func(idx int, id, name, typ string) {
 					defer wg.Done()
-					out := libOut{idx: idx, name: name}
+					out := libOut{idx: idx, name: name, typ: typ}
 					if lr, err := getJSON("/Items", url.Values{
 						"ParentId": {id}, "Recursive": {"true"}, "Limit": {"4"},
 						"SortBy": {"DateCreated"}, "SortOrder": {"Descending"},
+						// 见 embyCountTypes：少了这一行电影库的数字会翻倍
+						"IncludeItemTypes": {embyCountTypes(typ)},
+						// 剧集库里「已排播但没有文件」的占位集也会被算进去
+						"IsVirtualItem": {"false"},
 					}); err == nil {
 						if tc, ok := lr["TotalRecordCount"].(float64); ok {
 							out.count = int(tc)
@@ -342,7 +405,7 @@ func fetchEmbyDashboard(h *Handler) gin.H {
 						}
 					}
 					outCh <- out
-				}(idx, id, name)
+				}(idx, id, name, typ)
 				idx++
 			}
 			wg.Wait()
@@ -352,7 +415,10 @@ func fetchEmbyDashboard(h *Handler) gin.H {
 				ordered[o.idx] = o
 			}
 			for _, o := range ordered {
-				libraries = append(libraries, gin.H{"name": o.name, "count": o.count, "collage": o.collage})
+				libraries = append(libraries, gin.H{
+					"name": o.name, "count": o.count, "collage": o.collage,
+					"type": o.typ, "type_label": embyCollectionLabel(o.typ),
+				})
 			}
 		}
 	}
@@ -423,21 +489,21 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 	h.DB.Model(&model.MediaLibrary{}).Where("media_type = ? AND created_at >= ?", "movie", monthStart).Count(&movieMonth)
 	h.DB.Model(&model.MediaLibrary{}).Where("media_type = ? AND created_at >= ?", "tv", monthStart).Count(&tvMonth)
 
-	// ---- STRM 统计（失效口径：台账 video 行中本地文件已不存在的，抽样上限防大库卡顿）----
-	var strmTotal, strmInvalid, syncedFiles int64
+	// ---- STRM 统计 ----
+	// 两个口径别混：
+	//   orphan  = 网盘源文件已经没了（全量同步打的 orphan_at 标记，「失效 STRM」页的口径）
+	//   missing = 台账有行、本地 .strm 已不在（手工删本地文件、外部清理），
+	//             逐条 os.Stat 太贵，只抽最近 dashMissingSample 条，前端必须把「抽样」说出来
+	var strmTotal, strmOrphan, strmMissing, syncedFiles int64
 	var dashRecentVideos []model.SyncedFile
-	dashLocalRoot := defaultLocalPath
-	var dashFullCfg struct {
-		LocalPath string `json:"local_path"`
-	}
-	if json.Unmarshal([]byte(h.getSettingValue("full")), &dashFullCfg) == nil && dashFullCfg.LocalPath != "" {
-		dashLocalRoot = dashFullCfg.LocalPath
-	}
+	dashLocalRoot := localMediaRoot()
 	h.DB.Model(&model.SyncedFile{}).Where("kind = ?", "video").Count(&strmTotal)
-	h.DB.Model(&model.SyncedFile{}).Where("kind = ?", "video").Order("updated_at DESC").Limit(500).Find(&dashRecentVideos)
+	h.DB.Model(&model.SyncedFile{}).Where("kind = ? AND orphan_at IS NOT NULL", "video").Count(&strmOrphan)
+	h.DB.Model(&model.SyncedFile{}).Where("kind = ?", "video").
+		Order("updated_at DESC").Limit(dashMissingSample).Find(&dashRecentVideos)
 	for _, sf := range dashRecentVideos {
 		if _, err := os.Stat(filepath.Join(dashLocalRoot, filepath.FromSlash(sf.RelPath))); err != nil {
-			strmInvalid++
+			strmMissing++
 		}
 	}
 	h.DB.Model(&model.SyncedFile{}).Count(&syncedFiles)
@@ -526,17 +592,42 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 	var organizedTotal int64
 	h.DB.Model(&model.MediaLibrary{}).Count(&organizedTotal)
 
-	embyData := fetchEmbyDashboard(h)
+	embyData := fetchEmbyDashboard(h, c.Query("refresh") == "1")
+
+	// ---- 电影 / 剧集数量：Emby 接上了就以 Emby 为准 ----
+	// 本地 MediaLibrary 是「整理入库台账」，用户手工删文件、解除 Emby 目录关联之后
+	// 它只增不减，拿它当媒体库规模会比实际大一截（这正是「显示 1243 实际 619」的另一半）。
+	// 台账自己的数字仍然原样带出去（local_*），前端并排显示，对不上就提示校准
+	media := gin.H{
+		"movies": movieCount, "tvs": tvCount,
+		"movies_month": movieMonth, "tvs_month": tvMonth,
+		"total":        movieCount + tvCount,
+		"local_movies": movieCount, "local_tvs": tvCount,
+		"source": "local",
+	}
+	if embyData != nil {
+		if counts, ok := embyData["counts"].(gin.H); ok {
+			em, _ := counts["movies"].(int)
+			es, _ := counts["series"].(int)
+			ee, _ := counts["episodes"].(int)
+			if em > 0 || es > 0 {
+				media["movies"], media["tvs"] = em, es
+				media["total"] = em + es
+				media["episodes"] = ee
+				media["source"] = "emby"
+			}
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"emby":    embyData,
 		"storage": h.pan115CapacityCached(),
-		"media": gin.H{
-			"movies": movieCount, "tvs": tvCount,
-			"movies_month": movieMonth, "tvs_month": tvMonth,
-			"total": movieCount + tvCount,
+		"media":   media,
+		"strm": gin.H{
+			"total": strmTotal, "orphan": strmOrphan,
+			"missing": strmMissing, "missing_sampled": len(dashRecentVideos),
+			"active": strmTotal - strmOrphan,
 		},
-		"strm":           gin.H{"total": strmTotal, "invalid": strmInvalid, "active": strmTotal - strmInvalid},
 		"synced_files":   syncedFiles,
 		"organized":      organizedTotal,
 		"recent_media":   recent,

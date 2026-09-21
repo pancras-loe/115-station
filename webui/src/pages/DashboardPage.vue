@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { NSkeleton, NTag } from 'naive-ui'
+import { NAlert, NButton, NSkeleton, NTag, NTooltip } from 'naive-ui'
 import {
   Clapperboard,
   Cpu,
+  Database,
   FileVideo,
   MemoryStick,
   RefreshCw,
+  SlidersHorizontal,
   Tv,
 } from '@lucide/vue'
 import { dashboardApi } from '@/api'
@@ -17,21 +19,26 @@ import MeterBar from '@/components/ui/MeterBar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import WeeklyChart from '@/components/ui/WeeklyChart.vue'
 import PosterImage from '@/components/PosterImage.vue'
+import CalibrateModal from '@/components/dashboard/CalibrateModal.vue'
 import { bytes, num, percent } from '@/utils/format'
 import { embyImageUrl, posterUrl } from '@/utils/media'
 import { toastError } from '@/composables/useFeedback'
 
 const data = ref<Dashboard | null>(null)
 const loading = ref(true)
+const refreshing = ref(false)
+const calibrating = ref(false)
 
-async function load(manual = false) {
+async function load(manual = false, force = false) {
+  if (force) refreshing.value = true
   try {
-    data.value = await dashboardApi.get()
+    data.value = await dashboardApi.get(force)
   } catch (e) {
     // 轮询失败静默：30 秒一次的后台刷新不该把错误提示刷满屏
     if (manual) toastError(e, '仪表盘加载失败')
   } finally {
     loading.value = false
+    refreshing.value = false
   }
 }
 
@@ -51,6 +58,23 @@ const storagePct = computed(() => {
 const storageEnabled = computed(() => storage.value.enabled !== false && !!storage.value.total)
 
 const sys = computed(() => data.value?.sys ?? {})
+const media = computed(() => data.value?.media)
+const strm = computed(() => data.value?.strm)
+
+/** 数字是谁给的：Emby 接上了就以 Emby 为准，否则只能用本地整理台账 */
+const fromEmby = computed(() => media.value?.source === 'emby')
+
+/**
+ * 台账「虚高」：本地整理台账比 Emby 实际条目多出一截。
+ * 手工删片、解除媒体库目录关联都只影响 Emby 和本地 STRM，台账不会自己缩回去，
+ * 这时候面板上任何按台账算的数字都偏大 —— 提示用户校准，而不是让他自己猜。
+ */
+const localTotal = computed(() => (media.value?.local_movies ?? 0) + (media.value?.local_tvs ?? 0))
+const drift = computed(() => {
+  if (!fromEmby.value || !media.value) return 0
+  return localTotal.value - media.value.total
+})
+const driftNotable = computed(() => drift.value >= 10)
 
 /** Emby 接上了就以 Emby 媒体库为准，否则退回本地整理台账的分类 */
 const categories = computed(() => {
@@ -59,12 +83,14 @@ const categories = computed(() => {
     return emby.libraries.map((l) => ({
       name: l.name,
       count: l.count,
+      label: l.type_label ?? '',
       posters: (l.collage ?? []).map((p) => embyImageUrl(p)),
     }))
   }
   return (data.value?.categories ?? []).map((c) => ({
     name: c.name,
     count: c.count,
+    label: '',
     posters: (c.posters ?? []).map((p) => posterUrl(p) as string),
   }))
 })
@@ -89,10 +115,56 @@ const wall = computed(() => {
 })
 
 const recent = computed(() => data.value?.recent_media ?? [])
+
+/** STRM 卡片的副标题：两种「坏掉」的口径分开说，别混成一个「失效 N」 */
+const strmSub = computed(() => {
+  const s = strm.value
+  if (!s) return ''
+  const parts = [`失效 ${num(s.orphan)}`]
+  if (s.missing > 0) parts.push(`本地缺失 ${num(s.missing)}/${num(s.missing_sampled)}`)
+  parts.push(`台账 ${num(data.value?.synced_files)}`)
+  return parts.join(' · ')
+})
 </script>
 
 <template>
   <div class="dash">
+    <!-- ==== 数据来源与动作 ==== -->
+    <div class="bar">
+      <div class="bar-src">
+        <span class="bar-label">媒体数量来源</span>
+        <NTooltip>
+          <template #trigger>
+            <NTag size="small" :type="fromEmby ? 'success' : 'default'" :bordered="false">
+              {{ fromEmby ? 'Emby 媒体库' : '本地整理台账' }}
+            </NTag>
+          </template>
+          {{
+            fromEmby
+              ? 'Emby 已接入，电影/剧集数量与媒体库卡片都直接读 Emby，和 Emby 界面上的一致'
+              : '未配置 Emby 或暂时不可达，只能按本地整理台账统计'
+          }}
+        </NTooltip>
+      </div>
+      <div class="bar-actions">
+        <NButton size="small" quaternary :loading="refreshing" @click="load(true, true)">
+          <template #icon><RefreshCw :size="15" /></template>
+          刷新
+        </NButton>
+        <NButton size="small" quaternary @click="calibrating = true">
+          <template #icon><SlidersHorizontal :size="15" /></template>
+          校准台账
+        </NButton>
+      </div>
+    </div>
+
+    <!-- ==== 台账虚高提示 ==== -->
+    <NAlert v-if="driftNotable" type="warning" :bordered="false">
+      本地整理台账记着 {{ num(localTotal) }} 部，Emby 实际只有 {{ num(media?.total) }} 部，
+      多出的 {{ num(drift) }} 部多半是手工删片、解除媒体库目录关联之后留下的幽灵记录。
+      点「校准台账」按本地 STRM 目录核对一遍即可（只删台账行，不动网盘与 Emby）。
+    </NAlert>
+
     <!-- ==== 指标行 ==== -->
     <div class="stats">
       <template v-if="loading">
@@ -101,34 +173,63 @@ const recent = computed(() => data.value?.recent_media ?? [])
       <template v-else>
         <StatCard
           label="电影"
-          :value="num(data?.media.movies)"
-          :sub="'本月新增 ' + (data?.media.movies_month ?? 0)"
+          :value="num(media?.movies)"
+          :sub="'本月整理 +' + (media?.movies_month ?? 0)"
           :icon="Clapperboard"
           tone="primary"
         />
         <StatCard
           label="剧集"
-          :value="num(data?.media.tvs)"
-          :sub="'本月新增 ' + (data?.media.tvs_month ?? 0)"
+          :value="num(media?.tvs)"
+          :sub="
+            media?.episodes
+              ? num(media.episodes) + ' 集 · 本月整理 +' + (media?.tvs_month ?? 0)
+              : '本月整理 +' + (media?.tvs_month ?? 0)
+          "
           :icon="Tv"
           tone="success"
         />
         <StatCard
           label="STRM 文件"
-          :value="num(data?.strm.total)"
-          :sub="'失效 ' + (data?.strm.invalid ?? 0) + ' · 同步台账 ' + num(data?.synced_files)"
+          :value="num(strm?.total)"
+          :sub="strmSub"
           :icon="FileVideo"
-          :tone="(data?.strm.invalid ?? 0) > 0 ? 'warning' : 'primary'"
+          :tone="(strm?.orphan ?? 0) > 0 ? 'warning' : 'primary'"
         />
         <StatCard
-          label="已整理入库"
+          label="整理台账"
           :value="num(data?.organized)"
           :sub="'待处理事件 ' + (data?.pending_events ?? 0)"
-          :icon="RefreshCw"
-          tone="primary"
+          :icon="Database"
+          :tone="driftNotable ? 'warning' : 'primary'"
         />
       </template>
     </div>
+
+    <!-- ==== 我的媒体库 ==== -->
+    <SectionCard
+      title="我的媒体库"
+      :hint="fromEmby ? '直接读 Emby 媒体库，按库类型计数（一部影视算一条）' : '按本地整理台账的分类聚合'"
+    >
+      <div v-if="categories.length" class="cats">
+        <div
+          v-for="c in categories"
+          :key="c.name"
+          class="cat"
+          :title="c.name + ' · ' + c.count + ' 部'"
+        >
+          <div class="collage">
+            <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" />
+          </div>
+          <div class="cat-foot">
+            <span class="cat-name">{{ c.name }}</span>
+            <span v-if="c.label" class="cat-type">{{ c.label }}</span>
+            <NTag size="small" :bordered="false">{{ num(c.count) }}</NTag>
+          </div>
+        </div>
+      </div>
+      <EmptyState v-else text="暂无入库记录 · 整理或同步后这里会显示分类卡片" />
+    </SectionCard>
 
     <!-- ==== 容量 / 系统 / 趋势 ==== -->
     <div class="grid-3">
@@ -177,37 +278,21 @@ const recent = computed(() => data.value?.recent_media ?? [])
         </div>
       </SectionCard>
 
-      <SectionCard title="近 7 天入库" :hint="'共 ' + (data?.week_total ?? 0) + ' 部'">
+      <SectionCard title="近 7 天整理入库" :hint="'共 ' + (data?.week_total ?? 0) + ' 部'">
         <WeeklyChart :data="data?.weekly ?? []" />
       </SectionCard>
     </div>
 
-    <!-- ==== 我的媒体库 ==== -->
-    <SectionCard title="我的媒体库">
-      <div v-if="categories.length" class="cats">
-        <div
-          v-for="c in categories"
-          :key="c.name"
-          class="cat"
-          :title="c.name + ' · ' + c.count + ' 部'"
-        >
-          <div class="collage">
-            <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" />
-          </div>
-          <div class="cat-foot">
-            <span class="cat-name">{{ c.name }}</span>
-            <NTag size="small" :bordered="false">{{ num(c.count) }}</NTag>
-          </div>
-        </div>
-      </div>
-      <EmptyState v-else text="暂无入库记录 · 整理或同步后这里会显示分类卡片" />
-    </SectionCard>
-
     <!-- ==== 海报墙 + 最近整理 ==== -->
     <div class="grid-2">
-      <SectionCard title="最新入库">
+      <SectionCard title="最新入库" :hint="fromEmby ? '来自 Emby' : '来自本地整理记录'">
         <div v-if="wall.length" class="wall">
-          <div v-for="m in wall" :key="m.key" class="wall-item" :title="m.title + ' ' + (m.sub || '')">
+          <div
+            v-for="m in wall"
+            :key="m.key"
+            class="wall-item"
+            :title="m.title + ' ' + (m.sub || '')"
+          >
             <PosterImage :src="m.src" :alt="m.title" />
             <div class="wall-title">{{ m.title }}</div>
           </div>
@@ -231,6 +316,8 @@ const recent = computed(() => data.value?.recent_media ?? [])
         <EmptyState v-else text="暂无整理记录" />
       </SectionCard>
     </div>
+
+    <CalibrateModal v-model:show="calibrating" @done="load(true, true)" />
   </div>
 </template>
 
@@ -239,6 +326,27 @@ const recent = computed(() => data.value?.recent_media ?? [])
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.bar-src {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.bar-label {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+.bar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
 }
 
 .stats {
@@ -329,6 +437,11 @@ const recent = computed(() => data.value?.recent_media ?? [])
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.cat-type {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--c-text-3);
 }
 
 .wall {

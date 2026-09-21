@@ -100,7 +100,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **播放链路** | `proxy.go` `offlineplay.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、边下边播、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、离线下载、**下载记录**、媒体库封面生成、115 签到 |
+| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、**媒体库台账校准**、离线下载、**下载记录**、媒体库封面生成、115 签到 |
 
 ### 数据模型（`internal/model/model.go`）
 
@@ -240,6 +240,19 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 
     历史设计与 Emby 真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md`，其中旧定时扫描设计已被上述流程替代。
 
+11. **数「有几部」时 Emby 的 `/Items` 必须带 `IncludeItemTypes`**（`dashboard.go` 的 `embyCountTypes`）：
+    `/Items?ParentId=..&Recursive=true` 不带类型过滤时，`TotalRecordCount` 把子树里**所有**条目都算上——
+    每部影片自己那层目录（`Type=Folder`）也是一条，「一部影片一个目录」的电影库正好翻倍
+    （2026-09 的现场：面板显示 1243 部、实际 619 部）；剧集库更离谱，Series + Season + Episode 全进去。
+    按库的 `CollectionType` 收敛到「一部 = 一条」的那个类型，数字才和 Emby 自己界面上的一致。
+    - 库类型从 `/Library/MediaFolders` 的 `CollectionType` 取；为空（混合库）按 `Movie,Series` 算。
+    - 顺手带 `IsVirtualItem=false`：剧集库里「已排播但没有文件」的占位集不该算进库存。
+    - 另一半是**本地整理台账会虚高**：`MediaLibrary` 只在整理时写入，用户手工删本地 STRM、
+      在 Emby 里解除媒体库目录关联、直接上网盘删片，三种都不会回头改它。
+      所以面板上的电影/剧集数量 **Emby 可用时一律以 Emby 为准**，台账数字另走 `media.local_*` 并排显示；
+      对不上就提示用户跑一次「校准台账」（`medialib.go`，拿本地 STRM 树当事实清幽灵行，
+      只删 `MediaLibrary` 这一张表，不碰网盘/Emby/`SyncedFile`，且「一条都对不上」时拒绝执行）。
+
 ---
 
 ## 7. 常见任务入口
@@ -255,6 +268,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
+| 改总览面板 | `internal/api/dashboard.go`（数据）+ `webui/src/pages/DashboardPage.vue`（界面）。**Emby 计数别再改回不带 `IncludeItemTypes`**，见 §6.11；台账校准在 `internal/api/medialib.go` + `webui/src/components/dashboard/CalibrateModal.vue` |
 | 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`）。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
 | 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `fullSyncMu`，整理抢不到锁会置位 `organizeMissed` 稍后补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |

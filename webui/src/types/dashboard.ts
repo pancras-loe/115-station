@@ -11,17 +11,27 @@ export interface StorageInfo {
 }
 
 export interface MediaCounts {
+  /** 展示口径：Emby 可用时就是 Emby 的数字，否则是本地整理台账 */
   movies: number
   tvs: number
+  total: number
+  /** Emby 的剧集单集数；本地口径下没有这个字段 */
+  episodes?: number
   movies_month: number
   tvs_month: number
-  total: number
+  /** 本地整理台账自己的数字，始终返回，用来和 Emby 对账 */
+  local_movies: number
+  local_tvs: number
+  source: 'emby' | 'local'
 }
 
 export interface StrmCounts {
   total: number
-  /** 台账里本地文件已不存在的条数（抽样上限 500，防大库卡顿） */
-  invalid: number
+  /** 网盘源文件已删（全量同步打的 orphan_at 标记，即「失效 STRM」） */
+  orphan: number
+  /** 台账有行但本地 .strm 已不在；只抽查最近 missing_sampled 条 */
+  missing: number
+  missing_sampled: number
   active: number
 }
 
@@ -56,6 +66,9 @@ export interface EmbyLibrary {
   name: string
   count: number
   collage: string[] | null
+  /** Emby 的 CollectionType（movies / tvshows / …）与它的中文标签 */
+  type?: string
+  type_label?: string
 }
 
 export interface EmbyDashboard {
@@ -78,4 +91,29 @@ export interface Dashboard {
   categories: CategoryCard[]
   sys: SysStat
   pending_events: number
+}
+
+/** POST /api/media-library/calibrate —— 见 internal/api/medialib.go */
+export interface CalibrateSample {
+  title: string
+  year: string
+  type: string
+  category: string
+  target_path: string
+}
+
+export interface CalibrateResult {
+  /** false = 只是预演，一条都没删 */
+  applied: boolean
+  local_root: string
+  total: number
+  /** 本地已经找不到落点的台账行数 */
+  stale: number
+  kept: number
+  /** 台账里没记落点、无法判断的，一律保留 */
+  skipped: number
+  removed: number
+  sample: CalibrateSample[]
+  /** 本地 STRM 树实际数出来的部数，按 Emby 建库的那一层目录分组 */
+  libraries: { name: string; count: number }[]
 }
