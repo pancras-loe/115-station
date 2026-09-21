@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"115-station/internal/config"
 )
@@ -30,6 +31,7 @@ type fakeEmby struct {
 	deleteOK  bool             // 删条目是否放行；false = 模拟没开「允许删除媒体」
 	dupItems  bool             // 同一路径回两个条目（Folder 与刮削出的 Movie 并存）
 	hitPath   string           // 非空时只有这个路径能查到条目（模拟 Emby 还没给新目录建条目）
+	itemType  string           // 查到的条目类型，空= Movie。Folder = Emby 只建了目录条目、影片还没入库
 	srv       *httptest.Server
 }
 
@@ -64,10 +66,14 @@ func newFakeEmbyLibs(t *testing.T, libs []map[string]any, lookupHit bool) *fakeE
 			f.mu.Unlock()
 			items := []map[string]any{}
 			if f.lookupHit && (f.hitPath == "" || f.hitPath == p) {
+				typ := f.itemType
+				if typ == "" {
+					typ = "Movie"
+				}
 				// 回显请求路径：调用方会再比对一次完整路径才认
-				items = append(items, map[string]any{"Id": "item9", "Name": "某片", "Path": p})
+				items = append(items, map[string]any{"Id": "item9", "Name": "某片", "Path": p, "Type": typ})
 				if f.dupItems {
-					items = append(items, map[string]any{"Id": "item10", "Name": "某片", "Path": p})
+					items = append(items, map[string]any{"Id": "item10", "Name": "某片", "Path": p, "Type": typ})
 				}
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"Items": items})
@@ -119,6 +125,10 @@ func setupEmbyRefreshCfg(t *testing.T, serverURL, root string) {
 	t.Helper()
 	notifyConfigSource = &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
 	t.Cleanup(func() { notifyConfigSource = nil })
+	// 入库回查是分钟级的后台协程，假服务器早就关了；单独用例验证它
+	prevDelays := embyVerifyDelays
+	embyVerifyDelays = nil
+	t.Cleanup(func() { embyVerifyDelays = prevDelays })
 
 	save := func(key string, v any) {
 		b, _ := json.Marshal(v)
@@ -157,8 +167,55 @@ func TestNotifyEmbyRefreshUsesItemsEndpoint(t *testing.T) {
 	if len(f.itemPathQ) != 1 || f.itemPathQ[0] != filepath.ToSlash(dir) {
 		t.Fatalf("按路径查条目用的路径不对: %v", f.itemPathQ)
 	}
-	if len(f.updates) != 0 {
-		t.Fatalf("Emby 已经有这个路径的条目，不该再报一次新增: %v", f.updates)
+	// 入库一律如实报一次：Emby 查得到条目不等于影片已经入库
+	// （文件监控会先建一个 Type=Folder 的目录条目），按条目在不在去筛
+	// 恰好会在最需要通知的时候跳过通知
+	want := []map[string]string{{"Path": filepath.ToSlash(dir), "UpdateType": "Created"}}
+	if !reflect.DeepEqual(f.updates, want) {
+		t.Fatalf("新增没如实报出去：期望 %v，实际 %v", want, f.updates)
+	}
+}
+
+// Emby 的文件监控几秒内就会给新影片目录建一个 Type=Folder 的条目 ——
+// 那恰恰是「目录建了、影片还没被解析成 Movie」的未入库状态。
+// 2026-09-21 实测就栽在这儿：按「查得到条目」去跳过通知，片子晚了 4 分钟才进库
+func TestNotifyEmbyRefreshAnnouncesWhenOnlyFolderItemExists(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.itemType = "Folder"
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+
+	dir := filepath.Join(root, "电影", "美国队长.2011.{tmdbid=1771}")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	(&Handler{}).notifyEmbyRefresh(dir)
+
+	want := []map[string]string{{"Path": filepath.ToSlash(dir), "UpdateType": "Created"}}
+	if !reflect.DeepEqual(f.updates, want) {
+		t.Fatalf("只有目录条目时更要报新增：期望 %v，实际 %v", want, f.updates)
+	}
+	if !f.sawHit("POST /Items/item9/Refresh") {
+		t.Fatalf("刷新仍然要提交: %v", f.hits)
+	}
+}
+
+// 删除场景不受影响：不报 Created
+func TestNotifyEmbyDeletedNeverAnnouncesCreated(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	if err := os.MkdirAll(filepath.Join(root, "电影"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(filepath.Join(root, "电影", "已删.2020"))
+
+	for _, u := range f.updates {
+		if u["UpdateType"] == "Created" {
+			t.Fatalf("删除场景报了 Created: %v", f.updates)
+		}
 	}
 }
 
@@ -608,5 +665,48 @@ func TestNotifyEmbyRefreshAnnouncesLargeAddBatch(t *testing.T) {
 		if u["UpdateType"] != "Created" {
 			t.Fatalf("UpdateType 不对: %v", u)
 		}
+	}
+}
+
+// 入库回查：查到影视条目就报成功
+func TestEmbyVerifyIngestConfirms(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	embyVerifyDelays = []time.Duration{10 * time.Millisecond}
+
+	cfg, _ := loadEmbyRefreshCfg()
+	embyVerifyIngest(cfg, []string{filepath.ToSlash(filepath.Join(root, "电影", "某片"))})
+
+	if len(f.itemPathQ) != 1 {
+		t.Fatalf("回查应该只查一轮: %v", f.itemPathQ)
+	}
+}
+
+// 只有目录条目时要一直查到最后一轮，不能当成已入库提前收工
+func TestEmbyVerifyIngestKeepsRetryingOnFolderOnly(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.itemType = "Folder"
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+	embyVerifyDelays = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond}
+
+	cfg, _ := loadEmbyRefreshCfg()
+	embyVerifyIngest(cfg, []string{filepath.ToSlash(filepath.Join(root, "电影", "某片"))})
+
+	if len(f.itemPathQ) != 2 {
+		t.Fatalf("只有目录条目就该继续回查：期望 2 轮，实际 %v", f.itemPathQ)
+	}
+}
+
+// Folder 与 Movie 并存时挑 Movie（被删的影片目录实测就是这个形态）
+func TestPickMediaHit(t *testing.T) {
+	hits := []embyItemHit{{ID: "1", Type: "Folder"}, {ID: "2", Type: "Movie"}}
+	if got := pickMediaHit(hits); got.ID != "2" {
+		t.Fatalf("没挑到影视条目: %+v", got)
+	}
+	// 全是目录条目时退回第一个（调用方按 Type 自己判断）
+	if got := pickMediaHit([]embyItemHit{{ID: "9", Type: "Folder"}}); got.ID != "9" {
+		t.Fatalf("退回第一个失败: %+v", got)
 	}
 }

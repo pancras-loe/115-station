@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ==================== EMBY 刷新通知（出站：本站 → Emby）====================
@@ -201,25 +202,32 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 	}
 
 	var refreshed []string
-	var created []string // 入库场景里 Emby 还不认识的新路径，收尾单独报一次 Created
+	var created []string // 入库场景要如实报新增的路径（无条件收集，理由见下面 embyReportUpdated 处）
 	for _, libID := range order {
 		lib, paths := byID[libID], buckets[libID]
+		if kind == embyRefreshAdded && !wholeLib[libID] {
+			// 目标在库之上（全量同步传媒体根）那种除外，其余新增路径一律报一次。
+			// **不要再按「Emby 有没有这个条目」去筛** —— 见 embyReportUpdated 处的注释
+			for _, t := range paths {
+				created = append(created, t.path)
+			}
+		}
 		// 少量变更精确到条目刷（目标在库之上时没这个选项，只能整库刷）
 		if !wholeLib[libID] && len(paths) <= embyItemRefreshMax {
 			var rest []string
 			for _, t := range paths {
-				id, name, exact := embyResolveItem(cfg, t, lib.Locations)
-				if kind == embyRefreshAdded && !exact {
-					created = append(created, t.path)
-				}
-				if id == "" || !embyRefreshItem(cfg, id) {
+				hit, exact := embyResolveItem(cfg, t, lib.Locations)
+				if hit.ID == "" || !embyRefreshItem(cfg, hit.ID) {
 					rest = append(rest, t.path)
 					continue
 				}
-				if exact {
-					log.Printf("[Emby] ○ 已提交条目刷新（%s）：%s —— %s", kind.label(), name, t.path)
-				} else {
-					log.Printf("[Emby] ○ Emby 尚无 %s 的条目，已刷新上级「%s」并单独报新增", t.path, name)
+				switch {
+				case !exact:
+					log.Printf("[Emby] ○ Emby 尚无 %s 的条目，已刷新上级「%s」并单独报新增", t.path, hit.Name)
+				case kind == embyRefreshAdded && !embyTypeIsMedia(hit.Type):
+					log.Printf("[Emby] ○ %s 在 Emby 里还只是个目录条目（Type=%s），已报新增并提交刷新", t.path, hit.Type)
+				default:
+					log.Printf("[Emby] ○ 已提交条目刷新（%s）：%s（%s）—— %s", kind.label(), hit.Name, hit.Type, t.path)
 				}
 			}
 			if len(rest) == 0 {
@@ -227,13 +235,6 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 				continue
 			}
 			log.Printf("[Emby] ○ %d 个路径未定位到条目，改为刷新整个媒体库 %s", len(rest), lib.Name)
-		} else if kind == embyRefreshAdded && !wholeLib[libID] {
-			// 变更太多、跳过了逐条查条目这一步：条目在不在无从得知，
-			// 一律如实报一次新增。整库刷新同样发现不了 Emby 还不知道的新目录，
-			// 而这条通知一次 POST 就报完所有路径，并不比逐条查贵
-			for _, t := range paths {
-				created = append(created, t.path)
-			}
 		}
 		if embyRefreshItem(cfg, lib.ID) {
 			refreshed = append(refreshed, lib.Name)
@@ -246,14 +247,24 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		}
 	}
 
-	// 新增的路径 Emby 还没有条目时，只刷上级/整库是不够的：刷新走的是
-	// ValidateChildren，它复核的是【已知】子条目还在不在，新建出来的目录要等
-	// Emby 自己的实时监控或定时扫库才会被发现 —— 媒体卷是网络盘/strm 时前者
-	// 常常收不到 inotify，后者默认关着，表现就是「整理完了 Emby 里没有这部片」。
-	// /Library/Media/Updated 是 Emby 给外部程序报「这个路径有新内容」的正式通道
-	// （Emby 自带的文件夹监控内部走的也是它），把新路径如实报一次才真的会去扫。
+	// ⚠️ **新增路径一律报一次，不要按「Emby 有没有这个条目」去筛。**
+	//
+	// 2026-09-21 实测：整理落盘几秒后 Emby 的文件监控就会在影片目录上建一个
+	// Type=Folder 的目录条目 —— 于是「按路径查得到条目」成立，可那恰恰是
+	// **还没入库**的状态（目录建了、影片没被解析成 Movie）。按这个条件去跳过
+	// 通知，等于专挑最需要通知的时候不通知，那一轮的片子晚了 4 分钟才进库。
+	//
+	// 而刷新本身指望不上：它走 ValidateChildren，复核的是【已知】子条目还在不在
+	// （删除那条线正是靠它），把一个 Folder 条目刷一遍并不会让 Emby 重新判定
+	// 「这个目录其实是部电影」—— 那个判定只在扫描它的父目录时才跑。
+	//
+	// /Library/Media/Updated 是 Emby 给外部程序报「这个路径有新内容」的正式通道，
+	// Emby 自带的文件夹监控内部走的也是同一套，由 Emby 自己决定要回溯校验到哪一层。
+	// 重复报无害（幂等），一次 POST 报完所有路径，比逐条查条目还便宜。
 	if len(created) > 0 {
-		embyReportUpdated(cfg, dedupeStrings(created), "Created")
+		created = dedupeStrings(created)
+		embyReportUpdated(cfg, created, "Created")
+		go embyVerifyIngest(cfg, created)
 	}
 
 	if len(unmatched) > 0 {
@@ -276,6 +287,68 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 		return
 	}
 	go NotifyMessage("🎬 媒体入库", "已刷新媒体库："+names)
+}
+
+// embyVerifyDelays 入库回查的时间点（相对提交通知的时刻）。
+// Emby 的文件监控在处理前有一段「等路径不再变动」的静默期，刮削紧跟着往
+// 同一个目录写 NFO/海报还会把它一次次推后，所以第一次回查放在 30 秒之后。
+// 测试里置空即关闭
+var embyVerifyDelays = []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
+
+// embyVerifyIngest 提交入库通知之后回查一次：Emby 到底收进去没有。
+//
+// 这条日志是给人看的 —— 入库链路上能出错的地方（路径映射、媒体库范围、库类型、
+// 实时监控开关）在提交那一刻全都表现为「提交成功」，不回查就只能靠用户
+// 一遍遍去 Emby 界面上翻。查到影视条目就报用时，只看到目录条目或什么都没有
+// 就把该查哪儿写在日志里
+func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
+	if len(paths) == 0 || len(embyVerifyDelays) == 0 {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Emby] ✗ 入库回查异常: %v", r)
+		}
+	}()
+	start := time.Now()
+	pending := append([]string(nil), paths...)
+	lastType := map[string]string{}
+	for _, d := range embyVerifyDelays {
+		select {
+		case <-stopCh:
+			return
+		case <-time.After(d - time.Since(start)):
+		}
+		var rest []string
+		for _, p := range pending {
+			hits := embyItemsByPath(cfg, p)
+			if len(hits) == 0 {
+				rest = append(rest, p)
+				continue
+			}
+			hit := pickMediaHit(hits)
+			if !embyTypeIsMedia(hit.Type) {
+				lastType[p] = hit.Type
+				rest = append(rest, p)
+				continue
+			}
+			log.Printf("[Emby] ✓ 入库确认：%s（%s，用时 %s）—— %s",
+				hit.Name, hit.Type, time.Since(start).Truncate(time.Second), p)
+		}
+		if pending = rest; len(pending) == 0 {
+			return
+		}
+	}
+	for _, p := range pending {
+		if t := lastType[p]; t != "" {
+			log.Printf("[Emby] ✗ 入库未完成：%s 在 Emby 里只有目录条目（Type=%s），影片没被识别 —— "+
+				"检查这个目录是不是在某个媒体库的范围内、库类型是不是「电影/剧集」", p, t)
+			continue
+		}
+		log.Printf("[Emby] ✗ 入库未完成：提交 %s 后 Emby 仍查不到 %s 的任何条目 —— "+
+			"检查「EMBY 管理」的本地路径映射，以及 Emby 那边的媒体库目录是否包含它",
+			time.Since(start).Truncate(time.Second), p)
+	}
 }
 
 // embyTarget 一个刷新目标。
@@ -461,18 +534,40 @@ func embyDeleteItem(cfg embyRefreshCfg, itemID string) bool {
 // embyResolveItem 沿祖先链找第一个 Emby 认识的条目，出了媒体库就停。
 // 逐级上溯的做法取自 p115strmhelper 的 trigger_refresh_by_path。
 //
-// exact 表示命中的就是目标路径本身（ancestors[0]）。调用方必须区分这一点：
-// 命中祖先意味着 Emby 压根还不知道目标路径的存在，刷新祖先并不等于会扫到它
-func embyResolveItem(cfg embyRefreshCfg, t embyTarget, locations []string) (id, name string, exact bool) {
+// exact 表示命中的就是目标路径本身（ancestors[0]）；命中祖先说明 Emby
+// 压根还不知道目标路径的存在。**但 exact 不等于「已入库」**，判据看 hit.Type
+func embyResolveItem(cfg embyRefreshCfg, t embyTarget, locations []string) (hit embyItemHit, exact bool) {
 	for i, a := range t.ancestors {
 		if !embyPathUnder(a, locations) {
-			return "", "", false // 再往上就出了这个媒体库，交给整库刷新
+			return embyItemHit{}, false // 再往上就出了这个媒体库，交给整库刷新
 		}
-		if id, name := embyItemIDByPath(cfg, a); id != "" {
-			return id, name, i == 0
+		if hits := embyItemsByPath(cfg, a); len(hits) > 0 {
+			return pickMediaHit(hits), i == 0
 		}
 	}
-	return "", "", false
+	return embyItemHit{}, false
+}
+
+// pickMediaHit 同一路径上的多个条目里优先挑真正的影视条目。
+// 被删的影片目录实测会同时挂着 Type=Folder 与刮削出的 Movie，刷新要挑后者
+func pickMediaHit(hits []embyItemHit) embyItemHit {
+	for _, h := range hits {
+		if embyTypeIsMedia(h.Type) {
+			return h
+		}
+	}
+	return hits[0]
+}
+
+// embyTypeIsMedia 这个条目类型算不算「影片已经入库」。
+// Folder 不算 —— Emby 的文件监控发现新目录就会先建一个目录条目，
+// 影片要等库扫描的解析器把这个目录认成 Movie 才叫入库。空 Type 按保守算「不是」
+func embyTypeIsMedia(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "movie", "series", "season", "episode", "video", "musicvideo":
+		return true
+	}
+	return false
 }
 
 // nearestExistingDir 从 p 往上找第一个还存在的目录，到 root 为止（含 root）。
@@ -600,8 +695,10 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 //
 // Limit 是防守：万一某个 Emby 版本压根不认 Path 参数，Recursive=true
 // 会把整个库倒出来。比不中就返回空，调用方退到整库刷新，不会误刷别的条目
-// embyItemHit 一条按路径命中的 Emby 条目
-type embyItemHit struct{ ID, Name string }
+// embyItemHit 一条按路径命中的 Emby 条目。
+// Type 必须留着：路径上有条目 ≠ 影片已经入库 —— Emby 的文件监控看到新目录会先
+// 建一个 Type=Folder 的目录条目，影片要等解析器把它认成 Movie/Series 才算真进库
+type embyItemHit struct{ ID, Name, Type string }
 
 func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
 	q := url.Values{
@@ -630,6 +727,7 @@ func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
 			ID   string `json:"Id"`
 			Name string `json:"Name"`
 			Path string `json:"Path"`
+			Type string `json:"Type"`
 		} `json:"Items"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&out) != nil {
@@ -638,7 +736,7 @@ func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
 	want := strings.TrimRight(strings.ReplaceAll(embyPath, "\\", "/"), "/")
 	for _, it := range out.Items {
 		if strings.TrimRight(strings.ReplaceAll(it.Path, "\\", "/"), "/") == want {
-			hits = append(hits, embyItemHit{ID: it.ID, Name: it.Name})
+			hits = append(hits, embyItemHit{ID: it.ID, Name: it.Name, Type: it.Type})
 		}
 	}
 	return hits
