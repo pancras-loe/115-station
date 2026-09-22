@@ -155,16 +155,18 @@ type incrParams struct {
 
 // incrSummary 增量同步结果摘要
 type incrSummary struct {
+	Round            uint64 `json:"round"` // 轮次号，对应日志里的 [同步#N]
 	EventsTotal      int    `json:"events_total"`
 	EventsFresh      int    `json:"events_fresh"`
+	EventsPending    int    `json:"events_pending"` // 本轮实际要处理的条数（含上轮遗留）
 	Relevant         int    `json:"relevant"`
 	Structural       int    `json:"structural"`
 	Deleted          int    `json:"deleted"`
 	Moved            int    `json:"moved"`
 	Dirs             int    `json:"dirs"`
-	DirsSkipped      int    `json:"dirs_skipped"`
 	Videos           int    `json:"videos"`
 	StrmCreated      int    `json:"strm_created"`
+	StrmExisting     int    `json:"strm_existing"` // 本地已有且内容一致，没动
 	AssetsTotal      int    `json:"assets_total"`
 	AssetsDownloaded int    `json:"assets_downloaded"`
 	AssetsSkipped    int    `json:"assets_skipped"`
@@ -172,6 +174,32 @@ type incrSummary struct {
 	Ignored          int    `json:"ignored"`    // 非媒体库区域（待整理/已存在/冗余等）的事件
 	Suppressed       int    `json:"suppressed"` // 整理自己产生、已由整理落盘的变更，本轮跳过
 	Elapsed          string `json:"elapsed"`
+
+	// ---- 回退目录遍历的账（排查「为什么这一轮跑了十几分钟」）----
+	DirsShallow int `json:"dirs_shallow"` // 浅遍历目标数（只列本层）
+	DirsDeep    int `json:"dirs_deep"`    // 深遍历目标数（递归整棵子树）
+	DirsMerged  int `json:"dirs_merged"`  // 被上层目标覆盖而省掉的
+	DirsVisited int `json:"dirs_visited"` // 实际访问到的目录总数
+	ListCalls   int `json:"list_calls"`   // 列目录请求次数 ≈ 本轮耗时的秒数（全局 1 秒读节流）
+
+	// ---- 跳过的目录：**临时**与**永久**必须分开 ----
+	//
+	// 只有临时失败才值得「整轮不消费、下轮重来」。改造前这三类混在
+	// DirsSkipped 一个计数里，于是一条永远不可能成功的事件（比如指向
+	// 媒体库外的目录）会把整批事件永久钉死，每 30 秒重放一次整轮遍历，
+	// 直到 7 天后被 pruneSyncEvents 强杀。
+	DirsSkipped  int `json:"dirs_skipped"`   // 临时：读不到，下轮重试（唯一会阻止消费的）
+	DirsOutside  int `json:"dirs_outside"`   // 永久：目录不在媒体库内，本工具不管
+	DirsGone     int `json:"dirs_gone"`      // 永久：目录已在网盘上删除
+	DirsNoParent int `json:"dirs_no_parent"` // 永久：事件没带父目录，定位不了
+
+	// ---- 本轮结局 ----
+	Interrupted bool   `json:"interrupted"`          // 被让路中断（整理等着用锁）
+	YieldedTo   string `json:"yielded_to,omitempty"` // 让给了谁
+	Consumed    bool   `json:"consumed"`             // 事件是否已标记消费、游标是否推进
+	NotConsumed string `json:"not_consumed,omitempty"`
+	PendingLeft int64  `json:"pending_left"` // 收尾时数据库里还剩多少条 pending
+	StallRounds int    `json:"stall_rounds"` // 连续多少轮没消费（>0 就是在重放）
 }
 
 // RunIncrementalSync 增量同步 HTTP 入口
@@ -191,11 +219,11 @@ func (h *Handler) RunIncrementalSync(c *gin.Context) {
 	}
 	p := normalizeIncrParams(req.Cid, req.LocalPath, req.VideoExt, req.ImageExt, req.DataExt, req.Limit)
 
-	if !fullSyncMu.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "任务正在进行中，请等待完成后再试"})
+	if !taskMu.Acquire("手动增量同步", manualAcquireWait) {
+		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
 		return
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	beginTask("增量同步")
 	defer endTask()
 
@@ -249,6 +277,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 「为什么没动静」正是要靠它们回答
 	defer func() { noteIncrRound(sum, err) }()
 
+	// 轮次号：日志里所有 [同步#N] 都属于这一轮。
+	// 同一批内容连着出现在几个轮次号里 = 事件没消费掉在重放（见 incrtrace.go）
+	lg := newIncrRound()
+	sum.Round = lg.id
 	incrStart := time.Now()
 
 	// ---- 作用域计算与配置体检（先于事件拉取：配置错误时熔断，不消费任何事件）----
@@ -259,7 +291,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		// 媒体库 cid 无效/未配置（如全量同步配置缺 cid 时默认 "0"）：
 		// 所有事件都会被判为 other 静默吞掉并标已消费 → STRM 永久缺失。
 		// 熔断本轮，事件原样留待配置修正
-		log.Printf("[同步] ⚠⚠ 媒体库 cid=%s 解析不出绝对路径（未配置或已失效），增量同步中止（事件未消费）。请到「账号与媒体库」确认媒体库目录配置", p.Cid)
+		lg.infof("⚠⚠ 媒体库 cid=%s 解析不出绝对路径（未配置或已失效），增量同步中止（事件未消费）。请到「账号与媒体库」确认媒体库目录配置", p.Cid)
 		return sum, fmt.Errorf("媒体库 cid 无效（%s），增量同步中止（事件未消费，修正配置后重试即可补上）", p.Cid)
 	}
 	var excludedAbs []string
@@ -269,7 +301,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		Redundant string `json:"redundant"`
 	}
 	if err := json.Unmarshal([]byte(d.setting("org-basic")), &orgCfgRaw); err != nil {
-		log.Printf("[同步] ○ 整理配置解析失败（使用默认值）: %v", err)
+		lg.infof("○ 整理配置解析失败（使用默认值）: %v", err)
 	}
 	var shareCfgRaw struct {
 		Folder string `json:"folder"`
@@ -287,7 +319,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 直接中止本次增量——事件一条都不拉取消费，修正配置后原样补上
 	for _, ex := range excludedAbs {
 		if libAbs != "" && strings.HasPrefix(strings.TrimSuffix(libAbs, "/")+"/", ex+"/") {
-			log.Printf("[同步] ⚠ 整理目录（%s）把整个媒体库都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把待整理/已存在/冗余目录改到媒体库外面", ex)
+			lg.infof("⚠ 整理目录（%s）把整个媒体库都包含进去了，这样会误删文件，增量同步已暂停。请到设置里把待整理/已存在/冗余目录改到媒体库外面", ex)
 			return sum, fmt.Errorf("配置错误：工作区目录 %s 覆盖了整个媒体库 %s，增量同步中止（事件未消费，修正配置后重试即可补上）", ex, libAbs)
 		}
 	}
@@ -314,7 +346,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				break
 			}
 			lastErr = err
-			log.Printf("[同步] 事件拉取失败（第 %d/3 次）: %v", attempt, err)
+			lg.infof("事件拉取失败（第 %d/3 次）: %v", attempt, err)
 			if attempt < 3 {
 				time.Sleep(incrRetryDelay)
 			}
@@ -351,6 +383,13 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	var stale []model.SyncEvent
 	h.DB.Where("status = ?", "pending").Order("event_time").Find(&stale)
 	pending = mergePendingEvents(stale, pending)
+	sum.EventsPending = len(pending)
+	// 溯源第一行：本轮要处理的事件是**从哪来的**。
+	// 新增 0 条、待处理一大批 = 在重放上轮没消费掉的积压，不是网盘上真有这么多变化
+	if len(pending) > 0 {
+		lg.infof("▶ 本轮网盘变动：接口拉到 %d 条，其中新事件 %d 条，加上遗留共 %d 条待处理",
+			sum.EventsTotal, sum.EventsFresh, len(pending))
+	}
 
 	// 事件按时间正序应用（接口返回最新在前）
 	sort.SliceStable(pending, func(i, j int) bool { return pending[i].EventTime < pending[j].EventTime })
@@ -443,18 +482,84 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 本轮命中抑制表的 fid：事件成功消费后才把这些标记清掉
 	var suppressedHits []string
 
-	dirSet := map[string]bool{}
+	// ---- 回退目录遍历的目标集合 ----
+	//
+	// 遍历是整条链路上最贵的动作（每列一次目录 = 一次 115 请求 + 1 秒节流），
+	// 所以「遍历多大范围」直接决定这一轮跑多久、把任务锁攥多久。
+	// 目标分两种，判据是**这条事件的内容到底在哪一层**：
+	//
+	//   浅（deep=false）：文件级事件。事件的 cid 就是那个文件的父目录，
+	//     文件一定在这一层，没有任何理由往下钻。改造前一律深遍历，于是
+	//     「往 影视/剧集 里丢了一个文件」这种事件会把整个 剧集 分类
+	//     （成百上千个目录）重扫一遍，一轮几十分钟锁不放。
+	//   深（deep=true）：目录级事件（新建目录/整目录转存/目录改名移动回退），
+	//     内容全在子树里，必须递归。注意这里取的是**目录自己的 file_id**，
+	//     不是它的父目录 cid —— 改造前目录改名回退遍历的是父目录，
+	//     父目录要是分类目录甚至库根，一次改名就等于全库重扫。
+	type fallbackTarget struct {
+		cid    string
+		deep   bool
+		reason string // 溯源：哪条事件把它带进来的
+	}
+	dirSet := map[string]*fallbackTarget{}
 	// 零遍历清单：事件自带 pick_code 时直接用事件数据生成 strm，
 	// 不再重遍历受影响目录（CMS 同款；无 pick_code 的事件回退 dirSet 遍历）
 	type preciseFile struct {
 		ev model.SyncEvent
 	}
 	var precise []preciseFile
-	fallbackDir := func(cid string) { dirSet[cid] = true }
+	// addFallback 登记一个回退遍历目标。why 只用于日志溯源
+	addFallback := func(cid string, deep bool, ev model.SyncEvent, why string) {
+		if cid == "" || cid == "0" {
+			// 事件没带父目录：定位不了，而且**永远**定位不了。
+			// 改造前它会以空 cid 进遍历队列，随后被判成「不在媒体库内」计进
+			// DirsSkipped，把整批事件永久钉死在重放里——这是最隐蔽的一条
+			sum.DirsNoParent++
+			lg.infof("○ 事件里没有可用的目录 id，定位不了，已跳过（类型=%s 文件=%s file_id=%s 父目录=%q%s）。"+
+				"不影响本轮其它事件；如发现媒体库缺内容，跑一次全量同步即可补齐",
+				ev.Type, ev.FileName, ev.FileID, ev.Cid, why)
+			return
+		}
+		if t := dirSet[cid]; t != nil {
+			t.deep = t.deep || deep // 同一目录既有文件级又有目录级事件：按深的算
+			return
+		}
+		dirSet[cid] = &fallbackTarget{
+			cid: cid, deep: deep,
+			reason: fmt.Sprintf("%s/%s%s", ev.Type, ev.FileName, why),
+		}
+	}
+
+	// ---- 让路 ----
+	//
+	// 这一轮从头到尾都攥着任务互斥锁，而它有三段都可能很长：
+	// 逐条事件推导路径（未命中缓存就是一次 115 请求 + 1 秒节流）、
+	// 零遍历落盘（附属文件要取直链下载）、回退目录遍历。
+	// 任何一段里只要有别的任务在排队，就地收工：增量是幂等的，
+	// 没消费完的事件下一轮原样重来；而整理错过这把锁要等 10 分钟起步
+	yieldReason := func() string {
+		who, ok := taskMu.YieldRequested()
+		if !ok {
+			return ""
+		}
+		return who
+	}
+	yieldNow := func(stage string) bool {
+		why := yieldReason()
+		if why == "" {
+			return false
+		}
+		sum.Interrupted, sum.YieldedTo = true, why
+		lg.infof("⏸ 让路给 %s（中断于%s，事件保持待处理，下轮原样重来）", why, stage)
+		return true
+	}
 
 	for i, ev := range pending {
 		if i%50 == 0 {
 			SetTaskProgress(fmt.Sprintf("处理网盘变化 %d/%d 条…", i+1, len(pending)))
+		}
+		if yieldNow(fmt.Sprintf("第 %d/%d 条事件", i+1, len(pending))) {
+			break
 		}
 		// 路径缓存维护必须在抑制检查【之前】：网盘侧的事实已经变了，
 		// 与本地怎么处理无关。整理自产的目录搬移也会绕回来，那些事件下面会被跳过，
@@ -496,10 +601,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				if ev.PickCode != "" && ev.Cid != "" && ev.FileID != "" {
 					precise = append(precise, preciseFile{ev: ev})
 				} else {
-					fallbackDir(ev.Cid)
+					// 文件级：只看父目录这一层
+					addFallback(ev.Cid, false, ev, "（事件没带 pick_code）")
 				}
 			} else if ev.FileID != "" && ev.Cid == "" {
-				fallbackDir(ev.FileID)
+				// 没带父目录的非媒体条目，通常是整目录上传：按目录自身递归
+				addFallback(ev.FileID, true, ev, "（按目录上传处理）")
 				sum.Relevant++
 			}
 		case evNewFolder, evCopyFolder:
@@ -509,9 +616,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				sum.Structural++
 				continue
 			}
-			// 目录新增/复制（含整目录转存）：按目录自身加入受影响集合
+			// 目录新增/复制（含整目录转存）：按目录自身加入受影响集合，内容在子树里 → 深
 			if ev.FileID != "" {
-				dirSet[ev.FileID] = true
+				addFallback(ev.FileID, true, ev, "")
 				sum.Relevant++
 			}
 		case evDelete:
@@ -554,10 +661,17 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				sum.Moved++
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
-				if ev.PickCode != "" && ev.FileID != "" && isMedia(ev.FileName) {
+				switch {
+				case ev.FileCat == "0" && ev.FileID != "":
+					// 目录搬过来了但本地跟不动（缓存里没有旧路径）：
+					// 要重扫的是**这个目录自己**在新位置的内容，不是它的父目录。
+					// 改造前这里落到 fallbackDir(ev.Cid)，父目录是分类目录时
+					// 一次目录改名就触发一次整分类重扫
+					addFallback(ev.FileID, true, ev, "（本地跟不动，重扫新位置）")
+				case ev.PickCode != "" && ev.FileID != "" && isMedia(ev.FileName):
 					precise = append(precise, preciseFile{ev: ev}) // 移入媒体库：事件直推重建
-				} else {
-					fallbackDir(ev.Cid)
+				default:
+					addFallback(ev.Cid, false, ev, "（移入媒体库）")
 				}
 			}
 			sum.Structural++
@@ -577,24 +691,30 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 						noteShallow(newRel)
 					}
 				} else {
-					dirSet[ev.Cid] = true
+					// 同上：重扫改名后的这个目录本身，不是它的父目录
+					addFallback(ev.FileID, true, ev, "（改名后本地跟不动，重扫新位置）")
 				}
 			}
 			sum.Structural++
 		default:
 			sum.Structural++
-			vlog("[同步] ○ 未处理的事件: 类型=%s 文件=%s", ev.Type, ev.FileName)
+			lg.vlogf("○ 未处理的事件: 类型=%s 文件=%s", ev.Type, ev.FileName)
 		}
 	}
 
 	// ---- 零遍历落盘：事件自带 pick_code 的精确处理（无目录遍历） ----
+	preciseDone := 0 // 实际处理掉的条数（中途让路时会少于 len(precise)），账单要报真数
 	{
 		domain, format, keepExt, skipExist := d.strmConfig()
-		for _, pf := range precise {
+		for i, pf := range precise {
+			// 事件循环里已经让路了就不再开工；落盘中途也随时可以停
+			if sum.Interrupted || yieldNow(fmt.Sprintf("直推第 %d/%d 个文件", i+1, len(precise))) {
+				break
+			}
 			ev := pf.ev
 			base, ok, err := d.relPath(ev.Cid, p.Cid)
 			if err != nil || !ok {
-				fallbackDir(ev.Cid) // 路径推导失败：回退目录遍历
+				addFallback(ev.Cid, false, ev, "（直推时推导不出路径）") // 回退目录遍历
 				continue
 			}
 			rel := path.Join(libName, base, ev.FileName)
@@ -605,16 +725,22 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				Size:     ev.Size,
 				PickCode: ev.PickCode,
 			}
+			preciseDone++
 			ext := strings.ToLower(path.Ext(ev.FileName))
 			switch {
 			case filter.videoExts[ext]:
-				if err := writeStrm(p.LocalPath, domain, format, keepExt, skipExist, f); err != nil {
-					log.Printf("[同步] 零遍历 strm 失败 %s: %v", rel, err)
-					fallbackDir(ev.Cid)
+				wrote, err := writeStrm(p.LocalPath, domain, format, keepExt, skipExist, f)
+				if err != nil {
+					lg.infof("零遍历 strm 失败 %s: %v", rel, err)
+					addFallback(ev.Cid, false, ev, "（直推写 strm 失败）")
 					continue
 				}
 				upsertSyncedFile(h.DB, f, rel+".strm", "video")
-				sum.StrmCreated++
+				if wrote {
+					sum.StrmCreated++
+				} else {
+					sum.StrmExisting++
+				}
 				sum.Videos++
 				noteShallow(path.Join(libName, base))
 			case filter.assetExts[ext]:
@@ -633,104 +759,224 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			}
 		}
 		if len(precise) > 0 {
-			vlog("[同步] 零遍历模式: 事件直推 %d 个文件（回退目录遍历 %d 个）", len(precise), len(dirSet))
+			lg.vlogf("零遍历模式: 事件直推 %d 个文件（回退目录遍历 %d 个）", len(precise), len(dirSet))
 		}
 	}
 
-	// 受影响目录：定位相对路径 + 祖先去重
-	type targetDir struct{ cid, base string }
-	var targets []targetDir
-	for cid := range dirSet {
-		base, ok, err := d.relPath(cid, p.Cid)
-		if err != nil {
-			// 目录已不存在：目录被删除后残留的定位请求是永久性失败，
-			// 重试永远不会成功、还会让水位永远不推进。按"已解决"跳过。
-			// 判据从 files/get_info 的 800001 换成了 errDirGone —— 新接口对已删除
-			// 的 cid 不报错，是 fetch115Ancestors 自己校验末元素 cid 得出的结论
-			if errors.Is(err, errDirGone) {
-				log.Printf("[同步] 网盘目录已被删除，跳过相关变化")
-				continue
-			}
-			log.Printf("[同步] 暂时无法获取网盘目录位置（cid=%s）: %v", cid, err)
-			sum.DirsSkipped++
-			continue
-		}
-		if !ok {
-			sum.DirsSkipped++ // 不在媒体库路径下
-			continue
-		}
-		targets = append(targets, targetDir{cid: cid, base: base})
+	// ---- 受影响目录：定位相对路径 + 祖先去重 ----
+	//
+	// 这里的分类是整条链路的正确性关键：定位失败分**临时**与**永久**两种，
+	// 只有临时失败才该让整轮不消费、下轮重来（见 incrSummary 上的注释）
+	type targetDir struct {
+		cid, base, reason string
+		deep              bool
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].base < targets[j].base })
+	var targets []targetDir
+	for cid, ft := range dirSet {
+		// 定位本身就要打 115（缓存没命中时一次一秒），同样要能让路
+		if sum.Interrupted || yieldNow("定位受影响目录") {
+			break
+		}
+		base, ok, err := d.relPath(cid, p.Cid)
+		switch {
+		case errors.Is(err, errDirGone):
+			// 永久：目录被删掉之后残留的定位请求，重试永远不会成功。
+			// 判据是 errDirGone —— 新接口对已删除的 cid 不报错，
+			// 是 fetch115Ancestors 自己校验末元素 cid 得出的结论
+			sum.DirsGone++
+			lg.infof("○ 网盘目录已被删除，跳过相关变化（cid=%s 来源=%s）", cid, ft.reason)
+			continue
+		case err != nil:
+			// 临时：网络抖动 / 瞬时风控。只有这一类值得整轮不消费、下轮重来
+			sum.DirsSkipped++
+			lg.infof("⚠ 暂时读不到网盘目录位置（cid=%s 来源=%s）: %v", cid, ft.reason, err)
+			continue
+		case !ok:
+			// 永久：目录在媒体库外（转存区、别的网盘目录……），本工具本来就不管它。
+			// 改造前这一条是**静默**计进 DirsSkipped 的，于是一条这样的事件
+			// 就能把整批事件永久钉死：每 30 秒重放一遍整轮遍历，
+			// 直到 7 天后被 pruneSyncEvents 强杀。现在它只记账、不阻塞消费
+			sum.DirsOutside++
+			lg.infof("○ 目录不在媒体库内，不处理（cid=%s 网盘路径=%s 媒体库=%s 来源=%s）",
+				cid, orUnknownPath(d.absPath(cid)), libAbs, ft.reason)
+			continue
+		}
+		targets = append(targets, targetDir{cid: cid, base: base, deep: ft.deep, reason: ft.reason})
+	}
+	// 浅路径在前；同一路径上深遍历在前（深的能覆盖浅的，反过来不行）
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].base != targets[j].base {
+			return targets[i].base < targets[j].base
+		}
+		return targets[i].deep && !targets[j].deep
+	})
 	var uniqTargets []targetDir
-	dirsMerged := 0
 	for _, t := range targets {
 		covered := false
 		for _, u := range uniqTargets {
-			if u.base == "" || t.base == u.base || strings.HasPrefix(t.base, u.base+"/") {
-				covered = true
+			switch {
+			case u.deep && (u.base == "" || t.base == u.base || strings.HasPrefix(t.base, u.base+"/")):
+				covered = true // 上层在做深遍历，子目录不必再单独跑一趟
+			case !u.deep && !t.deep && t.base == u.base:
+				covered = true // 两个浅目标落在同一个目录
+			}
+			if covered {
 				break
 			}
 		}
 		if covered {
-			dirsMerged++ // 子目录被上层目录的遍历覆盖，无需单独处理
+			sum.DirsMerged++
 			continue
 		}
 		uniqTargets = append(uniqTargets, t)
 	}
+	for _, t := range uniqTargets {
+		if t.deep {
+			sum.DirsDeep++
+		} else {
+			sum.DirsShallow++
+		}
+		if t.deep && t.base == "" {
+			lg.infof("⚠ 本轮有一个深遍历目标就是媒体库根，这一趟等于整库重扫（来源=%s）", t.reason)
+		}
+	}
+	// 溯源清单：要遍历哪些目录、各自是被哪条事件带进来的、是浅还是深。
+	// 排查「这一轮为什么跑了十几分钟」看这一段就够了
+	walkKind := func(deep bool) string {
+		if deep {
+			return "深"
+		}
+		return "浅"
+	}
+	switch {
+	case len(uniqTargets) == 1:
+		t := uniqTargets[0]
+		lg.infof("回退遍历 1 个目录：[%s] %s ← %s", walkKind(t.deep), orRootLabel(t.base), t.reason)
+	case len(uniqTargets) > 1:
+		lg.infof("回退遍历 %d 个目录（深 %d / 浅 %d，另有 %d 个被上层目标覆盖）：",
+			len(uniqTargets), sum.DirsDeep, sum.DirsShallow, sum.DirsMerged)
+		for i, t := range uniqTargets {
+			if i >= incrTargetLogMax {
+				lg.infof("    …另有 %d 个目录未逐一列出", len(uniqTargets)-incrTargetLogMax)
+				break
+			}
+			lg.infof("    [%s] %s ← %s", walkKind(t.deep), orRootLabel(t.base), t.reason)
+		}
+	}
 
-	// 逐目录遍历并立即落盘
+	// ---- 逐目录遍历并立即落盘 ----
+	//
+	// 整轮最贵的一段：每列一次目录 = 一次 115 请求 + 1 秒节流。
+	// walkCtl.abort 让它在**每次发请求之前**都能停下来给排队的任务让路
 	domain, format, keepExt, skipExist := d.strmConfig()
 	for _, t := range uniqTargets {
-		noteShallow(path.Join(libName, t.base)) // 必须带库名，与零遍历那条保持一致
-		var videos, assets []remoteFile
-		if err := d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter); err != nil {
-			log.Printf("[同步] 遍历目录失败 %s: %v，30 秒后重试一次", t.base, err)
-			time.Sleep(incrRetryDelay)
-			if err := d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter); err != nil {
-				log.Printf("[同步] 遍历目录重试仍失败 %s: %v，跳过", t.base, err)
-				sum.DirsSkipped++
-				continue
-			}
+		if sum.Interrupted || yieldNow("目录遍历前") {
+			break
 		}
-		sc, dl, sk, fl := d.applyResults(videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
+		noteShallow(path.Join(libName, t.base)) // 必须带库名，与零遍历那条保持一致
+		ctl := &walkCtl{tag: lg.tag, abort: yieldReason}
+		if !t.deep {
+			ctl.maxDepth = 1 // 浅遍历：只列这一层，不下钻
+		}
+		tStart := time.Now()
+		var videos, assets []remoteFile
+		walkOnce := func() error {
+			videos, assets = nil, nil
+			return d.walkDir(t.cid, path.Join(libName, t.base), &videos, &assets, filter, ctl)
+		}
+		var aborted errWalkAborted
+		err := walkOnce()
+		if err != nil && !errors.As(err, &aborted) {
+			lg.infof("遍历目录失败 %s: %v，%v 后重试一次", orRootLabel(t.base), err, incrRetryDelay)
+			time.Sleep(incrRetryDelay)
+			err = walkOnce()
+		}
+		sum.DirsVisited += ctl.dirs
+		sum.ListCalls += ctl.pages
+		switch {
+		case errors.As(err, &aborted):
+			sum.Interrupted, sum.YieldedTo = true, aborted.reason
+			lg.infof("⏸ 让路给 %s，中断于 %s（本轮已列 %d 次目录；事件保持待处理，下轮重来）",
+				aborted.reason, aborted.dir, ctl.pages)
+		case err != nil:
+			lg.infof("⚠ 遍历目录重试仍失败 %s: %v —— 本轮事件保留，下轮自动重试", orRootLabel(t.base), err)
+			sum.DirsSkipped++
+			continue
+		}
+		st := d.applyResults(videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
 		sum.Dirs++
 		sum.Videos += len(videos)
-		sum.StrmCreated += sc
+		sum.StrmCreated += st.StrmCreated
+		sum.StrmExisting += st.StrmExisting
 		sum.AssetsTotal += len(assets)
-		sum.AssetsDownloaded += dl
-		sum.AssetsSkipped += sk
-		sum.AssetsFailed += fl
-		log.Printf("[同步] %s：新增视频 %d 个，附属文件下载 %d 个", t.base, len(videos), dl)
+		sum.AssetsDownloaded += st.AssetsDownloaded
+		sum.AssetsSkipped += st.AssetsSkipped
+		sum.AssetsFailed += st.AssetsFailed
+		// 逐目录结果：「新增」与「已存在」必须分开报。改造前这行打的是
+		// 扫到的视频总数且一律叫「新增」，重复遍历时满屏「新增视频 N 个」，
+		// 看着就像在全盘重建。
+		// 中断的那一趟只扫了一半，已列到的照常落盘（幂等），但必须标出来，
+		// 否则下一轮同一个目录又出现一遍会显得像重放
+		partial := ""
+		if sum.Interrupted {
+			partial = "（中断，未扫完）"
+		}
+		lg.infof("%s%s：扫到视频 %d 个（新增 STRM %d，已存在 %d），附属下载 %d 个｜列目录 %d 次，耗时 %s",
+			orRootLabel(t.base), partial, len(videos), st.StrmCreated, st.StrmExisting, st.AssetsDownloaded,
+			ctl.pages, time.Since(tStart).Truncate(time.Second))
+		if ctl.depthCut > 0 {
+			lg.vlogf("    （浅遍历：没有下钻的子目录 %d 个）", ctl.depthCut)
+		}
+		if t.deep && ctl.dirs >= incrDeepWalkWarn {
+			lg.infof("⚠ 这一趟深遍历扫了 %d 个目录、列了 %d 次目录（每次要等节流），耗时 %s。触发它的是：%s。"+
+				"范围明显过大的话，通常是网盘那边对一个大目录做了整体改名/移动",
+				ctl.dirs, ctl.pages, time.Since(tStart).Truncate(time.Second), t.reason)
+		}
+		if sum.Interrupted {
+			break
+		}
 	}
 
 	SetTaskProgress(fmt.Sprintf("收尾：目录 %d，STRM %d", sum.Dirs, sum.StrmCreated))
-	// 标记事件已应用 + 更新水位。
-	// 有目录遍历重试后仍失败（DirsSkipped>0）时绝不标记：被标记的事件永久
-	// 不再处理，对应 STRM 就永久缺失了。整轮不消费（下轮全量重做——
-	// STRM 写入是 upsert、删除幂等，重复处理无副作用，正确性优先）
-	if sum.DirsSkipped > 0 {
-		log.Printf("[同步] ⚠ 有 %d 个网盘目录暂时读取失败，下轮会自动重试这些内容", sum.DirsSkipped)
-		return sum, nil
-	}
-	now := time.Now()
-	ids := make([]string, 0, len(pending))
-	for _, ev := range pending {
-		ids = append(ids, ev.EventID)
-	}
-	if len(ids) > 0 {
-		h.DB.Model(&model.SyncEvent{}).Where("event_id IN ?", ids).
-			Updates(map[string]interface{}{"status": "applied", "applied_at": now})
-	}
-	// 事件已落定，现在才能清掉抑制标记：同一个 fid 之后被用户真的手动移动时
-	// 必须能正常处理，标记不清就会把那次真实变更也吞了
-	unmarkSuppressed(suppressedHits...)
-	d.saveSetting("incr-last", fmt.Sprint(now.Unix()))
-	// 游标只在本轮真的全部消费完之后才推进：DirsSkipped>0 已在上面提前返回，
-	// 那批事件下轮还要重来，游标跟着不动才补得回来
-	d.saveSetting("incr-cursor", encodeLifeCursor(nextCur))
 
-	// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）
+	// ---- 消费判定 ----
+	//
+	// 「消费」= 把本轮事件标成 applied 并推进游标。不消费的代价是下一轮
+	// 原样重来（STRM 写入是 upsert、删除幂等，重复处理无副作用），
+	// 所以宁可不消费也不能漏内容 —— 但**不消费的理由必须是会自己好转的**，
+	// 否则就是一个每 30 秒重放一次的死循环。
+	// 永久性跳过（不在库内 / 已删除 / 没带父目录）只记账，不阻止消费。
+	switch {
+	case sum.DirsSkipped > 0:
+		sum.NotConsumed = fmt.Sprintf("%d 个网盘目录暂时读不到", sum.DirsSkipped)
+	case sum.Interrupted:
+		sum.NotConsumed = "给 " + sum.YieldedTo + " 让路，本轮没跑完"
+	default:
+		sum.Consumed = true
+	}
+
+	now := time.Now()
+	if sum.Consumed {
+		ids := make([]string, 0, len(pending))
+		for _, ev := range pending {
+			ids = append(ids, ev.EventID)
+		}
+		if len(ids) > 0 {
+			h.DB.Model(&model.SyncEvent{}).Where("event_id IN ?", ids).
+				Updates(map[string]interface{}{"status": "applied", "applied_at": now})
+		}
+		// 事件已落定，现在才能清掉抑制标记：同一个 fid 之后被用户真的手动移动时
+		// 必须能正常处理，标记不清就会把那次真实变更也吞了
+		unmarkSuppressed(suppressedHits...)
+		d.saveSetting("incr-last", fmt.Sprint(now.Unix()))
+		// 游标只在本轮真的全部消费完之后才推进：没消费的那批事件下轮还要重来，
+		// 游标跟着不动才补得回来
+		d.saveSetting("incr-cursor", encodeLifeCursor(nextCur))
+	}
+
+	// 定向刷新：传本轮受影响的最浅子目录（传库根会命中所有库=全刷）。
+	// 刷新与通知跟消费判定无关 —— 已经落盘的内容要让 Emby 看见，
+	// 哪怕这一轮是被让路中断的
 	refreshBase := p.LocalPath
 	if shallowest != "" {
 		refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
@@ -748,7 +994,47 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	if len(deletedPaths) > 0 {
 		d.notifyDeleted(dedupeStrings(deletedPaths)...)
 	}
+
 	sum.Elapsed = time.Since(incrStart).Truncate(time.Second).String()
+
+	// ---- 本轮账单 ----
+	//
+	// 一行说清这一轮干了什么、贵在哪、最后有没有消费掉。空转轮次照旧静默
+	// （30 秒一轮，不能刷屏），但只要动过手就一定留一行 —— 出问题时
+	// 把相邻几个轮次号的账单排在一起，是重放还是真有变化一眼就分得出来
+	h.DB.Model(&model.SyncEvent{}).Where("status = ?", "pending").Count(&sum.PendingLeft)
+	// 停滞检测放在账单之前：账单要报「已经连续几轮没消费」（见 incrtrace.go）
+	if len(pending) > 0 || !sum.Consumed {
+		sum.StallRounds = noteIncrRoundOutcome(lg, sum.Consumed, sum.NotConsumed, sum.PendingLeft)
+	}
+	if len(pending) > 0 || sum.ListCalls > 0 {
+		outcome := "事件已消费，游标已推进"
+		if !sum.Consumed {
+			outcome = fmt.Sprintf("事件未消费（%s），下轮原样重来；已连续 %d 轮", sum.NotConsumed, sum.StallRounds)
+		}
+		perm := ""
+		if n := sum.DirsOutside + sum.DirsGone + sum.DirsNoParent; n > 0 {
+			perm = fmt.Sprintf("｜永久跳过 %d（库外 %d/已删 %d/无目录 id %d）",
+				n, sum.DirsOutside, sum.DirsGone, sum.DirsNoParent)
+		}
+		bill := fmt.Sprintf("本轮账单：事件 拉取%d/新增%d/处理%d · 直推 %d · 回退目录 %d（深%d 浅%d，访问 %d 个，列目录 %d 次）"+
+			" · 删 %d · 移改 %d · STRM 新增 %d/已存在 %d · 附属 下载%d/跳过%d/失败%d%s · 耗时 %s · %s · 剩余待处理 %d 条",
+			sum.EventsTotal, sum.EventsFresh, sum.EventsPending, preciseDone,
+			sum.DirsShallow+sum.DirsDeep, sum.DirsDeep, sum.DirsShallow, sum.DirsVisited, sum.ListCalls,
+			sum.Deleted, sum.Moved, sum.StrmCreated, sum.StrmExisting,
+			sum.AssetsDownloaded, sum.AssetsSkipped, sum.AssetsFailed, perm,
+			sum.Elapsed, outcome, sum.PendingLeft)
+		// 平平无奇的轮次（全是整理自产、或本来就无关的事件）只在详细日志里留账：
+		// 30 秒一轮，不能每轮都往日志里塞一条长行。
+		// 但只要**花了 115 请求**或者**没消费掉**，这一行就必须出现——
+		// 「为什么一直在轮询/为什么反复扫同样的目录」全靠它回答
+		if sum.ListCalls > 0 || !sum.Consumed || sum.StallRounds > 0 ||
+			sum.DirsSkipped+sum.DirsOutside+sum.DirsGone+sum.DirsNoParent > 0 {
+			lg.infof("%s", bill)
+		} else {
+			lg.vlogf("%s", bill)
+		}
+	}
 
 	// 完成汇总（大白话）：只要本轮真的处理了变化就给一条结论。
 	// 此前的术语行（媒体相关/结构性/非库区忽略…）普通用户读不懂，
@@ -777,12 +1063,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if sum.Ignored > 0 {
 			ignoredNote = fmt.Sprintf("（另有 %d 条整理目录内变动已忽略）", sum.Ignored)
 		}
-		log.Printf("[同步] ✓ 增量同步完成：%s%s。用时 %s", detail, ignoredNote, sum.Elapsed)
+		lg.infof("✓ 增量同步完成：%s%s。用时 %s", detail, ignoredNote, sum.Elapsed)
 	}
 	// 整理自产的变更单独报一行：它们的 STRM 在整理时就已经落好，这里跳过是正常的，
 	// 不说清楚会让人以为增量把变更漏了
 	if sum.Suppressed > 0 {
-		log.Printf("[同步] ○ 已跳过自产变更 %d 条（整理时已生成 STRM）", sum.Suppressed)
+		lg.infof("○ 已跳过自产变更 %d 条（整理时已生成 STRM）", sum.Suppressed)
 	}
 	return sum, nil
 }

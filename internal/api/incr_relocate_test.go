@@ -164,6 +164,7 @@ func TestIncrFolderRenameFallsBackWhenOldPathUnknown(t *testing.T) {
 
 	d.abs["d1"] = "/影视/剧集"
 	d.rel["d1"] = "剧集"
+	d.rel["dir-1"] = "剧集/新名" // 改名后这个目录自己的新位置
 	// 故意不给 cachedAbs["dir-1"]
 	d.pages = [][]lifeEvent{{
 		{ID: "e-1", Type: evFolderRename, FileID: "dir-1", Cid: "d1",
@@ -175,6 +176,12 @@ func TestIncrFolderRenameFallsBackWhenOldPathUnknown(t *testing.T) {
 	}
 	if d.walkCalls != 1 {
 		t.Fatalf("应回退重遍历一次，实得 %d", d.walkCalls)
+	}
+	// 重扫的必须是**改名的这个目录自己**，不是它的父目录。
+	// 改造前回退遍历的是父目录 d1（这里是「剧集」这一整个分类），
+	// 一次目录改名就等于整个分类重扫，几百个目录 × 1 秒节流
+	if got := d.walked[0]; got.cid != "dir-1" || got.base != "媒体库/剧集/新名" || !got.deep {
+		t.Fatalf("应深遍历改名后的目录自身，实得 %+v", got)
 	}
 	if _, err := os.Stat(filepath.Join(p.LocalPath, "媒体库", "剧集", "旧名", "E01.mkv.strm")); err != nil {
 		t.Fatalf("拿不到旧路径时不该动本地文件: %v", err)

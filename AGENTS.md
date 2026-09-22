@@ -209,7 +209,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
      台账行一旦清掉、事件又被抑制，没有第二个人会来收拾（见 `wash.go` 的洗版替换分支）。
    - 增量同步现在只负责 115 端的外部变更：手机上传、离线下载、网页端删改。
    - 抑制标记**只查不删**（`peekSuppressed`），要等事件真的标成 `applied` 之后
-     才由 `unmarkSuppressed` 批量清。增量遇到目录读不出来会整轮放弃重来，
+     才由 `unmarkSuppressed` 批量清。增量遇到目录**暂时**读不出来会整轮放弃重来，
      查时就消费的话下一轮没标记可命中，整理的产物会被当成外部变更处理掉。
 9. **空目录清理会删网盘内容**（`emptydir.go`）：整理搬完文件后，源目录与重新整理前的
    旧标题目录都会被清掉。删除走 `/rb/delete`（进 115 回收站，可还原），但守卫一条都不能松：
@@ -226,7 +226,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 原生 `library.deleted` 也可能来自扫库清理，不能证明用户主动删除。仅接受 Movie / Episode / Season / Series；Folder、库容器及空/未知类型一律拦截，通知仍保留。电影/单集精确匹配 STRM；剧/季目录须通过台账布局验证，不能无条件展开前缀。
     - 执行前实时查询 Emby `/Library/VirtualFolders` 的 Locations 并映射到本地，拒绝库根/祖先、已移除的库、查询失败与库目录不可访问；pickcode 命中也不得绕过。查询后再次检查开关和本地缺失，只收缩候选。单次数量/占比阈值保持移除，不恢复全库扫描。
     - 原生事件使用两次短间隔检查，神医 `deep.delete` 不等待后台轮询。事件先于本地删除时有一次短暂重查。
-    - 与整理、全量、增量共用 `fullSyncMu`，事件等锁后重查，不可丢弃事件再指望定时扫描补上。
+    - 与整理、全量、增量共用 `taskMu`（§6.12），事件等锁后重查，不可丢弃事件再指望定时扫描补上。
     - 旧 `vanish_at` 仅保留数据库兼容，不读写、不参与删除；旧模式、预演与 `max_batch` / `max_ratio` 配置不再生效。
     - **空目录只沿本次文件的父目录链往上清**：叶子目录（影片目录 / 季目录）走 `pruneEmptyDirTree`
       （整棵子树没有文件才删，顺带收掉空季目录），再往上的分类目录只接受「自己完全为空」，
@@ -253,6 +253,31 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       对不上就提示用户跑一次「校准台账」（`medialib.go`，拿本地 STRM 树当事实清幽灵行，
       只删 `MediaLibrary` 这一张表，不碰网盘/Emby/`SyncedFile`，且「一条都对不上」时拒绝执行）。
 
+12. **任务互斥锁 `taskMu` 与增量的遍历范围**（`synclock.go`、`incr115.go`、`files115.go`）：
+    增量同步、自动整理、全量、洗版、深删全部串行在 `taskMu` 上。2026-09-22 之前它是一把裸
+    `sync.Mutex` + 各处 `TryLock`，配上「增量 30 秒一轮、而一轮增量可能递归遍历整棵分类树」，
+    结果是整理被饿死（现场：转存完几小时不入库、手动点整理永远提示有任务在跑）。现在：
+    - **等待方登记让路**（`Acquire`），**持有方主动收工**：增量在「逐条事件推导路径 / 零遍历落盘 /
+      目录遍历」三段里都查 `taskMu.YieldRequested()`，有人排队就就地停下。没消费完的事件保持
+      `pending`，下一轮原样重来（STRM upsert、删除幂等）。
+    - 增量轮询用 `TryLockPolite`：**有人在排队就主动不抢**。少了这道礼让，30 秒一轮的增量会在
+      整理刚放开锁的瞬间又抢回去，让路白做。
+    - 抢不到锁的日志/报错一律走 `busyErr()` / `logBusy()`，必须说清**被谁占着、占了多久**。
+    - **回退目录遍历分浅深**（`fallbackTarget`）：文件级事件只列父目录**这一层**（文件就在那一层），
+      目录级事件才递归，且递归目标取**目录自己的 file_id**，不是父目录 cid。改造前一律深遍历父目录，
+      于是「往 影视/剧集 丢了个文件」或「给分类目录改个名」都等于整个分类重扫，每列一次目录还要等 1 秒节流。
+    - **跳过的目录要区分临时与永久**：只有「暂时读不到」（`DirsSkipped`）才阻止本轮消费；
+      「不在媒体库内」「已被删除」「事件没带目录 id」是永久的，只记账。混在一起的后果是
+      **一条永远处理不完的事件把整批事件钉死，每 30 秒重放一次整轮遍历**，直到 7 天后被
+      `pruneSyncEvents` 强杀 —— 这正是用户看到「一直在轮询 / 全盘 strm 一直在重读」的原因。
+    - 溯源日志见 `incrtrace.go`：每轮一个 `[同步#N]` 轮次号、一份「回退遍历哪些目录 ← 哪条事件带来的」
+      清单、一行「本轮账单」，以及连续多轮不消费时的重放告警。状态页 `/sync/incr-status` 同步暴露
+      `task_lock` 与 `stall`。
+    - `writeStrm` 返回 `wrote bool`：跳过已存在 / 内容一致的重写**不算新增**。混着算的话，
+      任何一次重复遍历都会报成满屏「新增视频 N 个」并连带触发 Emby 刷新。
+    - 测试：`synclock_test.go`（锁与让路）、`walkctl_test.go`（深度上限与中断）、
+      `incr_scope_test.go`（永久跳过不阻塞消费、浅/深遍历选型、让路不消费）、`strmwrite_test.go`。
+
 ---
 
 ## 7. 常见任务入口
@@ -271,7 +296,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改总览面板 | `internal/api/dashboard.go`（数据）+ `webui/src/pages/DashboardPage.vue`（界面）。**Emby 计数别再改回不带 `IncludeItemTypes`**，见 §6.11；台账校准在 `internal/api/medialib.go` + `webui/src/components/dashboard/CalibrateModal.vue` |
 | 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`）。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
-| 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `fullSyncMu`，整理抢不到锁会置位 `organizeMissed` 稍后补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
+| 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12），整理抢不到锁会先登记让路、等一段，仍抢不到才置位 `organizeMissed` 每分钟补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
@@ -280,7 +305,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
 | 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
-| 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
+| 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量、**当前任务锁**、**重放检测**），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
+| 「一直在轮询 / 反复扫同样的目录」 | 日志按轮次号 `[同步#N]` 对比相邻两轮：内容一样就是重放。看「本轮账单」那行的结尾（消费了没有、为什么没消费）与「回退遍历 N 个目录 ← 哪条事件带来的」清单。机制见 §6.12，代码在 `incrtrace.go` |
+| 「整理/转存半天不动」 | `GET /sync/incr-status` 的 `task_lock`：谁占着、占了多久、谁在排队。日志里 `[定时] ○ 整理未开始：…` / `[整理] ○ 转存后自动整理未开始：…` 会写明被谁挡住。机制见 §6.12 |
 
 ---
 

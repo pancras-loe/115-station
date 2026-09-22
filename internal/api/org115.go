@@ -151,11 +151,13 @@ func organizeSummaryLine(sink *orgSink, results []OrganizeResult) string {
 // RunOrganizePipeline 整理流水线 HTTP 入口
 // POST /organize/pipeline
 func (h *Handler) RunOrganizePipeline(c *gin.Context) {
-	if !fullSyncMu.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "任务正在进行中，请等待完成后再试"})
+	// 等一会儿再说忙：30 秒一轮的增量轮询占着锁的概率不低，
+	// 一抢不到就弹「任务进行中」的话，用户点十次有五次是白点
+	if !taskMu.Acquire("手动整理", manualAcquireWait) {
+		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
 		return
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	beginTask("自动整理")
 	defer endTask()
 

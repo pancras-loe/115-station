@@ -166,7 +166,7 @@ async function runFull() {
       message.warning('快速模式不可用，已自动降级为标准模式完成本次同步（详见日志）')
     }
     message.success(
-      `全量同步完成：视频 ${d.total} 个（生成 STRM ${d.created}），` +
+      `全量同步完成：视频 ${d.total} 个（新增 STRM ${d.created}，已存在 ${d.existing ?? 0}），` +
         `附属文件 ${d.assets_total} 个（下载 ${d.assets_downloaded}，跳过 ${d.assets_skipped}，失败 ${d.assets_failed}）`,
     )
     // 失效标记开关后端只读库里那份，这里跟着 saved 走，别拿界面上还没保存的开关判断

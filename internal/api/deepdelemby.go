@@ -48,14 +48,15 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		return
 	}
 	// 等待同步完成，不能像旧 TryLock 路径一样丢弃事件；等锁不启动任何全库扫描。
-	for !fullSyncMu.TryLock() {
+	// Acquire 会登记让路请求，正在跑的增量遍历看到有人排队就提前收工
+	for !taskMu.Acquire("Emby 深度删除", 10*time.Second) {
 		select {
 		case <-stopCh:
 			return
-		case <-time.After(250 * time.Millisecond):
+		default:
 		}
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	cfg := h.loadDeepDelCfg()
 	if !cfg.Enabled {
 		return

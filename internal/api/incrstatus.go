@@ -16,7 +16,13 @@ import (
 // 那个位置 —— 好处是日志干净，代价是「为什么没同步」这个问题只能翻日志猜。
 // 尤其是「115 生活」事件开关的门禁结论，此前只活在内存里，界面上根本看不到。
 //
-// 这里把判断需要的东西一次给全：门禁、当前通道、游标、上一轮结果、积压量。
+// 这里把判断需要的东西一次给全：门禁、当前通道、游标、上一轮结果、积压量，
+// 外加两样排查「一直在轮询/一直不整理」必须看的东西：
+//
+//   - task_lock：任务互斥锁此刻被谁占着、占了多久、谁在排队。
+//     「手动点整理说有任务在跑」「转存完几小时不入库」都是在问这个
+//   - stall：连续多少轮没能消费掉事件。>0 就意味着日志里反复出现的
+//     同一批目录是**重放**，不是网盘上真有这么多变化
 
 var (
 	lastRoundMu  sync.Mutex
@@ -78,6 +84,26 @@ func (h *Handler) IncrStatus(c *gin.Context) {
 
 	interval := int(h.loadIncrInterval() / time.Second)
 
+	// 任务锁：谁在跑、跑了多久、谁在排队。
+	// 「为什么整理不动」「为什么手动点了说有任务在跑」全靠这块回答
+	lock := gin.H{"busy": false, "holder": "", "describe": taskMu.Describe()}
+	if owner, dur, ok := taskMu.Holder(); ok {
+		lock["busy"] = true
+		lock["holder"] = owner
+		lock["running_sec"] = int(dur.Seconds())
+	}
+	if waiters, waited := taskMu.Waiters(); len(waiters) > 0 {
+		lock["waiting"] = waiters
+		lock["waited_sec"] = int(waited.Seconds())
+	}
+
+	// 停滞：连续多少轮没消费掉事件。>0 就说明日志里反复出现的同一批内容是重放
+	stallRounds, stallSince, stallReason := incrStallSnapshot()
+	stall := gin.H{"rounds": stallRounds, "reason": stallReason}
+	if !stallSince.IsZero() {
+		stall["since"] = stallSince.Format("01-02 15:04:05")
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"life_gate":      gate,
 		"endpoint":       endpoint,
@@ -86,6 +112,8 @@ func (h *Handler) IncrStatus(c *gin.Context) {
 		"pending_events": pendingEvents,
 		"path_cache":     pathRows,
 		"interval_sec":   interval,
+		"task_lock":      lock,
+		"stall":          stall,
 	})
 }
 

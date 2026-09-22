@@ -147,13 +147,14 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 			vlog("[整理]     · 落盘 → %s", filepath.Join(s.localRoot, filepath.FromSlash(f.Path), f.Name))
 		}
 	}
-	sc, dl, _, fl := applySyncResults(model.DB, ops, vs, as, s.localRoot, s.domain, s.format, s.keepExt, s.skipExist, rootRel)
-	if fl > 0 {
-		log.Printf("[整理] ○ %s：%d 个附属文件下载失败（增量同步下轮会重试）", rootRel, fl)
+	st := applySyncResults(model.DB, ops, vs, as, s.localRoot, s.domain, s.format, s.keepExt, s.skipExist, rootRel)
+	sc, dl := st.StrmCreated+st.StrmExisting, st.AssetsDownloaded
+	if st.AssetsFailed > 0 {
+		log.Printf("[整理] ○ %s：%d 个附属文件下载失败（增量同步下轮会重试）", rootRel, st.AssetsFailed)
 	}
 	// 写 STRM 失败的视频同样要交回增量：applySyncResults 内部失败只打日志，
-	// 台账里不会有它的行，这里按「登记数少于送进去的数」反推
-	if sc < len(vs) {
+	// 台账里不会有它的行，这里按 StrmFailed 反查是哪几个
+	if st.StrmFailed > 0 {
 		for _, f := range vs {
 			var n int64
 			model.DB.Model(&model.SyncedFile{}).Where("file_id = ?", f.Fid).Count(&n)

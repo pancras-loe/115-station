@@ -9,17 +9,21 @@ package api
 //     每分钟检查一次 cron 是否命中。重操作，低频合适
 //   - 增量同步（incr.interval_sec）：**独立轮询**，默认 30 秒一轮。
 //     只负责 115 端的外部变更（手机上传、离线下载、网页端删改）。
-//     改造后一轮只要 1~2 个请求，挂在整理的 cron 上纯属浪费实时性；
-//     30 秒一轮 ≈ 2 次/分钟，反而比改造前（10 分钟 34 次 ≈ 3.4 次/分钟）更低。
-//     填 0 可退回「跟着整理串行跑」的老行为
+//     空转轮次只要 1 个请求（拉一页生活事件），挂在整理的 cron 上纯属浪费实时性。
+//     ⚠️ 但**有事件的轮次不便宜**：事件带不出 pick_code 时要回退目录遍历，
+//     每列一次目录就是一次 115 请求 + 1 秒节流。所以遍历范围被严格收着
+//     （文件级事件只列一层，见 incr115.go 的 fallbackTarget），
+//     并且遍历中途会给排队的任务让路。填 0 可退回「跟着整理串行跑」的老行为
 //   - 全量（full.cron）：整库扫描，服务于失效 STRM 检测——生活事件有窗口，
 //     网页版批量删除、停机期间的删除都会漏掉，只有整库差集能查出来。低频即可
 //
 // 全量整库扫描请求量大（115 风控敏感），所以它只在用户开了失效 STRM 检测时
 // 才有意义：检测关着的时候定时全量纯属白跑一趟，前后端都直接当没开。
 //
-// 三条线共用 fullSyncMu。整理抢不到锁时会置位 organizeMissed 稍后补跑——
-// 增量提频之后，整理的 cron 撞上一轮正在遍历大目录的增量是常态。
+// 三条线共用 taskMu（见 synclock.go）。整理抢不到锁时会登记让路请求：
+// 正在跑的增量遍历看到有人排队就提前收工，没消费完的事件下一轮原样重来。
+// 还抢不到就置位 organizeMissed，每分钟继续补 —— 增量提频到 30 秒之后，
+// 整理的 cron 撞上一轮正在遍历大目录的增量是常态。
 
 import (
 	"115-station/internal/model"
@@ -103,8 +107,9 @@ func (h *Handler) loadIncrCron() string {
 
 const (
 	// incrIntervalDefault 增量独立轮询的默认间隔。
-	// 改造后一轮增量只要 1~2 个请求，30 秒一轮 ≈ 2 次/分钟，
-	// 反而比改造前（10 分钟 34 次 ≈ 3.4 次/分钟）更低
+	// 空转轮次只有 1 个请求（拉一页生活事件），30 秒一轮 ≈ 2 次/分钟，
+	// 比改造前（10 分钟 34 次 ≈ 3.4 次/分钟）更低。
+	// 有事件的轮次贵在目录遍历，那部分由遍历范围与让路机制控制，不靠调大间隔
 	incrIntervalDefault = 30 * time.Second
 	// incrIntervalMin 下限，再快也没有意义（115 的事件本身就有延迟）
 	incrIntervalMin = 15 * time.Second
@@ -270,24 +275,24 @@ func (h *Handler) runIncrPollTick() {
 	if p.Cid == "" || p.Cid == "0" {
 		return // 未配置媒体库
 	}
-	if !fullSyncMu.TryLock() {
-		return // 整理/全量在跑，让路（下一轮 30 秒后再来）
+	// TryLockPolite：**有人在排队就主动不抢**。
+	// 没有这道礼让，增量会在整理刚放开锁的瞬间又把锁抢回去
+	// （整理 60 秒才回来一次、转存守望者 5 分钟一次，抢不过 30 秒一轮的增量），
+	// 登记的让路就白做了
+	if !taskMu.TryLockPolite("增量轮询") {
+		vlog("[轮询] ○ 本轮增量跳过：%s", taskMu.Describe())
+		return
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[轮询] ✗ 增量 panic 已恢复: %v", r)
 		}
-		fullSyncMu.Unlock()
+		taskMu.Unlock()
 	}()
-	sum, err := h.executeIncrementalSync(p)
-	if err != nil {
+	// 结果由增量自己按轮次号打账单（见 incrtrace.go）：
+	// 这里再打一行摘要就是同一轮内容出现两遍，排查时反而更难分清轮次
+	if _, err := h.executeIncrementalSync(p); err != nil {
 		log.Printf("[轮询] 增量同步失败: %v", err)
-		return
-	}
-	// 空转轮次完全静默（30 秒一轮，静默才不刷屏）
-	if sum.EventsFresh > 0 {
-		log.Printf("[轮询] 增量: 新事件 %d，删 %d，移/改 %d，STRM %d，附属下载 %d，跳过自产 %d",
-			sum.EventsFresh, sum.Deleted, sum.Moved, sum.StrmCreated, sum.AssetsDownloaded, sum.Suppressed)
 	}
 }
 
@@ -300,8 +305,8 @@ func (h *Handler) runScheduledFullSync() {
 		log.Printf("[定时] ○ 全量同步已开启定时，但未配置媒体库 cid，本轮跳过")
 		return
 	}
-	if !fullSyncMu.TryLock() {
-		log.Printf("[定时] ○ 已有任务运行中，本轮全量同步跳过")
+	if !taskMu.Acquire("定时全量同步", organizeAcquireWait) {
+		logBusy("全量同步", "定时")
 		return
 	}
 	defer func() {
@@ -309,7 +314,7 @@ func (h *Handler) runScheduledFullSync() {
 			log.Printf("[定时] ✗ 全量同步 panic 已恢复: %v", r)
 		}
 		endTask()
-		fullSyncMu.Unlock()
+		taskMu.Unlock()
 	}()
 	beginTask("定时全量同步")
 
@@ -328,11 +333,12 @@ func (h *Handler) runScheduledFullSync() {
 // 永久抱死互斥锁——此前非 defer 的 Unlock 在 panic 时被跳过，之后所有
 // 同步入口都报"任务正在进行中"直到重启
 func (h *Handler) runScheduledTick() {
-	if !fullSyncMu.TryLock() {
-		// 错过即补：置位后每分钟继续尝试，不再等下一个 cron 周期。
-		// 增量提频到 30 秒之后，撞上一轮正在遍历大目录的增量是常态
+	// 先登记让路再等：正在跑的增量遍历看到有人排队会就地收工。
+	// 等不到才置位「错过即补」，每分钟继续尝试，不再等下一个 cron 周期
+	if !taskMu.Acquire("定时整理", organizeAcquireWait) {
 		if organizeMissed.CompareAndSwap(false, true) {
-			log.Printf("[定时] ○ 已有任务运行中，整理稍后补跑")
+			logBusy("整理", "定时")
+			log.Printf("[定时] ○ 整理稍后补跑（每分钟重试一次，不等下一个 cron 周期）")
 		}
 		return
 	}
@@ -342,7 +348,7 @@ func (h *Handler) runScheduledTick() {
 			log.Printf("[定时] ✗ 任务 panic 已恢复: %v", r)
 		}
 		endTask()
-		fullSyncMu.Unlock()
+		taskMu.Unlock()
 	}()
 	beginTask("定时整理+增量")
 	start := time.Now()
@@ -381,11 +387,8 @@ func (h *Handler) runScheduledTick() {
 	}
 	// 空转轮次完全静默（每 10 分钟一 tick，静默才不刷屏）；
 	// 只有真的处理了内容才输出摘要
+	// 增量那半边的明细由它自己按轮次号打账单（见 incrtrace.go），这里不复述
 	if !idle {
-		if sum != nil {
-			log.Printf("[定时] 增量: 新事件 %d，删 %d，移/改 %d，STRM %d，附属下载 %d，跳过自产 %d",
-				sum.EventsFresh, sum.Deleted, sum.Moved, sum.StrmCreated, sum.AssetsDownloaded, sum.Suppressed)
-		}
 		log.Printf("[定时] ✅ 定时任务完成，耗时 %.2f 秒", time.Since(start).Seconds())
 	}
 }

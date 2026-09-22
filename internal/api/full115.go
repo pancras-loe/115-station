@@ -91,9 +91,6 @@ const defaultLocalPath = "/media"
 
 // ==================== 全量同步 ====================
 
-// fullSyncMu 全量同步互斥：防止重复点击导致两个同步并发互相干扰
-var fullSyncMu sync.Mutex
-
 // taskState 当前任务状态（供前端展示与按钮禁用，含 cron 触发的任务）
 var (
 	taskStateMu  sync.Mutex
@@ -165,7 +162,8 @@ type fullSummary struct {
 	Orphans          int    // 当前待清理的失效 STRM 数
 	Elapsed          string
 	Total            int
-	Created          int
+	Created          int // 真正新写/改写的 strm
+	Existing         int // 本地已有且内容一致，没动（与 Created 分开报，见 writeStrm）
 	AssetsTotal      int
 	AssetsDownloaded int
 	AssetsSkipped    int
@@ -194,12 +192,13 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		return
 	}
 
-	// 同一时刻只允许一个全量同步
-	if !fullSyncMu.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "任务正在进行中，请等待完成后再试"})
+	// 同一时刻只允许一个全量同步。等一小会儿：正在跑的增量遍历
+	// 看到有人排队会提前收工，通常几秒内就能让出锁
+	if !taskMu.Acquire("全量同步", manualAcquireWait) {
+		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
 		return
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	beginTask("全量同步")
 	defer endTask()
 
@@ -224,6 +223,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		"elapsed":           sum.Elapsed,
 		"total":             sum.Total,
 		"created":           sum.Created,
+		"existing":          sum.Existing,
 		"assets_total":      sum.AssetsTotal,
 		"assets_downloaded": sum.AssetsDownloaded,
 		"assets_skipped":    sum.AssetsSkipped,
@@ -234,7 +234,7 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 // executeFullSync 全量同步核心：递归遍历 cid 目录，视频生成 .strm，附属文件实体落盘。
 // 附属文件 = 用户配置的图片后缀 + 数据文件后缀 + nfo（Emby/Jellyfin 标准元数据）；
 // 不在过滤集合内的文件一律不同步。
-// 调用方负责持有 fullSyncMu 与 beginTask/endTask（HTTP 入口与 cron 调度器都要用）
+// 调用方负责持有 taskMu 与 beginTask/endTask（HTTP 入口与 cron 调度器都要用）
 func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	if p.LocalPath == "" {
 		p.LocalPath = defaultLocalPath
@@ -279,7 +279,7 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	}
 
 	SetTaskProgress(fmt.Sprintf("落盘：视频 %d + 附属 %d", len(videos), len(assets)))
-	strmCreated, downloaded, skipped, failed := applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
+	st := applySyncResults(h.DB, ops, videos, assets, p.LocalPath, domain, format, keepExt, skipExist, "")
 
 	// 失效 STRM 标记：台账里有、但本次扫描没见到的文件 = 网盘上已被删除。
 	// 三个前提缺一不可——用户开了开关、清单完整、拿得到库名（台账按库名前缀分区）。
@@ -308,7 +308,7 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		}
 	}
 
-	totalNew := strmCreated + downloaded
+	totalNew := st.StrmCreated + st.AssetsDownloaded
 	if totalNew > 0 {
 		// 全量传的是媒体库根，会把根下面每个库都整库扫一遍（万级库很贵），
 		// 所以做成开关且默认关 —— p115strmhelper、qmediasync 的同类开关同样默认关
@@ -329,9 +329,10 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		}
 	}
 	SetTaskProgress("")
-	log.Printf("[同步] 全量同步完成（%s模式）：视频 %d 个（生成 STRM %d），附属文件下载 %d 个，用时 %s",
+	log.Printf("[同步] 全量同步完成（%s模式）：视频 %d 个（新增 STRM %d，已存在 %d，失败 %d），附属文件下载 %d 个，用时 %s",
 		map[string]string{"fast": "快速", "normal": "标准"}[modeUsed],
-		len(videos), strmCreated, downloaded, time.Since(fullStart).Truncate(time.Second))
+		len(videos), st.StrmCreated, st.StrmExisting, st.StrmFailed, st.AssetsDownloaded,
+		time.Since(fullStart).Truncate(time.Second))
 
 	return &fullSummary{
 		ModeUsed:         modeUsed,
@@ -339,11 +340,12 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		Orphans:          orphanTotal,
 		Elapsed:          time.Since(fullStart).Truncate(time.Second).String(),
 		Total:            len(videos),
-		Created:          strmCreated,
+		Created:          st.StrmCreated,
+		Existing:         st.StrmExisting,
 		AssetsTotal:      len(assets),
-		AssetsDownloaded: downloaded,
-		AssetsSkipped:    skipped,
-		AssetsFailed:     failed,
+		AssetsDownloaded: st.AssetsDownloaded,
+		AssetsSkipped:    st.AssetsSkipped,
+		AssetsFailed:     st.AssetsFailed,
 	}, nil
 }
 
@@ -459,18 +461,38 @@ func (h *Handler) orgSkipCids(rootCid string) (map[string]bool, []string) {
 // assetDLWorkers 附属文件并发下载线程数（CDN 下载不占 API 限额，CMS 同款思路）
 const assetDLWorkers = 5
 
+// applyStats 一批落盘的结果。
+//
+// 刻意把「新写的」和「本来就有的」分开：两者混在一个 strmCreated 里之后，
+// 任何一次重复遍历都会报成一堆「新增」，日志、完成汇总、Emby 刷新
+// 全都跟着误触发（见 writeStrm 的注释）
+type applyStats struct {
+	StrmCreated      int // 真正新写/改写的 strm
+	StrmExisting     int // 本地已有且内容一致，没动
+	StrmFailed       int
+	AssetsDownloaded int
+	AssetsSkipped    int
+	AssetsFailed     int
+}
+
 // applySyncResults 对遍历结果执行落盘：视频生成 strm，附属文件下载（已存在跳过），
 // 全部登记到 SyncedFile 台账（move/delete 事件精确执行的依据）
-func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, localPath, domain, format string, keepExt, skipExist bool, dirLabel string) (strmCreated, downloaded, skipped, failed int) {
+func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, localPath, domain, format string, keepExt, skipExist bool, dirLabel string) (st applyStats) {
 	// 视频：先全部生成 STRM，成功的收集后批量 upsert（此前逐条独立写事务，
 	// 万级视频全量同步即万次写）
 	videoRows := make([]model.SyncedFile, 0, len(videos))
 	for _, f := range videos {
-		if err := writeStrm(localPath, domain, format, keepExt, skipExist, f); err != nil {
+		wrote, err := writeStrm(localPath, domain, format, keepExt, skipExist, f)
+		if err != nil {
 			log.Printf("[同步] 生成 STRM 失败: %s/%s: %v", f.Path, f.Name, err)
+			st.StrmFailed++
 			continue
 		}
-		strmCreated++
+		if wrote {
+			st.StrmCreated++
+		} else {
+			st.StrmExisting++
+		}
 		videoRows = append(videoRows, model.SyncedFile{
 			FileID: f.Fid, PickCode: f.PickCode,
 			RelPath: path.Join(f.Path, f.Name+".strm"), Kind: "video", Size: f.Size, Sha1: f.Sha1,
@@ -530,12 +552,12 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 	for r := range resCh {
 		switch {
 		case r.err != nil:
-			failed++
+			st.AssetsFailed++
 			log.Printf("[同步] 附属文件失败: %s/%s: %v", r.f.Path, r.f.Name, r.err)
 		case r.status == "skip":
-			skipped++
+			st.AssetsSkipped++
 		default:
-			downloaded++
+			st.AssetsDownloaded++
 			upsertSyncedFile(db, r.f, path.Join(r.f.Path, r.f.Name), "asset")
 		}
 	}
@@ -723,7 +745,14 @@ func parseStrmConfig(raw string) (domain, format string, keepExt, skipExist bool
 //
 // 「保留文件后缀」= pickcode 段是否带 .ext（播放器据 URL 后缀识别容器格式）；
 // ?/ 之后的文件名仅供播放器展示与识别，代理忽略查询串
-func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile) error {
+// writeStrm 落一个 .strm。返回 wrote=true 表示**内容真的变了**（新建或改写）。
+//
+// 为什么要把「写了没有」报出去：改造前它只返回 error，跳过已存在也返回 nil，
+// 调用方照样 strmCreated++。于是任何一次重复遍历都会把整棵树的老文件
+// 全部报成「新增视频 N 个」，还连带触发一次 Emby 刷新——用户看到的
+// 「全盘 strm 一直在重读重建」有一大半是这个计数造成的错觉。
+// 判据不用 skipExist：关掉「跳过已存在」时内容一致的重写也不是新增
+func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile) (wrote bool, err error) {
 	base := strings.TrimRight(domain, "/")
 	idPart := f.PickCode
 	if keepExt {
@@ -739,18 +768,21 @@ func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remo
 	// 本地目录：保持网盘目录结构
 	dir := filepath.Join(localRoot, filepath.FromSlash(f.Path))
 	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return err
+		return false, err
 	}
 
 	strmName := f.Name + ".strm"
 	strmPath := filepath.Join(dir, strmName)
 
-	// 如果配置为跳过已存在，且文件已存在则跳过
-	if skipExist {
-		if _, err := os.Stat(strmPath); err == nil {
-			return nil
+	// 已存在：配置了跳过就跳过；没配跳过但内容一模一样，写了也是原样，同样算没动
+	if old, err := os.ReadFile(strmPath); err == nil {
+		if skipExist || string(old) == streamURL {
+			return false, nil
 		}
 	}
 
-	return os.WriteFile(strmPath, []byte(streamURL), 0o666)
+	if err := os.WriteFile(strmPath, []byte(streamURL), 0o666); err != nil {
+		return false, err
+	}
+	return true, nil
 }

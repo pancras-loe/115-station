@@ -147,11 +147,11 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 	}
 
 	// 与整理/同步互斥：重整理同样要动网盘与本地文件
-	if !fullSyncMu.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "任务正在进行中，请等待完成后再试"})
+	if !taskMu.Acquire("重新整理", manualAcquireWait) {
+		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
 		return
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	beginTask("重新整理")
 	defer endTask()
 

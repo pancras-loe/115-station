@@ -15,6 +15,14 @@ import (
 // 数据库用真的内存 SQLite、本地文件用真的临时目录 —— upsert 与整树删除
 // 这些最容易出错的地方，用桩反而会糊过去。
 
+// walkArg 记一次目录遍历的目标与范围。
+// 「遍历了哪个目录、是不是深遍历」是回退遍历这块唯一值得断言的东西：
+// 遍历错目录（拿父目录当目标）或该浅的时候深，代价都是整棵子树重扫
+type walkArg struct {
+	cid, base string
+	deep      bool
+}
+
 type stubIncrDeps struct {
 	pages     [][]lifeEvent     // 按次序返回的事件页
 	names     map[string]string // cid → 目录名
@@ -29,6 +37,7 @@ type stubIncrDeps struct {
 	fetchCalls int
 	gateCalls  int
 	walkCalls  int
+	walked     []walkArg // 每次遍历的目标与范围
 	refreshed  []string
 	deleted    []string
 	saved      map[string]string
@@ -84,8 +93,10 @@ func (s *stubIncrDeps) relPath(cid, rootCid string) (string, bool, error) {
 	return r, ok, nil
 }
 
-func (s *stubIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter) error {
+func (s *stubIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, ctl *walkCtl) error {
 	s.walkCalls++
+	deep := ctl == nil || ctl.maxDepth <= 0
+	s.walked = append(s.walked, walkArg{cid: cid, base: basePath, deep: deep})
 	return s.walkErr
 }
 
@@ -101,8 +112,8 @@ func (s *stubIncrDeps) strmConfig() (string, string, bool, bool) {
 }
 
 func (s *stubIncrDeps) applyResults(videos, assets []remoteFile, localPath, domain, format string,
-	keepExt, skipExist bool, dirLabel string) (int, int, int, int) {
-	return 0, 0, 0, 0
+	keepExt, skipExist bool, dirLabel string) applyStats {
+	return applyStats{}
 }
 
 // newIncrTestEnv 搭一套「媒体库 lib = /影视，库名 媒体库，子目录 d1 = 剧集/X」的环境

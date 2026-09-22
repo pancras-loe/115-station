@@ -432,11 +432,11 @@ func (h *Handler) DeepDeleteOrganizeRecord(c *gin.Context) {
 		}
 	}
 
-	if !fullSyncMu.TryLock() {
-		c.JSON(http.StatusConflict, gin.H{"error": "同步任务进行中，请稍后再试"})
+	if !taskMu.Acquire("深度删除", manualAcquireWait) {
+		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
 		return
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 
 	var rec model.OrganizeRecord
 	if h.DB.First(&rec, c.Param("id")).Error != nil {

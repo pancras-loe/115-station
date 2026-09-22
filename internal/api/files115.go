@@ -198,25 +198,90 @@ func list115Entries(cookie, cid string, offset int) ([]map[string]interface{}, i
 	return entries, count, err
 }
 
+// ==================== 目录遍历的范围与中断控制 ====================
+//
+// 遍历是整条链路上最贵的动作：每列一次目录都要过全局 1 秒读节流
+// （见 ratelimit.go），所以「遍历一棵多大的树」直接等于「这一轮要跑多久、
+// 要把任务互斥锁攥多久」。改造前 walk115Dir 只有一个模式——无限深度递归，
+// 于是一条「往 影视/剧集 里丢了个文件」的增量事件，就能把整个 剧集 分类
+// （成百上千个目录）重扫一遍，几十分钟锁不放。
+//
+// walkCtl 给遍历加了三样东西：深度上限、中断回调、以及计数（写进日志用于溯源）。
+// nil 表示老行为：不限深度、不可中断（全量同步走这条）。
+type walkCtl struct {
+	tag      string        // 日志前缀，如 "[同步#12]"；空则用 "[同步]"
+	maxDepth int           // >0 时限制递归层数：1 = 只列目标目录本层，不下钻
+	abort    func() string // 非 nil 且返回非空时中止遍历，返回值即中止原因
+
+	// 观测计数，遍历结束后由调用方写进日志
+	dirs     int // 访问过的目录数
+	pages    int // 列目录请求次数（≈ 本次遍历的 115 请求数与秒数）
+	depthCut int // 因深度上限没有下钻的子目录数
+}
+
+func (c *walkCtl) logTag() string {
+	if c == nil || c.tag == "" {
+		return "[同步]"
+	}
+	return c.tag
+}
+
+// errWalkAborted 遍历被主动中止（让路给排队中的任务），不是失败。
+// 调用方据此把本轮判成「未消费」：事件保持 pending，下一轮原样重来
+type errWalkAborted struct{ reason, dir string }
+
+func (e errWalkAborted) Error() string {
+	return fmt.Sprintf("遍历已让路给 %s（中断于 %s）", e.reason, e.dir)
+}
+
+// entryLister 遍历只用得到「列一页目录」这一件事。
+// 抽出来是为了让深度上限与让路中断这两条逻辑能单测——
+// 它们决定一轮增量要跑多久、锁要攥多久，是这块最该有测试的地方
+type entryLister interface {
+	listEntries(cid string, offset int) ([]map[string]interface{}, int, error)
+}
+
 // walk115Dir 递归遍历目录，按过滤器分别收集视频（生成 strm）和附属文件（实体落盘）
 // assets 为 nil 时只收集视频（整理管线等场景）；skipCids 非空时跳过这些 cid 的子树
 // （整理工作区：待整理/已存在/冗余/转存目录，同步库根时不应生成 STRM）
-func walk115Dir(ops *pan115Ops, cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, skipCids map[string]bool) error {
+func walk115Dir(ops entryLister, cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, skipCids map[string]bool) error {
+	return walk115DirCtl(ops, cid, basePath, videos, assets, f, skipCids, nil)
+}
+
+// walk115DirCtl 带范围/中断控制的遍历。ctl 为 nil 时等价于 walk115Dir
+func walk115DirCtl(ops entryLister, cid, basePath string, videos, assets *[]remoteFile,
+	f *syncFilter, skipCids map[string]bool, ctl *walkCtl) error {
+	if ctl == nil {
+		ctl = &walkCtl{}
+	}
+	return walk115DirDepth(ops, cid, basePath, videos, assets, f, skipCids, ctl, 1)
+}
+
+func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]remoteFile,
+	f *syncFilter, skipCids map[string]bool, ctl *walkCtl, depth int) error {
 	dirLabel := basePath
 	if dirLabel == "" {
 		dirLabel = "(根目录)"
 	}
+	ctl.dirs++
 	offset := 0
 	for {
+		// 中断检查放在「发请求之前」：让路要的是立刻停下来别再排队等 1 秒
+		if ctl.abort != nil {
+			if why := ctl.abort(); why != "" {
+				return errWalkAborted{reason: why, dir: dirLabel}
+			}
+		}
 		entries, count, err := ops.listEntries(cid, offset)
 		if err != nil {
 			return err
 		}
+		ctl.pages++
 		// 等待时长并入目录行；简洁模式静默逐目录遍历
 		if w := throttle115LastWait(); w > 0 {
-			vlog("[同步] 同步%s（等 %.1fs）", dirLabel, w.Seconds())
+			vlog("%s 同步%s（等 %.1fs）", ctl.logTag(), dirLabel, w.Seconds())
 		} else {
-			vlog("[同步] 同步%s", dirLabel)
+			vlog("%s 同步%s", ctl.logTag(), dirLabel)
 		}
 		for _, d := range entries {
 			isDir := fmt.Sprint(d["f"]) == "0"
@@ -224,11 +289,17 @@ func walk115Dir(ops *pan115Ops, cid, basePath string, videos, assets *[]remoteFi
 			if isDir {
 				subCid := fmt.Sprint(d["cid"])
 				if skipCids != nil && skipCids[subCid] {
-					log.Printf("[同步] ○ 跳过整理工作区目录: %s", path.Join(basePath, name))
+					log.Printf("%s ○ 跳过整理工作区目录: %s", ctl.logTag(), path.Join(basePath, name))
+					continue
+				}
+				// 深度上限：浅遍历只看目标目录这一层。事件带来的文件就在这一层，
+				// 往下钻等于把整棵子树重扫一遍（改造前的真实行为）
+				if ctl.maxDepth > 0 && depth >= ctl.maxDepth {
+					ctl.depthCut++
 					continue
 				}
 				subPath := path.Join(basePath, name)
-				if err := walk115Dir(ops, subCid, subPath, videos, assets, f, skipCids); err != nil {
+				if err := walk115DirDepth(ops, subCid, subPath, videos, assets, f, skipCids, ctl, depth+1); err != nil {
 					return err
 				}
 			} else {

@@ -70,9 +70,15 @@ func TestOrganizeCatchUpOnMissedSlot(t *testing.T) {
 	organizeMissed.Store(false)
 	t.Cleanup(func() { organizeMissed.Store(false) })
 
-	fullSyncMu.Lock()
-	h.runScheduledTick() // 锁被别人占着，应立刻返回并置位
-	fullSyncMu.Unlock()
+	// 测试里不真等 90 秒
+	defer func(d time.Duration) { organizeAcquireWait = d }(organizeAcquireWait)
+	organizeAcquireWait = 10 * time.Millisecond
+
+	if !taskMu.TryLock("测试占用") {
+		t.Fatal("锁应当是空闲的")
+	}
+	h.runScheduledTick() // 锁被别人占着，等不到就该置位待补
+	taskMu.Unlock()
 
 	if !organizeMissed.Load() {
 		t.Fatal("锁被占用时应置位待补")

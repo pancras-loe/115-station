@@ -56,7 +56,10 @@ export interface FullSyncResult {
   /** 当前待清理的失效 STRM 数 */
   orphans?: number
   total: number
+  /** 真正新写/改写的 strm */
   created: number
+  /** 本地已有且内容一致，没动 */
+  existing?: number
   assets_total: number
   assets_downloaded: number
   assets_skipped: number
@@ -68,16 +71,21 @@ export const runFull = (body: SyncExtConfig) =>
   http.post<FullSyncResult>('/sync/full', body, { timeoutMs: 30 * 60_000 })
 
 export interface IncrSummary {
+  /** 轮次号，与日志里的 [同步#N] 对应 */
+  round: number
   events_total: number
   events_fresh: number
+  /** 本轮实际要处理的条数（含上轮遗留） */
+  events_pending: number
   relevant: number
   structural: number
   deleted: number
   moved: number
   dirs: number
-  dirs_skipped: number
   videos: number
   strm_created: number
+  /** 本地已有且内容一致，没动 */
+  strm_existing: number
   assets_total: number
   assets_downloaded: number
   assets_skipped: number
@@ -85,6 +93,32 @@ export interface IncrSummary {
   /** 非媒体库区域（待整理/已存在/冗余等）的事件 */
   ignored: number
   elapsed: string
+
+  /** 回退遍历的范围与代价：排查「这一轮为什么跑了十几分钟」 */
+  dirs_shallow: number
+  dirs_deep: number
+  dirs_merged: number
+  dirs_visited: number
+  /** 列目录请求次数，每次都要等节流 */
+  list_calls: number
+
+  /** 临时读不到：唯一会让本轮不消费、下轮重来的 */
+  dirs_skipped: number
+  /** 永久：目录不在媒体库内 */
+  dirs_outside: number
+  /** 永久：目录已在网盘上删除 */
+  dirs_gone: number
+  /** 永久：事件没带父目录 */
+  dirs_no_parent: number
+
+  /** 被让路中断（有别的任务在排队等锁） */
+  interrupted: boolean
+  yielded_to?: string
+  /** 事件是否已标记消费、游标是否推进；false = 下一轮原样重放 */
+  consumed: boolean
+  not_consumed?: string
+  pending_left: number
+  stall_rounds: number
 }
 
 export const runIncremental = (body: SyncExtConfig) =>
@@ -157,6 +191,17 @@ export interface IncrStatus {
   pending_events: number
   path_cache: number
   interval_sec: number
+  /** 任务互斥锁：整理/同步/全量都排这一条队，谁占着、谁在等 */
+  task_lock: {
+    busy: boolean
+    holder: string
+    describe: string
+    running_sec?: number
+    waiting?: string[]
+    waited_sec?: number
+  }
+  /** 连续多少轮没消费掉事件；>0 说明日志里反复出现的内容是重放 */
+  stall: { rounds: number; reason: string; since?: string }
 }
 
 export const incrStatus = () => http.get<IncrStatus>('/sync/incr-status', { timeoutMs: 15_000 })

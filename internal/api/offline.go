@@ -180,11 +180,16 @@ func classifyLink(raw string) string {
 func (h *Handler) triggerOrganizeAndSync() bool {
 	time.Sleep(3 * time.Second)
 
-	if !fullSyncMu.TryLock() {
-		// 被其他任务占用：静默跳过（占用方的日志已覆盖，等下轮守望者接管）
+	// 等锁而不是抢一次就走：转存后的整理是用户最在意的一条链路，
+	// 而增量轮询 30 秒一轮，一抢不到就返回的话，长遍历期间它几乎永远抢不到。
+	// Acquire 会登记让路请求，正在遍历的增量看到有人排队就提前收工
+	if !taskMu.Acquire("自动整理+增量（转存触发）", organizeAcquireWait) {
+		// 等满了还没轮到：说明真有长任务在跑。记一行说明被谁挡住了，
+		// 改造前这里完全静默，用户只看到「转存完几个小时都没动静」
+		logBusy("转存后自动整理", "整理")
 		return false
 	}
-	defer fullSyncMu.Unlock()
+	defer taskMu.Unlock()
 	beginTask("自动整理+增量（转存触发）")
 	defer endTask()
 
@@ -404,8 +409,11 @@ func StartTransferWatcher(h *Handler) {
 			//（此前写成 +4min，实际冷却 9 分钟，快速接续从未生效）
 			lastTrigger = time.Now().Add(-4 * time.Minute)
 			if !ran {
-				lastTrigger = time.Now()
-				continue // 其他任务占用，本轮不计成败
+				// 被别的任务挡住不是失败，不该罚满 5 分钟冷却（上一行已经
+				// 把锚点拨回 4 分钟前 = 60 秒后重来）。改造前这里写的是
+				// lastTrigger = now，一次没抢到就再等 5 分钟，撞上一轮长遍历时
+				// 期望等待是**小时级**的 —— 「转存完几个小时都不入库」就是这么来的
+				continue
 			}
 			// 整理后复查：目录清空 = 成功；仍有条目 = 一轮失败。
 			// 连续 3 次失败（如整理反复报错/内容无法处理）后暂停 30 分钟，

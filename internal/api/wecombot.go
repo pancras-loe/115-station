@@ -392,11 +392,11 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		go func() {
 			// 必须取任务互斥锁：此前直接调执行函数，可与全量同步/定时任务
 			// 并发搬动同一棵 115 目录树
-			if !fullSyncMu.TryLock() {
-				reply("○ 整理未开始：已有任务运行中")
+			if !taskMu.Acquire("机器人指令-整理", organizeAcquireWait) {
+				reply("○ 整理未开始：" + busyErr())
 				return
 			}
-			defer fullSyncMu.Unlock()
+			defer taskMu.Unlock()
 			beginTask("机器人指令-整理")
 			defer endTask()
 			if _, _, err := h.executeOrganize(); err != nil {
@@ -410,11 +410,11 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		reply("已开始增量同步，完成后通知。")
 		go func() {
 			// 同上：增量同步与全量共用事件流与本地树，必须互斥
-			if !fullSyncMu.TryLock() {
-				reply("○ 增量同步未开始：已有任务运行中")
+			if !taskMu.Acquire("机器人指令-增量同步", manualAcquireWait) {
+				reply("○ 增量同步未开始：" + busyErr())
 				return
 			}
-			defer fullSyncMu.Unlock()
+			defer taskMu.Unlock()
 			beginTask("机器人指令-增量同步")
 			defer endTask()
 			p := h.incrParamsFromConfig()

@@ -91,7 +91,7 @@ async function runIncremental() {
     const s = d.summary
     message.success(
       `增量同步完成（${s.elapsed}）：事件 ${s.events_total}，视频 ${s.videos}，` +
-        `生成 STRM ${s.strm_created}，附属文件下载 ${s.assets_downloaded}`,
+        `新增 STRM ${s.strm_created}（已存在 ${s.strm_existing}），附属文件下载 ${s.assets_downloaded}`,
     )
   } catch (e) {
     toastError(e, '增量同步失败')
@@ -218,18 +218,51 @@ const helpVisible = ref(false)
           <span class="st-note">{{ status.interval_sec > 0 ? `每 ${status.interval_sec} 秒一轮` : '已关闭（跟随自动整理串行执行）' }}</span>
         </FieldRow>
 
-        <FieldRow label="上一轮" tip="每一轮都会记录，包括没找到任何变动的空转轮次。">
+        <FieldRow
+          label="当前任务"
+          tip="整理、增量、全量、洗版、深删都排这一条队。「手动点整理提示有任务在跑」「转存完迟迟不入库」看的就是这里。"
+        >
+          <NTag :type="status.task_lock.busy ? 'warning' : 'success'" size="small" round>
+            {{ status.task_lock.busy ? '占用中' : '空闲' }}
+          </NTag>
+          <span class="st-note">{{ status.task_lock.describe }}</span>
+          <span v-if="status.task_lock.waiting?.length" class="st-warn">
+            · {{ status.task_lock.waiting.join('、') }} 在排队（已等 {{ status.task_lock.waited_sec }} 秒）
+          </span>
+        </FieldRow>
+
+        <FieldRow label="上一轮" tip="每一轮都会记录，包括没找到任何变动的空转轮次。轮次号与日志里的 [同步#N] 对应。">
           <template v-if="status.last_round.at">
             <span class="st-note">{{ status.last_round.at }}</span>
+            <span v-if="status.last_round.summary" class="st-dim">#{{ status.last_round.summary.round }}</span>
             <span v-if="status.last_round.error" class="st-err">{{ status.last_round.error }}</span>
-            <span v-else-if="status.last_round.summary" class="st-dim">
-              新事件 {{ status.last_round.summary.events_fresh }} ·
-              新增 STRM {{ status.last_round.summary.strm_created }} ·
-              清理 {{ status.last_round.summary.deleted }} ·
-              移动/改名 {{ status.last_round.summary.moved }}
-            </span>
+            <template v-else-if="status.last_round.summary">
+              <span class="st-dim">
+                待处理 {{ status.last_round.summary.events_pending }} ·
+                新增 STRM {{ status.last_round.summary.strm_created }}（已存在 {{ status.last_round.summary.strm_existing }}） ·
+                清理 {{ status.last_round.summary.deleted }} ·
+                移动/改名 {{ status.last_round.summary.moved }} ·
+                列目录 {{ status.last_round.summary.list_calls }} 次 ·
+                用时 {{ status.last_round.summary.elapsed }}
+              </span>
+              <span v-if="!status.last_round.summary.consumed" class="st-warn">
+                · 未消费（{{ status.last_round.summary.not_consumed }}），下轮原样重来
+              </span>
+            </template>
           </template>
           <span v-else class="st-dim">还没跑过</span>
+        </FieldRow>
+
+        <FieldRow
+          label="重放检测"
+          tip="连续多少轮没能把事件消费掉。大于 0 时，日志里反复出现的同一批目录是重放，不是网盘上真有这么多变化。"
+        >
+          <template v-if="status.stall.rounds > 0">
+            <span class="st-warn">已连续 {{ status.stall.rounds }} 轮未消费</span>
+            <span class="st-dim">· {{ status.stall.reason }}</span>
+            <span v-if="status.stall.since" class="st-dim">· 起于 {{ status.stall.since }}</span>
+          </template>
+          <span v-else class="st-note">正常（上一轮已消费）</span>
         </FieldRow>
 
         <FieldRow label="积压事件" tip="拉回来但还没处理完的事件。持续不降说明有网盘目录一直读不出来，日志里会有提示。">

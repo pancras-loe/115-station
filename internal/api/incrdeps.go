@@ -30,7 +30,9 @@ type incrDeps interface {
 	dirName(cid string) string                         // 目录自身名字；取不到返回 ""
 	absPath(cid string) string                         // 网盘绝对路径；取不到返回 ""
 	relPath(cid, rootCid string) (string, bool, error) // 相对媒体库根的路径
-	walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter) error
+	// walkDir 遍历一个目录。ctl 控制深度与中断（见 files115.go 的 walkCtl）：
+	// 浅遍历只列本层，中断回调让正在排队的整理能把锁抢走
+	walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, ctl *walkCtl) error
 	invalidateDirCache()
 	// dirMoved 目录在网盘上改了名/换了位置：更新路径缓存，返回它【原来】的绝对路径。
 	// 旧路径只可能来自缓存（事件里的字段全是新位置），查不到就返回 false，不猜
@@ -46,7 +48,7 @@ type incrDeps interface {
 	// ---- 落盘（需要打 115 取直链的那部分）----
 	downloadAsset(f remoteFile, localPath string) error
 	applyResults(videos, assets []remoteFile, localPath, domain, format string,
-		keepExt, skipExist bool, dirLabel string) (strmCreated, downloaded, skipped, failed int)
+		keepExt, skipExist bool, dirLabel string) applyStats
 
 	// ---- 通知 ----
 	notifyRefresh(base string)
@@ -114,8 +116,8 @@ func (d *realIncrDeps) relPath(cid, rootCid string) (string, bool, error) {
 	return get115RelPath(d.cookie, cid, rootCid)
 }
 
-func (d *realIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter) error {
-	return walk115Dir(d.ops, cid, basePath, videos, assets, f, nil)
+func (d *realIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFile, f *syncFilter, ctl *walkCtl) error {
+	return walk115DirCtl(d.ops, cid, basePath, videos, assets, f, nil, ctl)
 }
 
 func (d *realIncrDeps) invalidateDirCache() { forgetAllDirPaths() }
@@ -162,7 +164,7 @@ func (d *realIncrDeps) downloadAsset(f remoteFile, localPath string) error {
 }
 
 func (d *realIncrDeps) applyResults(videos, assets []remoteFile, localPath, domain, format string,
-	keepExt, skipExist bool, dirLabel string) (int, int, int, int) {
+	keepExt, skipExist bool, dirLabel string) applyStats {
 	return applySyncResults(d.h.DB, d.ops, videos, assets, localPath, domain, format, keepExt, skipExist, dirLabel)
 }
 
