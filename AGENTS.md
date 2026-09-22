@@ -278,6 +278,28 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 测试：`synclock_test.go`（锁与让路）、`walkctl_test.go`（深度上限与中断）、
       `incr_scope_test.go`（永久跳过不阻塞消费、浅/深遍历选型、让路不消费）、`strmwrite_test.go`。
 
+13. **洗版：判定逐文件、执行必须整批**（`wash.go`、`organize.go` 的 `processDir`）：
+    2026-09-22 之前每集各发一次 115 写请求（旧版让位一次、新版移「已存在」一次），
+    153 集的动漫光这两件事就是十几分钟，而整理全程占着 `taskMu`（§6.12），
+    增量同步每 30 秒来一次全被挡回去 —— 现场日志里「转存后自动整理未开始」刷了两分半。
+    - `decideWash` **只读台账**，不发任何 115 请求、不动本地文件，返回 `washPlan`；
+      `applyWashPlans` 收一批 plan，按去向目录分组后每组**一次** move / 整批**一次** delete。
+      新增洗版分支时判定和执行要各放各的地方，别又在判定里插一次网盘写。
+    - `washScanner` 缓存库名前缀与每个目标目录的台账行。缓存成立的前提就是
+      「判定期间没有任何写入」，把执行挪回判定里这份缓存立刻失真。
+    - 判为「已存在」的新文件同样攒成一批搬一次，**整理记录也只写一条**（`SourceKind=dir`、
+      `VideoCount` 记集数）。一集一条的话记录页会被一部剧刷掉好几页。
+    - **sha1 去重不许再抢在洗版前面**。此前 `processDir` 里一句全表
+      `sha1ExistsInLibrary` 命中就短路，既不打日志也不看策略：用户配着
+      `mode: replace` 只看到「库内已有相同或更优版本」，无从解释（现场：龙珠 153 集）。
+      现在并进 `decideWash`，分三种情况——同一份文件**就在本次目标目录下** → `washSameFile`
+      （真的没什么可洗的）；在库内**别的位置**（全量同步带进来的旧目录结构）→ 按策略让位，
+      replace 就是让规范路径上的新副本接管；**没配策略** → `washNoStrategy` 退回纯去重。
+      `orphan_at` 非空的台账行一律不参与去重，否则一行陈旧记录能把一部片永久钉死在「已存在」。
+    - 两种「已存在」的文案必须分开（`washExistsMsg`）：策略判输了和撞了 sha1 是两回事。
+    - 测试：`washbatch_test.go`（批量、分组、去重、缓存、失效行）、
+      `wash_regression_test.go` / `washflow_test.go` / `wash_recycle_test.go`。
+
 ---
 
 ## 7. 常见任务入口
@@ -289,7 +311,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 加一个环境变量 | `internal/config/config.go` 的 `Load()` |
 | 改文件名识别/解析 | `internal/api/resource.go`，配套测试 `recognize_test.go` / `paren_test.go` / `eprange_test.go` |
 | 改重命名模板变量 | `internal/api/rename.go`（变量体系与 CMS 对齐） |
-| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashConfig`；默认 YAML 首次写入，已有配置（含空配置）不覆盖，保存后立即失效缓存 |
+| 改洗版规则 | `internal/api/wash.go` + `model.InitDefaultWashConfig`；默认 YAML 首次写入，已有配置（含空配置）不覆盖，保存后立即失效缓存。**判定（`decideWash`）与执行（`applyWashPlans`）是分开的**，改之前先读 §6.13 |
 | 接一个新资源站 | 照 `re0.go` 或 `mukaku.go` 的结构写，前端在 `index.html` 的 `mt-*` 页签 |
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
