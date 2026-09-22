@@ -121,12 +121,6 @@ func resolveEmbyPlaybackSource(db *gorm.DB, cfg *config.Config, sourcePath, requ
 		(requestHost != "" && strings.EqualFold(u.Host, requestHost)) {
 		managed = true
 	}
-	if managed && (u.Scheme == "http" || u.Scheme == "https") && strings.HasPrefix(u.Path, "/ed2k/play/") {
-		id := strings.TrimPrefix(u.Path, "/ed2k/play/")
-		if id != "" && !strings.Contains(id, "/") {
-			return "@offline:" + id, true, nil
-		}
-	}
 	id := pickcodeOfDirectURL(direct)
 	if id == "" {
 		if managed {
@@ -305,11 +299,6 @@ func handleEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target 
 		c.String(http.StatusUnsupportedMediaType, "115 直连不支持服务器转码，请使用支持原文件格式的播放器")
 		return true
 	}
-	if strings.HasPrefix(pc, "@offline:") {
-		c.Params = append(c.Params, gin.Param{Key: "id", Value: strings.TrimPrefix(pc, "@offline:")})
-		(&Handler{DB: db, Config: cfg}).handleOfflinePlay(c)
-	} else {
-		servePickcodeDirect(c, db, cfg, pc)
-	}
+	servePickcodeDirect(c, db, cfg, pc)
 	return true
 }

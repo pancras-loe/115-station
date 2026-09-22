@@ -203,9 +203,6 @@ type DeepDeleteRecord struct {
 // ⚠️ 认领产物**不允许新增任何 115 请求**，只能用已经在手的数据：
 //   - 离线任务：监视器本来就在 30 秒轮询任务列表，顺手摘 file_id（产物 fid）与任务名
 //   - 分享转存：/share/snap 的返回里本来就有顶层条目名，转存后 115 保留原名
-//
-// 为什么不复用 OfflinePlay：那张表是「按需离线播放端点」的登记（主键是链接指纹、
-// 不含分享链接、也没有产物信息），职责不同，混用会把两件事绑死。
 type DownloadLink struct {
 	ID   uint   `json:"id" gorm:"primaryKey"`
 	Kind string `json:"kind" gorm:"index;size:16"` // magnet / ed2k / http / ftp / share
@@ -214,7 +211,7 @@ type DownloadLink struct {
 	Name string `json:"name" gorm:"size:500"`      // 任务名 / 分享标题 / 链接文件名（提交时取得到多少算多少，回填时补全）
 
 	TargetCid string `json:"target_cid" gorm:"size:64"` // 提交时指定的转存目录
-	Source    string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 影巢 / TG订阅 / 按需离线
+	Source    string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 影巢 / TG订阅
 	// Status 下载/转存侧的状态：submitted（已提交）/ downloading / done / failed。
 	// 分享转存是同步完成的，登记即 done
 	Status string `json:"status" gorm:"index;size:16"`
@@ -238,22 +235,6 @@ type DownloadLink struct {
 	TargetDir      string     `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// OfflinePlay 按需离线（边下边播）登记：ed2k/磁力链接 ↔ 播放端点 id。
-// 入库（提交离线）时创建，STRM 占位内容指向 /ed2k/play/{id}；
-// Emby 播放时端点查任务状态，没下过就提交 115 离线，完成后定位
-// pickcode 存在本表，后续播放走 302 直连快路径
-type OfflinePlay struct {
-	ID        string    `json:"id" gorm:"primaryKey;size:64"` // 链接指纹（ed2k hash/btih/URL sha1）
-	Link      string    `json:"link" gorm:"size:1000"`        // 原始 ed2k/magnet/http 链接
-	Name      string    `json:"name" gorm:"size:500"`         // 文件名（ed2k 链接自带，http 取 URL base）
-	Size      int64     `json:"size"`                         // 文件字节数（ed2k 链接自带，完成后按尺寸兜底定位）
-	PickCode  string    `json:"pick_code" gorm:"size:64"`     // 下载完成并定位到的 115 pickcode（就绪后快速 302）
-	Status    string    `json:"status" gorm:"size:20;index"`  // pending / downloading / ready / failed
-	ErrorMsg  string    `json:"error_msg" gorm:"size:500"`    // 失败原因（115 拒绝等）
-	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -359,7 +340,6 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},
-		&OfflinePlay{},
 		&DownloadLink{},
 		&UploadMark{},
 		&OrganizeRecord{},

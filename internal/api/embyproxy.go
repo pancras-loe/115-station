@@ -248,9 +248,6 @@ func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) e
 
 // 详情页和播放信息的预取共用正式播放解析器；实际播放器 UA 改变时重新取链。
 func prefetchPickcodeLink(db *gorm.DB, cfg *config.Config, pickcode, ua string) {
-	if strings.HasPrefix(pickcode, "@offline:") {
-		return
-	} // 浏览详情不能提交离线任务。
 	resolver := playbackLinks
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

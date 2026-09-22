@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ import (
 
 // offlineSubmitCore 提交离线下载任务核心（/offline/add 与影巢磁力转存共用）。
 // target 空则回落分享同步接收文件夹；organize 时挂秒传试探与延迟整理；
-// source 是提交来源（web / 机器人 / 按需离线…），只用于台账留痕。
+// source 是提交来源（web / 机器人等），只用于台账留痕。
 // 返回 (HTTP 状态码, 成功消息或错误信息)。
 func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool) (int, string) {
 	// 验证链接类型
@@ -100,8 +101,7 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 	}
 
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
-	offlineMineAdd(h, rawURL)      // 归属标记：完成通知只发给 115-Station 内提交的任务
-	offlinePlayRegister(h, rawURL) // 按需离线登记：占位 STRM 指向 /ed2k/play/{id}，边下边播
+	offlineMineAdd(h, rawURL) // 归属标记：完成通知只发给 115-Station 内提交的任务
 	// 下载记录：链接本身先落一行，产物 fid / 任务名由离线监视器的既有轮询回填
 	dlLinkRecord(h, rawURL, linkType, "", target, source, "submitted", nil)
 
@@ -313,6 +313,9 @@ func offlineNextPollDelay() time.Duration {
 		return 30 * time.Second
 	}
 }
+
+// 磁力指纹用于离线任务归属与下载记录对账。
+var reMagnetBtih = regexp.MustCompile(`(?i)btih:([A-Za-z0-9]+)`)
 
 func offlineMineAdd(h *Handler, rawURL string) {
 	lower := strings.ToLower(rawURL)

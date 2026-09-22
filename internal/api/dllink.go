@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,32 @@ const downloadLinkKeepDays = 90
 // dlClaimWindow 认领时间窗：只有这段时间内提交的链接会被整理结果认领。
 // 太长会让同名内容错认到陈年旧链接上
 const dlClaimWindow = 14 * 24 * time.Hour
+
+// downloadLinkName 只取链接自带的文件名；磁力名称由现有任务监视器回填。
+func downloadLinkName(raw string) string {
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "ed2k://") {
+		parts := strings.Split(raw, "|")
+		if len(parts) >= 3 {
+			if name, err := url.QueryUnescape(parts[2]); err == nil && name != "" {
+				return name
+			}
+			return parts[2]
+		}
+		return ""
+	}
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "ftp://") {
+		if u, err := url.Parse(raw); err == nil {
+			if base := path.Base(u.Path); base != "" && base != "/" && base != "." {
+				if name, err := url.QueryUnescape(base); err == nil {
+					return name
+				}
+				return base
+			}
+		}
+	}
+	return ""
+}
 
 // linkHashOf 取链接指纹：磁力 btih / ed2k 文件 hash / 分享 share_code。
 // 这是与 115 离线任务列表 info_hash 对账的键；HTTP/FTP 链接没有指纹，返回空
@@ -70,7 +98,7 @@ func dlLinkRecord(h *Handler, rawURL, kind, name, targetCid, source, status stri
 		kind = classifyLink(rawURL)
 	}
 	if name == "" {
-		name, _ = offlinePlayNameSize(rawURL)
+		name = downloadLinkName(rawURL)
 	}
 	row := model.DownloadLink{
 		Kind: kind, URL: truncateStr(rawURL, 1000), Hash: linkHashOf(rawURL),

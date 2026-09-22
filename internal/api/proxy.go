@@ -60,9 +60,6 @@ func StartProxy(db *gorm.DB, cfg *config.Config) {
 
 	registerDirectPlaybackRoutes(r, db, cfg)
 
-	// 按需离线播放端点: /ed2k/play/{id}（STRM 占位内容指向这里，边下边播）
-	RegisterOfflinePlayRoutes(r, botHandler)
-
 	// Emby 反代：客户端访问 http://ip:6086/emby 即可使用 Emby（CMS 9096 同款）
 	registerEmbyProxy(r, db, cfg)
 
