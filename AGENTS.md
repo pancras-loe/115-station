@@ -65,7 +65,6 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
 | 前端（现役） | Vue 3 + TypeScript + Vite + Naive UI（`webui/`），详见 [webui/README.md](webui/README.md) |
-| 前端（已停用·保留备查） | 原生 HTML/CSS/JS（`web/`），`WEBUI=legacy` 可切回 |
 | 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 Emby/Jellyfin |
 
 ---
@@ -80,7 +79,6 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 │   ├── config/                 # 环境变量配置、配置文件读写、TLS 自签证书
 │   └── model/                  # GORM 实体与建表/默认数据初始化
 ├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + Naive UI）
-├── web/                        # 管理后台前端·旧版，已停用，保留供对照实现（WEBUI=legacy 可切回）
 ├── wiki/index.html             # 完整版使用 Wiki（单文件）
 ├── .github/workflows/docker.yml# CI：测试门禁 → 多架构镜像构建
 ├── Dockerfile                  # 多阶段交叉编译 → alpine + ffmpeg
@@ -172,7 +170,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 - Gin handler 挂在 `*Handler` 上（`h.DB` / `h.Config`），注册集中在 `routes.go` 的 `SetupRoutes`。
 - 路由分三档：`/api/auth/*`（公开）、`/api/*`（JWT 保护的 `protected` 组）、若干无鉴权但带 token 校验的回调端点（Emby webhook、OAuth callback、302 直链）。
 - 配置读取顺序：**数据库 `Setting` 表优先，环境变量兜底**（如 115 请求间隔）。
-- **前端已重写完成**（见 §8）。改页面一律改 `webui/`；`web/` 是停用的旧实现，只作对照，**不要再往里加功能**。
+- **前端已重写完成**（见 §8）。改页面一律改 `webui/`；旧前端已删除，历史实现可查 Git 历史。
 - 前端有构建：`cd webui && npm run typecheck && npm run build`，产物是单个 `webui/dist/index.html`（不提交进仓库）。
 - 颜色只能从 `webui/src/styles/main.css` 的设计令牌取，组件里写死色值必然漏暗色模式。
 - **API Key / Secret / token 一律用 `SecretInput` 组件**，不要直接写 `<NInput type="password">`——
@@ -332,7 +330,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
 | 改深度删除 | `internal/api/deepdel.go`：执行在 `runDeepDelete`、事件范围在 `deepDelEventRows`、守卫在 `checkLibRoots`、网盘空目录在 `pruneDeepDelDirs`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
-| 想知道旧版某功能怎么做的 | `web/index.html` + `web/js/app.js`（停用但保留），对照后在 `webui/` 里实现 |
+| 想知道旧版某功能怎么做的 | 查 Git 历史中的 `web/`；现役实现在 `webui/` |
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
 | 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
@@ -359,19 +357,8 @@ cd webui && npm install && npm run dev
 cd webui && npm run typecheck && npm run build
 ```
 
-Go 默认服务 `webui/dist/index.html`；产物不存在时打日志自动回退旧前端，不会启动失败。
-
-### 旧前端为什么还留着
-
-`web/` 已停用但**刻意保留在仓库里**：新前端出问题时可以 `WEBUI=legacy` 立刻切回，
-排查「旧版这里是怎么做的」也不必翻 git 历史。它不再接收任何新功能。
-
-```bash
-WEBUI=legacy ./115-station     # PowerShell: $env:WEBUI="legacy"; .\115-station.exe
-```
-
-确认新前端稳定后可以整体删除 `web/`、`main.go` 的 `inlinedIndexHTML` / `indexHTMLMarker`
-与三个 `r.Static`，以及 Dockerfile 里那行 `COPY --from=builder /build/web ./web`。
+Go 服务 `webui/dist/index.html`；产物不可用时记录日志，页面返回 503 并提示先构建前端。
+旧版 `web/` 及回退入口已删除，历史实现可查 Git 历史。
 
 ### 三条不要动的约定
 

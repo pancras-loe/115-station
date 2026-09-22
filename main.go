@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -29,40 +27,8 @@ import (
 // 用于日志/UI 确认运行的是哪个提交（排查"更新没生效"类问题）
 var BuildSHA = "dev"
 
-// inlinedIndexHTML 返回把 style.css 内联进 <style> 的 index.html（启动时
-// 准备一次）。替换标记是 HTML 里的 style.css link 标签；标记不存在（新版
-// HTML 配旧二进制等）时返回 nil，调用方回退为原样文件服务。
-// 内联读取失败不影响启动：nil 回退，CSS 仍走外链
-var indexHTMLMarker = `<link rel="stylesheet" href="/css/style.css?v=32">`
-
-// nextIndexPath 新前端产物（Vite 单文件打包，JS/CSS 已内联进 HTML，
-// 所以不需要下面那套启动时内联 style.css 的处理）。
-// 下面的 inlinedIndexHTML / indexHTMLMarker 只服务于 WEBUI=legacy 的旧前端。
+// 前端采用 Vite 单文件产物，JS/CSS 均内联于 HTML。
 const nextIndexPath = "./webui/dist/index.html"
-
-func inlinedIndexHTML() []byte {
-	inlinedOnce.Do(func() {
-		html, err := os.ReadFile("./web/index.html")
-		if err != nil || !bytes.Contains(html, []byte(indexHTMLMarker)) {
-			return
-		}
-		css, err := os.ReadFile("./web/css/style.css")
-		if err != nil {
-			return
-		}
-		// </style> 在合法 CSS 里不会出现，无需转义
-		out := bytes.Replace(html, []byte(indexHTMLMarker),
-			append([]byte("<style>\n"), append(css, []byte("\n</style>")...)...), 1)
-		log.Printf("[前端] ✓ style.css(%dKB) 已内联进 index.html（弱网防连接重置）", len(css)/1024)
-		inlinedHTML = out
-	})
-	return inlinedHTML
-}
-
-var (
-	inlinedOnce sync.Once
-	inlinedHTML []byte
-)
 
 // rotatingWriter 大小轮转日志写入器：超过 maxBytes 时切割
 // （app.log → app.log.1 → .2 → .3，最旧的丢弃）
@@ -206,61 +172,21 @@ func main() {
 	apiGroup := r.Group("/api")
 	api.SetupRoutes(apiGroup, db, cfg)
 
-	// 静态文件（前端）：no-cache = 协商缓存（ETag 校验，未变返回 304 不重下）。
-	// 之前靠 index.html 里手写的 ?v=N 版本号失效缓存——更新后浏览器仍可能
-	// 用旧 JS 调新接口/碰已删除的元素（登录页报错即此因），改为服务端
-	// 强制校验，一劳永逸。
-	// 用中间件而非精确路由：r.Static 注册 /css/*filepath 通配，gin 不允许
-	// 与 /css/style.css 精确段共存（路由树冲突 → 启动 panic）
-	r.Use(func(c *gin.Context) {
-		p := c.Request.URL.Path
-		if strings.HasPrefix(p, "/js/") ||
-			strings.HasPrefix(p, "/css/") || strings.HasPrefix(p, "/vendor/") {
-			// 协商缓存（no-cache + Last-Modified）：每次刷新发条件请求，命中
-			// 返回 304 空体——弱网下比整文件重拉小得多；镜像更新后文件
-			// mtime 变化，条件请求立刻拿新内容（更新即时生效，等价 no-store
-			// 的正确性，但刷新传输量从 200KB 级降到几十字节）
-			c.Header("Cache-Control", "no-cache")
-		}
-		c.Next()
-	})
-	r.Static("/css", "./web/css")
-	r.Static("/js", "./web/js")
-	r.Static("/vendor", "./web/vendor") // CodeMirror 等第三方前端库
-	r.StaticFile("/cms-115.png", "./web/cms-115.png")
-	// index.html 禁用启发式缓存：升级后浏览器总是重新校验，避免页面拿到旧 HTML
-	// 搭配新资产。新前端是 Vite 单文件产物（JS/CSS 已内联进 HTML），一次请求
-	// 拿完整个前端——跨境明文 HTTP 下首条连接（HTML 文档）几乎总能成功，而并行
-	// 拉取的静态资源大概率被连接重置（ERR_CONNECTION_RESET）。
-	//
-	// WEBUI=legacy 回退到旧前端（./web）。旧实现刻意保留在仓库里备查，
-	// 新前端出问题时可以立刻切回去对照，不必翻 git 历史。
-	useLegacy := os.Getenv("WEBUI") == "legacy"
-	if !useLegacy {
-		if _, err := os.Stat(nextIndexPath); err != nil {
-			log.Printf("[前端] ✗ %s 不存在（需先 cd webui && npm run build），本次回退旧前端", nextIndexPath)
-			useLegacy = true
-		}
-	}
-	if useLegacy {
-		log.Printf("[前端] ○ 使用旧前端 ./web（WEBUI=legacy 或新前端产物缺失）")
+	if _, err := os.Stat(nextIndexPath); err != nil {
+		log.Printf("[前端] ✗ 无法读取 %s，请先 cd webui && npm run build：%v", nextIndexPath, err)
 	} else {
-		log.Printf("[前端] ✓ 使用新前端 %s", nextIndexPath)
+		log.Printf("[前端] ✓ 使用前端 %s", nextIndexPath)
 	}
 	serveIndex := func(c *gin.Context) {
+		// 单文件产物每次协商缓存，部署更新后浏览器即可取得新版页面。
 		c.Header("Cache-Control", "no-cache")
-		if !useLegacy {
-			// 用 c.File 而非 c.Data：http.ServeContent 会带上 Last-Modified，
-			// 配合 no-cache 拿到 304，弱网下刷新只传几十字节
-			c.File(nextIndexPath)
+		if _, err := os.Stat(nextIndexPath); err != nil {
+			c.String(http.StatusServiceUnavailable, "前端产物不可用，请先执行 cd webui && npm run build")
 			return
 		}
-		if inlined := inlinedIndexHTML(); inlined != nil {
-			c.Data(http.StatusOK, "text/html; charset=utf-8", inlined)
-			return
-		}
-		c.File("./web/index.html")
+		c.File(nextIndexPath)
 	}
+
 	r.GET("/", serveIndex)
 	r.NoRoute(serveIndex)
 

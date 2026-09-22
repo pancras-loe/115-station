@@ -1,6 +1,6 @@
 # webui —— 115-Station 新版管理后台前端
 
-Vue 3 + TypeScript + Vite + Naive UI 重写版，正在逐页替换 `web/` 下的原生实现。
+Vue 3 + TypeScript + Vite + Naive UI 重写版，已整体替换旧版原生实现。
 
 ## 为什么是这套选型
 
@@ -89,7 +89,7 @@ src/
 
 ## 迁移进度
 
-**13 个页面已全部迁移完成**，`web/` 下的原生实现不再有对应页面。
+**13 个页面已全部迁移完成**，旧版 `web/` 已删除，历史实现可查 Git 历史。
 
 | 页面 | 路由 | 页签 |
 |---|---|---|
@@ -119,15 +119,8 @@ src/
 
 ## 与旧前端的关系
 
-**Go 默认服务 `webui/dist/index.html`。** 旧版 `web/` 已停用但保留在仓库里，
-新前端出问题时可以立刻切回去对照：
-
-```bash
-WEBUI=legacy ./115-station        # PowerShell: $env:WEBUI="legacy"; .\115-station.exe
-```
-
-`webui/dist/index.html` 不存在时（没跑 `npm run build`）Go 会打一行日志自动回退旧前端，
-不会启动失败。旧前端不再接收任何新功能；确认新版稳定后可整体删除，清单见 AGENTS.md §8。
+**Go 服务 `webui/dist/index.html`。** 旧版 `web/` 与回退入口已删除。
+产物不可用时，Go 记录日志，页面返回 503 并提示执行 `cd webui && npm run build`。
 
 ## 密钥字段必须用 SecretInput
 

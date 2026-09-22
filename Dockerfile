@@ -47,8 +47,6 @@ WORKDIR /app
 COPY --from=builder /build/115-station .
 # 新前端产物（默认服务的就是它）
 COPY --from=webbuilder /webui/dist ./webui/dist
-# 旧前端保留：WEBUI=legacy 时回退用，新前端出问题可立刻切回
-COPY --from=builder /build/web ./web
 
 # 6060 管理后台 / 6086 302直链代理
 EXPOSE 6060 6086
