@@ -30,7 +30,7 @@ func TestPlanRedoLayoutTV(t *testing.T) {
 		{Fid: "j1", Name: "说明.txt", Kind: "junk"},
 	}
 
-	plan, err := planRedoLayout(media, "国产剧", files)
+	plan, err := planRedoLayout(media, "剧集/国产剧", files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestPlanRedoLayoutMovie(t *testing.T) {
 	media := &TmdbMedia{TmdbID: 123, Title: "测试电影", Year: "2024", MediaType: "movie"}
 	files := []orgRecordFile{{Fid: "v1", Name: "Test.Movie.2024.2160p.mkv", Kind: "video"}}
 
-	plan, err := planRedoLayout(media, "动作", files)
+	plan, err := planRedoLayout(media, "电影/动作", files)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPlanRedoLayoutNoVideo(t *testing.T) {
 	media := &TmdbMedia{TmdbID: 1, Title: "X", Year: "2024", MediaType: "movie"}
 	files := []orgRecordFile{{Fid: "n1", Name: "movie.nfo", Kind: "meta"}}
 
-	if _, err := planRedoLayout(media, "动作", files); err == nil {
+	if _, err := planRedoLayout(media, "电影/动作", files); err == nil {
 		t.Fatal("没有视频文件时应报错")
 	}
 }

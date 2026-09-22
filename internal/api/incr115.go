@@ -953,21 +953,42 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				return full
 			}
 		}
-		// 目录事件：台账中出现过该名称路径段的，按最浅前缀整树删除
+		// 目录事件：台账中出现过该名称路径段的，整树删除。
+		//
+		// ⚠️ 这里只能删**事件真正指向的那个目录**。改造前取的是「最浅前缀」：
+		// 网盘上删掉 影视/剧集/动漫番剧（本地没同步过这条路径，第 2 级落空）后，
+		// 台账里 影视/动漫番剧/… 的行同样匹配 "%/动漫番剧/%"，最浅前缀算成
+		// 影视/动漫番剧，把用户整个番剧库的 STRM 树删了。
+		//
+		// 推得出父目录（dirOK）时，候选只认 dirRel/FileName 这一条；
+		// 推不出时（父目录被连带删除）退回按名匹配，但只接受唯一候选 ——
+		// 同名目录在库里有两处及以上就放弃，漏删交给失效 STRM 检测
 		var segs []model.SyncedFile
-		h.DB.Where("rel_path LIKE ? OR rel_path LIKE ?", "%/"+ev.FileName+"/%", "%/"+ev.FileName).Limit(50).Find(&segs)
-		bestPrefix := ""
+		h.DB.Where("rel_path LIKE ? OR rel_path LIKE ?", "%/"+ev.FileName+"/%", "%/"+ev.FileName).Limit(200).Find(&segs)
+		want := ""
+		if dirOK {
+			want = path.Join(dirRel, ev.FileName)
+		}
+		prefixes := map[string]bool{}
 		for _, sf := range segs {
 			parts := strings.Split(sf.RelPath, "/")
 			for i, part := range parts {
 				if part == ev.FileName {
 					prefix := strings.Join(parts[:i+1], "/")
-					if bestPrefix == "" || len(prefix) < len(bestPrefix) {
-						bestPrefix = prefix
+					if want == "" || prefix == want {
+						prefixes[prefix] = true
 					}
 					break
 				}
 			}
+		}
+		bestPrefix := ""
+		if len(prefixes) == 1 {
+			for p := range prefixes {
+				bestPrefix = p
+			}
+		} else if len(prefixes) > 1 && !quiet {
+			log.Printf("[同步] ○ 台账里有 %d 处同名目录 %q，无法确定删哪一处，跳过", len(prefixes), ev.FileName)
 		}
 		if bestPrefix != "" {
 			full := filepath.Join(localRoot, filepath.FromSlash(bestPrefix))

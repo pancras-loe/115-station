@@ -123,24 +123,14 @@ export interface CategoryModel {
   unknownTop: Entry[]
 }
 
-/** 后端 normalizeCategoryName 的等价物：一级目录名前缀会被剥掉 */
-const MEDIA_DIR_NAMES = ['电影', '电视剧', '剧集', 'movie', 'tv']
-
-export function normalizeCategoryName(name: string): string {
-  let n = name.trim().replace(/^\/+|\/+$/g, '')
-  for (;;) {
-    let trimmed = false
-    for (const p of MEDIA_DIR_NAMES) {
-      if (n === p) return ''
-      if (n.startsWith(p + '/')) {
-        n = n.slice(p.length + 1)
-        trimmed = true
-        break
-      }
-    }
-    if (!trimmed) break
-  }
-  return n
+/**
+ * 后端 libSubPath(name) 的等价物：分类名就是库内目录名（多级用 / 分隔），
+ * 只做去空白/去首尾斜杠。**不剥「电影/」「剧集/」前缀** —— 写什么就落到哪，
+ * 剥掉再由后端补一层会把平铺写法（tv 下并列 动漫番剧/综艺/剧集）
+ * 整理成 剧集/动漫番剧
+ */
+export function categoryDirName(name: string): string {
+  return name.trim().replace(/^\/+|\/+$/g, '')
 }
 
 export function parseCategory(src: string): CategoryModel {
@@ -224,11 +214,11 @@ export function lintCategory(src: string): RuleIssue[] {
     }
     let fallbackAt = -1
     for (const r of s.rules) {
-      if (!normalizeCategoryName(r.name)) {
+      if (!categoryDirName(r.name)) {
         issues.push({
           line: r.line,
           level: 'info',
-          text: `「${r.name}」就是一级目录名本身，这条表示不加二级分类，直接整理到 ${label}/ 这一层`,
+          text: `分类名为空，这条会整理到 ${label}/ 这一层`,
         })
       }
       if (fallbackAt >= 0) {
@@ -496,11 +486,11 @@ export function outlineCategory(src: string): OutlineGroup[] {
       items: s.rules.map(r => {
         const muted = seenFallback
         if (r.fallback) seenFallback = true
-        const name = normalizeCategoryName(r.name)
+        const name = categoryDirName(r.name)
         return {
           line: r.line,
-          label: name || `${top}/`,
-          tags: [...(r.fallback ? ['兜底'] : []), ...(name ? [] : ['不加二级分类'])],
+          label: name ? `${name}/` : `${top}/`,
+          tags: [...(r.fallback ? ['兜底'] : []), ...(name ? [] : ['无分类目录'])],
           chips: r.conds
             .filter(c => c.value.trim())
             .map(c => `${CATEGORY_COND_LABEL[c.key] ?? c.key}：${decode(c.key, c.value, s.media)}`),

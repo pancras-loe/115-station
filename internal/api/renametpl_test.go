@@ -63,24 +63,21 @@ func TestDefaultRenameConfig(t *testing.T) {
 	}
 }
 
-// 分类名归一化：前缀要剥到底，分类名本身就是一级分类名时视为「不要二级分类」
-func TestNormalizeCategoryName(t *testing.T) {
-	for in, want := range map[string]string{
-		"国产剧":        "国产剧",
-		"电视剧/国产剧":    "国产剧",
-		"剧集/国产剧":     "国产剧",
-		"电影/动画电影":    "动画电影",
-		"movie/动画电影": "动画电影",
-		"剧集/电视剧/国产剧": "国产剧", // 叠了两层前缀
-		"剧集":         "",    // 用户的意思是不分二级，不是要个叫「剧集」的子目录
-		"电影":         "",
-		"tv":         "",
-		"  剧集/国产剧  ": "国产剧",
-		"/剧集/国产剧/":   "国产剧",
-		"":           "",
+// 分类目录：分类名就是库内目录名，写什么就是什么；为空才退回媒体类型默认目录
+func TestCategoryDir(t *testing.T) {
+	for _, c := range []struct {
+		mediaType, category, want string
+	}{
+		{"tv", "动漫番剧", "动漫番剧"},       // 平铺写法：不再被叠成 剧集/动漫番剧
+		{"tv", "电视剧/国产剧", "电视剧/国产剧"}, // 多级写法：原样保留
+		{"tv", "剧集", "剧集"},
+		{"tv", "", "剧集"}, // 不要分类子目录 → 媒体类型默认目录
+		{"movie", "", "电影"},
+		{"movie", " /电影/动画电影/ ", "电影/动画电影"},
+		{"其它", "", "未分类"},
 	} {
-		if got := normalizeCategoryName(in); got != want {
-			t.Errorf("%q: 得到 %q，预期 %q", in, got, want)
+		if got := categoryDir(c.mediaType, c.category); got != c.want {
+			t.Errorf("categoryDir(%q, %q) = %q，预期 %q", c.mediaType, c.category, got, c.want)
 		}
 	}
 }
@@ -106,10 +103,10 @@ func TestLibSubPath(t *testing.T) {
 // 用户实配模板的端到端校验：
 //
 //	文件夹规则 {title}.{year}<.[[tmdbid={tmdb_id}]]>/Season {season_num}
-//	期望入库到 剧集/<二级分类>/大时代.1992.{tmdbid=20382}/Season 1/<文件名>
+//	期望入库到 <分类目录>/大时代.1992.{tmdbid=20382}/Season 1/<文件名>
 //
-// 此前两处都错：[[ ]] 没转义（出 [[tmdbid=20382]]），二级分类名叫「剧集」时
-// 又被 mediaTypeCategory 叠了一层（出 剧集/剧集/…）
+// 此前两处都错：[[ ]] 没转义（出 [[tmdbid=20382]]），分类名又被
+// mediaTypeCategory 叠了一层（出 剧集/剧集/…、剧集/动漫番剧/…）
 func TestUserTemplateEndToEnd(t *testing.T) {
 	prev := renameTpl
 	t.Cleanup(func() { renameTpl = prev })
@@ -128,13 +125,17 @@ func TestUserTemplateEndToEnd(t *testing.T) {
 		t.Fatalf("模板产出 %q，预期 %q", newPath, wantPath)
 	}
 
-	// 有二级分类
-	if got := libSubPath(mediaTypeCategory("tv"), "国产剧", pathDir(newPath)); got != "剧集/国产剧/大时代.1992.{tmdbid=20382}/Season 1" {
-		t.Errorf("带二级分类的目标目录不符: %q", got)
+	// 分类写全路径
+	if got := libSubPath(categoryDir("tv", "电视剧/国产剧"), pathDir(newPath)); got != "电视剧/国产剧/大时代.1992.{tmdbid=20382}/Season 1" {
+		t.Errorf("带分类的目标目录不符: %q", got)
 	}
-	// 二级分类被归一化成空（用户在 YAML 里把分类名写成了「剧集」）
-	if got := libSubPath(mediaTypeCategory("tv"), normalizeCategoryName("剧集"), pathDir(newPath)); got != "剧集/大时代.1992.{tmdbid=20382}/Season 1" {
-		t.Errorf("无二级分类时不该叠出 剧集/剧集: %q", got)
+	// 用户在 YAML 里把分类名写成了「剧集」——就是 剧集/，不叠 剧集/剧集
+	if got := libSubPath(categoryDir("tv", "剧集"), pathDir(newPath)); got != "剧集/大时代.1992.{tmdbid=20382}/Season 1" {
+		t.Errorf("分类名为 剧集 时不该叠出 剧集/剧集: %q", got)
+	}
+	// 平铺分类：tv 下并列写 动漫番剧，就落在 动漫番剧/ 而不是 剧集/动漫番剧/
+	if got := libSubPath(categoryDir("tv", "动漫番剧"), pathDir(newPath)); got != "动漫番剧/大时代.1992.{tmdbid=20382}/Season 1" {
+		t.Errorf("平铺分类不该被叠上一级目录: %q", got)
 	}
 }
 

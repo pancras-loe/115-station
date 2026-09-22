@@ -95,7 +95,7 @@ type ScrapeRule struct {
 type CategoryRule struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`
 	MediaType  string `json:"media_type" gorm:"size:20;not null;index"` // movie, tv
-	Name       string `json:"name" gorm:"size:50;not null"`             // 华语电影, 动画电影
+	Name       string `json:"name" gorm:"size:100;not null"`            // 库内相对目录，如 电影/华语电影、动漫番剧
 	Cid        string `json:"cid" gorm:"size:100"`                      // 115 文件夹 CID
 	ArchiveDir string `json:"archive_dir" gorm:"size:200"`              // 归档子目录路径
 
@@ -398,21 +398,23 @@ func InitDefaultCategories(db *gorm.DB) error {
 		return nil // 已存在，跳过
 	}
 
+	// Name 就是库内目录名（相对媒体库根，多级用 / 分隔），写什么就落到哪 ——
+	// 整理时不会再额外补一层「电影/」「剧集/」，所以这里必须带全
 	defaults := []CategoryRule{
 		// 电影分类
-		{MediaType: "movie", Name: "动画电影", GenreIds: "16", Priority: 1},
-		{MediaType: "movie", Name: "华语电影", OriginalLanguage: "zh,cn,bo,za", Priority: 2},
-		{MediaType: "movie", Name: "纪录片", GenreIds: "99", Priority: 3},
-		{MediaType: "movie", Name: "外语电影", IsDefault: true, Priority: 99},
+		{MediaType: "movie", Name: "电影/动画电影", GenreIds: "16", Priority: 1},
+		{MediaType: "movie", Name: "电影/华语电影", OriginalLanguage: "zh,cn,bo,za", Priority: 2},
+		{MediaType: "movie", Name: "电影/纪录片", GenreIds: "99", Priority: 3},
+		{MediaType: "movie", Name: "电影/外语电影", IsDefault: true, Priority: 99},
 		// 电视剧分类
-		{MediaType: "tv", Name: "国漫", GenreIds: "16", OriginCountry: "CN,TW,HK", Priority: 1},
-		{MediaType: "tv", Name: "日番", GenreIds: "16", OriginCountry: "JP", Priority: 2},
-		{MediaType: "tv", Name: "纪录片", GenreIds: "99", Priority: 3},
-		{MediaType: "tv", Name: "综艺", GenreIds: "10764,10767", Priority: 4},
-		{MediaType: "tv", Name: "国产剧", OriginCountry: "CN,TW,HK", Priority: 5},
-		{MediaType: "tv", Name: "欧美剧", OriginCountry: "US,FR,GB,DE,ES,IT,NL,PT,RU,UK", Priority: 6},
-		{MediaType: "tv", Name: "日韩剧", OriginCountry: "JP,KP,KR,TH,IN,SG", Priority: 7},
-		{MediaType: "tv", Name: "未分类", IsDefault: true, Priority: 99},
+		{MediaType: "tv", Name: "电视剧/国漫", GenreIds: "16", OriginCountry: "CN,TW,HK", Priority: 1},
+		{MediaType: "tv", Name: "电视剧/日番", GenreIds: "16", OriginCountry: "JP", Priority: 2},
+		{MediaType: "tv", Name: "电视剧/纪录片", GenreIds: "99", Priority: 3},
+		{MediaType: "tv", Name: "电视剧/综艺", GenreIds: "10764,10767", Priority: 4},
+		{MediaType: "tv", Name: "电视剧/国产剧", OriginCountry: "CN,TW,HK", Priority: 5},
+		{MediaType: "tv", Name: "电视剧/欧美剧", OriginCountry: "US,FR,GB,DE,ES,IT,NL,PT,RU,UK", Priority: 6},
+		{MediaType: "tv", Name: "电视剧/日韩剧", OriginCountry: "JP,KP,KR,TH,IN,SG", Priority: 7},
+		{MediaType: "tv", Name: "电视剧/未分类", IsDefault: true, Priority: 99},
 	}
 	return db.Create(&defaults).Error
 }

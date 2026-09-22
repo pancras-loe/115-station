@@ -112,9 +112,17 @@ func matchWashStrategy(mediaType, category string) *washStrategy {
 	return nil
 }
 
+// containsCategory 洗版策略的 category 列表是否覆盖该分类。
+// 分类现在是库内相对目录（"电视剧/日番"），而策略里用户习惯只写末级名（"日番"），
+// 所以全路径和末级名都算命中
 func containsCategory(list, cat string) bool {
+	leaf := path.Base(cat)
 	for _, c := range strings.Split(list, ",") {
-		if strings.TrimSpace(c) == cat {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if c == cat || c == leaf {
 			return true
 		}
 	}

@@ -75,14 +75,16 @@ const CATEGORY_PRESETS: CategoryPreset[] = [
   { label: '华语电影', media: 'movie', name: '电影/华语电影', langs: ['zh', 'cn'] },
   { label: '纪录片', media: 'movie', name: '电影/纪录片', genres: ['99'] },
   { label: '外语电影', media: 'movie', name: '电影/外语电影' },
-  { label: '不分二级（兜底）', media: 'movie', name: '电影' },
+  { label: '全放电影/（兜底）', media: 'movie', name: '电影' },
   { label: '国漫', media: 'tv', name: '电视剧/国漫', genres: ['16'], countries: ['CN', 'TW', 'HK'] },
   { label: '日番', media: 'tv', name: '电视剧/日番', genres: ['16'], countries: ['JP'] },
   { label: '国产剧', media: 'tv', name: '电视剧/国产剧', countries: ['CN', 'TW', 'HK'] },
   { label: '欧美剧', media: 'tv', name: '电视剧/欧美剧', countries: ['US', 'GB', 'FR', 'DE', 'ES', 'IT', 'NL', 'PT', 'RU'] },
   { label: '日韩剧', media: 'tv', name: '电视剧/日韩剧', countries: ['JP', 'KR', 'KP', 'TH', 'IN', 'SG'] },
   { label: '纪录剧集', media: 'tv', name: '电视剧/纪录片', genres: ['99'] },
-  { label: '不分二级（兜底）', media: 'tv', name: '剧集' },
+  { label: '全放剧集/（兜底）', media: 'tv', name: '剧集' },
+  { label: '动漫番剧（平铺）', media: 'tv', name: '动漫番剧', genres: ['16'] },
+  { label: '综艺（平铺）', media: 'tv', name: '综艺', genres: ['10764', '10767'] },
 ]
 
 const catPresets = computed(() => CATEGORY_PRESETS.filter(p => p.media === media.value))
@@ -318,7 +320,7 @@ watch(show, v => {
           <NSelect v-model:value="washMedia" :options="mediaOptions" />
         </FieldRow>
 
-        <FieldRow label="限定分类" tip="只对某些二级分类生效，逗号分隔；留空表示全部" wide>
+        <FieldRow label="限定分类" tip="只对某些分类生效，逗号分隔；可写全路径「电视剧/日番」或只写末级「日番」；留空表示全部" wide>
           <NInput v-model:value="washCategory" placeholder="选填，如 电影/华语电影" />
         </FieldRow>
 

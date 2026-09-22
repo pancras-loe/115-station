@@ -170,6 +170,10 @@ func main() {
 	if err := model.InitDefaultWashConfig(db); err != nil {
 		log.Printf("初始化默认洗版策略失败: %v", err)
 	}
+	// 分类规则表按库里存的 YAML 重建：YAML 是事实来源，规则表只是解析结果
+	if err := api.SyncCategoryRulesFromYAML(db); err != nil {
+		log.Printf("重建二级分类规则失败: %v", err)
+	}
 
 	api.SetVersion(BuildSHA)
 

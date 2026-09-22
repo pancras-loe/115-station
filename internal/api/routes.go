@@ -1141,19 +1141,8 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 		h.DB.Create(&rule)
 	}
 	// 事务重建 movie/tv 规则
-	tx := h.DB.Begin()
-	if err := tx.Where("media_type IN ?", []string{"movie", "tv"}).Delete(&model.CategoryRule{}).Error; err != nil {
-		tx.Rollback()
+	if err := replaceCategoryRules(h.DB, rows); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "重建规则失败: " + err.Error()})
-		return
-	}
-	if err := tx.Create(&rows).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入规则失败: " + err.Error()})
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "提交失败: " + err.Error()})
 		return
 	}
 	movieN, tvN := 0, 0
@@ -1168,36 +1157,38 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))})
 }
 
-// mediaTypeDirNames 一级分类目录名的全部写法（YAML 里用户怎么写的都有）
-var mediaTypeDirNames = []string{"电影", "电视剧", "剧集", "movie", "tv"}
-
-// normalizeCategoryName 去掉分类名里的媒体类型前缀，避免与 mediaTypeCategory
-// 拼路径时出现 "剧集/电视剧/xxx" 双前缀。
-//
-// 两条容易踩的：
-//   - 前缀可能叠了不止一层（"剧集/电视剧/国产剧"），要循环剥到底；
-//   - 分类名**本身就是**一级分类名（tv 下直接写 "剧集"）时返回空 ——
-//     用户的意思是「不要二级分类，直接放一级目录下」，不是要一个叫「剧集」
-//     的子目录，照搬会整理成 剧集/剧集/片名
-func normalizeCategoryName(name string) string {
-	name = strings.Trim(strings.TrimSpace(name), "/")
-	for name != "" {
-		trimmed := false
-		for _, p := range mediaTypeDirNames {
-			if name == p {
-				return ""
-			}
-			if strings.HasPrefix(name, p+"/") {
-				name = strings.TrimPrefix(name, p+"/")
-				trimmed = true
-				break
-			}
-		}
-		if !trimmed {
-			break
-		}
+// replaceCategoryRules 事务重建 movie/tv 规则表（整表替换，不做增量合并）
+func replaceCategoryRules(db *gorm.DB, rows []model.CategoryRule) error {
+	tx := db.Begin()
+	if err := tx.Where("media_type IN ?", []string{"movie", "tv"}).Delete(&model.CategoryRule{}).Error; err != nil {
+		tx.Rollback()
+		return err
 	}
-	return name
+	if err := tx.Create(&rows).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit().Error
+}
+
+// SyncCategoryRulesFromYAML 启动时按库里存的 YAML 重建规则表。
+//
+// YAML 是唯一事实来源，规则表只是它的解析结果：两者解析规则变化后必须重新落一遍，
+// 否则用户界面上看到的 YAML 和整理实际用的分类对不上（且只有再点一次保存才会一致）。
+// 没存过 YAML（从没进过分类设置）时什么都不做，保留首次部署播种的默认规则。
+func SyncCategoryRulesFromYAML(db *gorm.DB) error {
+	var rule model.ScrapeRule
+	if err := db.Where("type = ?", "category_config").First(&rule).Error; err != nil {
+		return nil // 没存过，用种子默认规则
+	}
+	if strings.TrimSpace(rule.Config) == "" {
+		return nil
+	}
+	rows, err := parseCategoryYAML(rule.Config)
+	if err != nil || len(rows) == 0 {
+		return err
+	}
+	return replaceCategoryRules(db, rows)
 }
 
 // parseCategoryYAML 解析二级分类 YAML 为有序规则行（movie/tv；无条件条目作为兜底）
@@ -1226,10 +1217,11 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 			if strings.TrimSpace(raw) == "" {
 				continue // 空键，没有分类名可言
 			}
-			// 分类名就是一级目录名本身（movie 下写「电影」）→ normalize 后为空，
-			// 表示「不要二级分类，直接放一级目录下」。此前这里把它整条丢掉，
-			// 结果是这一档既没规则也没兜底，反而被 classifyMedia 判成「未分类」
-			name := normalizeCategoryName(raw)
+			// 分类名**就是**库内目录名，写什么就是什么（多级用 / 分隔）。
+			// 这里不能再去剥「电影/」「电视剧/」前缀：剥掉之后调用方补一层
+			// mediaTypeCategory，写成平铺结构（tv 下并列 动漫番剧/综艺/剧集）
+			// 的用户会被整理成 剧集/动漫番剧
+			name := libSubPath(raw)
 			r := model.CategoryRule{MediaType: mediaKey, Name: name}
 			fields := val.Content[j+1]
 			if fields != nil && fields.Kind == yaml.MappingNode {

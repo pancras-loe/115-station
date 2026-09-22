@@ -127,3 +127,74 @@ func newTestDBRows(t *testing.T, rels ...string) {
 		model.DB.Create(&model.SyncedFile{FileID: rel, RelPath: rel, Kind: "video"})
 	}
 }
+
+// 第 3 级绝不能跨目录误删：网盘上删掉 剧集/动漫番剧（本地没同步过这条路径），
+// 台账里另一处同名的 媒体库/动漫番剧/… 整棵树不能跟着陪葬。
+// 线上就是这么把整个番剧库的 STRM 删光的
+func TestRemoveSyncedItemLevel3DoesNotDeleteSameNameElsewhere(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "remove_level3_scope.db")
+
+	// 用户真正的番剧库：媒体库/动漫番剧/…（事件指向的是 媒体库/剧集/X/动漫番剧）
+	rel := "媒体库/动漫番剧/某番/E01.mkv.strm"
+	abs := filepath.Join(p.LocalPath, filepath.FromSlash(rel))
+	os.MkdirAll(filepath.Dir(abs), 0o755)
+	os.WriteFile(abs, []byte("x"), 0o644)
+	newTestDBRows(t, rel)
+
+	ev := model.SyncEvent{Type: evDelete, FileID: "dir-anime", Cid: "d1", FileName: "动漫番剧", FileCat: "0"}
+	if got := h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false); got != "" {
+		t.Fatalf("事件指向的目录本地不存在，不该报告删除了 %q", got)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		t.Fatalf("另一处同名目录被误删了: %v", err)
+	}
+	var n int64
+	model.DB.Model(&model.SyncedFile{}).Count(&n)
+	if n != 1 {
+		t.Fatalf("台账不该被清，还剩 %d 行", n)
+	}
+}
+
+// 推不出父目录时按名兜底仍然可用，但库里有两处同名目录就放弃 ——
+// 删错一棵树的代价远大于漏删（漏删交给失效 STRM 检测）
+func TestRemoveSyncedItemLevel3AmbiguousNameGivesUp(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "remove_level3_ambiguous.db")
+
+	rels := []string{"媒体库/动漫番剧/某番/E01.mkv.strm", "媒体库/剧集/动漫番剧/另一番/E01.mkv.strm"}
+	for _, rel := range rels {
+		abs := filepath.Join(p.LocalPath, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(abs), 0o755)
+		os.WriteFile(abs, []byte("x"), 0o644)
+	}
+	newTestDBRows(t, rels...)
+
+	// cid 解析不出相对路径 → 只剩按名兜底
+	ev := model.SyncEvent{Type: evDelete, FileID: "dir-anime", Cid: "未知目录", FileName: "动漫番剧", FileCat: "0"}
+	if got := h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false); got != "" {
+		t.Fatalf("同名目录有两处时不该删，实际删了 %q", got)
+	}
+	for _, rel := range rels {
+		if _, err := os.Stat(filepath.Join(p.LocalPath, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s 被误删: %v", rel, err)
+		}
+	}
+}
+
+// 唯一同名目录 + 推不出父目录：按名兜底照常整树删除（这条分支不能被上面两条改死）
+func TestRemoveSyncedItemLevel3UniqueNameStillDeletes(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "remove_level3_unique.db")
+
+	rel := "媒体库/动漫番剧/某番/E01.mkv.strm"
+	abs := filepath.Join(p.LocalPath, filepath.FromSlash(rel))
+	os.MkdirAll(filepath.Dir(abs), 0o755)
+	os.WriteFile(abs, []byte("x"), 0o644)
+	newTestDBRows(t, rel)
+
+	ev := model.SyncEvent{Type: evDelete, FileID: "dir-anime", Cid: "未知目录", FileName: "动漫番剧", FileCat: "0"}
+	if h.removeSyncedItem(d, ev, p.Cid, "媒体库", p.LocalPath, true, false) == "" {
+		t.Fatal("唯一同名目录应能按名兜底删除")
+	}
+	if _, err := os.Stat(filepath.Join(p.LocalPath, "媒体库", "动漫番剧")); !os.IsNotExist(err) {
+		t.Fatal("目录应已整棵删除")
+	}
+}

@@ -460,7 +460,14 @@ func classifyRules(mediaType string) []model.CategoryRule {
 	return categories
 }
 
-// classifyMedia 根据分类规则判断二级分类
+// classifyMedia 根据分类规则判断分类目录（**库内相对路径**，可多级）。
+//
+// 分类名就是 115 目录名，写什么就是什么：tv 下写「动漫番剧」落到 库/动漫番剧，
+// 写「电视剧/日番」才落到 库/电视剧/日番。此前这里会剥掉开头的媒体类型段、
+// 再由调用方补一层 mediaTypeCategory，于是用户写的平铺结构
+// （tv: 动漫番剧/综艺/剧集）被整理成了 剧集/动漫番剧。
+//
+// 返回空串表示「不要分类子目录」，由 categoryDir 退回媒体类型默认目录。
 func classifyMedia(media *TmdbMedia) string {
 	// 电影和电视剧分开查询
 	mediaType := "movie"
@@ -471,18 +478,29 @@ func classifyMedia(media *TmdbMedia) string {
 
 	for _, cat := range categories {
 		if matchCategory(&cat, media) {
-			return normalizeCategoryName(cat.Name)
+			return libSubPath(cat.Name)
 		}
 	}
 
 	// 查找默认分类
 	for _, cat := range categories {
 		if cat.IsDefault {
-			return normalizeCategoryName(cat.Name)
+			return libSubPath(cat.Name)
 		}
 	}
 
-	return "未分类"
+	// 这一档只在该媒体类型一条规则都没有时才会走到（有兜底规则就轮不到）。
+	// 挂在媒体类型目录下而不是库根，免得库根多出一个孤零零的「未分类」
+	return libSubPath(mediaTypeCategory(mediaType), "未分类")
+}
+
+// categoryDir 分类目录的库内相对路径。分类名为空 = 用户不要分类子目录，
+// 此时退回媒体类型默认目录（电影/剧集），而不是把片子丢在库根
+func categoryDir(mediaType, category string) string {
+	if c := libSubPath(category); c != "" {
+		return c
+	}
+	return mediaTypeCategory(mediaType)
 }
 
 // libSubPath 拼库内相对路径，自动跳过空段。
@@ -756,7 +774,7 @@ func checkByCloudSHA1(ops *pan115Ops, media *TmdbMedia, cfg *OrgConfig, libAbs, 
 		return false
 	}
 	absDir := strings.TrimSuffix(libAbs, "/") + "/" +
-		libSubPath(mediaTypeCategory(media.MediaType), classifyMedia(media), folderName)
+		libSubPath(categoryDir(media.MediaType, classifyMedia(media)), folderName)
 
 	// 查目标标题目录 cid
 	cid, ok := cloudPathCid(ops.cookie, absDir)
@@ -1675,7 +1693,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 库内现有版本，不能再依赖 MediaLibrary 记录（同步建起来的库没有那张表的行）
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, mainVideo.Name)
-	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
 
 	// 必须逐文件判定：主视频重复或画质不佳，不代表同目录的新增集也应该拒收。
 	var accepted []remoteFile
@@ -1686,7 +1704,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			vp.Season = parsed.Season
 		}
 		vpath := buildNewNameWithTemplate(media, vp, vf.Name)
-		vdir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(vpath))
+		vdir := libSubPath(categoryDir(media.MediaType, category), pathDir(vpath))
 		duplicate := len(videoFiles) > 1 && sha1ExistsInLibrary(vf.Sha1)
 		decision := washNotBetter
 		if !duplicate {
@@ -1741,7 +1759,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 按文件分类移动（规范结构）：
 	//   视频 + 字幕 → 季目录（电影为根目录）；NFO + 标准封面图 → 剧集根目录；垃圾 → 冗余
 	parts := strings.Split(newPath, "/")
-	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, parts[0])
+	rootRel := libSubPath(categoryDir(media.MediaType, category), parts[0])
 	onLog(fmt.Sprintf("▣ 目标目录就绪: %s", rootRel))
 	rootCid, err := ops.ensurePath(cfg.Library, rootRel)
 	if err != nil {
@@ -2148,7 +2166,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 
 	category := mainResult.Category
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
 	switch tryWashReplace(ops, cfg, media, f.Name, targetDir, onLog) {
@@ -2164,7 +2182,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 		return OrganizeResult{FileName: f.Name, Status: "exists", Message: "库内已有更优版本"}, nil, 0
 	}
 
-	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
+	rootRel := libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
@@ -2288,7 +2306,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	// 分类 + 移动到影视库
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := libSubPath(mediaTypeCategory(media.MediaType), category, pathDir(newPath))
+	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
 	switch tryWashReplace(ops, cfg, media, f.Name, targetDir, onLog) {
@@ -2316,7 +2334,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		return result, nil
 	}
 
-	rootRel := libSubPath(mediaTypeCategory(media.MediaType), category, strings.SplitN(newPath, "/", 2)[0])
+	rootRel := libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {

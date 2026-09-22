@@ -416,7 +416,7 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile) (*
 		if newPath == "" {
 			continue
 		}
-		base := libSubPath(mediaTypeCategory(media.MediaType), category)
+		base := categoryDir(media.MediaType, category)
 		if out.rootRel == "" {
 			out.rootRel = libSubPath(base, strings.SplitN(newPath, "/", 2)[0])
 		}
