@@ -236,6 +236,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// ---- 2) 原地改名 + 搬移（原地刷新时整段跳过）----
 	rootCid := rec.TargetCid
 	if !inPlace {
+		// 只改名不换目录的重整理（换了模板、补回了原名里的画质）同样不该搬动：
+		// 把文件移动到它已经在的目录对 115 没有保证，失败还会让整次重整理作废
+		plan.settled = settledGroups(sink, plan.groups)
 		if err := redoRelocate(ops, cfg, files, plan, &rootCid); err != nil {
 			return err
 		}
@@ -379,6 +382,7 @@ type redoLayout struct {
 	renames   map[string]string          // fid → 新文件名
 	groups    map[string][]orgRecordFile // 落点相对路径 → 该目录下的视频与字幕
 	metaFiles []orgRecordFile            // NFO / 封面：一律进标题目录
+	settled   map[string]bool            // 落点 → 文件已经就在那儿了（只改名，不搬动）
 }
 
 // sampleVideoPath 取一个代表性视频的库内路径（写进 MediaLibrary.TargetPath）。
@@ -537,6 +541,26 @@ func recordKindSummary(files []orgRecordFile) string {
 	return fileKindSummary(rf)
 }
 
+// settledGroups 哪些落点的文件已经就在那儿了（按本地台账里的目录判断：
+// 台账行与网盘路径同源，整理与增量都按它落盘）。
+// 查不到台账行、或目录对不上的一律按「要搬」处理 —— 宁可多搬一次
+func settledGroups(sink *orgSink, groups map[string][]orgRecordFile) map[string]bool {
+	out := make(map[string]bool, len(groups))
+	for rel, gfs := range groups {
+		want, all := sink.libRel(rel), len(gfs) > 0
+		for _, f := range gfs {
+			var sf model.SyncedFile
+			if f.Fid == "" || model.DB.Where("file_id = ?", f.Fid).First(&sf).Error != nil ||
+				pathDir(sf.RelPath) != want {
+				all = false
+				break
+			}
+		}
+		out[rel] = all
+	}
+	return out
+}
+
 // redoRelocate 重新整理的网盘侧动作：批量改名 + 按落点分组搬移。
 // rootCid 出参给调用方（记录里要存新的标题目录 cid）。
 // 原地刷新（目标与现状一致）时调用方整段跳过 —— 把文件移动到它已经在的目录
@@ -591,6 +615,10 @@ func redoRelocate(ops *pan115Ops, cfg *OrgConfig, files []orgRecordFile, plan *r
 			if err != nil {
 				return fmt.Errorf("创建目录 %s 失败: %w", rel, err)
 			}
+		}
+		if plan.settled[rel] {
+			log.Printf("[整理] ○ %s 的文件本来就在目标目录，只改名不搬动", rel)
+			continue
 		}
 		fids := make([]string, 0, len(gfs))
 		for _, f := range gfs {

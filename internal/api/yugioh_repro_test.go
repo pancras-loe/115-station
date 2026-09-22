@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // 2026-09-22 游戏王 S01E153 事故的三处回归。
@@ -186,4 +188,36 @@ func TestEmbyVerifyChecksLandedFileNotTitleDir(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t.Fatalf("回查没查落盘文件，查的是: %v", f.itemPathQ)
+}
+
+// 只改名不换目录的重整理（补回原名里的画质、换了模板）不该搬动网盘：
+// 把文件移动到它已经在的目录对 115 没有保证，失败会让整次重整理作废
+func TestSettledGroupsSkipsMoveWhenAlreadyInPlace(t *testing.T) {
+	newTestDB(t, "redo-settled.db")
+	sink := &orgSink{libName: "影视", libResolved: true}
+	const rel = "动漫番剧/游戏王：怪兽之决斗.2000.{tmdbid=902}/Season 1"
+	groups := map[string][]orgRecordFile{
+		rel: {{Fid: "v1", Name: "游戏王：怪兽之决斗.S01E153.mkv", Kind: "video"}},
+	}
+
+	// 台账里还没有这个文件 → 按「要搬」处理
+	if settledGroups(sink, groups)[rel] {
+		t.Fatal("台账查不到的文件不该判成已就位")
+	}
+
+	if err := model.DB.Create(&model.SyncedFile{FileID: "v1", Kind: "video",
+		RelPath: "影视/" + rel + "/游戏王：怪兽之决斗.S01E153.mkv.strm"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !settledGroups(sink, groups)[rel] {
+		t.Fatal("文件本来就在目标目录，不该再搬一次")
+	}
+
+	// 目录对不上（换了分类、换了模板）→ 照搬不误
+	other := map[string][]orgRecordFile{
+		"动漫番剧/别的剧/Season 1": groups[rel],
+	}
+	if settledGroups(sink, other)["动漫番剧/别的剧/Season 1"] {
+		t.Fatal("目标目录变了还判成已就位")
+	}
 }
