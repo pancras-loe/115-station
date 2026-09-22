@@ -364,6 +364,54 @@ func moveQuietly(ops *pan115Ops, targetCid string, fids []string, label string, 
 	}
 }
 
+// holdingFileOps 是「已存在/冗余」归档所需的最小写接口，单测不必接真实 115。
+type holdingFileOps interface {
+	ensurePath(string, string) (string, error)
+	moveFiles(string, []string) error
+}
+
+// moveToHoldingDir 先在工作区根下建隔离目录，再整批移动文件。
+// 已识别的剧集可能一次有上百集，调用方应把同一片目的 fid 合并后再进来，
+// 不能为了目录整洁退回逐文件移动。
+func moveToHoldingDir(ops holdingFileOps, rootCid, dirName string, fids []string) (string, error) {
+	dirName = sanitizePath(dirName)
+	if rootCid == "" || dirName == "" || len(fids) == 0 {
+		return "", fmt.Errorf("归档目录或文件为空")
+	}
+	targetCid, err := ops.ensurePath(rootCid, dirName)
+	if err != nil {
+		return "", fmt.Errorf("创建归档目录 %s 失败: %w", dirName, err)
+	}
+	if err := ops.moveFiles(targetCid, fids); err != nil {
+		return "", fmt.Errorf("移动到归档目录 %s 失败: %w", dirName, err)
+	}
+	return targetCid, nil
+}
+
+// recognizedHoldingDir 复用正式入库的标题目录模板，但只取片目根目录，
+// 不带分类和 Season：既能靠年份/TMDB id 辨认，又能让整季仍只发一次 move。
+func recognizedHoldingDir(media *TmdbMedia, parsed *ParsedName, originalName string) string {
+	if media == nil || parsed == nil {
+		return ""
+	}
+	return titleDirOf(media, parsed, originalName)
+}
+
+// sourceHoldingDir 给无法命中 TMDB 的顶层散文件找一个稳定的原名分组。
+// 有明确的剧集前缀时优先保留（Show.S01E01 → Show）；否则用已经解析出的标题，
+// 最后才退回完整文件基名。目录条目本身会整目录搬移，不走这里。
+func sourceHoldingDir(originalName, parsedTitle string) string {
+	cleaned := sanitizeReleaseFilename(originalName)
+	base := baseName(cleaned)
+	if prefix := extractSeriesPrefix(cleaned); prefix != "" && prefix != base {
+		return sanitizeName(prefix)
+	}
+	if title := sanitizeName(parsedTitle); title != "" && !isEpisodeOnly(title) {
+		return title
+	}
+	return sanitizeName(base)
+}
+
 // recognizeConfig 「识别规则」页的配置：识别链最前面那一段——文件名预处理与过滤。
 // 三项都在识别之前生效（替换 → 体积过滤 → parseFileName → TMDB 搜索）。
 type recognizeConfig struct {
@@ -1684,6 +1732,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, mainVideo.Name)
 	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
+	holdingDir := recognizedHoldingDir(media, parsed, mainVideo.Name)
+	if holdingDir == "" {
+		holdingDir = sourceHoldingDir(dir.Name, parsed.Title)
+	}
 
 	// 洗版**判定**必须逐文件做（主视频重复或画质不佳，不代表同目录的新增集也该拒收），
 	// 但**执行**一律攒到判完再发。逐集各发一次 115 写请求要过 3 秒写间隔：
@@ -1745,7 +1797,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 判为已存在的整批搬一次，整理记录也只留一条：一集一条的话 153 集能把
 	// 记录页刷满好几页，而它们本来就是同一部片同一次动作
 	if len(rejectFids) > 0 {
-		if err := ops.moveFiles(cfg.Existing, rejectFids); err != nil {
+		if _, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, rejectFids); err != nil {
 			failMedia("failed", "move", "移到已存在失败: "+err.Error(), media, category, targetDir)
 			return append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: err.Error()})
 		}
@@ -1756,7 +1808,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		case sameFileVideos > 0:
 			reason = "库内已有同一份文件或更优版本"
 		}
-		msg := fmt.Sprintf("%s，%d 个视频已移到已存在目录", reason, rejectVideos)
+		msg := fmt.Sprintf("%s，%d 个视频已移到 已存在/%s", reason, rejectVideos, holdingDir)
 		onLog(fmt.Sprintf("○ %s/ - %s", dir.Name, msg))
 		ctx.sink.note(&model.OrganizeRecord{
 			Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
@@ -2189,6 +2241,10 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	category := mainResult.Category
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
 	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
+	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
+	if holdingDir == "" {
+		holdingDir = sourceHoldingDir(f.Name, parsed.Title)
+	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
 	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, onLog); decision {
@@ -2197,11 +2253,13 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	case washReplaced:
 		// 旧版已让位，落入下方正常入库
 	case washNotBetter, washSameFile:
-		if err := ops.moveFiles(cfg.Existing, []string{f.Fid}); err != nil {
+		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
+		if err != nil {
 			return OrganizeResult{FileName: f.Name, Status: "failed", Message: "移到已存在失败: " + err.Error()}, nil, 0
 		}
-		msg := washExistsMsg(decision)
-		onLog(fmt.Sprintf("○ %s - %s，已移到已存在目录", f.Name, msg))
+		moveSiblingAttachments(ops, cfg.Pending, baseName(f.Name), "", holdingCid, false, onLog)
+		msg := washExistsMsg(decision) + "，已移到 已存在/" + holdingDir
+		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
 		return OrganizeResult{FileName: f.Name, Status: "exists", Message: msg}, nil, 0
 	}
 
@@ -2260,6 +2318,11 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
 	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+	appendSelf := func(files []remoteFile) {
+		for _, a := range files {
+			self = append(self, orgRecordFile{Fid: a.Fid, Name: a.Name, Kind: recordFileKind(a.Name), PickCode: a.PickCode, Size: a.Size, Sha1: a.Sha1})
+		}
+	}
 	fail := func(status, stage, msg string) (OrganizeResult, *model.OrganizeRecord) {
 		ctx.sink.noteFail(f.Name, f.Fid, "file", status, stage, msg, self)
 		return result, nil
@@ -2275,13 +2338,20 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	parsed := parseFileName(name)
 	oldBase := baseName(f.Name)
 	if parsed.Title == "" {
-		// 无法识别，移到冗余（附件随行，避免字幕变孤儿）
-		moveQuietly(ops, cfg.Redundant, []string{f.Fid}, f.Name, onLog)
-		moveSiblingAttachments(ops, cfg.Pending, oldBase, "", cfg.Redundant, false, onLog)
+		// 无法识别，按原文件的剧集前缀归档（附件随行，避免字幕变孤儿）
+		holdingDir := sourceHoldingDir(f.Name, "")
+		holdingCid, err := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
+		if err != nil {
+			result.Status = "failed"
+			result.Message = "移到冗余失败: " + err.Error()
+			onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
+			return fail("failed", "move", result.Message)
+		}
+		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
 		result.Status = "failed"
-		result.Message = "无法提取标题，已移到冗余"
-		onLog(fmt.Sprintf("✗ %s - 无法提取标题，已移到冗余", f.Name))
-		return fail("unrecognized", "recognize", "文件名提取不出片名，已移到冗余")
+		result.Message = "无法提取标题，已移到 冗余/" + holdingDir
+		onLog(fmt.Sprintf("✗ %s - 无法提取标题，已移到 冗余/%s", f.Name, holdingDir))
+		return fail("unrecognized", "recognize", result.Message)
 	}
 
 	// TMDB 识别
@@ -2294,12 +2364,19 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		return fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
 	}
 	if media == nil {
-		moveQuietly(ops, cfg.Redundant, []string{f.Fid}, f.Name, onLog)
-		moveSiblingAttachments(ops, cfg.Pending, oldBase, "", cfg.Redundant, false, onLog)
+		holdingDir := sourceHoldingDir(f.Name, parsed.Title)
+		holdingCid, moveErr := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
+		if moveErr != nil {
+			result.Status = "failed"
+			result.Message = "移到冗余失败: " + moveErr.Error()
+			onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
+			return fail("failed", "move", result.Message)
+		}
+		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
 		result.Status = "failed"
-		result.Message = "TMDB 未找到匹配，已移到冗余"
-		onLog(fmt.Sprintf("✗ %s - TMDB 未找到匹配，已移到冗余", f.Name))
-		return fail("unrecognized", "recognize", "TMDB 未找到匹配条目，已移到冗余")
+		result.Message = "TMDB 未找到匹配，已移到 冗余/" + holdingDir
+		onLog(fmt.Sprintf("✗ %s - TMDB 未找到匹配，已移到 冗余/%s", f.Name, holdingDir))
+		return fail("unrecognized", "recognize", result.Message)
 	}
 
 	result.TmdbID = media.TmdbID
@@ -2308,28 +2385,36 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	result.MediaType = media.MediaType
 
 	onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
+	category := classifyMedia(media)
+	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
+	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
+	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
+	if holdingDir == "" {
+		holdingDir = sourceHoldingDir(f.Name, parsed.Title)
+	}
 
 	// 直接查网盘去重（不依赖本地缓存表）
 	if checkByCloudSHA1(ops, media, cfg, libAbs, f.Sha1, parsed, f.Name) {
-		ops.moveFiles(cfg.Existing, []string{f.Fid})
-		moveSiblingAttachments(ops, cfg.Pending, oldBase, "", cfg.Existing, false, onLog)
+		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
+		if err != nil {
+			result.Status = "failed"
+			result.Message = "移到已存在失败: " + err.Error()
+			return fail("failed", "move", result.Message)
+		}
+		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
 		result.Status = "exists"
-		result.Message = fmt.Sprintf("已存在: %s (%s)，已移到已存在目录", media.Title, media.Year)
-		onLog(fmt.Sprintf("○ %s → 已存在: %s (%s)", f.Name, media.Title, media.Year))
+		result.Message = fmt.Sprintf("已存在: %s (%s)，已移到 已存在/%s", media.Title, media.Year, holdingDir)
+		onLog(fmt.Sprintf("○ %s → 已存在: %s (%s) → 已存在/%s", f.Name, media.Title, media.Year, holdingDir))
 		ctx.sink.note(&model.OrganizeRecord{
 			Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
-			Status: "exists", Message: "网盘已有相同文件，已移到已存在目录",
+			Status: "exists", Message: result.Message,
 			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
 			MediaType: media.MediaType, PosterPath: media.PosterPath,
+			Category: category, TargetDir: targetDir,
 			Files: marshalRecordFiles(self),
 		})
 		return result, nil
 	}
-
-	// 分类 + 移动到影视库
-	category := classifyMedia(media)
-	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
 	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, onLog); decision {
@@ -2339,12 +2424,13 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	case washReplaced:
 		// 旧版已让位，落入下方正常入库
 	case washNotBetter, washSameFile:
-		if err := ops.moveFiles(cfg.Existing, []string{f.Fid}); err != nil {
+		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
+		if err != nil {
 			result.Status, result.Message = "failed", "移到已存在失败: "+err.Error()
 			return fail("failed", "move", result.Message)
 		}
-		moveSiblingAttachments(ops, cfg.Pending, oldBase, "", cfg.Existing, false, onLog)
-		msg := washExistsMsg(decision) + "，已移到已存在目录"
+		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
+		msg := washExistsMsg(decision) + "，已移到 已存在/" + holdingDir
 		result.Status, result.Message = "exists", msg
 		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
 		ctx.sink.note(&model.OrganizeRecord{
@@ -2352,6 +2438,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 			Status: "exists", Message: msg,
 			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
 			MediaType: media.MediaType, PosterPath: media.PosterPath,
+			Category: category, TargetDir: targetDir,
 			Files: marshalRecordFiles(self),
 		})
 		return result, nil
