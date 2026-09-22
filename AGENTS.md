@@ -217,7 +217,16 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    - **整棵子树没有任何文件**才删，只看直接子项会误判——待整理常见
      `片名/Season 01/*.mkv`，文件搬走后父目录里还挂着空的 `Season 01`；
    - 列目录失败（风控/目录已不存在）一律按「不删」处理；
-   - 限深 `emptyDirMaxDepth`。
+   - 限深 `emptyDirMaxDepth`；
+   - **进子树之前先核验树根**（`prunableRoot`，`pruneOrMove` 也走它）：祖先链末元素
+     必须还是它自己、必须是某个工作区根的真子孙、且不是网盘根或一级目录
+     （后者抄 MoviePilot `delete_media_file` 的 `parts <= 2`）。核不准就既不删也不搬。
+     2026-09-22 线上事故：重新整理拿着记录里**早已被删掉**的源目录 cid 去清理，
+     115 对失效 cid 返回网盘根的内容，清理于是从用户整个网盘根开始爬。
+   - 同一个坑的根治在**列目录那一层**：`assert115SameDir` 核对响应回的 `cid`/`path`
+     末级与请求的 cid 是否一致，不一致返回 `errDirGone`
+     （p115client `tool/fs_files.py` 同款守卫）。`errDirGone` 是**永久**失败，
+     增量里要计 `DirsGone` 直接跳过，**不要**当成「下轮重来」的临时失败。
    守卫逻辑全部由 `emptydir_test.go` 用假目录树覆盖（判断错一次就是误删用户文件），
    改这块**先把测试跑绿**。
 10. **深度删除会删网盘源文件**（`deepdel.go`、`deepdelemby.go`）：

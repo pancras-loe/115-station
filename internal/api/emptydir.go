@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 )
 
 // ==================== 网盘空目录清理 ====================
@@ -24,6 +26,12 @@ import (
 // emptyDirMaxDepth 递归清理的最大层数（标题目录 → 季目录 → 再一层足够）
 const emptyDirMaxDepth = 3
 
+// minPruneDepth 允许清理的最浅层级：网盘根（0 层）与一级目录（1 层）永不删。
+// 取自 MoviePilot 的 `len(Path(path).parts) <= 2 → 根目录或一级目录不允许删除`
+// （app/chain/storage.py delete_media_file，p115strmhelper 也照抄了这一条）：
+// 工作区根通常就挂在一级目录上，而任何一次 cid 失真都会把清理指到那一带
+const minPruneDepth = 2
+
 // dirIO 清理空目录用到的两个 115 动作。抽成接口不是为了扩展，是为了让守卫
 // 逻辑能被单测覆盖 —— 这段判断错一次就是误删用户文件，而真链路要 115 账号。
 // *pan115Ops 直接满足它
@@ -31,6 +39,13 @@ type dirIO interface {
 	listEntries(cid string, offset int) ([]map[string]interface{}, int, error)
 	deleteFiles(fids []string) error
 	moveFiles(targetCid string, fids []string) error
+}
+
+// dirLocator 可选能力：报出目录的祖先 cid 链（根在最前、末元素是目录自己）。
+// 通道具备这个能力时（*pan115Ops 带 Cookie）清理前会做范围核验 prunableRoot。
+// 做成可选而不是并进 dirIO：拿不到祖先链只是少一道保险，不该让清理彻底停摆
+type dirLocator interface {
+	dirAncestors(cid string) ([]string, error)
 }
 
 // pruneCand 一个待检查的空目录候选：cid + 给人看的路径/名字
@@ -95,6 +110,9 @@ func (p *dirPruner) flush() int {
 			continue
 		}
 		seen[c.cid] = true
+		if !prunableRoot(p.ops, c.cid, p.protected, c.label, p.onLog) {
+			continue
+		}
 		n, _ := pruneEmptyDirTree(p.ops, c.cid, p.protected, 0, c.label, p.onLog)
 		removed += n
 	}
@@ -104,6 +122,56 @@ func (p *dirPruner) flush() int {
 		p.onLog(fmt.Sprintf("○ 本轮共清理 %d 个空文件夹（都在 115 回收站里，可还原）", removed))
 	}
 	return removed
+}
+
+// prunableRoot 清理某棵子树**之前**的身份与范围核验。只核验树根：
+// 子目录是从核验过的父目录列出来的，天然在范围内。
+//
+// 挡的是这一类事故（线上真实发生）：重新整理拿着记录里的源目录 cid 去清理，
+// 而那个目录上一轮已经被删掉了；115 对失效 cid 返回网盘根的内容，于是清理
+// 从用户整个网盘根开始爬，一路扫进「婚礼」「软件」「学习」这些无关目录。
+//
+// 两道锁，和 MoviePilot / p115strmhelper 的做法对齐：
+//  1. 身份：祖先链末元素必须还是它自己（fetch115Ancestors 里识别「被降级成根」）
+//  2. 范围：必须是某个工作区根的**真子孙**，且不是网盘根 / 一级目录
+//
+// 核不准就不删（连带 pruneOrMove 也不搬）—— 留下空壳只是碍眼，删错是数据事故
+func prunableRoot(ops dirIO, cid string, protected map[string]bool, label string, onLog func(string)) bool {
+	loc, ok := ops.(dirLocator)
+	if !ok {
+		return true // 通道没有这个能力（单测的假 ops 等），退回只靠列目录的旧守卫
+	}
+	chain, err := loc.dirAncestors(cid)
+	switch {
+	case errors.Is(err, errNoDirLocator):
+		vlogTo(onLog, "○ 当前通道读不出目录祖先链，跳过范围核验: %s", label)
+		return true
+	case errors.Is(err, errDirGone):
+		onLog(fmt.Sprintf("○ 目录已不在网盘上（多半此前已清理），跳过: %s（cid=%s）", label, cid))
+		return false
+	case err != nil:
+		onLog(fmt.Sprintf("○ 核不准目录身份，跳过清理: %s（cid=%s）: %v", label, cid, err))
+		return false
+	}
+	if n := len(chain); n == 0 || chain[n-1] != cid {
+		onLog(fmt.Sprintf("✗ 目录身份对不上（115 返回的是别处），拒绝清理: %s（cid=%s）", label, cid))
+		return false
+	}
+	if len(chain) <= minPruneDepth {
+		onLog(fmt.Sprintf("✗ 拒绝清理网盘根 / 一级目录: %s（cid=%s）", label, cid))
+		return false
+	}
+	if len(protected) == 0 {
+		return true
+	}
+	for _, anc := range chain[:len(chain)-1] {
+		if protected[anc] {
+			return true
+		}
+	}
+	onLog(fmt.Sprintf("✗ %s（cid=%s）不在整理工作区内，拒绝清理（祖先链 %s）",
+		label, cid, strings.Join(chain, "/")))
+	return false
 }
 
 // vlogTo 详细日志走调用方的 onLog：模块前缀由调用方认领（整理 / 深度删除各写各的），
@@ -138,7 +206,13 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 	entries, _, err := ops.listEntries(cid, 0)
 	if err != nil {
 		// 列不出来就不删：可能是目录已经不存在（上一轮删过），也可能是风控，
-		// 两种情况下删都没有好处
+		// 两种情况下删都没有好处。
+		// errDirGone 是 listEntries 那层识破的「115 拿根目录冒充它」，
+		// 不走详细日志 —— 它解释了「为什么这个目录没被清掉」，平时也该看得见
+		if errors.Is(err, errDirGone) {
+			onLog(fmt.Sprintf("○ 目录已不在网盘上，跳过清理: %s（cid=%s）", label, cid))
+			return 0, false
+		}
 		vlogTo(onLog, "○ 读不出目录内容，不做清理: %s（%v）", label, err)
 		return 0, false
 	}
@@ -181,6 +255,11 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 // 还有残留内容就连同内容移到 fallbackCid（冗余），等人工过目。
 // 返回是否已删除
 func pruneOrMove(ops dirIO, cid string, protected map[string]bool, fallbackCid, label string, onLog func(string)) bool {
+	// 核不准就两件事都不做：这里的「回退」是把目录连同内容搬进冗余，
+	// 拿着一个指向别处的 cid 搬，比删还难收拾
+	if !prunableRoot(ops, cid, protected, label, onLog) {
+		return false
+	}
 	_, gone := pruneEmptyDirTree(ops, cid, protected, 0, label, onLog)
 	if gone {
 		return true // pruneEmptyDirTree 已经逐个打过日志

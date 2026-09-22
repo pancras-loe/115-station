@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -669,6 +670,11 @@ func (o *open115Client) listEntries(cid string, offset int) ([]map[string]interf
 		Message string          `json:"message"`
 		Count   int             `json:"count"`
 		Data    []openFileEntry `json:"data"`
+		// cid/path 只用于核对「返回的确实是我要的目录」（见 assert115SameDir）
+		Cid  json.RawMessage `json:"cid"`
+		Path []struct {
+			Cid json.RawMessage `json:"cid"`
+		} `json:"path"`
 	}
 	token, err := o.ensureToken()
 	if err != nil {
@@ -712,6 +718,14 @@ func (o *open115Client) listEntries(cid string, offset int) ([]map[string]interf
 			return nil, 0, fmt.Errorf("token 已刷新，请重试")
 		}
 		return nil, 0, oerr
+	}
+	// 与 Cookie 通道同一个坑：cid 失效时 115 静默返回网盘根，必须核对
+	var pathCid json.RawMessage
+	if n := len(page.Path); n > 0 {
+		pathCid = page.Path[n-1].Cid
+	}
+	if !assert115SameDir(cid, page.Cid, pathCid) {
+		return nil, 0, errDirGone
 	}
 	// 兼容 data 为对象内嵌 list 的返回格式
 	if page.Data == nil {
@@ -897,6 +911,28 @@ func (o *pan115Ops) listEntries(cid string, offset int) ([]map[string]interface{
 		return o.open.listEntries(cid, offset)
 	}
 	return list115Entries(o.cookie, cid, offset)
+}
+
+// errNoDirLocator 当前通道解析不出祖先链（OpenAPI 独立模式且没有 Cookie 回退）
+var errNoDirLocator = errors.New("当前 115 通道无法解析目录祖先链")
+
+// dirAncestors 目录的祖先 cid 链（根在最前，末元素是 cid 自己）。
+// 空目录清理靠它确认「这个 cid 还在，而且确实落在整理工作区里面」。
+// 走 Cookie 通道的 fetch115Ancestors：一次请求拿整条链，且它自带
+// 「115 把不存在的 cid 降级成根目录」的识别（errDirGone）
+func (o *pan115Ops) dirAncestors(cid string) ([]string, error) {
+	if o.cookie == "" {
+		return nil, errNoDirLocator
+	}
+	chain, err := fetch115Ancestors(o.cookie, cid)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(chain))
+	for _, a := range chain {
+		out = append(out, a.cid)
+	}
+	return out, nil
 }
 
 // listDirs 目录浏览（只返回文件夹），返回列表、总条目数、命中域名

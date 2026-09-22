@@ -130,10 +130,15 @@ func fetch115FilesPage(cookie, ua, cid string, offset int) ([]map[string]interfa
 			continue
 		}
 		var result struct {
-			State bool                      `json:"state"`
-			Error string                    `json:"error"`
+			State bool                     `json:"state"`
+			Error string                   `json:"error"`
 			Data  []map[string]interface{} `json:"data"`
-			Count int                       `json:"count"`
+			Count int                      `json:"count"`
+			// 下面两项只用来校验「返回的确实是我要的那个目录」，见 assert115SameDir
+			Cid  json.RawMessage `json:"cid"`
+			Path []struct {
+				Cid json.RawMessage `json:"cid"`
+			} `json:"path"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
 			lastErr = fmt.Errorf("解析 115 目录失败: %v", err)
@@ -153,6 +158,15 @@ func fetch115FilesPage(cookie, ua, cid string, offset int) ([]map[string]interfa
 		if origin != webapiFileOrigins[0] {
 			log.Printf("[诊断] %s 镜像接管: count=%d, 条目数=%d", origin, result.Count, len(result.Data))
 		}
+		// ⚠️ 目录不存在时 115 不报错，而是静默返回**网盘根目录**的内容，
+		// 必须自己核对返回的 cid（p115client fs_files 同款守卫，见下方注释）
+		var pathCid json.RawMessage
+		if n := len(result.Path); n > 0 {
+			pathCid = result.Path[n-1].Cid
+		}
+		if !assert115SameDir(cid, result.Cid, pathCid) {
+			return nil, 0, "", errDirGone // 换镜像也是同样的结果
+		}
 		// state=true 但 count>0 而 data 为空：响应异常，换镜像
 		if result.Count > 0 && len(result.Data) == 0 {
 			lastErr = fmt.Errorf("响应异常：count=%d 但未返回数据", result.Count)
@@ -164,6 +178,33 @@ func fetch115FilesPage(cookie, ua, cid string, offset int) ([]map[string]interfa
 		return result.Data, result.Count, origin, nil
 	}
 	return nil, 0, "", lastErr
+}
+
+// assert115SameDir 核对「列出来的确实是我请求的那个目录」。
+//
+// ⚠️⚠️ 115 的列目录接口对不存在 / 已删除 / 已进回收站的 cid **不报错**：
+// 返回 HTTP 200 + state:true，但内容是**网盘根目录**，响应里的 cid 变成 0、
+// path 只剩根那一级。认不出这一点，一个失效的 cid 就会被当成「网盘根」，
+// 于是清理空目录的递归会从用户的整个网盘根开始爬 —— 线上真实发生过。
+//
+// 参考 p115client（ChenyangGao，MIT）`p115client/tool/fs_files.py`：
+// 每次 fs_files 返回后都校验 `resp["cid"] == 请求的 cid`，不等就抛 ENOENT。
+// 校验放在**列目录这一层**而不是各个调用方，是因为所有遍历/清理/整理链路
+// 共用这一个入口，漏一处就是一次误删。
+//
+// respCid / pathCid 任一存在且与请求 cid 不符即判定「已消失」；两者都缺
+// （某些方言不回这两个字段）时只能放行 —— 宁可退回旧行为，也不要把正常
+// 的目录误判成不存在而中断整理
+func assert115SameDir(want string, respCid, pathCid json.RawMessage) bool {
+	if want == "" || want == "0" {
+		return true // 请求的就是根目录，无从校验也无需校验
+	}
+	for _, raw := range []json.RawMessage{respCid, pathCid} {
+		if got := rawStr(raw); got != "" && got != want {
+			return false
+		}
+	}
+	return true
 }
 
 // normalize115Entry 归一化 webapi / open 两种条目方言，统一为 webapi 形态：

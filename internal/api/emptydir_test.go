@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -59,6 +60,145 @@ func newFakeDirs(d map[string][]map[string]interface{}) *fakeDirIO {
 }
 
 func quiet(string) {}
+
+// locatedDirIO 带祖先链的假通道：只有它能触发 prunableRoot 的范围守卫
+// （*pan115Ops 走 Cookie 时同款）。chains 里没有的 cid 视为「已不在网盘上」，
+// 正是本次事故里那个失效源目录的处境
+type locatedDirIO struct {
+	*fakeDirIO
+	chains map[string][]string
+	errs   map[string]error
+}
+
+func (f *locatedDirIO) dirAncestors(cid string) ([]string, error) {
+	if err := f.errs[cid]; err != nil {
+		return nil, err
+	}
+	chain, ok := f.chains[cid]
+	if !ok {
+		return nil, errDirGone
+	}
+	return chain, nil
+}
+
+func located(f *fakeDirIO, chains map[string][]string) *locatedDirIO {
+	return &locatedDirIO{fakeDirIO: f, chains: chains, errs: map[string]error{}}
+}
+
+// 记录里的源目录 cid 早已失效时，绝不能把清理放进去跑 ——
+// 115 会拿网盘根冒充它，于是「清理空目录」变成扫用户整个网盘（线上事故复现）
+func TestPrunableRootRejectsGoneDir(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{
+		"stale": {dirEnt("婚礼"), dirEnt("软件")}, // 115 返回的其实是网盘根的内容
+	}), map[string][]string{})
+	var logs []string
+	sink := func(s string) { logs = append(logs, s) }
+	if prunableRoot(f, "stale", map[string]bool{"pending": true}, "游戏王DVD国语", sink) {
+		t.Fatal("失效 cid 必须被拦下")
+	}
+	if len(logs) == 0 || !strings.Contains(logs[0], "已不在网盘上") {
+		t.Errorf("要说清为什么跳过，实际 %v", logs)
+	}
+}
+
+// 落在工作区外的目录一律拒绝：这是不依赖 115 行为的那道硬锁
+func TestPrunableRootRejectsOutsideWorkspace(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{"wedding": {}}),
+		map[string][]string{"wedding": {"0", "婚礼", "wedding"}})
+	if prunableRoot(f, "wedding", map[string]bool{"pending": true, "lib": true}, "婚礼/典礼", quiet) {
+		t.Fatal("工作区外的目录不该允许清理")
+	}
+	// 工作区内的真子孙照常放行
+	f.chains["src"] = []string{"0", "分享", "pending", "src"}
+	f.dirs["src"] = nil
+	if !prunableRoot(f, "src", map[string]bool{"pending": true}, "待整理/片名", quiet) {
+		t.Fatal("待整理下的源目录应允许清理")
+	}
+}
+
+// 网盘根与一级目录永不删（MoviePilot 同款兜底），哪怕它恰好被登记成了候选
+func TestPrunableRootRejectsShallowDirs(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{"top": {}}),
+		map[string][]string{"top": {"0", "top"}})
+	if prunableRoot(f, "top", nil, "分享", quiet) {
+		t.Fatal("一级目录不该允许清理")
+	}
+}
+
+// 祖先链读失败（风控等）时按「核不准」处理，不删
+func TestPrunableRootFailsClosed(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{"x": {}}), map[string][]string{})
+	f.errs["x"] = fmt.Errorf("访问频率过高")
+	if prunableRoot(f, "x", nil, "x", quiet) {
+		t.Fatal("核不准身份时必须放弃清理")
+	}
+	// 通道压根没有祖先链能力时退回旧守卫，清理照常（否则 OpenAPI 独立模式全停摆）
+	if !prunableRoot(f.fakeDirIO, "x", nil, "x", quiet) {
+		t.Fatal("没有祖先链能力时不该拦下")
+	}
+	f.errs["x"] = errNoDirLocator
+	if !prunableRoot(f, "x", nil, "x", quiet) {
+		t.Fatal("通道自报无能力时同样不该拦下")
+	}
+}
+
+// 核不准身份时连「搬进冗余」也要停手：拿着指向别处的 cid 搬，比删更难收拾
+func TestPruneOrMoveRefusesUnverifiedDir(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{
+		"stale": {fileEnt("典礼2k.mp4")},
+	}), map[string][]string{})
+	if pruneOrMove(f, "stale", map[string]bool{"pending": true}, "redundant", "片名/", quiet) {
+		t.Fatal("不该报告已清理")
+	}
+	if len(f.moved) != 0 || len(f.deleted) != 0 {
+		t.Fatalf("既不该删也不该搬，实际 deleted=%v moved=%v", f.deleted, f.moved)
+	}
+}
+
+// dirPruner 整轮跑：工作区内的删掉，工作区外/已失效的原样留着
+func TestDirPrunerScopesToWorkspace(t *testing.T) {
+	f := located(newFakeDirs(map[string][]map[string]interface{}{
+		"src":     {},
+		"wedding": {},
+		"stale":   {dirEnt("婚礼")},
+	}), map[string][]string{
+		"src":     {"0", "分享", "pending", "src"},
+		"wedding": {"0", "婚礼", "wedding"},
+	})
+	p := newDirPruner(f, []string{"pending", "lib"}, quiet)
+	p.mark("src", "待整理/片名")
+	p.mark("wedding", "婚礼/典礼")
+	p.mark("stale", "游戏王DVD国语")
+	if n := p.flush(); n != 1 {
+		t.Fatalf("只该清掉工作区内那一个，实际 %d：%v", n, f.deleted)
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "src" {
+		t.Fatalf("删错了目录：%v", f.deleted)
+	}
+}
+
+// 115 用网盘根冒充失效目录：列目录这一层就要识破（p115client fs_files 同款守卫）
+func TestAssert115SameDir(t *testing.T) {
+	raw := func(s string) json.RawMessage { return json.RawMessage(s) }
+	cases := []struct {
+		name          string
+		want          string
+		resp, pathCid json.RawMessage
+		ok            bool
+	}{
+		{"cid 相符", "123", raw(`"123"`), raw(`"123"`), true},
+		{"数字形态也认", "123", raw(`123`), nil, true},
+		{"被降级成网盘根", "123", raw(`0`), raw(`"0"`), false},
+		{"path 末级对不上", "123", nil, raw(`"456"`), false},
+		{"请求的就是根目录", "0", raw(`0`), nil, true},
+		{"两个字段都没回", "123", nil, nil, true},
+	}
+	for _, c := range cases {
+		if got := assert115SameDir(c.want, c.resp, c.pathCid); got != c.ok {
+			t.Errorf("%s: 期望 %v，实际 %v", c.name, c.ok, got)
+		}
+	}
+}
 
 // 剧集场景：标题目录下只剩空的季目录 → 自下而上整棵删掉
 func TestPruneEmptyTitleTree(t *testing.T) {

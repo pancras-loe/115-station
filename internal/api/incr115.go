@@ -886,7 +886,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		}
 		var aborted errWalkAborted
 		err := walkOnce()
-		if err != nil && !errors.As(err, &aborted) {
+		// errDirGone 是永久失败（遍历途中目录被删了），重试与「下轮重来」都没有意义，
+		// 按临时失败处理会把整批事件永久钉死（见 incrSummary 上的分类注释）
+		if err != nil && !errors.As(err, &aborted) && !errors.Is(err, errDirGone) {
 			lg.infof("遍历目录失败 %s: %v，%v 后重试一次", orRootLabel(t.base), err, incrRetryDelay)
 			time.Sleep(incrRetryDelay)
 			err = walkOnce()
@@ -898,6 +900,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			sum.Interrupted, sum.YieldedTo = true, aborted.reason
 			lg.infof("⏸ 让路给 %s，中断于 %s（本轮已列 %d 次目录；事件保持待处理，下轮重来）",
 				aborted.reason, aborted.dir, ctl.pages)
+		case errors.Is(err, errDirGone):
+			sum.DirsGone++
+			lg.infof("○ 遍历途中目录已被删除，跳过 %s（cid=%s 来源=%s）", orRootLabel(t.base), t.cid, t.reason)
+			continue
 		case err != nil:
 			lg.infof("⚠ 遍历目录重试仍失败 %s: %v —— 本轮事件保留，下轮自动重试", orRootLabel(t.base), err)
 			sum.DirsSkipped++

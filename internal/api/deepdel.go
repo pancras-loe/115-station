@@ -300,6 +300,9 @@ func (h *Handler) pruneDeepDelDirs(ops dirIO, rootCid string, rows []model.Synce
 		}
 		seen[cid] = true
 		if targets[rel] {
+			if !prunableRoot(ops, cid, guard, rel, onLog) {
+				continue
+			}
 			n, _ := pruneEmptyDirTree(ops, cid, guard, 0, rel, onLog)
 			removed += n
 			continue
