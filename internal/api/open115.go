@@ -983,26 +983,25 @@ func (o *pan115Ops) rename(fid, newName string) error {
 	return nil
 }
 
-// renameBatch 批量重命名（一次调用）；OpenAPI 模式同样回退 Cookie 通道
-func (o *pan115Ops) renameBatch(names map[string]string) error {
+// renameBatch 批量重命名；OpenAPI 模式同样回退 Cookie 通道。
+// 返回真正改名成功的项目，避免分批请求中途失败后把部分成功误当成全部失败。
+func (o *pan115Ops) renameBatch(names map[string]string) (map[string]string, error) {
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
 	if o.open != nil && o.cookie == "" {
-		return fmt.Errorf("OpenAPI 通道暂不支持批量重命名，且未配置 Cookie 无法回退（账号与媒体库 → 二维码登录可补 Cookie）")
+		return nil, fmt.Errorf("OpenAPI 通道暂不支持批量重命名，且未配置 Cookie 无法回退（账号与媒体库 → 二维码登录可补 Cookie）")
 	}
-	if err := rename115Batch(o.cookie, names); err != nil {
-		return err
-	}
-	fids := make([]string, 0, len(names))
-	for fid := range names {
+	renamed, err := rename115Batch(o.cookie, names)
+	fids := make([]string, 0, len(renamed))
+	for fid := range renamed {
 		fids = append(fids, fid)
 		forgetDirSubtree(fid) // 理由同 rename
 	}
-	if o.suppress {
+	if o.suppress && len(fids) > 0 {
 		markSuppressed("rename", fids)
 	}
-	return nil
+	return renamed, err
 }
 
 // moveFiles 移动文件

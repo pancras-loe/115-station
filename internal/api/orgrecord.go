@@ -527,11 +527,17 @@ func redoRelocate(ops *pan115Ops, cfg *OrgConfig, files []orgRecordFile, plan *r
 			}
 			log.Printf("[整理] ▣ 需重命名 %d 个文件（例: %s）", len(renames), example)
 		}
-		if err := ops.renameBatch(renames); err != nil {
-			log.Printf("[整理] ○ 重新整理批量改名失败（按原名继续搬移）: %v", err)
-			// 改名没成，落盘要用原名
+		renamed, err := ops.renameBatch(renames)
+		if err != nil {
+			log.Printf("[整理] ○ 重新整理批量改名未全部完成（成功 %d、保持原名 %d）: %v",
+				len(renamed), len(renames)-len(renamed), err)
+			// 只有失败项目仍用原名；此前分批中途失败会把已成功项目也误判成原名，
+			// 随后生成的 STRM 就会指向不存在的旧文件名。
 			for rel, gfs := range groups {
 				for i := range gfs {
+					if _, ok := renamed[gfs[i].Fid]; ok {
+						continue
+					}
 					if orig, ok := findOrigName(files, gfs[i].Fid); ok {
 						groups[rel][i].Name = orig
 					}

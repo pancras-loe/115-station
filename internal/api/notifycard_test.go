@@ -1,6 +1,8 @@
 package api
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,15 @@ func resetMediaNotifQueue(t *testing.T) {
 			mediaNotif.timer.Stop()
 		}
 		mediaNotif.items, mediaNotif.timer, mediaNotif.firstAt = nil, nil, time.Time{}
+		mediaNotif.sent = nil
 	})
+	mediaNotif.mu.Lock()
+	if mediaNotif.timer != nil {
+		mediaNotif.timer.Stop()
+	}
+	mediaNotif.items, mediaNotif.timer, mediaNotif.firstAt = nil, nil, time.Time{}
+	mediaNotif.sent = nil
+	mediaNotif.mu.Unlock()
 }
 
 func mediaNotifSnapshot() []mediaNotifEntry {
@@ -77,6 +87,42 @@ func TestMediaNotifMergeKey(t *testing.T) {
 	}
 	if (mediaNotifEntry{}).mergeKey() != "" {
 		t.Fatal("没有片名就不该有合并键")
+	}
+}
+
+// 整理通知已经发出后，Emby 晚到的同片 webhook 不能再发第二次；但一次新的
+// 整理动作仍然要能通知（例如同一部剧稍后追加新集）。
+func TestQueueMediaNotifSuppressesLateEmbyOnly(t *testing.T) {
+	resetMediaNotifQueue(t)
+	key := (mediaNotifEntry{Title: "游戏王 朝日版", Kind: "剧集"}).mergeKey()
+	mediaNotif.mu.Lock()
+	mediaNotif.sent = map[string]time.Time{key: time.Now()}
+	mediaNotif.mu.Unlock()
+
+	QueueMediaNotif(mediaNotifEntry{Title: "游戏王 朝日版", Kind: "剧集", Source: "emby"})
+	if got := len(mediaNotifSnapshot()); got != 0 {
+		t.Fatalf("迟到的 Emby 回声又入队了: %d", got)
+	}
+	QueueMediaNotif(mediaNotifEntry{Title: "游戏王 朝日版", Kind: "剧集", Source: "organize"})
+	if got := len(mediaNotifSnapshot()); got != 1 {
+		t.Fatalf("新的整理动作被短期去重误吞: %d", got)
+	}
+}
+
+func TestManagedMediaPathGone(t *testing.T) {
+	root := t.TempDir()
+	alive := filepath.Join(root, "影视", "动漫番剧", "正确条目")
+	if err := os.MkdirAll(alive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if managedMediaPathGone(root, alive) {
+		t.Fatal("仍存在的入库路径被判成过期")
+	}
+	if !managedMediaPathGone(root, filepath.Join(root, "影视", "动漫番剧", "已删除旧条目")) {
+		t.Fatal("媒体根内已经不存在的旧路径没有被拦截")
+	}
+	if managedMediaPathGone(root, filepath.Join(t.TempDir(), "外部媒体库")) {
+		t.Fatal("媒体根外的路径不能按本站文件系统状态判断")
 	}
 }
 

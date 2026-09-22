@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -666,32 +667,108 @@ func (h *Handler) markEventsCoveredByFullSync(cookie string) (int, error) {
 
 // rename115 重命名网盘文件（单个；批量场景用 rename115Batch）
 func rename115(cookie, fid, newName string) error {
-	return rename115Batch(cookie, map[string]string{fid: newName})
+	_, err := rename115Batch(cookie, map[string]string{fid: newName})
+	return err
 }
 
-// rename115Batch 批量重命名：一次接口调用改多个文件。
+// rename115Post 测试时替换请求出口；正式环境始终走带全局节流的 httpPostForm115。
+var rename115Post = httpPostForm115
+
+// 参数错误若来自接口整体变化而不是某个坏文件，无限二分会把一次失败放大成
+// 数百次写请求。32 次足够把 223 项按约 10 项一组探明，也覆盖定位单个坏项。
+const rename115MaxAdaptiveRequests = 32
+
+// rename115Batch 批量重命名。返回真正已经改名成功的项目；后续批次失败时，
+// 调用方必须只按这部分新名字落盘，不能把已经改过的文件又当成原名。
 // 逐个调用时每个文件都要过一遍 API 限流（3 秒/次），24 集的重命名
-// 仅等待就要 70+ 秒；batch_rename 本就支持多文件表单，合并为一次调用
-func rename115Batch(cookie string, names map[string]string) error {
+// 仅等待就要 70+ 秒。p115client 的 fs_rename 支持整批提交，update_name 默认
+// batch_size=1000，因此不能凭一次 223 项失败臆定固定上限；只有服务端明确报
+// 「参数错误」时才二分重试，既能适应隐藏的数量约束，也能定位单个坏参数。
+func rename115Batch(cookie string, names map[string]string) (map[string]string, error) {
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
+	fids := make([]string, 0, len(names))
+	for fid := range names {
+		fids = append(fids, fid)
+	}
+	sort.Strings(fids) // map 遍历无序；二分边界固定后失败结果和测试才可复现
+	attempts := 0
+	return rename115BatchPart(cookie, names, fids, &attempts)
+}
+
+func rename115BatchPart(cookie string, names map[string]string, fids []string, attempts *int) (map[string]string, error) {
+	if *attempts >= rename115MaxAdaptiveRequests {
+		return nil, fmt.Errorf("参数错误拆分已达 %d 次请求上限，停止继续尝试", rename115MaxAdaptiveRequests)
+	}
+	*attempts = *attempts + 1
 	form := url.Values{}
-	for fid, name := range names {
-		form.Set("files_new_name["+fid+"]", name)
+	for _, fid := range fids {
+		form.Set("files_new_name["+fid+"]", names[fid])
 	}
-	body, err := httpPostForm115("https://webapi.115.com/files/batch_rename", form, cookie, 30*time.Second)
+	body, err := rename115Post("https://webapi.115.com/files/batch_rename", form, cookie, 30*time.Second)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var r struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
+		State  bool              `json:"state"`
+		Error  string            `json:"error"`
+		ErrMsg string            `json:"errMsg"`
+		Data   map[string]string `json:"data"`
 	}
-	if json.Unmarshal(body, &r) == nil && !r.State {
-		return fmt.Errorf("批量重命名被拒: %s", r.Error)
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("响应无法解析: %s", truncateStr(string(body), 150))
 	}
-	return nil
+	if r.State {
+		// p115client.update_name 也是以 data 中返回的 id→名字作为成功清单，
+		// 不能只看 state=true 就把整批都算成功。
+		renamed := make(map[string]string, len(r.Data))
+		for _, fid := range fids {
+			if _, ok := r.Data[fid]; ok {
+				renamed[fid] = names[fid]
+			}
+		}
+		if len(renamed) != len(fids) {
+			return renamed, fmt.Errorf("成功响应只确认了 %d/%d 个文件", len(renamed), len(fids))
+		}
+		return renamed, nil
+	}
+	msg := r.Error
+	if msg == "" {
+		msg = r.ErrMsg
+	}
+	if msg == "" {
+		msg = "未知错误"
+	}
+	// 参数错误既可能是整包触发隐藏约束，也可能是其中一个文件名有问题。
+	// 二分后成功的半边立刻记账，失败半边继续缩小；鉴权/风控等错误绝不拆分，
+	// 否则会在同一个坏状态下制造大量 115 请求。
+	if len(fids) > 1 && rename115IsParamError(msg) {
+		mid := len(fids) / 2
+		left, leftErr := rename115BatchPart(cookie, names, fids[:mid], attempts)
+		right, rightErr := rename115BatchPart(cookie, names, fids[mid:], attempts)
+		renamed := make(map[string]string, len(left)+len(right))
+		for fid, name := range left {
+			renamed[fid] = name
+		}
+		for fid, name := range right {
+			renamed[fid] = name
+		}
+		if leftErr == nil && rightErr == nil {
+			return renamed, nil
+		}
+		return renamed, fmt.Errorf("拆分重试后仍有 %d/%d 个文件失败: %w",
+			len(fids)-len(renamed), len(fids), errors.Join(leftErr, rightErr))
+	}
+	if len(fids) == 1 {
+		return nil, fmt.Errorf("文件 %s → %s 被拒: %s", fids[0], truncateStr(names[fids[0]], 100), msg)
+	}
+	return nil, fmt.Errorf("批量重命名被拒: %s", msg)
+}
+
+func rename115IsParamError(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	return strings.Contains(msg, "参数") || strings.Contains(msg, "param") || strings.Contains(msg, "argument")
 }
 
 // getStrmConfig 读取 STRM 直链配置。

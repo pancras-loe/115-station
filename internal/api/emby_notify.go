@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -235,6 +237,15 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 		}
 		return ""
 	}
+	// 重新整理会先删掉错误标题目录，再让 Emby 扫入正确目录。Emby 可能在几分钟后
+	// 才把旧扫描任务的 library.new 送回来；旧路径此时已经不存在，不能再算一部入库。
+	if itemPath := str(item, "Path"); itemPath != "" {
+		localPath := h.mapFromEmbyPath(itemPath)
+		if managedMediaPathGone(h.orphanLocalRoot(), localPath) {
+			log.Printf("[Emby Webhook] ○ 忽略已不存在路径的过期入库事件: %s", itemPath)
+			return
+		}
+	}
 	// 剧集条目用剧集名（单集标题没有辨识度）
 	title := str(item, "SeriesName")
 	year := ""
@@ -251,7 +262,7 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 	if t := str(item, "Type"); t == "Episode" || t == "Series" {
 		typeLabel = "剧集"
 	}
-	entry := mediaNotifEntry{Title: title, Year: year, Kind: typeLabel}
+	entry := mediaNotifEntry{Title: title, Year: year, Kind: typeLabel, Source: "emby"}
 	if r, ok := item["CommunityRating"].(float64); ok && r > 0 {
 		entry.Rating = r
 	}
@@ -273,6 +284,22 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 		}
 	}
 	QueueMediaNotif(entry)
+}
+
+// managedMediaPathGone 只判断本站媒体根内的路径。外部 Emby 媒体库不在本站文件系统上，
+// Stat 不到不能据此吞事件；权限错误、挂载异常同样按“不确定”保留通知。
+func managedMediaPathGone(root, localPath string) bool {
+	if strings.TrimSpace(root) == "" || strings.TrimSpace(localPath) == "" {
+		return false
+	}
+	root = filepath.Clean(root)
+	localPath = filepath.Clean(localPath)
+	rel, err := filepath.Rel(root, localPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	_, err = os.Stat(localPath)
+	return os.IsNotExist(err)
 }
 
 // TestEmbyConnection 测试 Emby 服务器连接

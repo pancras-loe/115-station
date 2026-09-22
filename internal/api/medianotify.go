@@ -31,6 +31,7 @@ type mediaNotifEntry struct {
 	Title      string
 	Year       string
 	Kind       string  // 电影 / 剧集
+	Source     string  // organize / emby；已发送后的延迟 webhook 去重用
 	Category   string  // 二级分类（整理侧）
 	Rating     float64 // 评分（Emby 侧）
 	Quality    string  // 画质：2160P HDR BLURAY（整理侧）
@@ -166,7 +167,10 @@ var mediaNotif struct {
 	items   []mediaNotifEntry
 	timer   *time.Timer
 	firstAt time.Time
+	sent    map[string]time.Time // 已经发出的媒体键；只拦截随后迟到的 Emby 回声
 }
+
+const mediaNotifSentWindow = 10 * time.Minute
 
 // QueueMediaNotif 入队入库通知（15 秒防抖；累计超 105 秒立即冲刷）
 func QueueMediaNotif(e mediaNotifEntry) {
@@ -175,9 +179,25 @@ func QueueMediaNotif(e mediaNotifEntry) {
 	}
 	mediaNotif.mu.Lock()
 	defer mediaNotif.mu.Unlock()
+	now := time.Now()
+	for key, at := range mediaNotif.sent {
+		if now.Sub(at) > mediaNotifSentWindow {
+			delete(mediaNotif.sent, key)
+		}
+	}
+	key := e.mergeKey()
+	// 整理卡片通常先发，Emby 扫描完成可能几十秒乃至几分钟后才回 webhook。
+	// 队列内合并管不到已经发出的卡片，因此只把迟到的 Emby 回声拦掉；新的整理动作
+	// 仍允许再次通知，避免同一部剧稍后追加新集时被十分钟窗口误吞。
+	if e.Source == "emby" && key != "" {
+		if at, ok := mediaNotif.sent[key]; ok && now.Sub(at) <= mediaNotifSentWindow {
+			vlog("[通知] ○ 跳过已发送片目的延迟 Emby 入库事件: %s", e.headline())
+			return
+		}
+	}
 	// 同一部影视的第二个来源（整理 / Emby 扫描）并进已有卡片，不新开一条
 	merged := false
-	if key := e.mergeKey(); key != "" {
+	if key != "" {
 		for i := range mediaNotif.items {
 			if mediaNotif.items[i].mergeKey() == key {
 				mediaNotif.items[i].mergeFrom(e)
@@ -225,6 +245,19 @@ func FlushMediaNotif() {
 		mediaNotif.mu.Unlock()
 		return
 	}
+	// 配置读取成功才算进入发送阶段。先登记再发，避免发送期间又到一条相同 webhook
+	// 穿过窗口；各通知通道沿用既有的异步发送与失败日志。
+	mediaNotif.mu.Lock()
+	if mediaNotif.sent == nil {
+		mediaNotif.sent = map[string]time.Time{}
+	}
+	now := time.Now()
+	for _, e := range items {
+		if key := e.mergeKey(); key != "" {
+			mediaNotif.sent[key] = now
+		}
+	}
+	mediaNotif.mu.Unlock()
 	if len(items) == 1 {
 		e := items[0]
 		sendMediaNotifSingle(cfg, e)

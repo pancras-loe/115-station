@@ -349,12 +349,13 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 	if len(names) == 0 {
 		return nil
 	}
-	if err := ops.renameBatch(names); err != nil {
-		onLog(fmt.Sprintf("✗ 批量重命名失败（%d 个文件保持原名）: %v", len(names), err))
-		return nil // 整批没改成，调用方按原名落盘
+	renamed, err := ops.renameBatch(names)
+	if err != nil {
+		onLog(fmt.Sprintf("✗ 批量重命名未全部完成（成功 %d、保持原名 %d）: %v", len(renamed), len(names)-len(renamed), err))
+		return renamed // 已成功的批次必须按新名落盘，不能生成指向旧名的死 STRM
 	}
-	onLog(fmt.Sprintf("✓ 批量重命名 %d 个文件（例: %s）", len(names), example))
-	return names
+	onLog(fmt.Sprintf("✓ 批量重命名 %d 个文件（例: %s）", len(renamed), example))
+	return renamed
 }
 
 // moveQuietly 移动并记录失败（失败不再被吞掉）
@@ -2936,7 +2937,7 @@ func notifyMediaStoredFull(media *TmdbMedia, category string, videoFiles []remot
 		typeLabel = "剧集"
 	}
 	entry := mediaNotifEntry{
-		Title: media.Title, Year: media.Year, Kind: typeLabel,
+		Title: media.Title, Year: media.Year, Kind: typeLabel, Source: "organize",
 		Category: category, Quality: qualityLabel(mainVideoName), Rating: media.VoteAverage,
 	}
 	if movedCount > 0 {
