@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -434,13 +435,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 	if classifyLink(link) == "share" {
 		shareURL, code := splitShareLink(link)
-		if code == "" {
-			reply("✗ 115 分享链接缺少提取码：",
-				"把链接和提取码发在一起即可，例如：",
-				"https://115.com/s/abc123?password=xxxx",
-				"或：https://115.com/s/abc123 提取码：xxxx")
-			return
-		}
 		organize := true // 机器人触发的转存默认走「整理+增量」闭环
 		reply("⏳ 开始转存 115 分享…", truncateStr(shareURL, 70))
 		go func() {
@@ -464,22 +458,30 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 	reply("✓ 已提交离线下载", "下载完成后自动整理入库并通知。")
 }
 
+var (
+	// 115 官方复制文案会在 URL 前带「链接：」，消息通道也可能把它包成 Markdown 链接，
+	// 所以不能再假定第一个空白字段就是 URL。
+	reBot115ShareURL = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?(?:115\.com|115cdn\.com|anxia\.com)/s/[a-z0-9_-]+(?:\?[^#\s<>"'\[\](){}，。；;！!]+)?(?:#[a-z0-9]+)?`)
+	reBotShareCode   = regexp.MustCompile(`(?i)(?:提取码|访问码|密码|口令)\s*[:：]?\s*([a-z0-9]{3,12})`)
+)
+
 // splitShareLink 从消息中拆出分享链接与提取码。
-// 支持：URL 自带 ?password=xxx；"链接 提取码：xxx"；"链接 xxx"（末尾独立字段）
+// 支持官方整段分享文案、Markdown 链接、URL 内嵌提取码以及链接后单独提取码。
 func splitShareLink(msg string) (shareURL, code string) {
-	fields := strings.Fields(msg)
-	if len(fields) == 0 {
+	loc := reBot115ShareURL.FindStringIndex(msg)
+	if loc == nil {
 		return "", ""
 	}
-	shareURL = fields[0]
-	if u, err := url.Parse(shareURL); err == nil {
-		if p := u.Query().Get("password"); p != "" {
-			return shareURL, p
-		}
+	shareURL = msg[loc[0]:loc[1]]
+	if m := reSharePass.FindStringSubmatch(shareURL); m != nil {
+		return shareURL, m[1]
 	}
-	// 其余字段里找提取码（"提取码：xxx" / "密码:xxx" / 纯 4-8 位字母数字）
-	for i := 1; i < len(fields); i++ {
-		f := strings.TrimPrefix(strings.TrimPrefix(fields[i], "提取码"), "密码")
+	if m := reBotShareCode.FindStringSubmatch(msg); m != nil {
+		return shareURL, m[1]
+	}
+	// 兼容「链接 ab12」这种没有标签的旧写法，只查 URL 后方，避免把文案里的其他单词当作提取码。
+	for _, field := range strings.Fields(msg[loc[1]:]) {
+		f := strings.TrimPrefix(strings.TrimPrefix(field, "提取码"), "密码")
 		f = strings.Trim(f, "：:，, ")
 		if len(f) >= 3 && len(f) <= 12 && isShareCode(f) {
 			return shareURL, f
