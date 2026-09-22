@@ -4,11 +4,13 @@ import {
   NButton,
   NDataTable,
   NInput,
+  NInputNumber,
   NModal,
   NPopconfirm,
   NRadioButton,
   NRadioGroup,
   NSelect,
+  NSwitch,
   NTag,
   type DataTableColumns,
 } from 'naive-ui'
@@ -158,15 +160,34 @@ async function libRun() {
 // ============ 媒体库封面 ============
 const cgShow = ref(false)
 const cgSaving = ref(false)
-const cgForm = ref({ cron: '0 0 * * *', style: '1', strategy: 'added', blacklist: '', advanced: '' })
+const cgForm = ref<pluginsApi.CoverGenConfig>({
+  enabled: true,
+  cron: '0 0 * * *',
+  style: 'static_1',
+  strategy: 'added',
+  include: '',
+  blacklist: '',
+  titles: '',
+  resolution: '720p',
+  poster_count: 6,
+  background: 'auto',
+  custom_color: '#263445',
+  blur: 36,
+  color_ratio: 0.72,
+  use_primary: true,
+})
 const covers = ref<{ name: string; time?: string }[]>([])
 
 const CG_STYLES = [
+  { v: 'static_1', label: '层叠卡片', desc: '主题色背景 + 斜向海报墙' },
+  { v: 'static_2', label: '对角色块', desc: '左侧标题 + 右侧主海报' },
+  { v: 'static_3', label: '矩阵海报', desc: '左侧标题 + 右侧海报矩阵' },
+  { v: 'static_4', label: '沉浸背景', desc: '主海报铺满 + 居中标题' },
   { v: '1', label: '样式一', desc: '彩色底 + 斜排海报 + 库名' },
   { v: '2', label: '样式二', desc: '深色横幅 + 底部海报排' },
   { v: '3', label: '样式三', desc: '大字库名 + 右侧大图' },
   { v: 'random', label: '随机', desc: '每个库按名称随机样式' },
-]
+].filter((s) => !['1', '2', '3'].includes(s.v))
 
 const CG_STRATEGIES = [
   { label: '按加入日期排序，选最新的 9 个', value: 'added' },
@@ -181,11 +202,20 @@ async function cgOpen() {
     const d = await pluginsApi.coverGenConfig()
     const c = d.data ?? {}
     cgForm.value = {
+      enabled: c.enabled ?? true,
       cron: c.cron ?? '0 0 * * *',
-      style: c.style || '1',
+      style: c.style || 'static_1',
       strategy: c.strategy || 'added',
+      include: c.include || '',
       blacklist: c.blacklist || '',
-      advanced: c.advanced || '',
+      titles: c.titles || '',
+      resolution: c.resolution || '720p',
+      poster_count: c.poster_count || 6,
+      background: c.background || 'auto',
+      custom_color: c.custom_color || '#263445',
+      blur: c.blur ?? 36,
+      color_ratio: c.color_ratio ?? 0.72,
+      use_primary: c.use_primary ?? true,
     }
   } catch {
     // 首次使用尚无配置
@@ -229,6 +259,16 @@ async function cgRun() {
 }
 
 const previewUrl = pluginsApi.coverPreviewUrl
+
+async function cgClean() {
+  try {
+    const d = await pluginsApi.cleanCoverGen()
+    message.success(d.message || '缓存已清理')
+    await cgLoadList()
+  } catch (e) {
+    toastError(e, '清理失败')
+  }
+}
 
 // ============ 插件清单 ============
 const plugins = [
@@ -380,6 +420,10 @@ const availableCount = plugins.filter((p) => p.available).length
         <CronField v-model="cgForm.cron" placeholder="0 0 * * *" />
       </FieldRow>
 
+      <FieldRow label="启用定时生成" tip="关闭后仍可手动生成。">
+        <NSwitch v-model:value="cgForm.enabled" />
+      </FieldRow>
+
       <FieldRow label="封面样式" wide>
         <div class="styles">
           <button
@@ -402,8 +446,40 @@ const availableCount = plugins.filter((p) => p.available).length
         <NSelect v-model:value="cgForm.strategy" :options="CG_STRATEGIES" />
       </FieldRow>
 
+      <FieldRow label="输出分辨率">
+        <NRadioGroup v-model:value="cgForm.resolution" size="small">
+          <NRadioButton value="480p">480p</NRadioButton>
+          <NRadioButton value="720p">720p</NRadioButton>
+          <NRadioButton value="1080p">1080p</NRadioButton>
+        </NRadioGroup>
+      </FieldRow>
+
+      <FieldRow label="取图数量" tip="从每个媒体库按选取策略取 1–12 张海报。">
+        <NInputNumber v-model:value="cgForm.poster_count" :min="1" :max="12" />
+      </FieldRow>
+
+      <FieldRow label="背景取色">
+        <NSelect v-model:value="cgForm.background" :options="[
+          { label: '按媒体库稳定配色', value: 'auto' },
+          { label: '提取主海报颜色', value: 'poster' },
+          { label: '使用自定义颜色', value: 'custom' },
+        ]" />
+      </FieldRow>
+
+      <FieldRow v-if="cgForm.background === 'custom'" label="自定义背景色">
+        <NInput v-model:value="cgForm.custom_color" placeholder="#263445" />
+      </FieldRow>
+
+      <FieldRow label="仅生成这些库" hint="一行一个；留空表示全部媒体库。">
+        <NInput v-model:value="cgForm.include" type="textarea" :rows="2" />
+      </FieldRow>
+
       <FieldRow label="媒体库黑名单" hint="一行一个 Emby 库名；未配置 Emby 时填写本地分类名">
         <NInput v-model:value="cgForm.blacklist" type="textarea" :rows="2" />
+      </FieldRow>
+
+      <FieldRow label="标题映射" hint="每行：媒体库名=中文标题|英文副标题。">
+        <NInput v-model:value="cgForm.titles" type="textarea" :rows="3" placeholder="电影=电影|MOVIES" />
       </FieldRow>
 
       <div class="covers">
@@ -422,6 +498,10 @@ const availableCount = plugins.filter((p) => p.available).length
 
       <template #footer>
         <div class="foot-right">
+          <NPopconfirm @positive-click="cgClean">
+            <template #trigger><NButton type="error" ghost>清理缓存</NButton></template>
+            只删除本地生成缓存，不会删除 Emby 当前海报。继续？
+          </NPopconfirm>
           <NButton @click="cgShow = false">取消</NButton>
           <NButton type="primary" :loading="cgSaving" @click="cgSave">保存</NButton>
         </div>

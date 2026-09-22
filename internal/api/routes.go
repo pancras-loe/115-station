@@ -342,6 +342,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/covergen/config", h.CoverGenSaveConfig)
 		protected.POST("/covergen/run", h.CoverGenRun)
 		protected.GET("/covergen/list", h.CoverGenList)
+		protected.POST("/covergen/clean", h.CoverGenClean)
 
 		// TG 关键词订阅（频道轮询 → 水位去重 → 命中通知/自动转存）
 		protected.GET("/tgsub/config", h.TgSubGetConfig)

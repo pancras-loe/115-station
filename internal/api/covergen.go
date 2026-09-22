@@ -1,9 +1,7 @@
 package api
 
-// 媒体库封面生成（参考 CMS/MoviePilot 同类插件）：
-// 按「二级分类」聚合入库记录，按选取策略取 TMDB 海报，合成带库名的封面图
-// （1280×720 PNG），保存到 /data/library-covers/ 并推送为 Emby 对应媒体库的
-// 主页图片。支持 cron 定时与手动触发；三种封面样式 + 随机。
+// 媒体库海报生成器。设计参考 MoviePilot MediaCoverGenerator，但保留本站的
+// 静态 PNG、Emby 上传和本地台账降级契约，不复制其插件框架。
 
 import (
 	"bytes"
@@ -44,51 +42,123 @@ var coverFontBytes []byte
 var (
 	coverFontOnce sync.Once
 	coverFontObj  *opentype.Font
+	coverRunMu    sync.Mutex
+	coverLastRun  string
 )
 
-func loadCoverFont() *opentype.Font {
-	coverFontOnce.Do(func() {
-		if f, err := opentype.Parse(coverFontBytes); err == nil {
-			coverFontObj = f
-		} else {
-			log.Printf("[封面生成] ✗ 字体解析失败: %v", err)
-		}
-	})
-	return coverFontObj
-}
-
 type coverGenCfg struct {
-	Cron      string `json:"cron"`
-	Style     string `json:"style"`    // 1 2 3 random
-	Strategy  string `json:"strategy"` // title release added rating
-	Blacklist string `json:"blacklist"`
-	Advanced  string `json:"advanced"`
+	Enabled     bool    `json:"enabled"`
+	Cron        string  `json:"cron"`
+	Style       string  `json:"style"`
+	Strategy    string  `json:"strategy"`
+	Include     string  `json:"include"`
+	Blacklist   string  `json:"blacklist"`
+	Titles      string  `json:"titles"`
+	Resolution  string  `json:"resolution"`
+	PosterCount int     `json:"poster_count"`
+	Background  string  `json:"background"`
+	CustomColor string  `json:"custom_color"`
+	Blur        int     `json:"blur"`
+	ColorRatio  float64 `json:"color_ratio"`
+	UsePrimary  bool    `json:"use_primary"`
+	Advanced    string  `json:"advanced,omitempty"`
 }
 
-func (h *Handler) loadCoverGenCfg() coverGenCfg {
-	c := coverGenCfg{Cron: "0 0 * * *", Style: "1", Strategy: "added"}
-	if v := h.Config.GetSetting("covergen"); v != "" {
-		_ = json.Unmarshal([]byte(v), &c)
+func defaultCoverGenCfg() coverGenCfg {
+	return coverGenCfg{Enabled: true, Cron: "0 0 * * *", Style: "static_1", Strategy: "added", Resolution: "720p", PosterCount: 6, Background: "auto", Blur: 36, ColorRatio: .72, UsePrimary: true}
+}
+
+func normalizeCoverGenCfg(c coverGenCfg) coverGenCfg {
+	if c.Cron == "" {
+		c.Cron = "0 0 * * *"
+	}
+	switch c.Style {
+	case "1", "2", "3", "4":
+		c.Style = "static_" + c.Style
+	}
+	if !map[string]bool{"static_1": true, "static_2": true, "static_3": true, "static_4": true, "random": true}[c.Style] {
+		c.Style = "static_1"
+	}
+	if !map[string]bool{"added": true, "release": true, "title": true, "rating": true}[c.Strategy] {
+		c.Strategy = "added"
+	}
+	if !map[string]bool{"480p": true, "720p": true, "1080p": true}[c.Resolution] {
+		c.Resolution = "720p"
+	}
+	if c.PosterCount < 1 || c.PosterCount > 12 {
+		c.PosterCount = 6
+	}
+	if !map[string]bool{"auto": true, "poster": true, "custom": true}[c.Background] {
+		c.Background = "auto"
+	}
+	if c.Blur < 0 || c.Blur > 100 {
+		c.Blur = 36
+	}
+	if c.ColorRatio < 0 || c.ColorRatio > 1 {
+		c.ColorRatio = .72
+	}
+	if c.CustomColor == "" {
+		c.CustomColor = "#263445"
 	}
 	return c
 }
 
+func (h *Handler) loadCoverGenCfg() coverGenCfg {
+	c := defaultCoverGenCfg()
+	if v := h.Config.GetSetting("covergen"); v != "" {
+		_ = json.Unmarshal([]byte(v), &c)
+	}
+	return normalizeCoverGenCfg(c)
+}
+
 func (h *Handler) saveCoverGenCfg(c coverGenCfg) error {
-	b, _ := json.Marshal(c)
+	b, _ := json.Marshal(normalizeCoverGenCfg(c))
 	return h.Config.SaveSetting("covergen", string(b))
 }
 
-// ==================== 数据聚合 ====================
-
 type coverLib struct {
-	Name      string
-	Items     []model.MediaLibrary
-	ItemID    string
-	PosterIDs []string
+	Name, ItemID string
+	Items        []model.MediaLibrary
+	PosterIDs    []string
 }
 
-// 参考 MoviePilot-2 的媒体库与条目图片接口：直接用服务器的库 ID，
-// 避免全量同步没有整理台账、分类路径与显示库名不同导致无图或推错库。
+func coverLines(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range strings.FieldsFunc(s, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' }) {
+		if v = strings.TrimSpace(v); v != "" {
+			out[v] = true
+		}
+	}
+	return out
+}
+
+func coverAllowed(name string, cfg coverGenCfg) bool {
+	include, exclude := coverLines(cfg.Include), coverLines(cfg.Blacklist)
+	return !exclude[name] && (len(include) == 0 || include[name])
+}
+
+// titles 每行：媒体库名=中文标题|英文副标题。
+func coverTitle(name, raw string) (string, string) {
+	zh, en := name, coverEnglishName(name)
+	for _, line := range strings.Split(raw, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) != name {
+			continue
+		}
+		mapped := strings.SplitN(strings.TrimSpace(parts[1]), "|", 2)
+		if v := strings.TrimSpace(mapped[0]); v != "" {
+			zh = v
+		}
+		if len(mapped) == 2 {
+			if v := strings.TrimSpace(mapped[1]); v != "" {
+				en = v
+			}
+		}
+		break
+	}
+	return zh, en
+}
+
 func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
 	base, key, ok := h.embyServerInfo()
 	if !ok || key == "" {
@@ -96,28 +166,19 @@ func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
 	}
 	resp, err := embyRequest(http.MethodGet, base, key, "/Library/VirtualFolders", nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("连接 Emby 失败，请检查服务器配置")
+		return nil, fmt.Errorf("连接 Emby 失败：请检查服务器配置")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("读取 Emby 媒体库失败：HTTP %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("获取 Emby 媒体库失败：HTTP %d", resp.StatusCode)
 	}
 	var folders []struct{ Name, ItemID, CollectionType string }
-	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+	if json.NewDecoder(resp.Body).Decode(&folders) != nil {
 		return nil, fmt.Errorf("Emby 媒体库响应无法解析")
 	}
-	var libs []coverLib
+	libs := []coverLib{}
 	for _, f := range folders {
-		if f.ItemID == "" || f.Name == "" {
-			continue
-		}
-		blocked := false
-		for _, line := range strings.Split(cfg.Blacklist, "\n") {
-			if strings.TrimSpace(line) == f.Name {
-				blocked = true
-			}
-		}
-		if blocked {
+		if f.Name == "" || f.ItemID == "" || !coverAllowed(f.Name, cfg) {
 			continue
 		}
 		sortBy, order := "DateCreated", "Descending"
@@ -129,25 +190,25 @@ func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
 		case "rating":
 			sortBy = "CommunityRating"
 		}
-		q := url.Values{"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {embyCountTypes(f.CollectionType)}, "IsVirtualItem": {"false"}, "ImageTypes": {"Primary"}, "SortBy": {sortBy}, "SortOrder": {order}, "Limit": {"9"}}
+		q := url.Values{"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {embyCountTypes(f.CollectionType)}, "IsVirtualItem": {"false"}, "ImageTypes": {"Primary"}, "SortBy": {sortBy}, "SortOrder": {order}, "Limit": {strconv.Itoa(cfg.PosterCount)}}
 		r, err := embyRequest(http.MethodGet, base, key, "/Items", q, nil)
 		if err != nil {
-			return nil, fmt.Errorf("读取媒体库「%s」条目失败", f.Name)
+			return nil, fmt.Errorf("获取媒体库《%s》项目失败", f.Name)
 		}
-		var items struct {
+		var payload struct {
 			Items []struct {
 				ID string `json:"Id"`
-			}
+			} `json:"Items"`
 		}
-		err = json.NewDecoder(r.Body).Decode(&items)
+		decodeErr := json.NewDecoder(r.Body).Decode(&payload)
 		r.Body.Close()
-		if r.StatusCode != 200 || err != nil {
-			return nil, fmt.Errorf("读取媒体库「%s」条目失败：HTTP %d", f.Name, r.StatusCode)
+		if r.StatusCode != http.StatusOK || decodeErr != nil {
+			return nil, fmt.Errorf("获取媒体库《%s》项目失败：HTTP %d", f.Name, r.StatusCode)
 		}
 		lib := coverLib{Name: f.Name, ItemID: f.ItemID}
-		for _, it := range items.Items {
-			if it.ID != "" {
-				lib.PosterIDs = append(lib.PosterIDs, it.ID)
+		for _, item := range payload.Items {
+			if item.ID != "" {
+				lib.PosterIDs = append(lib.PosterIDs, item.ID)
 			}
 		}
 		libs = append(libs, lib)
@@ -157,90 +218,76 @@ func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
 
 func (h *Handler) coverEmbyPoster(id string) image.Image {
 	base, key, _ := h.embyServerInfo()
-	r, err := embyRequest(http.MethodGet, base, key, "/Items/"+url.PathEscape(id)+"/Images/Primary", url.Values{"MaxWidth": {"400"}}, nil)
+	r, err := embyRequest(http.MethodGet, base, key, "/Items/"+url.PathEscape(id)+"/Images/Primary", url.Values{"MaxWidth": {"500"}}, nil)
 	if err != nil {
 		return nil
 	}
 	defer r.Body.Close()
-	if r.StatusCode != 200 {
+	if r.StatusCode != http.StatusOK {
 		return nil
 	}
-	im, _, _ := image.Decode(io.LimitReader(r.Body, 8<<20))
+	im, _, _ := image.Decode(io.LimitReader(r.Body, 12<<20))
 	return im
 }
 
-func (h *Handler) coverCollectLibs(cfg coverGenCfg) []coverLib {
-	black := map[string]bool{}
-	for _, ln := range strings.Split(cfg.Blacklist, "\n") {
-		if s := strings.TrimSpace(ln); s != "" {
-			black[s] = true
-		}
+func coverSortItems(items []model.MediaLibrary, strategy string) {
+	switch strategy {
+	case "title":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].Title < items[j].Title })
+	case "release":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].Year > items[j].Year })
+	case "rating":
+		sort.SliceStable(items, func(i, j int) bool { return items[i].VoteAverage > items[j].VoteAverage })
+	default:
+		sort.SliceStable(items, func(i, j int) bool { return items[i].ID > items[j].ID })
 	}
+}
+
+// 保留旧内部调用签名，避免同包扩展和既有测试因重构失效。
+func (h *Handler) coverSortItems(items []model.MediaLibrary, strategy string) {
+	coverSortItems(items, strategy)
+}
+
+func (h *Handler) coverCollectLibs(cfg coverGenCfg) []coverLib {
 	var rows []model.MediaLibrary
 	h.DB.Where("poster_path <> ''").Order("created_at ASC").Find(&rows)
 	groups := map[string]*coverLib{}
-	for _, r := range rows {
-		if r.Category == "" || black[r.Category] {
+	for _, row := range rows {
+		if row.Category == "" || !coverAllowed(row.Category, cfg) {
 			continue
 		}
-		g, ok := groups[r.Category]
-		if !ok {
-			g = &coverLib{Name: r.Category}
-			groups[r.Category] = g
+		if groups[row.Category] == nil {
+			groups[row.Category] = &coverLib{Name: row.Category}
 		}
-		g.Items = append(g.Items, r)
+		groups[row.Category].Items = append(groups[row.Category].Items, row)
 	}
-	var libs []coverLib
-	for _, g := range groups {
-		h.coverSortItems(g.Items, cfg.Strategy)
-		if len(g.Items) > 9 {
-			g.Items = g.Items[:9]
+	libs := []coverLib{}
+	for _, lib := range groups {
+		coverSortItems(lib.Items, cfg.Strategy)
+		if len(lib.Items) > cfg.PosterCount {
+			lib.Items = lib.Items[:cfg.PosterCount]
 		}
-		libs = append(libs, *g)
+		libs = append(libs, *lib)
 	}
 	sort.Slice(libs, func(i, j int) bool { return libs[i].Name < libs[j].Name })
 	return libs
 }
 
-func (h *Handler) coverSortItems(items []model.MediaLibrary, strategy string) {
-	yearOf := func(i int) string { return items[i].Year }
-	switch strategy {
-	case "title":
-		sort.Slice(items, func(i, j int) bool { return items[i].Title < items[j].Title })
-	case "release": // 无发行日期字段，用年份近似（新→旧）
-		sort.SliceStable(items, func(i, j int) bool {
-			a, b := yearOf(i), yearOf(j)
-			if a != b {
-				return a > b
-			}
-			return items[i].ID > items[j].ID
-		})
-	case "rating":
-		sort.SliceStable(items, func(i, j int) bool { return items[i].VoteAverage > items[j].VoteAverage })
-	default: // added：加入日期新→旧
-		sort.SliceStable(items, func(i, j int) bool { return items[i].ID > items[j].ID })
-	}
-}
-
-// ==================== 海报下载与绘制 ====================
-
 func coverFetchPoster(path string) image.Image {
 	base := strings.TrimSuffix(tmdbImageBase(), "/t/p")
-	u := base + "/t/p/w300/" + strings.TrimPrefix(path, "/")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 12 * time.Second}
 	proxyURL := getProxyURL()
-	var cfg model.TmdbConfig
-	if model.DB != nil && model.DB.First(&cfg).Error == nil && cfg.EnableProxy && cfg.ProxyUrl != "" {
-		proxyURL = cfg.ProxyUrl
+	var tc model.TmdbConfig
+	if model.DB != nil && model.DB.First(&tc).Error == nil && tc.EnableProxy && tc.ProxyUrl != "" {
+		proxyURL = tc.ProxyUrl
 	}
-	// 与刮削使用相同代理，否则刮削正常的库仍可能一张封面都下载不到。
 	if proxyURL != "" {
 		if proxy, err := parseProxyURL(proxyURL); err == nil {
 			client.Transport = &http.Transport{Proxy: proxy}
 			defer client.CloseIdleConnections()
 		}
 	}
-	resp, err := client.Get(u)
+	resp, err := client.Get(base + "/t/p/w500/" + strings.TrimPrefix(path, "/"))
 	if err != nil {
 		return nil
 	}
@@ -248,178 +295,185 @@ func coverFetchPoster(path string) image.Image {
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
-	im, _, err := image.Decode(resp.Body)
+	im, _, _ := image.Decode(io.LimitReader(resp.Body, 12<<20))
 	return im
 }
 
-// coverDrawPoster 等比放大/缩小并居中裁切填充目标矩形（cover 模式）
-func coverDrawPoster(dst draw.Image, src image.Image, rect image.Rectangle) {
-	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
-	rw, rh := rect.Dx(), rect.Dy()
-	if sw <= 0 || sh <= 0 || rw <= 0 || rh <= 0 {
+func coverResolution(v string) (int, int) {
+	switch v {
+	case "480p":
+		return 854, 480
+	case "1080p":
+		return 1920, 1080
+	default:
+		return 1280, 720
+	}
+}
+
+func coverCrop(dst draw.Image, src image.Image, rect image.Rectangle) {
+	if src == nil || rect.Empty() {
 		return
 	}
-	scale := math.Max(float64(rw)/float64(sw), float64(rh)/float64(sh))
+	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
+	scale := math.Max(float64(rect.Dx())/float64(sw), float64(rect.Dy())/float64(sh))
 	dw, dh := int(float64(sw)*scale)+1, int(float64(sh)*scale)+1
 	scaled := image.NewRGBA(image.Rect(0, 0, dw, dh))
-	xdraw.ApproxBiLinear.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Src, nil)
-	ox := (dw - rw) / 2
-	oy := (dh - rh) / 2
-	if ox < 0 {
-		ox = 0
-	}
-	if oy < 0 {
-		oy = 0
-	}
-	draw.Draw(dst, rect, scaled, image.Pt(ox, oy), draw.Src)
-	// 细白描边提升层次
-	bd := color.RGBA{255, 255, 255, 90}
-	for x := rect.Min.X; x < rect.Max.X; x++ {
-		dst.Set(x, rect.Min.Y, bd)
-		dst.Set(x, rect.Max.Y-1, bd)
-	}
-	for y := rect.Min.Y; y < rect.Max.Y; y++ {
-		dst.Set(rect.Min.X, y, bd)
-		dst.Set(rect.Max.X-1, y, bd)
-	}
+	xdraw.CatmullRom.Scale(scaled, scaled.Bounds(), src, src.Bounds(), draw.Src, nil)
+	draw.Draw(dst, rect, scaled, image.Pt(max(0, (dw-rect.Dx())/2), max(0, (dh-rect.Dy())/2)), draw.Src)
 }
 
 func coverFace(size float64) font.Face {
-	f := loadCoverFont()
-	if f == nil {
+	coverFontOnce.Do(func() { coverFontObj, _ = opentype.Parse(coverFontBytes) })
+	if coverFontObj == nil {
 		return nil
 	}
-	face, err := opentype.NewFace(f, &opentype.FaceOptions{Size: size, DPI: 72})
-	if err != nil {
-		return nil
-	}
+	face, _ := opentype.NewFace(coverFontObj, &opentype.FaceOptions{Size: size, DPI: 72})
 	return face
 }
-
-func coverText(dst draw.Image, text string, size float64, x, y int, c color.Color) {
+func coverDrawText(dst draw.Image, s string, size float64, x, y int, c color.Color) {
 	face := coverFace(size)
 	if face == nil {
 		return
 	}
-	d := &font.Drawer{Dst: dst, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x, y)}
-	d.DrawString(text)
+	(&font.Drawer{Dst: dst, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x, y)}).DrawString(s)
 }
-
-func coverTextWidth(text string, size float64) int {
+func coverTextWidth(s string, size float64) int {
 	face := coverFace(size)
 	if face == nil {
 		return 0
 	}
-	d := &font.Drawer{Face: face}
-	return int(d.MeasureString(text) >> 6)
+	return int((&font.Drawer{Face: face}).MeasureString(s) >> 6)
 }
 
-func coverEnName(cn string) string {
+func coverEnglishName(name string) string {
 	switch {
-	case strings.Contains(cn, "动漫"), strings.Contains(cn, "动画"):
-		return "ANIME"
-	case strings.Contains(cn, "纪录"):
+	case strings.Contains(name, "动漫"), strings.Contains(name, "动画"):
+		return "ANIMATION"
+	case strings.Contains(name, "纪录"):
 		return "DOCUMENTARY"
-	case strings.Contains(cn, "综艺"):
-		return "VARIETY"
-	case strings.Contains(cn, "剧集"), strings.Contains(cn, "剧"):
+	case strings.Contains(name, "综艺"):
+		return "VARIETY SHOW"
+	case strings.Contains(name, "剧集"), strings.Contains(name, "电视剧"):
 		return "TV SERIES"
-	case strings.Contains(cn, "电影"), strings.Contains(cn, "影"):
-		return "MOVIE"
+	case strings.Contains(name, "电影"):
+		return "MOVIES"
 	}
 	return "MEDIA LIBRARY"
 }
-
-// coverSpaced 字母间隔排版（C N   M O V I E）
-func coverSpaced(en string) string {
-	var b strings.Builder
-	for i, r := range en {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteRune(r)
+func coverSpaced(s string) string {
+	r := []rune(strings.ReplaceAll(s, " ", "  "))
+	parts := make([]string, len(r))
+	for i, v := range r {
+		parts[i] = string(v)
 	}
-	return strings.ReplaceAll(b.String(), "   ", "    ")
+	return strings.Join(parts, " ")
 }
 
-var coverPalette = []string{"#e74c3c", "#8e44ad", "#2980b9", "#16a085", "#e67e22", "#34495e", "#d35400", "#27ae60"}
+var coverPalette = []color.RGBA{{222, 92, 116, 255}, {111, 100, 180, 255}, {56, 137, 180, 255}, {53, 153, 134, 255}, {217, 143, 73, 255}, {72, 92, 111, 255}}
 
 func coverHash(s string) uint32 {
-	var h uint32 = 2166136261
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= 16777619
+	h := uint32(2166136261)
+	for i := range s {
+		h = (h ^ uint32(s[i])) * 16777619
 	}
 	return h
 }
 
-func coverHexColor(hex string) color.RGBA {
-	v, _ := strconv.ParseUint(strings.TrimPrefix(hex, "#"), 16, 32)
-	return color.RGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 255}
+var coverHexRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+func coverParseHex(s string) (color.RGBA, bool) {
+	if !coverHexRe.MatchString(s) {
+		return color.RGBA{}, false
+	}
+	v, e := strconv.ParseUint(s[1:], 16, 32)
+	return color.RGBA{uint8(v >> 16), uint8(v >> 8), uint8(v), 255}, e == nil
 }
-
-// ==================== 三种样式（1280×720） ====================
-
-func coverStyle1(img *image.RGBA, name string, posters []image.Image) {
-	draw.Draw(img, img.Bounds(), &image.Uniform{coverHexColor(coverPalette[coverHash(name)%uint32(len(coverPalette))])}, image.Point{}, draw.Src)
-	// 斜向阶梯海报
-	x, y := 560, 40
-	for i, p := range posters {
-		if i >= 5 {
-			break
+func coverAverage(im image.Image) color.RGBA {
+	if im == nil {
+		return color.RGBA{45, 60, 75, 255}
+	}
+	b := im.Bounds()
+	var r, g, bl, n uint64
+	sx, sy := max(1, b.Dx()/32), max(1, b.Dy()/32)
+	for y := b.Min.Y; y < b.Max.Y; y += sy {
+		for x := b.Min.X; x < b.Max.X; x += sx {
+			rr, gg, bb, _ := im.At(x, y).RGBA()
+			r += uint64(rr >> 8)
+			g += uint64(gg >> 8)
+			bl += uint64(bb >> 8)
+			n++
 		}
-		coverDrawPoster(img, p, image.Rect(x, y, x+260, y+390))
-		x += 130
-		y += 75
 	}
-	// 左下：竖条 + 中文名 + 英文间隔字幕
-	draw.Draw(img, image.Rect(90, 440, 102, 600), &image.Uniform{color.RGBA{255, 255, 255, 230}}, image.Point{}, draw.Src)
-	coverText(img, name, 92, 122, 566, color.White)
-	en := coverSpaced(coverEnName(name))
-	coverText(img, en, 34, 124, 634, color.RGBA{255, 255, 255, 200})
+	return color.RGBA{uint8(r / n), uint8(g / n), uint8(bl / n), 255}
 }
-
-func coverStyle2(img *image.RGBA, name string, posters []image.Image) {
-	// 深色底 + 顶部微亮横带
-	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{16, 24, 34, 255}}, image.Point{}, draw.Src)
-	draw.Draw(img, image.Rect(0, 0, 1280, 8), &image.Uniform{coverHexColor(coverPalette[coverHash(name)%uint32(len(coverPalette))])}, image.Point{}, draw.Src)
-	coverText(img, name, 84, 80, 140, color.White)
-	coverText(img, coverSpaced(coverEnName(name)), 30, 82, 196, color.RGBA{255, 255, 255, 170})
-	// 底部海报横排（最多 5 张）
-	x, y, w, h := 80, 720-330-60, 212, 318
-	for i, p := range posters {
-		if i >= 5 {
-			break
+func coverBackground(cfg coverGenCfg, name string, posters []image.Image) color.RGBA {
+	base := coverPalette[coverHash(name)%uint32(len(coverPalette))]
+	if cfg.Background == "custom" {
+		if c, ok := coverParseHex(cfg.CustomColor); ok {
+			base = c
 		}
-		coverDrawPoster(img, p, image.Rect(x+i*(w+14), y, x+i*(w+14)+w, y+h))
+	} else if cfg.Background == "poster" && len(posters) > 0 {
+		base = coverAverage(posters[0])
 	}
+	r := cfg.ColorRatio
+	return color.RGBA{uint8(float64(base.R)*r + 20*(1-r)), uint8(float64(base.G)*r + 25*(1-r)), uint8(float64(base.B)*r + 32*(1-r)), 255}
 }
 
-func coverStyle3(img *image.RGBA, name string, posters []image.Image) {
-	draw.Draw(img, img.Bounds(), &image.Uniform{coverHexColor(coverPalette[(coverHash(name)+3)%uint32(len(coverPalette))])}, image.Point{}, draw.Src)
-	// 右侧大图（3 张叠放错位营造厚度）
-	if len(posters) > 0 {
-		draw.Draw(img, image.Rect(806-14, 30, 1280-14, 720), &image.Uniform{color.RGBA{0, 0, 0, 70}}, image.Point{}, draw.Src)
-		coverDrawPoster(img, posters[0], image.Rect(792, 16, 1266, 706))
+func coverRender(cfg coverGenCfg, name string, posters []image.Image) ([]byte, error) {
+	w, h := coverResolution(cfg.Resolution)
+	style := cfg.Style
+	if style == "random" {
+		style = fmt.Sprintf("static_%d", 1+coverHash(name)%4)
 	}
-	draw.Draw(img, image.Rect(80, 300, 240, 308), &image.Uniform{color.RGBA{255, 255, 255, 220}}, image.Point{}, draw.Src)
-	coverText(img, name, 88, 80, 420, color.White)
-	coverText(img, coverSpaced(coverEnName(name)), 32, 82, 478, color.RGBA{255, 255, 255, 190})
-}
-
-// coverRenderWith 按指定样式渲染（1/2/3；random 或空 = 按库名哈希随机）
-func (h *Handler) coverRenderWith(style, name string, posters []image.Image) ([]byte, error) {
-	if style == "" || style == "random" {
-		style = strconv.Itoa(1 + int(coverHash(name))%3)
+	zh, en := coverTitle(name, cfg.Titles)
+	bg := coverBackground(cfg, name, posters)
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.Draw(img, img.Bounds(), image.NewUniform(bg), image.Point{}, draw.Src)
+	sx, sy := float64(w)/1280, float64(h)/720
+	text := func(s string, size float64, x, y int, c color.Color) {
+		coverDrawText(img, s, size*sy, int(float64(x)*sx), int(float64(y)*sy), c)
 	}
-	img := image.NewRGBA(image.Rect(0, 0, 1280, 720))
 	switch style {
-	case "2":
-		coverStyle2(img, name, posters)
-	case "3":
-		coverStyle3(img, name, posters)
+	case "static_2":
+		if len(posters) > 0 {
+			coverCrop(img, posters[0], image.Rect(w*43/100, 0, w, h))
+		}
+		draw.Draw(img, image.Rect(0, 0, w*58/100, h), image.NewUniform(bg), image.Point{}, draw.Src)
+		text(zh, 88, 72, 326, color.White)
+		text(en, 31, 76, 382, color.RGBA{255, 255, 255, 205})
+	case "static_3":
+		pw, ph := w/5, h*49/100
+		for i, p := range posters {
+			if i >= 6 {
+				break
+			}
+			col, row := i%3, i/3
+			x, y := w*48/100+col*(pw*4/5), -ph/5+row*(ph*4/5)
+			coverCrop(img, p, image.Rect(x, y, x+pw, y+ph))
+		}
+		text(zh, 82, 68, 335, color.White)
+		text(en, 29, 72, 390, color.RGBA{255, 255, 255, 205})
+	case "static_4":
+		if len(posters) > 0 {
+			coverCrop(img, posters[0], img.Bounds())
+		}
+		draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{bg.R, bg.G, bg.B, uint8(min(245, 150+cfg.Blur))}), image.Point{}, draw.Over)
+		zw := coverTextWidth(zh, 96*sy)
+		text(zh, 96, int((float64(w-zw)/2)/sx), 350, color.RGBA{255, 255, 255, 240})
+		ew := coverTextWidth(en, 32*sy)
+		text(en, 32, int((float64(w-ew)/2)/sx), 414, color.RGBA{255, 255, 255, 220})
 	default:
-		coverStyle1(img, name, posters)
+		pw, ph := int(270*sx), int(405*sy)
+		for i, p := range posters {
+			if i >= 5 {
+				break
+			}
+			x, y := int((590+float64(i)*125)*sx), int((30+float64(i)*60)*sy)
+			coverCrop(img, p, image.Rect(x, y, x+pw, y+ph))
+		}
+		draw.Draw(img, image.Rect(int(76*sx), int(430*sy), int(86*sx), int(605*sy)), image.NewUniform(color.RGBA{255, 255, 255, 230}), image.Point{}, draw.Src)
+		text(zh, 88, 106, 550, color.White)
+		text(coverSpaced(en), 29, 109, 610, color.RGBA{255, 255, 255, 210})
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
@@ -428,15 +482,13 @@ func (h *Handler) coverRenderWith(style, name string, posters []image.Image) ([]
 	return buf.Bytes(), nil
 }
 
-// coverRender 按用户配置的样式渲染
-func (h *Handler) coverRender(name string, posters []image.Image) ([]byte, error) {
-	cfg := h.loadCoverGenCfg()
-	return h.coverRenderWith(cfg.Style, name, posters)
+func (h *Handler) coverRenderWith(style, name string, posters []image.Image) ([]byte, error) {
+	cfg := defaultCoverGenCfg()
+	cfg.Style = style
+	return coverRender(normalizeCoverGenCfg(cfg), name, posters)
 }
 
-func coverOutDir(dataDir string) string {
-	return filepath.Join(dataDir, "library-covers")
-}
+func coverOutDir(dataDir string) string { return filepath.Join(dataDir, "library-covers") }
 
 var coverNameRe = regexp.MustCompile(`[^\w\p{Han}]+`)
 
@@ -444,52 +496,38 @@ func coverSafeName(name string) string {
 	return strings.Trim(coverNameRe.ReplaceAllString(name, "_"), "_")
 }
 
-// coverPushEmby 把封面推送为 Emby 同名媒体库的主页图片（未配置 Emby 时静默跳过）
-func (h *Handler) coverPushEmby(name, itemID string, pngData []byte) error {
-	base, apiKey, ok := h.embyServerInfo()
-	if !ok || apiKey == "" {
+func (h *Handler) coverPushEmby(name, itemID string, data []byte) error {
+	base, key, ok := h.embyServerInfo()
+	if !ok || key == "" {
 		return nil
 	}
-	// 媒体库列表 → 名称匹配 ItemId（解析形态见 embyVirtualFolderIds 的注释，
-	// 这里曾经自己抄过一份，两份对同一个端点的解析形状还不一样）
 	if itemID == "" {
-		itemID = embyVirtualFolderIds(base, apiKey)[name]
+		itemID = embyVirtualFolderIds(base, key)[name]
 	}
 	if itemID == "" {
-		log.Printf("[封面生成] ○ Emby 中未找到同名媒体库「%s」，跳过推送", name)
 		return fmt.Errorf("未找到同名 Emby 媒体库")
 	}
-	// ⚠️ **图片要 base64 再发**：Emby / Jellyfin 的 POST /Items/{Id}/Images/{Type}
-	// 是把整个请求体当文本读进去再 Convert.FromBase64String 的，
-	// 直接 POST 原始 PNG 字节在服务端解码就会炸（此前一直这么发，推送必失败）。
-	// Emby Web 自己上传封面走的也是 FileReader.readAsDataURL 去掉头部的 base64
-	body := []byte(base64.StdEncoding.EncodeToString(pngData))
-	req, err := http.NewRequest(http.MethodPost,
-		base+"/Items/"+itemID+"/Images/Primary?api_key="+url.QueryEscape(apiKey),
-		bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, base+"/Items/"+url.PathEscape(itemID)+"/Images/Primary?api_key="+url.QueryEscape(key), bytes.NewReader([]byte(base64.StdEncoding.EncodeToString(data))))
 	if err != nil {
-		return fmt.Errorf("无法创建封面上传请求")
+		return err
 	}
 	req.Header.Set("Content-Type", "image/png")
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
-		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: %v", name, err)
 		return fmt.Errorf("连接 Emby 失败")
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: HTTP %d", name, resp.StatusCode)
 		return fmt.Errorf("上传失败：HTTP %d", resp.StatusCode)
 	}
-	log.Printf("[封面生成] ✓ 已推送 Emby 媒体库「%s」封面", name)
+	log.Printf("[媒体库海报] ✓ 已推送 Emby 媒体库《%s》", name)
 	return nil
 }
 
-// runCoverGen 生成全部媒体库封面；返回（生成数、库名列表、跳过的库名、错误）
 func (h *Handler) runCoverGen() (int, []string, []string, error) {
 	if !coverRunMu.TryLock() {
-		return 0, nil, nil, fmt.Errorf("封面生成正在运行，请等待完成")
+		return 0, nil, nil, fmt.Errorf("媒体库海报正在生成，请稍候")
 	}
 	defer coverRunMu.Unlock()
 	cfg := h.loadCoverGenCfg()
@@ -501,60 +539,54 @@ func (h *Handler) runCoverGen() (int, []string, []string, error) {
 		libs = h.coverCollectLibs(cfg)
 	}
 	if len(libs) == 0 {
-		return 0, nil, nil, fmt.Errorf("没有可用的媒体库分类（先完成整理入库，或检查黑名单）")
+		return 0, nil, nil, fmt.Errorf("没有可用媒体库，请检查包含/排除设置与 Emby 配置")
 	}
 	outDir := coverOutDir(h.Config.DataDir)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return 0, nil, nil, fmt.Errorf("创建封面目录失败：%w", err)
+		return 0, nil, nil, fmt.Errorf("创建海报目录失败：%w", err)
 	}
 	done, skipped := []string{}, []string{}
 	for _, lib := range libs {
-		var imgs []image.Image
+		imgs := []image.Image{}
 		for _, id := range lib.PosterIDs {
-			if len(imgs) >= 5 {
+			if len(imgs) >= cfg.PosterCount {
 				break
 			}
 			if im := h.coverEmbyPoster(id); im != nil {
 				imgs = append(imgs, im)
 			}
 		}
-		for _, it := range lib.Items {
-			if len(imgs) >= 5 {
+		for _, item := range lib.Items {
+			if len(imgs) >= cfg.PosterCount {
 				break
 			}
-			if im := coverFetchPoster(it.PosterPath); im != nil {
+			if im := coverFetchPoster(item.PosterPath); im != nil {
 				imgs = append(imgs, im)
 			}
 		}
 		if len(imgs) == 0 {
-			log.Printf("[封面生成] ○ %s：没有可用海报，跳过", lib.Name)
-			skipped = append(skipped, lib.Name+"：没有可用海报，请检查图片与网络配置")
+			skipped = append(skipped, lib.Name+"：没有可用海报")
 			continue
 		}
-		data, err := h.coverRender(lib.Name, imgs)
+		data, err := coverRender(cfg, lib.Name, imgs)
 		if err != nil {
 			skipped = append(skipped, lib.Name+"：渲染失败")
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(outDir, coverSafeName(lib.Name)+".png"), data, 0o644); err != nil {
-			skipped = append(skipped, lib.Name+"：保存失败："+err.Error())
+			skipped = append(skipped, lib.Name+"：保存失败")
 			continue
 		}
 		if err := h.coverPushEmby(lib.Name, lib.ItemID, data); err != nil {
-			skipped = append(skipped, lib.Name+"：本地已生成，但 "+err.Error())
+			skipped = append(skipped, lib.Name+"："+err.Error())
 		}
 		done = append(done, lib.Name)
 	}
 	if len(done) == 0 {
-		return 0, done, skipped, fmt.Errorf("未生成任何封面：%s", strings.Join(skipped, "；"))
+		return 0, done, skipped, fmt.Errorf("未生成任何海报：%s", strings.Join(skipped, "；"))
 	}
 	return len(done), done, skipped, nil
 }
-
-// ==================== 调度与处理器 ====================
-
-var coverGenLastRun string
-var coverRunMu sync.Mutex
 
 func StartCoverGenScheduler(h *Handler) {
 	go func() {
@@ -567,39 +599,41 @@ func StartCoverGenScheduler(h *Handler) {
 				return
 			}
 			cfg := h.loadCoverGenCfg()
-			if cfg.Cron == "" || !CronMatch(cfg.Cron, time.Now()) {
+			if !cfg.Enabled || cfg.Cron == "" || !CronMatch(cfg.Cron, time.Now()) {
 				continue
 			}
 			key := time.Now().Format("2006-01-02 15:04")
-			if coverGenLastRun == key {
+			if coverLastRun == key {
 				continue
 			}
-			coverGenLastRun = key
+			coverLastRun = key
 			go func() {
-				defer func() { recover() }()
+				defer func() { _ = recover() }()
 				n, names, skipped, err := h.runCoverGen()
 				if err != nil {
-					NotifyMessage("", "▣ 媒体库封面生成失败: "+err.Error())
+					NotifyMessage("", "✗ 媒体库海报生成失败："+err.Error())
 					return
 				}
 				NotifyMessage("", coverGenResultText(n, names, skipped))
 			}()
 		}
 	}()
-	log.Println("[封面生成] 调度器已启动")
+	log.Println("[媒体库海报] ✓ 定时任务已启动")
 }
-
-// CoverGenGetConfig GET /covergen/config
 func (h *Handler) CoverGenGetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": h.loadCoverGenCfg()})
 }
-
-// CoverGenSaveConfig POST /covergen/config
 func (h *Handler) CoverGenSaveConfig(c *gin.Context) {
 	var req coverGenCfg
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数无效"})
 		return
+	}
+	if req.Background == "custom" {
+		if _, ok := coverParseHex(req.CustomColor); !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "自定义背景色必须是 #RRGGBB"})
+			return
+		}
 	}
 	if err := h.saveCoverGenCfg(req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})
@@ -607,8 +641,6 @@ func (h *Handler) CoverGenSaveConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
-
-// CoverGenRun POST /covergen/run
 func (h *Handler) CoverGenRun(c *gin.Context) {
 	n, names, skipped, err := h.runCoverGen()
 	if err != nil {
@@ -617,39 +649,51 @@ func (h *Handler) CoverGenRun(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": coverGenResultText(n, names, skipped), "warnings": skipped})
 }
-
-// coverGenResultText 生成结果文案（跳过的库点名原因）
 func coverGenResultText(n int, names, skipped []string) string {
-	b := fmt.Sprintf("▣ 媒体库封面已生成：%d 个\n%s", n, strings.Join(names, "、"))
+	b := fmt.Sprintf("✓ 媒体库海报已生成：%d 个\n%s", n, strings.Join(names, "、"))
 	if len(skipped) > 0 {
-		b += fmt.Sprintf("\n\n○ %d 项未完成：\n%s", len(skipped), strings.Join(skipped, "；"))
+		b += fmt.Sprintf("\n\n○ %d 个未完成：\n%s", len(skipped), strings.Join(skipped, "；"))
 	}
 	return b
 }
-
-// CoverGenList GET /covergen/list：已生成的封面清单
 func (h *Handler) CoverGenList(c *gin.Context) {
 	entries, err := os.ReadDir(coverOutDir(h.Config.DataDir))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"data": []gin.H{}})
 		return
 	}
-	var out []gin.H
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".png") {
+	out := []gin.H{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".png" {
 			continue
 		}
-		info, err1 := e.Info()
-		t := ""
-		if err1 == nil {
-			t = info.ModTime().Format("01-02 15:04")
+		info, _ := entry.Info()
+		stamp := ""
+		if info != nil {
+			stamp = info.ModTime().Format("01-02 15:04")
 		}
-		out = append(out, gin.H{"name": strings.TrimSuffix(e.Name(), ".png"), "time": t})
+		out = append(out, gin.H{"name": strings.TrimSuffix(entry.Name(), ".png"), "time": stamp})
 	}
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }
-
-// CoverGenPreview GET /covergen/preview?name=xxx：返回生成的封面 PNG
+func (h *Handler) CoverGenClean(c *gin.Context) {
+	dir := filepath.Clean(coverOutDir(h.Config.DataDir))
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取缓存失败"})
+		return
+	}
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".png" {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, entry.Name())) == nil {
+			removed++
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清理 %d 张海报", removed)})
+}
 func (h *Handler) CoverGenPreview(c *gin.Context) {
 	name := coverSafeName(strings.TrimSpace(c.Query("name")))
 	if name == "" {
