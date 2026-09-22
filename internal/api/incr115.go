@@ -443,6 +443,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 删除与移动旧路径单独收集，避免新增目录或同步根覆盖实际清理范围。
 	var deletedPaths []string
 	var relocatedPaths []string
+	// 库内改名/移动命中台账的 fid：这些文件在库里本来就有，重建出来的 STRM
+	// 只是换了个名字，Emby 随后推回来的 library.new 不是新片入库
+	renameEchoFids := map[string]bool{}
 	// relocateDir 目录改名/移动：本地跟着搬。oldPanAbs 来自路径缓存，
 	// 拿不到就返回 false 让调用方回退重遍历
 	relocateDir := func(ev model.SyncEvent, oldPanAbs string) bool {
@@ -461,8 +464,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		if !h.relocateLocalDir(oldRel, newRel, p.LocalPath) {
 			return false
 		}
+		newAbs := filepath.Join(p.LocalPath, filepath.FromSlash(newRel))
 		deletedPaths = append(deletedPaths, filepath.Join(p.LocalPath, filepath.FromSlash(oldRel)))
-		relocatedPaths = append(relocatedPaths, filepath.Join(p.LocalPath, filepath.FromSlash(newRel)))
+		relocatedPaths = append(relocatedPaths, newAbs)
+		// 目录只是换了名字/位置，里面还是原来那批片子：现在就打标记，
+		// 免得 Emby 的实时监控抢在本轮收尾之前把 library.new 推回来
+		markEmbyRenamed(newAbs)
 		return true
 	}
 
@@ -659,6 +666,20 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, true); removed != "" {
 				deletedPaths = append(deletedPaths, removed)
 				sum.Moved++
+				// 旧位置在台账里 = 这个文件本来就在库内，只是改了名/挪了地方。
+				// 没命中台账的是「从库外搬进来」，那才是真入库
+				if ev.FileID != "" {
+					renameEchoFids[ev.FileID] = true
+				}
+				// 新位置能当场推出来就先标上：直推落盘在下面还会标一次（幂等），
+				// 但事件没带 pick_code 而落到回退遍历时，那里就没人标了
+				if base, ok, err := d.relPath(ev.Cid, p.Cid); err == nil && ok && ev.FileName != "" {
+					newRel := path.Join(libName, base, ev.FileName)
+					if ev.FileCat != "0" && isMedia(ev.FileName) {
+						newRel += ".strm"
+					}
+					markEmbyRenamed(filepath.Join(p.LocalPath, filepath.FromSlash(newRel)))
+				}
 			}
 			if ev.Cid != "" && scopeOf(ev.Cid) == "library" {
 				switch {
@@ -736,6 +757,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					continue
 				}
 				upsertSyncedFile(h.DB, f, rel+".strm", "video")
+				strmAbs := filepath.Join(p.LocalPath, filepath.FromSlash(rel+".strm"))
+				if renameEchoFids[ev.FileID] {
+					markEmbyRenamed(strmAbs)
+				} else if wrote {
+					markEmbyFreshAdded(strmAbs)
+				}
 				if wrote {
 					sum.StrmCreated++
 				} else {
@@ -910,6 +937,9 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			continue
 		}
 		st := d.applyResults(videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
+		if st.StrmCreated > 0 {
+			markEmbyFreshAdded(filepath.Join(p.LocalPath, filepath.FromSlash(path.Join(libName, t.base))))
+		}
 		sum.Dirs++
 		sum.Videos += len(videos)
 		sum.StrmCreated += st.StrmCreated

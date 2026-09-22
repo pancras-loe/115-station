@@ -186,3 +186,39 @@ func TestEmbySelfDeletedMark(t *testing.T) {
 		t.Fatal("别的路径不该被抑制")
 	}
 }
+
+// resetEmbyChangeMarks 清掉包级的改名/新增标记，避免用例之间互相污染
+func resetEmbyChangeMarks() {
+	embyChangeMu.Lock()
+	defer embyChangeMu.Unlock()
+	embyRenamedAt = map[string]time.Time{}
+	embyFreshAt = map[string]time.Time{}
+}
+
+// 库内改名的回声不算入库；同窗口内这条路径下真有新增时照常通知
+func TestEmbyRenameEchoMark(t *testing.T) {
+	resetEmbyChangeMarks()
+	strm := "/media/影视/剧集/某剧.2025/Season 1/某剧.S01E02.mkv.strm"
+	season := "/media/影视/剧集/某剧.2025/Season 1"
+	if embyRenameEcho(strm) {
+		t.Fatal("没标记过就不该命中")
+	}
+	markEmbyRenamed(strm)
+	if !embyRenameEcho(strm) || !embyRenameEcho(season) {
+		t.Fatal("改名路径与它所在的季条目都该算回声")
+	}
+	// Emby 侧配成 windows 风格时事件里回来的是反斜杠路径
+	if !embyRenameEcho(strings.ReplaceAll(strm, "/", "\\")) {
+		t.Fatal("路径风格不同就认不出来了")
+	}
+	if embyRenameEcho("/media/影视/剧集/别的剧.2025") {
+		t.Fatal("别的路径不该被抑制")
+	}
+	markEmbyFreshAdded(season + "/某剧.S01E03.mkv.strm")
+	if embyRenameEcho(season) {
+		t.Fatal("同一季真的来了新集，季/剧集条目的入库通知不能被吞")
+	}
+	if !embyRenameEcho(strm) {
+		t.Fatal("改名的那条路径本身仍是回声")
+	}
+}

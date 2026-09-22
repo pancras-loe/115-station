@@ -245,6 +245,13 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 			log.Printf("[Emby Webhook] ○ 忽略已不存在路径的过期入库事件: %s", itemPath)
 			return
 		}
+		// 网盘上改个名、挪个位置，增量同步跟着重建 STRM，Emby 扫完推回一条
+		// library.new —— 片子还是原来那部，报「入库」是假消息。
+		// 同窗口内这条路径下真有新增内容时不会命中（见 embyRenameEcho）
+		if embyRenameEcho(localPath) {
+			log.Printf("[Emby Webhook] ○ 本站改名/移动的回声，跳过入库通知: %s", itemPath)
+			return
+		}
 	}
 	// 剧集条目用剧集名（单集标题没有辨识度）
 	title := str(item, "SeriesName")

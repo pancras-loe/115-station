@@ -544,6 +544,87 @@ func embyDelKey(p string) string {
 	return strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/")
 }
 
+// ---- 自产改名标记 ----
+//
+// 在网盘上给一集改个名（或把它挪个位置），增量同步会删掉旧 STRM、按新名字写一份，
+// Emby 扫完把 library.new 推回来 —— 那是同一集换了个文件名，不是新片入库，
+// 再推一条「🎬 Emby 入库」就是噪音（手动改一次名就收一条）。
+// 判据与自产删除同一套：本地路径 + 时间窗，窗口一样宽（Emby 实测能拖到 9 分钟才扫到）。
+//
+// 只记改名还不够：实测这种回声 Emby 报的是 Series 条目（路径是剧集目录），
+// 不是那个 .strm，所以判定得按路径包含关系双向匹配；而一旦按目录匹配，
+// 「同一部剧这一轮真的来了新集」就会被一起吞掉。于是同窗口内**真正新增**的
+// 内容单独记一份，命中就放行。
+const embySelfRenameTTL = 15 * time.Minute
+
+var (
+	embyChangeMu  sync.Mutex
+	embyRenamedAt = map[string]time.Time{} // 库内改名/移动后的新路径（本地路径）
+	embyFreshAt   = map[string]time.Time{} // 同窗口内真正新增的内容（本地路径）
+)
+
+// markEmbyRenamed 这些本地路径是库内改名/移动的产物（文件或整个目录）
+func markEmbyRenamed(localPaths ...string) { markEmbyChange(embyRenamedAt, localPaths) }
+
+// markEmbyFreshAdded 这些本地路径底下真的新增了内容
+func markEmbyFreshAdded(localPaths ...string) { markEmbyChange(embyFreshAt, localPaths) }
+
+func markEmbyChange(store map[string]time.Time, localPaths []string) {
+	embyChangeMu.Lock()
+	defer embyChangeMu.Unlock()
+	now := time.Now()
+	pruneEmbyChanges(now)
+	for _, local := range localPaths {
+		if key := embyDelKey(local); key != "" {
+			store[key] = now
+		}
+	}
+}
+
+func pruneEmbyChanges(now time.Time) {
+	for _, store := range []map[string]time.Time{embyRenamedAt, embyFreshAt} {
+		for k, t := range store {
+			if now.Sub(t) > embySelfRenameTTL {
+				delete(store, k)
+			}
+		}
+	}
+}
+
+// embyRenameEcho 这条入库事件是不是本站改名/移动动作的回声。
+// 命中改名标记（精确、或事件报的是它所在的季/剧集条目）且这条路径底下
+// 没有真正的新增，才算回声
+func embyRenameEcho(localPath string) bool {
+	key := embyDelKey(localPath)
+	if key == "" {
+		return false
+	}
+	embyChangeMu.Lock()
+	defer embyChangeMu.Unlock()
+	pruneEmbyChanges(time.Now())
+	echo := false
+	for k := range embyRenamedAt {
+		if embyPathRelated(key, k) {
+			echo = true
+			break
+		}
+	}
+	if !echo {
+		return false
+	}
+	for k := range embyFreshAt {
+		if k == key || strings.HasPrefix(k, key+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// embyPathRelated 同一条路径，或其中一条在另一条之下
+func embyPathRelated(a, b string) bool {
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
 // embyPathOf 本地路径 → Emby 看到的路径（映射规则 + 路径风格）
 func embyPathOf(cfg embyRefreshCfg, local string) string {
 	ep := mapLocalToEmbyPath(cfg.PathMapping, local)
