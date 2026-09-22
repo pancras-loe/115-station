@@ -181,7 +181,7 @@ async function cgOpen() {
     const d = await pluginsApi.coverGenConfig()
     const c = d.data ?? {}
     cgForm.value = {
-      cron: c.cron || '0 0 * * *',
+      cron: c.cron ?? '0 0 * * *',
       style: c.style || '1',
       strategy: c.strategy || 'added',
       blacklist: c.blacklist || '',
@@ -204,7 +204,7 @@ async function cgLoadList() {
 async function cgSave() {
   cgSaving.value = true
   try {
-    await pluginsApi.saveCoverGen({ ...cgForm.value, cron: cgForm.value.cron.trim() || '0 0 * * *' })
+    await pluginsApi.saveCoverGen({ ...cgForm.value, cron: cgForm.value.cron.trim() })
     message.success('配置已保存')
     cgShow.value = false
   } catch (e) {
@@ -219,9 +219,8 @@ async function cgRun() {
   results.value.covergen = { status: 'pending', title: '生成中…' }
   try {
     const d = await pluginsApi.runCoverGen()
-    results.value.covergen = { status: 'ok', title: d.message || '生成已开始' }
-    // 后端异步生成，等一会儿再刷列表才能看到新图
-    setTimeout(cgLoadList, 8000)
+    results.value.covergen = { status: d.warnings?.length ? 'err' : 'ok', title: d.warnings?.length ? '封面已生成，部分项目未完成' : '封面生成完成', detail: d.message }
+    await cgLoadList()
   } catch (e) {
     results.value.covergen = { status: 'err', title: '生成失败', detail: e instanceof Error ? e.message : '' }
   } finally {
@@ -257,7 +256,7 @@ const plugins = [
     key: 'covergen',
     name: '媒体库海报',
     icon: Images,
-    desc: '按分类聚合入库海报，合成带库名的封面图并推送 Emby 媒体库。支持定时与多种样式。',
+    desc: '从 Emby 媒体库选取海报，合成带库名的封面并推送。未配置 Emby 时使用本地整理台账。支持定时与多种样式。',
     available: true,
     runLabel: '立即生成',
     onConfig: cgOpen,
@@ -403,12 +402,8 @@ const availableCount = plugins.filter((p) => p.available).length
         <NSelect v-model:value="cgForm.strategy" :options="CG_STRATEGIES" />
       </FieldRow>
 
-      <FieldRow label="媒体库黑名单" hint="一行一个分类名，写在这里的媒体库不会生成封面">
+      <FieldRow label="媒体库黑名单" hint="一行一个 Emby 库名；未配置 Emby 时填写本地分类名">
         <NInput v-model:value="cgForm.blacklist" type="textarea" :rows="2" />
-      </FieldRow>
-
-      <FieldRow label="高级配置" hint="预留：后续支持自定义背景色 / 尺寸等参数（JSON 格式）">
-        <NInput v-model:value="cgForm.advanced" type="textarea" :rows="2" />
       </FieldRow>
 
       <div class="covers">

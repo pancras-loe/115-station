@@ -41,7 +41,7 @@ export interface CoverGenConfig {
 
 export const coverGenConfig = () => http.get<{ data?: Partial<CoverGenConfig> }>('/covergen/config')
 export const saveCoverGen = (body: CoverGenConfig) => http.post('/covergen/config', body)
-export const runCoverGen = () => http.post<{ message?: string }>('/covergen/run')
+export const runCoverGen = () => http.post<{ message?: string; warnings?: string[] }>('/covergen/run', undefined, { timeoutMs: 30 * 60_000 })
 export const coverGenList = () =>
   http.get<{ data?: { name: string; time?: string }[] }>('/covergen/list')
 

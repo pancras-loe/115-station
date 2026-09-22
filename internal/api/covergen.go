@@ -30,12 +30,12 @@ import (
 	"sync"
 	"time"
 
+	"115-station/internal/model"
 	"github.com/gin-gonic/gin"
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
-	"115-station/internal/model"
 )
 
 //go:embed assets/sourcehansans.otf
@@ -73,16 +73,100 @@ func (h *Handler) loadCoverGenCfg() coverGenCfg {
 	return c
 }
 
-func (h *Handler) saveCoverGenCfg(c coverGenCfg) {
+func (h *Handler) saveCoverGenCfg(c coverGenCfg) error {
 	b, _ := json.Marshal(c)
-	h.Config.SaveSetting("covergen", string(b))
+	return h.Config.SaveSetting("covergen", string(b))
 }
 
 // ==================== 数据聚合 ====================
 
 type coverLib struct {
-	Name  string
-	Items []model.MediaLibrary
+	Name      string
+	Items     []model.MediaLibrary
+	ItemID    string
+	PosterIDs []string
+}
+
+// 参考 MoviePilot-2 的媒体库与条目图片接口：直接用服务器的库 ID，
+// 避免全量同步没有整理台账、分类路径与显示库名不同导致无图或推错库。
+func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
+	base, key, ok := h.embyServerInfo()
+	if !ok || key == "" {
+		return nil, nil
+	}
+	resp, err := embyRequest(http.MethodGet, base, key, "/Library/VirtualFolders", nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("连接 Emby 失败，请检查服务器配置")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("读取 Emby 媒体库失败：HTTP %d", resp.StatusCode)
+	}
+	var folders []struct{ Name, ItemID, CollectionType string }
+	if err := json.NewDecoder(resp.Body).Decode(&folders); err != nil {
+		return nil, fmt.Errorf("Emby 媒体库响应无法解析")
+	}
+	var libs []coverLib
+	for _, f := range folders {
+		if f.ItemID == "" || f.Name == "" {
+			continue
+		}
+		blocked := false
+		for _, line := range strings.Split(cfg.Blacklist, "\n") {
+			if strings.TrimSpace(line) == f.Name {
+				blocked = true
+			}
+		}
+		if blocked {
+			continue
+		}
+		sortBy, order := "DateCreated", "Descending"
+		switch cfg.Strategy {
+		case "title":
+			sortBy, order = "SortName", "Ascending"
+		case "release":
+			sortBy = "PremiereDate"
+		case "rating":
+			sortBy = "CommunityRating"
+		}
+		q := url.Values{"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {embyCountTypes(f.CollectionType)}, "IsVirtualItem": {"false"}, "ImageTypes": {"Primary"}, "SortBy": {sortBy}, "SortOrder": {order}, "Limit": {"9"}}
+		r, err := embyRequest(http.MethodGet, base, key, "/Items", q, nil)
+		if err != nil {
+			return nil, fmt.Errorf("读取媒体库「%s」条目失败", f.Name)
+		}
+		var items struct {
+			Items []struct {
+				ID string `json:"Id"`
+			}
+		}
+		err = json.NewDecoder(r.Body).Decode(&items)
+		r.Body.Close()
+		if r.StatusCode != 200 || err != nil {
+			return nil, fmt.Errorf("读取媒体库「%s」条目失败：HTTP %d", f.Name, r.StatusCode)
+		}
+		lib := coverLib{Name: f.Name, ItemID: f.ItemID}
+		for _, it := range items.Items {
+			if it.ID != "" {
+				lib.PosterIDs = append(lib.PosterIDs, it.ID)
+			}
+		}
+		libs = append(libs, lib)
+	}
+	return libs, nil
+}
+
+func (h *Handler) coverEmbyPoster(id string) image.Image {
+	base, key, _ := h.embyServerInfo()
+	r, err := embyRequest(http.MethodGet, base, key, "/Items/"+url.PathEscape(id)+"/Images/Primary", url.Values{"MaxWidth": {"400"}}, nil)
+	if err != nil {
+		return nil
+	}
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		return nil
+	}
+	im, _, _ := image.Decode(io.LimitReader(r.Body, 8<<20))
+	return im
 }
 
 func (h *Handler) coverCollectLibs(cfg coverGenCfg) []coverLib {
@@ -141,8 +225,22 @@ func (h *Handler) coverSortItems(items []model.MediaLibrary, strategy string) {
 // ==================== 海报下载与绘制 ====================
 
 func coverFetchPoster(path string) image.Image {
-	u := tmdbImageBase() + "/t/p/w300" + path
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(u)
+	base := strings.TrimSuffix(tmdbImageBase(), "/t/p")
+	u := base + "/t/p/w300/" + strings.TrimPrefix(path, "/")
+	client := &http.Client{Timeout: 10 * time.Second}
+	proxyURL := getProxyURL()
+	var cfg model.TmdbConfig
+	if model.DB != nil && model.DB.First(&cfg).Error == nil && cfg.EnableProxy && cfg.ProxyUrl != "" {
+		proxyURL = cfg.ProxyUrl
+	}
+	// 与刮削使用相同代理，否则刮削正常的库仍可能一张封面都下载不到。
+	if proxyURL != "" {
+		if proxy, err := parseProxyURL(proxyURL); err == nil {
+			client.Transport = &http.Transport{Proxy: proxy}
+			defer client.CloseIdleConnections()
+		}
+	}
+	resp, err := client.Get(u)
 	if err != nil {
 		return nil
 	}
@@ -347,17 +445,19 @@ func coverSafeName(name string) string {
 }
 
 // coverPushEmby 把封面推送为 Emby 同名媒体库的主页图片（未配置 Emby 时静默跳过）
-func (h *Handler) coverPushEmby(name string, pngData []byte) {
+func (h *Handler) coverPushEmby(name, itemID string, pngData []byte) error {
 	base, apiKey, ok := h.embyServerInfo()
 	if !ok || apiKey == "" {
-		return
+		return nil
 	}
 	// 媒体库列表 → 名称匹配 ItemId（解析形态见 embyVirtualFolderIds 的注释，
 	// 这里曾经自己抄过一份，两份对同一个端点的解析形状还不一样）
-	itemID := embyVirtualFolderIds(base, apiKey)[name]
+	if itemID == "" {
+		itemID = embyVirtualFolderIds(base, apiKey)[name]
+	}
 	if itemID == "" {
 		log.Printf("[封面生成] ○ Emby 中未找到同名媒体库「%s」，跳过推送", name)
-		return
+		return fmt.Errorf("未找到同名 Emby 媒体库")
 	}
 	// ⚠️ **图片要 base64 再发**：Emby / Jellyfin 的 POST /Items/{Id}/Images/{Type}
 	// 是把整个请求体当文本读进去再 Convert.FromBase64String 的，
@@ -368,35 +468,56 @@ func (h *Handler) coverPushEmby(name string, pngData []byte) {
 		base+"/Items/"+itemID+"/Images/Primary?api_key="+url.QueryEscape(apiKey),
 		bytes.NewReader(body))
 	if err != nil {
-		return
+		return fmt.Errorf("无法创建封面上传请求")
 	}
 	req.Header.Set("Content-Type", "image/png")
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: %v", name, err)
-		return
+		return fmt.Errorf("连接 Emby 失败")
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Printf("[封面生成] ✗ Emby 推送「%s」失败: HTTP %d", name, resp.StatusCode)
-		return
+		return fmt.Errorf("上传失败：HTTP %d", resp.StatusCode)
 	}
 	log.Printf("[封面生成] ✓ 已推送 Emby 媒体库「%s」封面", name)
+	return nil
 }
 
 // runCoverGen 生成全部媒体库封面；返回（生成数、库名列表、跳过的库名、错误）
 func (h *Handler) runCoverGen() (int, []string, []string, error) {
+	if !coverRunMu.TryLock() {
+		return 0, nil, nil, fmt.Errorf("封面生成正在运行，请等待完成")
+	}
+	defer coverRunMu.Unlock()
 	cfg := h.loadCoverGenCfg()
-	libs := h.coverCollectLibs(cfg)
+	libs, err := h.coverEmbyLibs(cfg)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if _, key, ok := h.embyServerInfo(); !ok || key == "" {
+		libs = h.coverCollectLibs(cfg)
+	}
 	if len(libs) == 0 {
 		return 0, nil, nil, fmt.Errorf("没有可用的媒体库分类（先完成整理入库，或检查黑名单）")
 	}
 	outDir := coverOutDir(h.Config.DataDir)
-	_ = os.MkdirAll(outDir, 0o777)
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return 0, nil, nil, fmt.Errorf("创建封面目录失败：%w", err)
+	}
 	done, skipped := []string{}, []string{}
 	for _, lib := range libs {
 		var imgs []image.Image
+		for _, id := range lib.PosterIDs {
+			if len(imgs) >= 5 {
+				break
+			}
+			if im := h.coverEmbyPoster(id); im != nil {
+				imgs = append(imgs, im)
+			}
+		}
 		for _, it := range lib.Items {
 			if len(imgs) >= 5 {
 				break
@@ -405,20 +526,27 @@ func (h *Handler) runCoverGen() (int, []string, []string, error) {
 				imgs = append(imgs, im)
 			}
 		}
-		if len(imgs) < 3 {
-			log.Printf("[封面生成] ○ %s：可用海报不足 3 张，跳过", lib.Name)
-			skipped = append(skipped, lib.Name)
+		if len(imgs) == 0 {
+			log.Printf("[封面生成] ○ %s：没有可用海报，跳过", lib.Name)
+			skipped = append(skipped, lib.Name+"：没有可用海报，请检查图片与网络配置")
 			continue
 		}
 		data, err := h.coverRender(lib.Name, imgs)
 		if err != nil {
+			skipped = append(skipped, lib.Name+"：渲染失败")
 			continue
 		}
 		if err := os.WriteFile(filepath.Join(outDir, coverSafeName(lib.Name)+".png"), data, 0o644); err != nil {
+			skipped = append(skipped, lib.Name+"：保存失败："+err.Error())
 			continue
 		}
-		h.coverPushEmby(lib.Name, data)
+		if err := h.coverPushEmby(lib.Name, lib.ItemID, data); err != nil {
+			skipped = append(skipped, lib.Name+"：本地已生成，但 "+err.Error())
+		}
 		done = append(done, lib.Name)
+	}
+	if len(done) == 0 {
+		return 0, done, skipped, fmt.Errorf("未生成任何封面：%s", strings.Join(skipped, "；"))
 	}
 	return len(done), done, skipped, nil
 }
@@ -426,6 +554,7 @@ func (h *Handler) runCoverGen() (int, []string, []string, error) {
 // ==================== 调度与处理器 ====================
 
 var coverGenLastRun string
+var coverRunMu sync.Mutex
 
 func StartCoverGenScheduler(h *Handler) {
 	go func() {
@@ -472,29 +601,28 @@ func (h *Handler) CoverGenSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	h.saveCoverGenCfg(req)
+	if err := h.saveCoverGenCfg(req); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 
 // CoverGenRun POST /covergen/run
 func (h *Handler) CoverGenRun(c *gin.Context) {
-	go func() {
-		defer func() { recover() }()
-		n, names, skipped, err := h.runCoverGen()
-		if err != nil {
-			NotifyMessage("", "▣ 媒体库封面生成失败: "+err.Error())
-			return
-		}
-		NotifyMessage("", coverGenResultText(n, names, skipped)+"\n可在「扩展功能 → 媒体库海报」预览")
-	}()
-	c.JSON(http.StatusOK, gin.H{"message": "封面生成已开始，完成后通知"})
+	n, names, skipped, err := h.runCoverGen()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": coverGenResultText(n, names, skipped), "warnings": skipped})
 }
 
 // coverGenResultText 生成结果文案（跳过的库点名原因）
 func coverGenResultText(n int, names, skipped []string) string {
 	b := fmt.Sprintf("▣ 媒体库封面已生成：%d 个\n%s", n, strings.Join(names, "、"))
 	if len(skipped) > 0 {
-		b += fmt.Sprintf("\n\n○ 跳过 %d 个（可用海报不足 3 张，多为旧数据待回填）：\n%s", len(skipped), strings.Join(skipped, "、"))
+		b += fmt.Sprintf("\n\n○ %d 项未完成：\n%s", len(skipped), strings.Join(skipped, "；"))
 	}
 	return b
 }
