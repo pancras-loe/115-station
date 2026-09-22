@@ -49,19 +49,58 @@ var (
 	reTeam    = regexp.MustCompile(`-([A-Za-z0-9@]+)$`)
 )
 
+var (
+	// reTechBlob 技术信息块：字母数字连成一片的长段，如 "DVD960x720AVCAAC"。
+	// 只在这种段里补分隔符，片名里的英文单词不会长这样
+	reTechBlob = regexp.MustCompile(`[A-Za-z0-9]{6,}`)
+	// reGluedToken 粘连写法里的画质/编码 token（上面那些规则的无边界版）
+	reGluedToken = regexp.MustCompile(`(?i)(H26[45]|X26[45]|HEVC|AVC|XVID|DIVX|VP9|AAC|EAC3|AC3|TRUEHD|DTS|FLAC|2160P|1080[PI]|720P|576P|480P|BLURAY|WEBDL|WEBRIP|HDTV|DVDRIP|REMUX|10BIT|8BIT)`)
+)
+
+// unglueTechTokens 把粘在一起的资源 token 用点隔开，让下面那些 \b 边界重新成立。
+//
+// 115 离线下载落地的文件名会把空格吃掉：ed2k 链接里的
+// "Yu-Gi-Oh! Duel Monsters - S01E153 (DVD 960x720 AVC AAC).mkv"
+// 落到网盘上是 "...(DVD960x720AVCAAC).mkv" —— AVC 后面紧跟 A、AAC 前面紧跟 C，
+// 两边都没有词边界，整段编码信息一个都解析不出来，改出来的名字就比同一部剧
+// 其他集少了 ".H264.AAC"（2026-09-22 游戏王 S01E153 实例）。
+//
+// 只处理「同时含数字和大写字母、长度 ≥6」的连续段：技术块才长这样，
+// 《Isaac》《Peacock》这类片名不含数字，不会被误拆出 AAC / CR
+func unglueTechTokens(name string) string {
+	return reTechBlob.ReplaceAllStringFunc(name, func(run string) string {
+		hasDigit, hasUpper := false, false
+		for _, r := range run {
+			switch {
+			case r >= '0' && r <= '9':
+				hasDigit = true
+			case r >= 'A' && r <= 'Z':
+				hasUpper = true
+			}
+		}
+		if !hasDigit || !hasUpper {
+			return run
+		}
+		return reGluedToken.ReplaceAllString(run, ".$1.")
+	})
+}
+
 // ParseResourceInfo 从文件名解析完整的资源信息
 func ParseResourceInfo(filename string) ResourceInfo {
 	var ri ResourceInfo
 	upper := strings.ToUpper(filename)
+	// 粘连的技术块先补回分隔符再匹配；发布组仍按原文件名取
+	// （reTeam 认的是「最后一个 - 之后」，补出来的点会把它带偏）
+	scan := unglueTechTokens(filename)
 
 	// 分辨率
-	if m := rePix.FindStringSubmatch(filename); m != nil {
+	if m := rePix.FindStringSubmatch(scan); m != nil {
 		ri.Pix = normalizePix(m[1])
 	}
 
 	// 资源版本（可能有多个，取全部）
 	var versions []string
-	for _, m := range reVersion.FindAllStringSubmatch(filename, -1) {
+	for _, m := range reVersion.FindAllStringSubmatch(scan, -1) {
 		v := strings.ToUpper(m[1])
 		v = strings.ReplaceAll(v, " ", "")
 		if !containsStr(versions, v) {
@@ -71,12 +110,12 @@ func ParseResourceInfo(filename string) ResourceInfo {
 	ri.Version = strings.Join(versions, ".")
 
 	// 来源平台
-	if m := reSource.FindStringSubmatch(filename); m != nil {
+	if m := reSource.FindStringSubmatch(scan); m != nil {
 		ri.Source = normalizeSource(m[1])
 	}
 
 	// 资源质量
-	if m := reType.FindStringSubmatch(filename); m != nil {
+	if m := reType.FindStringSubmatch(scan); m != nil {
 		ri.Type = normalizeType(m[1])
 	}
 	// Source/Type 去重：WEB-DL 会被 source 的 WEB 前缀抢先命中，造成
@@ -87,7 +126,7 @@ func ParseResourceInfo(filename string) ResourceInfo {
 
 	// 特效（可能组合：DV.HDR）
 	var effects []string
-	for _, m := range reEffect.FindAllStringSubmatch(filename, -1) {
+	for _, m := range reEffect.FindAllStringSubmatch(scan, -1) {
 		e := strings.ToUpper(m[1])
 		e = strings.ReplaceAll(strings.ReplaceAll(e, "DOLBY VISION", "DV"), "DOLBY", "DV")
 		e = strings.ReplaceAll(e, " ", "")
@@ -101,10 +140,10 @@ func ParseResourceInfo(filename string) ResourceInfo {
 
 	// 视频编码（含位深）
 	videoParts := []string{}
-	if m := reVideo.FindStringSubmatch(filename); m != nil {
+	if m := reVideo.FindStringSubmatch(scan); m != nil {
 		videoParts = append(videoParts, normalizeVideoEncode(m[1]))
 	}
-	if m := reBit.FindStringSubmatch(filename); m != nil {
+	if m := reBit.FindStringSubmatch(scan); m != nil {
 		videoParts = append(videoParts, m[1])
 	}
 	if strings.Contains(upper, "REMUX") {
@@ -114,7 +153,7 @@ func ParseResourceInfo(filename string) ResourceInfo {
 
 	// 音频编码（可能组合：TrueHD.7.1 Atmos）
 	audioParts := []string{}
-	for _, m := range reAudio.FindAllStringSubmatch(filename, -1) {
+	for _, m := range reAudio.FindAllStringSubmatch(scan, -1) {
 		// [\d.]* 贪婪会把后续分隔符一并吃进（如 "DDP.7.1."），先去掉尾部
 		// 分隔符再归一化，否则 "7.1." 的声道判定失败被丢弃
 		a := normalizeAudioEncode(strings.TrimRight(m[1], "."))
@@ -153,12 +192,12 @@ func ParseResourceInfo(filename string) ResourceInfo {
 	}
 
 	// 帧率
-	if m := reFPS.FindStringSubmatch(filename); m != nil {
+	if m := reFPS.FindStringSubmatch(scan); m != nil {
 		ri.FPS = m[1] + "FPS"
 	}
 
 	// 盘号
-	if m := reDisc.FindStringSubmatch(filename); m != nil {
+	if m := reDisc.FindStringSubmatch(scan); m != nil {
 		ri.DiscNum = m[1]
 	}
 

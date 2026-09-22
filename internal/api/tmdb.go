@@ -188,6 +188,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 		Title         string   `json:"title"`
 		Name          string   `json:"name"`
 		OriginalTitle string   `json:"original_title"`
+		OriginalName  string   `json:"original_name"`
 		ReleaseDate   string   `json:"release_date"`
 		FirstAirDate  string   `json:"first_air_date"`
 		Genres        []struct{ ID int `json:"id"` } `json:"genres"`
@@ -208,6 +209,13 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 	if title == "" {
 		title = d.Name
 	}
+	// 剧集的原名字段叫 original_name，不是 original_title（与 title/name 同样分家）。
+	// 漏了这条回退，「重新整理」按 id 拉详情时 {en_title} 恒为空 —— 自动整理走搜索
+	// 接口有原名、重整理没有，同一部剧两条路径改出来的文件名会不一样
+	origTitle := d.OriginalTitle
+	if origTitle == "" {
+		origTitle = d.OriginalName
+	}
 	year := ""
 	date := d.ReleaseDate
 	if date == "" {
@@ -225,7 +233,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 		genreIDs = append(genreIDs, g.ID)
 	}
 	return &TmdbMedia{
-		TmdbID: d.ID, Title: title, OriginalTitle: d.OriginalTitle,
+		TmdbID: d.ID, Title: title, OriginalTitle: origTitle,
 		Year: year, MediaType: mediaType, GenreIDs: genreIDs,
 		Overview: d.Overview, PosterPath: d.PosterPath, BackdropPath: d.BackdropPath,
 		OrigLanguage: d.OriginalLanguage, OrigCountry: d.OriginCountry,

@@ -212,7 +212,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
-	plan, err := planRedoLayout(media, category, files)
+	plan, err := planRedoLayout(media, category, files, rec.Source)
 	if err != nil {
 		return err
 	}
@@ -400,19 +400,51 @@ func (l *redoLayout) sampleVideoPath() string {
 	return l.rootRel
 }
 
+// recordOrigNames fid → 重命名之前的原始文件名（取不到就退回当前名）。
+//
+// 整理时登记的 Orig 是首选。老记录没有这个字段，单视频记录还能从
+// rec.Source 捞回来（散文件整理的 Source 就是原文件名）——扩展名对得上
+// 才认，目录整理的 Source 是目录名，不能拿来当文件名用
+func recordOrigNames(files []orgRecordFile, srcName string) map[string]string {
+	out := make(map[string]string, len(files))
+	soleVideo, videos := "", 0
+	for _, f := range files {
+		if f.Orig != "" {
+			out[f.Fid] = f.Orig
+		} else {
+			out[f.Fid] = f.Name
+		}
+		if f.Kind == "video" {
+			videos++
+			if f.Orig == "" {
+				soleVideo = f.Fid
+			}
+		}
+	}
+	if videos == 1 && soleVideo != "" && srcName != "" && !strings.Contains(srcName, "/") &&
+		strings.EqualFold(pathExt(srcName), pathExt(out[soleVideo])) {
+		out[soleVideo] = srcName
+	}
+	return out
+}
+
 // planRedoLayout 纯计算：给定 TMDB 条目与记录里的文件清单，算出重整理的目标布局。
 // 不碰网盘也不碰本地磁盘，便于单测覆盖——重整理最容易出错的就是这段路径推导
-func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile) (*redoLayout, error) {
+func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, srcName string) (*redoLayout, error) {
 	out := &redoLayout{renames: map[string]string{}, groups: map[string][]orgRecordFile{}}
 	newBaseOf := map[string]string{} // 视频旧基名 → 新基名（字幕跟随用）
 	videos := 0
+	origOf := recordOrigNames(files, srcName)
 
 	for _, f := range files {
 		if f.Kind != "video" {
 			continue
 		}
+		// 季集按**当前**文件名解析（它已经是规范名），但模板里的资源变量
+		// 要拿**原始**文件名算：画质/编码只存在于原名里，上一次重命名没能
+		// 认出来的（粘连写法、模板没带这些字段）就永远回不来了
 		parsed := parseFileName(f.Name)
-		newPath := buildNewNameWithTemplate(media, parsed, f.Name)
+		newPath := buildNewNameWithTemplate(media, parsed, origOf[f.Fid])
 		if newPath == "" {
 			continue
 		}

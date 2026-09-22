@@ -1550,7 +1550,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 				}
 			}
 			out = append(out, orgRecordFile{
-				Fid: f.Fid, Name: n, Kind: recordFileKind(n),
+				Fid: f.Fid, Name: n, Orig: recordOrig(f.Name, n), Kind: recordFileKind(n),
 				PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
 			})
 		}
@@ -2027,10 +2027,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	var strmVideos, strmAssets []remoteFile
 	recFiles := make([]orgRecordFile, 0, len(files))
 	for _, f := range files {
+		orig := f.Name
 		f.Name = nameOf(f)
 		kind := recordFileKind(f.Name)
 		recFiles = append(recFiles, orgRecordFile{
-			Fid: f.Fid, Name: f.Name, Kind: kind,
+			Fid: f.Fid, Name: f.Name, Orig: recordOrig(orig, f.Name), Kind: kind,
 			PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
 		})
 		if !movedFids[f.Fid] {
@@ -2294,7 +2295,8 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	video := f
 	video.Name = finalName
 	strmCreated, _ := ctx.sink.commit(ops, media, rootRel, targetDir, []remoteFile{video}, nil)
-	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Orig: recordOrig(f.Name, finalName),
+		Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
 
 	result.Category = category
 	result.TargetDir = targetDir
@@ -2484,7 +2486,8 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	onLog(fmt.Sprintf("✓ %s - 落盘完成：STRM %d 个、附属 %d 个 → %s", f.Name, strmCreated, len(attachments),
 		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(targetDir)))))
 
-	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Orig: recordOrig(f.Name, finalName),
+		Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
 	for _, a := range attachments {
 		recFiles = append(recFiles, orgRecordFile{Fid: a.Fid, Name: a.Name, Kind: recordFileKind(a.Name), PickCode: a.PickCode, Sha1: a.Sha1})
 	}

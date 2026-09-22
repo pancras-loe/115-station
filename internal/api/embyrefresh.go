@@ -129,9 +129,11 @@ func loadEmbyRefreshCfg() (embyRefreshCfg, bool) {
 	return cfg, cfg.ServerURL != ""
 }
 
-// notifyEmbyRefresh STRM 生成后通知 Emby 刷新入库
-func (h *Handler) notifyEmbyRefresh(localPath string) {
-	notifyEmbyPaths([]string{localPath}, embyRefreshAdded)
+// notifyEmbyRefresh STRM 生成后通知 Emby 刷新入库。
+// verifyLocal 是本轮真正落盘的文件（.strm 本体），只给回查用：
+// 刷新按目录聚合，但「这一集到底进没进去」只有查到它自己才算数
+func (h *Handler) notifyEmbyRefresh(localPath string, verifyLocal ...string) {
+	notifyEmbyPaths([]string{localPath}, embyRefreshAdded, verifyLocal...)
 }
 
 // notifyEmbyDeleted 本地 STRM / 目录已经删掉了 → 通知 Emby 把对应条目清掉。
@@ -148,10 +150,11 @@ func notifyEmbyDeleted(localPaths ...string) {
 //
 // 删除场景先试一次「按路径精确删条目」，成功的就不必再刷新了。
 // 剩下的（以及全部新增场景）走三级策略，逐级降级：
-//  1. 按路径定位到具体条目，只刷那一个（万级库不必整库扫）
-//  2. 定位不到就刷该路径所属的媒体库条目
+//  1. 按路径定位到具体条目，只刷那一个（万级库不必整库扫）；
+//     新增场景还要过 embyAddCanRefreshItem 这一关（剧集/季条目刷了没用）
+//  2. 定位不到（或不该只刷条目）就刷该路径所属的媒体库条目
 //  3. 路径不属于任何媒体库（路径映射配错了？）→ /Library/Media/Updated 报路径
-func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
+func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...string) {
 	if len(localPaths) == 0 {
 		return
 	}
@@ -233,9 +236,17 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 
 	var refreshed []string
 	var verify []string // 入库场景提交完回查用（只读，不改变 Emby 行为）
+	// 调用方点名了落盘文件就只回查它们：刷新目标是标题目录，而标题目录上
+	// 早就挂着 Series 条目，拿它回查等于自问自答，永远是 ✓
+	for _, p := range verifyLocal {
+		if ep := embyPathOf(cfg, p); ep != "" {
+			verify = append(verify, ep)
+		}
+	}
+	namedVerify := len(verify) > 0
 	for _, libID := range order {
 		lib, paths := byID[libID], buckets[libID]
-		if kind == embyRefreshAdded {
+		if kind == embyRefreshAdded && !namedVerify {
 			for _, t := range paths {
 				verify = append(verify, t.path)
 			}
@@ -245,9 +256,9 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 			var rest []string
 			for _, t := range paths {
 				hit, exact := embyResolveItem(cfg, t, lib.Locations)
-				// ⚠️ 入库只认「目标路径上已经是影视条目」这一种精确刷新，
-				// 其余一律交给整库刷新 —— 理由见 embyRefreshItem 上方的长注释
-				if kind == embyRefreshAdded && !(exact && embyTypeIsMedia(hit.Type)) {
+				// ⚠️ 入库能精确刷的只有「路径上正好是一个叶子影视条目」，
+				// 其余一律交给整库刷新 —— 理由见 embyAddCanRefreshItem
+				if kind == embyRefreshAdded && !embyAddCanRefreshItem(exact, hit.Type) {
 					rest = append(rest, t.path)
 					continue
 				}
@@ -266,7 +277,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind) {
 				continue
 			}
 			if kind == embyRefreshAdded {
-				log.Printf("[Emby] ○ %d 个新增路径在 Emby 里还没有影视条目，改为刷新媒体库 %s（新内容要靠库扫描才会被识别）", len(rest), lib.Name)
+				log.Printf("[Emby] ○ %d 个新增路径没法只刷条目（还没有影视条目，或是剧集/季条目——刷它发现不了新的一集），改为刷新媒体库 %s", len(rest), lib.Name)
 			} else {
 				log.Printf("[Emby] ○ %d 个路径未定位到条目，改为刷新整个媒体库 %s", len(rest), lib.Name)
 			}
@@ -668,6 +679,27 @@ func embyTypeIsMedia(t string) bool {
 		return true
 	}
 	return false
+}
+
+// embyAddCanRefreshItem 新增场景能不能只刷这一个条目。
+//
+// 两条判据：路径上得**正好**是个影视条目（只有 Folder 条目意味着还没入库，
+// 刷它不会让 Emby 重新判定这目录是部电影）；而且它不能是 Series / Season ——
+// 刷新跑的是 ValidateChildren，复核的是 Emby【已知】的子条目还在不在，
+// 发现不了刚落进季目录里的新一集。
+//
+// 2026-09-22 游戏王 S01E153 就是栽在后一条上：剧集早在库里（223 集），
+// 新一集落盘后精确刷了 Series 条目、提交成功、回查还报了 ✓，集数纹丝不动，
+// 最后是 Emby 自己的文件监控隔了六分钟才把它捞进去
+func embyAddCanRefreshItem(exact bool, itemType string) bool {
+	if !exact || !embyTypeIsMedia(itemType) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case "series", "season":
+		return false
+	}
+	return true
 }
 
 // nearestExistingDir 从 p 往上找第一个还存在的目录，到 root 为止（含 root）。

@@ -60,8 +60,14 @@ type orgSink struct {
 	mu          sync.Mutex
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次
 	refreshDirs []string             // 本轮动过的库内目录（含库名前缀）
+	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
 	records     []*model.OrganizeRecord
 }
+
+// embyVerifySample 一轮整理最多拿几个落盘文件去回查 Emby。
+// 回查是 3 个时间点各查一遍，一部 40 集的剧全查就是 120 次请求；
+// 抽查几个足够回答「这一轮到底进没进库」
+const embyVerifySample = 3
 
 // newOrgSink 构建落盘出口。libCid 是媒体库根 cid（落盘时才拿它去解析库名）
 func (h *Handler) newOrgSink(libCid string) *orgSink {
@@ -168,6 +174,14 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refreshDirs = append(s.refreshDirs, s.libRel(rootRel))
+	// 回查样本取视频本体的 .strm（命名与 writeStrm 一致）：Emby 里剧集的
+	// Episode 条目路径就是这个文件，查它才能确认这一集真的入库了
+	for _, f := range vs {
+		if len(s.landed) >= embyVerifySample {
+			break
+		}
+		s.landed = append(s.landed, filepath.Join(s.localRoot, filepath.FromSlash(f.Path), f.Name+".strm"))
+	}
 	if media != nil && media.TmdbID > 0 {
 		key := s.libRel(rootRel)
 		if _, ok := s.jobs[key]; !ok {
@@ -255,6 +269,7 @@ func (s *orgSink) flushScrape() {
 func (s *orgSink) flushRefresh() {
 	s.mu.Lock()
 	dirs := append([]string(nil), s.refreshDirs...)
+	landed := append([]string(nil), s.landed...)
 	s.mu.Unlock()
 	if len(dirs) == 0 {
 		return
@@ -265,7 +280,7 @@ func (s *orgSink) flushRefresh() {
 			shallowest = d
 		}
 	}
-	s.h.notifyEmbyRefresh(filepath.Join(s.localRoot, filepath.FromSlash(shallowest)))
+	s.h.notifyEmbyRefresh(filepath.Join(s.localRoot, filepath.FromSlash(shallowest)), landed...)
 }
 
 // dropLocalByFids 按 fid 删除本地已落盘的 strm / 附属文件及台账行，
@@ -337,14 +352,27 @@ func removeEmptyParents(dir, root string) {
 }
 
 // orgRecordFile 整理记录里登记的单个文件。fid 在 115 上移动/改名后不变，
-// 所以 fid + 最终文件名就是「重新整理」原地捞回所需的全部信息
+// 所以 fid + 最终文件名就是「重新整理」原地捞回所需的全部信息；
+// 原名另存一份，重整理算模板变量时要用
 type orgRecordFile struct {
-	Fid      string `json:"fid"`
-	Name     string `json:"name"`
+	Fid  string `json:"fid"`
+	Name string `json:"name"`
+	// Orig 重命名之前的原始文件名，与 Name 相同时不存。
+	// 「重新整理」的模板变量（画质、编码、发布组）只能从原名里解析 ——
+	// 拿改过的名字再 parse 一遍，上一次没写进文件名的信息就永远回不来了
+	Orig     string `json:"orig,omitempty"`
 	Kind     string `json:"kind"` // video / subtitle / meta / junk
 	PickCode string `json:"pickcode,omitempty"`
 	Size     int64  `json:"size,omitempty"`
 	Sha1     string `json:"sha1,omitempty"`
+}
+
+// recordOrig 登记原名：与最终名一样就不存（记录里每个文件省一个字段）
+func recordOrig(orig, final string) string {
+	if orig == final {
+		return ""
+	}
+	return orig
 }
 
 func marshalRecordFiles(files []orgRecordFile) string {
