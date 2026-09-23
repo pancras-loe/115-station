@@ -72,7 +72,7 @@ func TestCoverFromEmbyWithoutLedger(t *testing.T) {
 			if err := h.Config.SaveSetting("emby", string(setting)); err != nil {
 				t.Fatal(err)
 			}
-			if err := h.saveCoverGenCfg(coverGenCfg{Style: "3", Strategy: "rating", Blacklist: "排除库"}); err != nil {
+			if err := h.saveCoverGenCfg(coverGenCfg{Style: "editorial_c", Strategy: "rating", Blacklist: "排除库"}); err != nil {
 				t.Fatal(err)
 			}
 			n, _, warnings, err := h.runCoverGen()
@@ -108,7 +108,7 @@ func TestCoverRenderStyles(t *testing.T) {
 		fakePoster(color.RGBA{200, 180, 60, 255}),
 		fakePoster(color.RGBA{160, 60, 200, 255}),
 	}
-	for _, style := range []string{"1", "2", "3", "editorial_a", "editorial_b", "editorial_c"} {
+	for _, style := range coverSampleStyles {
 		out, err := h.coverRenderWith(style, "动漫电影", posters)
 		if err != nil {
 			t.Fatalf("样式 %s 渲染失败: %v", style, err)
@@ -124,12 +124,12 @@ func TestCoverRenderStyles(t *testing.T) {
 	if coverFontObj == nil {
 		t.Fatalf("中文字体未加载（opentype 解析失败）")
 	}
-	if w := coverTextWidth("动漫电影", 92); w <= 0 {
-		t.Errorf("中文测宽失败: %d", w)
+	if coverSerifFontObj == nil {
+		t.Fatalf("宋体字体未加载（opentype 解析失败）")
 	}
-	// 写一张样例图供人工检查
-	out, _ := h.coverRenderWith("1", "动漫电影", posters)
-	_ = os.WriteFile(os.TempDir()+"/cover-sample.png", out, 0644)
+	if w := coverTextWidthFor("动漫电影", 92, true); w <= 0 {
+		t.Errorf("宋体中文测宽失败: %d", w)
+	}
 }
 
 func TestCoverEditorialAEqualStaircase(t *testing.T) {
@@ -145,6 +145,33 @@ func TestCoverEditorialAEqualStaircase(t *testing.T) {
 		}
 		if rects[2].Max.X > size[0] || rects[2].Max.Y > size[1] {
 			t.Fatalf("%dx%d: 最后一张海报越界：%v", size[0], size[1], rects[2])
+		}
+	}
+}
+
+func TestCoverLegacyStyleFallsBackToC(t *testing.T) {
+	for _, style := range []string{"static_1", "static_2", "static_3", "static_4", "random", "1"} {
+		if got := normalizeCoverGenCfg(coverGenCfg{Style: style}).Style; got != "editorial_c" {
+			t.Fatalf("旧样式 %s 没有迁移到 C：%s", style, got)
+		}
+	}
+}
+
+func TestCoverNewStylesWithOnePoster(t *testing.T) {
+	poster := fakePoster(color.RGBA{R: 210, G: 55, B: 40, A: 255})
+	for _, style := range []string{"editorial_d", "editorial_e"} {
+		cfg := defaultCoverGenCfg()
+		cfg.Style = style
+		im := coverCompose(cfg, "动漫电影", []image.Image{poster})
+		points := []image.Point{{X: 300, Y: 350}}
+		if style == "editorial_e" {
+			points = []image.Point{{X: 120, Y: 350}, {X: 380, Y: 350}, {X: 640, Y: 350}, {X: 900, Y: 350}, {X: 1150, Y: 350}}
+		}
+		for _, pt := range points {
+			r, _, _, _ := im.At(pt.X, pt.Y).RGBA()
+			if r>>8 < 180 {
+				t.Fatalf("样式 %s 单张海报未覆盖位置 %v", style, pt)
+			}
 		}
 	}
 }
@@ -169,7 +196,7 @@ func TestCoverSortItems(t *testing.T) {
 	}
 }
 
-// 样式缩略图不能依赖 Emby/TMDB：没配任何服务也要四张都出得来，且是用弹窗里未保存的配置画的。
+// 样式缩略图不能依赖 Emby/TMDB：没配任何服务也要五张都出得来。
 func TestCoverSampleDemo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dir := t.TempDir()
@@ -187,6 +214,9 @@ func TestCoverSampleDemo(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
+	if len(resp.Samples) != 5 {
+		t.Fatalf("应只展示五款新样式：%v", resp.Samples)
+	}
 	for _, style := range coverSampleStyles {
 		u := resp.Samples[style]
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(u, "data:image/jpeg;base64,"))
@@ -197,24 +227,17 @@ func TestCoverSampleDemo(t *testing.T) {
 		if err != nil || im.Bounds().Dx() != 854 {
 			t.Fatalf("样式 %s 预览尺寸异常：%v", style, err)
 		}
-		// static_1 左上角是纯背景色，自定义红色必须生效
-		if style == "static_1" {
-			r, g, b, _ := im.At(5, 5).RGBA()
-			if r>>8 < 200 || g>>8 > 60 || b>>8 > 60 {
-				t.Errorf("自定义背景色未生效：%d %d %d", r>>8, g>>8, b>>8)
-			}
-		}
 	}
 }
 
-// 沉浸背景的遮罩必须按真实透明度叠：曾用预乘的 color.RGBA 写半透明色，蓝色遮罩叠在红海报上
-// 蓝通道直接溢出到 255，海报被整个盖死。
+// C 的中央遮罩应保留海报颜色，边缘比中间更亮。
 func TestCoverOverlayAlpha(t *testing.T) {
-	cfg := normalizeCoverGenCfg(coverGenCfg{Style: "static_4", Background: "custom", CustomColor: "#0000ff", ColorRatio: 1, Blur: 0, Resolution: "480p"})
+	cfg := normalizeCoverGenCfg(coverGenCfg{Style: "editorial_c", Blur: 0, Resolution: "480p"})
 	im := coverCompose(cfg, "电影", []image.Image{fakePoster(color.RGBA{255, 0, 0, 255})})
-	r, _, b, _ := im.At(10, 10).RGBA()
-	if r>>8 < 80 || b>>8 > 200 {
-		t.Fatalf("遮罩叠色错误：R=%d B=%d", r>>8, b>>8)
+	edgeR, _, edgeB, _ := im.At(10, 10).RGBA()
+	centerR, _, _, _ := im.At(427, 10).RGBA()
+	if edgeR <= centerR || edgeR>>8 < 150 || edgeB>>8 > 40 {
+		t.Fatalf("遮罩叠色错误：边缘 R=%d B=%d；中央 R=%d", edgeR>>8, edgeB>>8, centerR>>8)
 	}
 }
 
@@ -243,7 +266,7 @@ func TestCoverSampleLiveNoSideEffects(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/covergen/sample", strings.NewReader(`{"config":{"style":"static_2"},"live":true,"library":"剧集"}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/covergen/sample", strings.NewReader(`{"config":{"style":"editorial_b"},"live":true,"library":"剧集"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	h.CoverGenSample(c)
 	if w.Code != http.StatusOK {

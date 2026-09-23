@@ -18,7 +18,7 @@ import {
   NTabPane,
   NTabs,
 } from 'naive-ui'
-import { Dices, ImageUp, RefreshCw } from '@lucide/vue'
+import { ImageUp, RefreshCw } from '@lucide/vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
 import { pluginsApi } from '@/api'
@@ -50,13 +50,11 @@ const tab = ref('style')
 const saving = ref(false)
 
 const STYLES = [
-  { v: 'editorial_a', label: 'A · 电影档案馆', desc: '等尺寸阶梯海报' },
-  { v: 'editorial_b', label: 'B · 美术馆画册', desc: '暖白四宫格' },
+  { v: 'editorial_a', label: 'A · 电影档案馆', desc: '宋体标题 · 阶梯海报' },
+  { v: 'editorial_b', label: 'B · 美术馆画册', desc: '浅色海报底纹 · 四宫格' },
   { v: 'editorial_c', label: 'C · 流媒体主视觉', desc: '四海报拼贴' },
-  { v: 'static_1', label: '层叠卡片', desc: '斜向海报墙' },
-  { v: 'static_2', label: '对角色块', desc: '标题 + 主海报' },
-  { v: 'static_3', label: '矩阵海报', desc: '标题 + 海报矩阵' },
-  { v: 'static_4', label: '沉浸背景', desc: '主海报铺满' },
+  { v: 'editorial_d', label: 'D · 主海报标题栏', desc: '单张主视觉 · 深蓝标题' },
+  { v: 'editorial_e', label: 'E · 胶片序列', desc: '五格画面 · 胶片齿孔' },
 ]
 
 const STRATEGIES = [
@@ -143,7 +141,7 @@ watch(
     })
   },
 )
-// 只影响真实预览的字段：换样式（缩略图四张都有了）、换取图范围
+// 只影响真实预览的字段：换样式（缩略图五张都有了）、换取图范围
 watch(
   () => [form.value.style, form.value.strategy, form.value.poster_count, form.value.include, form.value.blacklist],
   () => {
@@ -153,11 +151,11 @@ watch(
 
 const stageSrc = computed(() => {
   if (liveOn.value) return liveImage.value
-  return samples.value[form.value.style === 'random' ? 'static_1' : form.value.style] ?? ''
+  return samples.value[form.value.style] ?? ''
 })
 const stageBusy = computed(() => (liveOn.value ? liveLoading.value : samplesLoading.value && !stageSrc.value))
-const showBlur = computed(() => form.value.style === 'static_4' || form.value.style === 'editorial_c' || form.value.style === 'random')
-const showBackground = computed(() => form.value.style !== 'editorial_b' && form.value.style !== 'editorial_c')
+const showBlur = computed(() => form.value.style === 'editorial_c')
+const showBackground = computed(() => form.value.style === 'editorial_a')
 
 // ============ 已生成 ============
 const covers = ref<{ name: string; time?: string }[]>([])
@@ -222,7 +220,7 @@ defineExpose({ loadCovers })
       <!-- ============ 样式 ============ -->
       <NTabPane name="style" tab="封面样式">
         <div class="pane">
-          <div class="studio">
+          <div class="studio" :class="{ 'studio-full': !showBackground && !showBlur }">
             <div class="stage-col">
               <div class="stage">
                 <img v-if="stageSrc" :src="stageSrc" alt="封面预览" />
@@ -231,7 +229,6 @@ defineExpose({ loadCovers })
                 <span class="stage-tag">
                   <template v-if="liveOn">真实海报{{ liveLib ? ` · ${liveLib}` : '' }}</template>
                   <template v-else>示意海报</template>
-                  <template v-if="form.style === 'random'"> · 随机：每个库按名称固定一种</template>
                 </span>
               </div>
               <div class="stage-bar">
@@ -255,7 +252,7 @@ defineExpose({ loadCovers })
 
             <div class="knobs">
               <div v-if="showBackground" class="knob">
-                <div class="knob-label">背景取色</div>
+                <div class="knob-label">强调色取色</div>
                 <NSelect v-model:value="form.background" size="small" :options="BACKGROUNDS" />
               </div>
               <div v-if="showBackground && form.background === 'custom'" class="knob">
@@ -270,7 +267,7 @@ defineExpose({ loadCovers })
               </div>
               <div v-if="showBackground" class="knob">
                 <div class="knob-label">
-                  色彩浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
+                  强调色浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
                 </div>
                 <NSlider v-model:value="form.color_ratio" :min="0" :max="1" :step="0.01" :tooltip="false" />
               </div>
@@ -279,7 +276,7 @@ defineExpose({ loadCovers })
                   遮罩浓度 <span class="knob-val">{{ form.blur }}</span>
                 </div>
                 <NSlider v-model:value="form.blur" :min="0" :max="95" :step="1" :tooltip="false" />
-                <div class="knob-hint">「流媒体主视觉」和「沉浸背景」：越大海报越暗、标题越清楚</div>
+                <div class="knob-hint">越大海报越暗、标题越清楚</div>
               </div>
             </div>
           </div>
@@ -297,10 +294,6 @@ defineExpose({ loadCovers })
                 <img v-if="samples[s.v]" :src="samples[s.v]" :alt="s.label" />
               </span>
               <span class="thumb-cap"><b>{{ s.label }}</b>{{ s.desc }}</span>
-            </button>
-            <button type="button" class="thumb" :class="{ on: form.style === 'random' }" @click="form.style = 'random'">
-              <span class="thumb-img dice"><Dices :size="26" :stroke-width="1.6" /></span>
-              <span class="thumb-cap"><b>随机旧版</b>每库一种</span>
             </button>
           </div>
         </div>
@@ -339,7 +332,7 @@ defineExpose({ loadCovers })
           <FieldRow label="海报选取策略">
             <NSelect v-model:value="form.strategy" :options="STRATEGIES" />
           </FieldRow>
-          <FieldRow label="取图数量" tip="每个媒体库按选取策略取 1–12 张海报；A 用前 3 张，B/C 用前 4 张，旧样式依原规则取用。">
+          <FieldRow label="取图数量" tip="每个媒体库按选取策略取 1–12 张海报；A 用前 3 张，B/C 用前 4 张，D 用首张，E 用前 5 张。">
             <NInputNumber v-model:value="form.poster_count" :min="1" :max="12" />
           </FieldRow>
           <FieldRow label="输出分辨率">
@@ -406,6 +399,9 @@ defineExpose({ loadCovers })
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 16px;
+}
+.studio-full {
+  grid-template-columns: minmax(0, 1fr);
 }
 .stage {
   position: relative;
@@ -489,7 +485,7 @@ defineExpose({ loadCovers })
 
 .thumbs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 12px;
 }

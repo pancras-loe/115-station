@@ -37,7 +37,7 @@ export const coverGenList = () =>
   http.get<{ data?: { name: string; time?: string }[] }>('/covergen/list')
 export const cleanCoverGen = () => http.post<{ message?: string }>('/covergen/clean')
 
-/** 预览：live=false 返回四种样式的示意图；live=true 用某个库的真实海报按当前（未保存）配置出一张 */
+/** 预览：live=false 返回五种样式的示意图；live=true 用某个库的真实海报按当前（未保存）配置出一张 */
 export interface CoverGenSample {
   samples?: Record<string, string>
   image?: string
