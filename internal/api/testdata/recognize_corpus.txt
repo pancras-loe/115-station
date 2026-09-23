@@ -1,0 +1,51 @@
+# 文件名解析回归语料（recognize_corpus_test.go 读取）
+#
+# 每行一条，字段用 " | " 分隔：
+#   状态 | 文件名 | 期望片名 | 年份 | 季 | 集 | 剧集(1/0) | id标签 | 说明
+# 空值写 "-"。id 标签写 "603" 或 "1399/tv"。
+#
+# 状态：
+#   ok    必须通过，失败即测试失败
+#   todo  已知解析不对、待后续改进（中文季集、动漫命名等，见识别优化方案 P1）；
+#         只统计通过率不报错。哪天改好了测试会提示把它改成 ok
+#
+# 往这里加样本：整理记录里「未识别」或「重新整理改过」的条目就是现成的标注，
+# 把原文件名和人工确认的片名/年份/季集抄进来即可。
+
+# ---------- 电影：年份 ----------
+ok   | Blade.Runner.2049.2017.1080p.BluRay.x264-SPARKS.mkv | Blade Runner 2049 | 2017 | 0 | 0 | 0 | - | 片名带四位数，取最后一个年份
+ok   | Blade.Runner.2049.1080p.BluRay.mkv | Blade Runner 2049 | - | 0 | 0 | 0 | - | 超过明年的数字不是年份
+ok   | 2046.2004.1080p.BluRay.mkv | 2046 | 2004 | 0 | 0 | 0 | - | 片名是数字
+ok   | 1917.2019.1080p.mkv | 1917 | 2019 | 0 | 0 | 0 | - |
+ok   | The.Matrix.1999.1080p.BluRay.x264-2020.mkv | The Matrix | 1999 | 0 | 0 | 0 | - | 发布标记之后的数字是组名不是年份
+ok   | 流浪地球2.2023.2160p.mkv | 流浪地球2 | 2023 | 0 | 0 | 0 | - |
+ok   | Dune.Part.Two.2024.mkv | Dune Part Two | 2024 | 0 | 0 | 0 | - |
+ok   | Edge.of.Tomorrow.2014.1080p.mkv | Edge of Tomorrow | 2014 | 0 | 0 | 0 | - |
+ok   | WALL.E.2008.1080p.BluRay.x264.mkv | WALL E | 2008 | 0 | 0 | 0 | - | 片名里的 E 不是集号
+ok   | E.T.1982.720p.BluRay.mkv | E T | 1982 | 0 | 0 | 0 | - |
+ok   | Movie Name (1999).mkv | Movie Name | 1999 | 0 | 0 | 0 | - | 括号年份截掉后不留左括号
+ok   | 【高清影视之家发布 www.SSDSSE.com】骗不了人的男人.Softie.Conman.2022.1080p.MyTVSuper.WEB-DL.H265.AAC-QuickIO.mkv | 骗不了人的男人 Softie Conman | 2022 | 0 | 0 | 0 | - | 广告块剥离
+
+# ---------- 剧集 ----------
+ok   | The.Boys.S04E01.2024.2160p.AMZN.WEB-DL.mkv | The Boys | 2024 | 4 | 1 | 1 | - | 年份是第四季的，识别时不当首播年份
+ok   | The.Office.US.S02E03.mkv | The Office US | - | 2 | 3 | 1 | - |
+ok   | 请回答1988.E05.mkv | 请回答1988 | - | 1 | 5 | 1 | - |
+ok   | Baby.Walkure.Everyday.EP08.1080p.MAX.WEB-DL.DDP2.0.H.264-MagicStar.mkv | Baby Walkure Everyday | - | 1 | 8 | 1 | - |
+ok   | 某剧.第01集.1080p.mkv | 某剧 | - | 1 | 1 | 1 | - |
+ok   | [Sakurato] Hamidashi Creative! [01v2][AVC-8bit 1080p AAC][CHT].mp4 | Hamidashi Creative! | - | 1 | 1 | 1 | - |
+ok   | [Sub] Some Anime [05][1080p].mkv | Some Anime | - | 1 | 5 | 1 | - |
+
+# ---------- TMDB id 标签 ----------
+ok   | The.Matrix.1999.[tmdbid=603].mkv | The Matrix | 1999 | 0 | 0 | 0 | 603 | Emby 写法
+ok   | Movie Name (1999) [tmdbid-603] | Movie Name | 1999 | 0 | 0 | 0 | 603 | Jellyfin 写法，目录名无扩展名
+ok   | Movie.Name.1999.{tmdb-603} | Movie Name | 1999 | 0 | 0 | 0 | 603 | Plex 写法，标签在最后一个点之后
+ok   | {[tmdbid=1399;type=tv]} Game.of.Thrones.S01E01.mkv | Game of Thrones | - | 1 | 1 | 1 | 1399/tv | MoviePilot 写法带类型
+ok   | Game.of.Thrones.S01E01.[TMDBID=1399].mkv | Game of Thrones | - | 1 | 1 | 1 | 1399 | 大小写不敏感
+
+# ---------- 待改进（P1）----------
+todo | 庆余年第二季.第05集.2024.4K.mp4 | 庆余年 | 2024 | 2 | 5 | 1 | - | 中文季号：现在解析成 S1，会落进第一季目录
+todo | 繁花 第二季 | 繁花 | - | 2 | 0 | 1 | - | 中文季号
+todo | 狂飙.全39集.国语中字.2023.1080p.WEB-DL.mkv | 狂飙 | 2023 | 0 | 0 | 1 | - | 中文噪声词
+todo | [ANi] 葬送的芙莉莲 - 01 [1080P][Baha][WEB-DL][AAC AVC][CHT].mp4 | 葬送的芙莉莲 | - | 1 | 1 | 1 | - | 动漫「 - 01 」集号
+todo | [Nekomoe kissaten][Sousou no Frieren][01][1080p][JPSC].mp4 | Sousou no Frieren | - | 1 | 1 | 1 | - | 连续方括号
+todo | 鬼灭之刃 刀匠村篇 03.mp4 | 鬼灭之刃 刀匠村篇 | - | 1 | 3 | 1 | - | 末尾裸数字集号

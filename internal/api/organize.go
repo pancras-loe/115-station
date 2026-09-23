@@ -1695,8 +1695,16 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			if parsed.Episode == 0 && parseFileName(name).Episode > 0 {
 				parsed.Episode = parseFileName(name).Episode
 			}
+			if fp := parseFileName(name); fp.TmdbID > 0 {
+				parsed.TmdbID, parsed.TmdbKind = fp.TmdbID, fp.TmdbKind
+			}
 			useDirName = true
 		}
+	}
+	// 目录名上的 id 标签同样算数（整理好的目录常见 "片名 (2019) [tmdbid=123]"，
+	// 里面的文件名却不带标签）；文件名自己带了的优先
+	if parsed.TmdbID == 0 {
+		parsed.TmdbID, parsed.TmdbKind = extractTmdbID(dir.Name)
 	}
 
 	var media *TmdbMedia
@@ -1704,7 +1712,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		media = ctx.forced
 		onLog(fmt.Sprintf("✦ 人工确认: %s → %s (%s)", shortLogName(dir.Name), media.Title, media.Year))
 	} else {
-		if parsed.Title == "" {
+		if parsed.Title == "" && parsed.TmdbID == 0 {
 			if ctx.holdable() {
 				return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", nil, parsed, mainVideo.Name,
 					snapshot(nil), "文件名与目录名都提取不出片名，请手动指定 TMDB 条目"))
@@ -2417,7 +2425,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		media = ctx.forced
 		onLog(fmt.Sprintf("✦ 人工确认: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
 	} else {
-		if parsed.Title == "" {
+		if parsed.Title == "" && parsed.TmdbID == 0 {
 			if ctx.holdable() {
 				return ctx.holdForConfirm(f.Name, f.Fid, "file", nil, parsed, f.Name, holdFiles(),
 					"文件名提取不出片名，请手动指定 TMDB 条目"), nil

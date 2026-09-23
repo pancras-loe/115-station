@@ -127,7 +127,7 @@ func (tc *TmdbClient) get(endpoint string, params map[string]string) ([]byte, er
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("TMDB HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, &tmdbStatusError{Code: resp.StatusCode, Body: string(body)}
 	}
 	return body, nil
 }
@@ -181,6 +181,9 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 	}
 	body, err := tc.get(fmt.Sprintf("/%s/%d", kind, id), nil)
 	if err != nil {
+		if isTmdbNotFound(err) {
+			return nil, nil // 条目不存在是确定的「没有」，调用方按 nil 处理
+		}
 		return nil, err
 	}
 	var d struct {
@@ -250,203 +253,54 @@ func (tc *TmdbClient) SearchMovie(query string, year string) (*TmdbMedia, error)
 	return m, e
 }
 
+// searchMovieUncached 先不带年份搜（TMDB 的 year 参数是精确过滤，文件名年份差一年就整页落空），
+// 年份只参与候选打分；这一页里对不上，再带 year 参数搜一次 —— 片名太常见时
+// 正确条目可能不在不带年份那一页里。每一页都要过 choose 的片名校验，不再取第一条
 func (tc *TmdbClient) searchMovieUncached(query string, year string) (*TmdbMedia, error) {
-	// 多策略搜索：TMDB year 参数是精确匹配（时区可能差一年），改为搜索后手动过滤
-	// 策略1: query + language=zh-CN（优先搜中文标题）
-	// 策略2: query 不带 language（搜原始/英文标题）
-	for si, params := range []map[string]string{
-		{"query": query, "language": "zh-CN"},
-		{"query": query},
-	} {
-		body, err := tc.get("/search/movie", params)
-		if err != nil {
+	var attempts []map[string]string
+	for _, lang := range []string{"zh-CN", tc.Language} {
+		if lang == "" || (len(attempts) > 0 && lang == attempts[0]["language"]) {
 			continue
 		}
-		var result struct {
-			Results []struct {
-				ID               int     `json:"id"`
-				Title            string  `json:"title"`
-				OriginalTitle    string  `json:"original_title"`
-				ReleaseDate      string  `json:"release_date"`
-				GenreIDs         []int   `json:"genre_ids"`
-				Overview         string  `json:"overview"`
-				PosterPath       string  `json:"poster_path"`
-				BackdropPath     string  `json:"backdrop_path"`
-				OriginalLanguage string  `json:"original_language"`
-				VoteAverage      float64 `json:"vote_average"`
-			} `json:"results"`
-			TotalResults int `json:"total_results"`
-		}
-		if json.Unmarshal(body, &result) != nil || len(result.Results) == 0 {
-			vlog("[整理] 搜索策略%d %q 无结果", si+1, query)
-			continue
-		}
-		// 候选日志
-		cands := make([]string, 0, 3)
-		for _, c := range result.Results {
-			if len(cands) >= 3 {
-				break
-			}
-			cy := ""
-			if len(c.ReleaseDate) >= 4 {
-				cy = c.ReleaseDate[:4]
-			}
-			cands = append(cands, fmt.Sprintf("%s (%s) tmdb=%d", c.Title, cy, c.ID))
-		}
-		vlog("[整理] 搜索策略%d %q 候选: %s", si+1, query, strings.Join(cands, " | "))
-		// 手动按年份过滤（差1年也接受，处理时区/上映年份差异）
-		var pick = -1
-		if year != "" {
-			for i, c := range result.Results {
-				cy := ""
-				if len(c.ReleaseDate) >= 4 {
-					cy = c.ReleaseDate[:4]
-				}
-				if cy == year {
-					pick = i
-					break
-				}
-			}
-			// 精确年份没匹配到，允许差1年
-			if pick < 0 {
-				for i, c := range result.Results {
-					cy := ""
-					if len(c.ReleaseDate) >= 4 {
-						cy = c.ReleaseDate[:4]
-					}
-					if cy != "" && absYear(cy, year) == 1 {
-						pick = i
-						break
-					}
-				}
-			}
-		}
-		if pick < 0 {
-			pick = 0 // 没有年份过滤或都没匹配，取第一个
-		}
-		r := result.Results[pick]
-		yr := ""
-		if len(r.ReleaseDate) >= 4 {
-			yr = r.ReleaseDate[:4]
-		}
-	// 获取详情中的 origin_country
-	origCountry, _ := tc.getMovieDetails(r.ID)
-	return &TmdbMedia{
-		TmdbID:       r.ID,
-		Title:        r.Title,
-		OriginalTitle: r.OriginalTitle,
-		Year:         yr,
-		MediaType:    "movie",
-		GenreIDs:     r.GenreIDs,
-		Overview:     r.Overview,
-		PosterPath:   r.PosterPath,
-		BackdropPath: r.BackdropPath,
-		OrigLanguage: r.OriginalLanguage,
-		OrigCountry:  origCountry,
-		VoteAverage:  r.VoteAverage,
-		}, nil
+		attempts = append(attempts, map[string]string{"query": query, "language": lang})
 	}
-	vlog("[整理] 搜索 %q（年份=%s）所有策略均无结果", query, year)
-	return nil, nil
-}
-
-func absYear(a, b string) int {
-	ai, bi := 0, 0
-	fmt.Sscanf(a, "%d", &ai)
-	fmt.Sscanf(b, "%d", &bi)
-	d := ai - bi
-	if d < 0 {
-		d = -d
+	if year != "" {
+		attempts = append(attempts, map[string]string{"query": query, "language": "zh-CN", "year": year})
 	}
-	return d
-}
-
-// getMovieDetails 获取电影详情（origin_country）
-func (tc *TmdbClient) getMovieDetails(id int) ([]string, error) {
-	body, err := tc.get(fmt.Sprintf("/movie/%d", id), nil)
-	if err != nil {
-		return nil, err
+	m, err := tc.searchPick(tmdbPick{kind: "movie", query: query, year: year}, attempts)
+	if m == nil && err == nil {
+		vlog("[整理] 搜索 %q（电影，年份=%s）所有策略均无可采用的结果", query, year)
 	}
-	var detail struct {
-		OriginCountry []string `json:"origin_country"`
-	}
-	json.Unmarshal(body, &detail)
-	return detail.OriginCountry, nil
+	return m, err
 }
 
 // SearchTV 搜索电视剧
 func (tc *TmdbClient) SearchTV(query string, year string) (*TmdbMedia, error) {
-	if m, e, ok := tmdbCacheGet("tv", query, year); ok {
-		return m, e
-	}
-	m, e := tc.searchTVUncached(query, year)
-	tmdbCachePut("tv", query, year, m, e)
-	return m, e
+	return tc.searchTVSeason(query, year, 0)
 }
 
-func (tc *TmdbClient) searchTVUncached(query string, year string) (*TmdbMedia, error) {
-	params := map[string]string{"query": query}
-	if year != "" {
-		params["first_air_date_year"] = year // TMDB 剧集搜索的年份参数
+// searchTVSeason season 是文件里的季号（不知道就传 0）。
+// 季号 >1 时文件名里的年份是这一季的年份，不能拿去当首播年份过滤（见 tmdbPick.seasonYearMode）
+func (tc *TmdbClient) searchTVSeason(query, year string, season int) (*TmdbMedia, error) {
+	key := query
+	if season > 1 {
+		key = fmt.Sprintf("%s|S%d", query, season)
 	}
-	body, err := tc.get("/search/tv", params)
-	if err != nil {
-		return nil, err
+	if m, e, ok := tmdbCacheGet("tv", key, year); ok {
+		return m, e
 	}
-	var result struct {
-		Results []struct {
-			ID               int     `json:"id"`
-			Name             string  `json:"name"`
-			OriginalName     string  `json:"original_name"`
-			FirstAirDate     string  `json:"first_air_date"`
-			GenreIDs         []int   `json:"genre_ids"`
-			Overview         string  `json:"overview"`
-			PosterPath       string  `json:"poster_path"`
-			BackdropPath     string  `json:"backdrop_path"`
-			OriginalLanguage string  `json:"original_language"`
-			VoteAverage      float64 `json:"vote_average"`
-		} `json:"results"`
-		TotalResults int `json:"total_results"`
+	p := tmdbPick{kind: "tv", query: query, year: year, season: season}
+	var attempts []map[string]string
+	if year != "" && !p.seasonYearMode() {
+		attempts = append(attempts, map[string]string{"query": query, "first_air_date_year": year})
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+	attempts = append(attempts, map[string]string{"query": query})
+	m, e := tc.searchPick(p, attempts)
+	if m == nil && e == nil {
+		vlog("[整理] 搜索 %q（TV，年份=%s，季=%d）无可采用的结果", query, year, season)
 	}
-	if result.TotalResults == 0 || len(result.Results) == 0 {
-		vlog("[整理] 搜索 %q（TV，年份=%s）无结果", query, year)
-		return nil, nil
-	}
-	cands := make([]string, 0, 3)
-	for _, c := range result.Results {
-		if len(cands) >= 3 {
-			break
-		}
-		cy := ""
-		if len(c.FirstAirDate) >= 4 {
-			cy = c.FirstAirDate[:4]
-		}
-		cands = append(cands, fmt.Sprintf("%s (%s) tmdb=%d 评分%.1f", c.Name, cy, c.ID, c.VoteAverage))
-	}
-	vlog("[整理] 搜索 %q（TV）候选 %d 个: %s", query, result.TotalResults, strings.Join(cands, " | "))
-	r := result.Results[0]
-	resultYear := ""
-	if len(r.FirstAirDate) >= 4 {
-		resultYear = r.FirstAirDate[:4]
-	}
-	origCountry, _ := tc.getTVDetails(r.ID)
-	return &TmdbMedia{
-		TmdbID:       r.ID,
-		Title:        r.Name,
-		OriginalTitle: r.OriginalName,
-		Year:         resultYear,
-		MediaType:    "tv",
-		GenreIDs:     r.GenreIDs,
-		Overview:     r.Overview,
-		PosterPath:   r.PosterPath,
-		BackdropPath: r.BackdropPath,
-		OrigLanguage: r.OriginalLanguage,
-		OrigCountry:  origCountry,
-		VoteAverage:  r.VoteAverage,
-	}, nil
+	tmdbCachePut("tv", key, year, m, e)
+	return m, e
 }
 
 // SeasonEpisodeCount 某季总集数（TMDB season 详情；失败返回 0 不影响主流程）
@@ -467,19 +321,6 @@ func (tc *TmdbClient) SeasonEpisodeCount(tvID, season int) int {
 	return len(out.Episodes)
 }
 
-// getTVDetails 获取电视剧详情（origin_country）
-func (tc *TmdbClient) getTVDetails(id int) ([]string, error) {
-	body, err := tc.get(fmt.Sprintf("/tv/%d", id), nil)
-	if err != nil {
-		return nil, err
-	}
-	var detail struct {
-		OriginCountry []string `json:"origin_country"`
-	}
-	json.Unmarshal(body, &detail)
-	return detail.OriginCountry, nil
-}
-
 // ==================== 文件名解析 ====================
 
 // ParsedName 从文件名解析出的信息
@@ -491,6 +332,10 @@ type ParsedName struct {
 	IsTV       bool
 	Resolution string // 1080p, 2160p 等
 	Quality    string // 完整画质串（1080p.WEB-DL.AAC2.0.H.264 等，由调用方填充）
+	// 名字里写明的 TMDB 条目（[tmdbid=123] 等标签），识别时直接按 id 取，不走搜索。
+	// TmdbKind 只有 {[tmdbid=1;type=tv]} 这种写法才带，其余为空，由识别时判断类型
+	TmdbID   int
+	TmdbKind string
 }
 
 var (
@@ -535,15 +380,17 @@ func stripReleaseAds(name string) string {
 
 // parseFileName 从视频文件名解析标题、年份、季集等信息
 func parseFileName(filename string) *ParsedName {
-	// 去掉文件后缀
+	result := &ParsedName{}
+	// id 标签要在去后缀之前摘：目录名 "Movie.1999.[tmdbid=603]" 没有扩展名，
+	// 最后一个点后面的标签会被当成后缀一起剪掉
 	name := filename
+	result.TmdbID, result.TmdbKind, name = takeTmdbTag(name)
+	// 去掉文件后缀
 	if idx := strings.LastIndex(name, "."); idx > 0 {
 		name = name[:idx]
 	}
 	// 先剥离发布站广告（【…】块/域名），再解析
 	name = stripReleaseAds(name)
-
-	result := &ParsedName{}
 
 	// 检测季集
 	if m := reSeasonEpisode.FindStringSubmatch(name); m != nil {
@@ -574,9 +421,8 @@ func parseFileName(filename string) *ParsedName {
 	}
 
 	// 检测年份
-	if m := reYear.FindStringSubmatch(name); m != nil {
-		result.Year = m[1]
-	}
+	yearPos := -1
+	result.Year, yearPos = pickYear(name)
 
 	// 提取标题：从开头到第一个发布标记/季集/年份处截断
 	title := name
@@ -608,15 +454,15 @@ func parseFileName(filename string) *ParsedName {
 		title = title[:idx[0]]
 	}
 
-	// 在年份处截断
-	if result.Year != "" {
-		if idx := strings.Index(title, result.Year); idx > 0 {
-			title = title[:idx]
-		}
+	// 在年份处截断。按年份在原名里的位置截，而不是在标题里找第一个同样的数字：
+	// 前面几步只把 . _ 换成等长的空格、只截尾巴，位置是对得上的
+	if yearPos > 0 && yearPos < len(title) {
+		title = title[:yearPos]
 	}
 
-	// 清理首尾空格和标点
-	title = strings.Trim(title, " -.")
+	// 清理首尾空格和标点。尾部的左括号是年份被截走后剩下的（"Movie (1999)" → "Movie ("）；
+	// 开头的不动，"(500) Days of Summer" 的括号是片名的一部分
+	title = strings.Trim(strings.TrimRight(title, " -.([（【"), " -.")
 	// 合并多个空格
 	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
 
@@ -624,22 +470,108 @@ func parseFileName(filename string) *ParsedName {
 	return result
 }
 
-// recognizeFile 通过 TMDB 识别文件
-var reTmdbID = regexp.MustCompile(`\[tmdb=(\d+)\]`)
-
-func extractTmdbID(name string) int {
-	if m := reTmdbID.FindStringSubmatch(name); m != nil {
-		id, _ := strconv.Atoi(m[1])
-		return id
+// pickYear 取文件名里的年份及其位置（位置指年份数字的起点，没有则 -1）。
+//
+// 片名本身可能带四位数（Blade.Runner.2049.2017、2046.2004），所以取发布标记
+// （1080p/BluRay/x264…）之前**最后一个**年份，前面的留在片名里（MoviePilot
+// metavideo.py 的 __init_year 同样是后出现的年份覆盖前面的）。发布标记之后的数字多半
+// 是发布组名（-2020Group），不参与；标记前一个都没有时才退回标记后的第一个，与旧行为一致。
+// 超过明年的「年份」不可能是上映年份（2049），一律当作片名的一部分
+func pickYear(name string) (string, int) {
+	type hit struct {
+		year string
+		pos  int
 	}
-	return 0
+	var hits []hit
+	// reYear 两侧都要吃一个分隔符，FindAll 会漏掉紧挨着的第二个（".2049.2017" 的 2017），
+	// 所以逐个找、每次从上一个年份数字之后继续
+	for off := 0; off < len(name); {
+		loc := reYear.FindStringSubmatchIndex(name[off:])
+		if loc == nil {
+			break
+		}
+		hits = append(hits, hit{name[off+loc[2] : off+loc[3]], off + loc[2]})
+		off += loc[3]
+	}
+	maxYear := time.Now().Year() + 1
+	cut := len(name)
+	if m := reReleaseMarkers.FindStringIndex(name); m != nil {
+		cut = m[0]
+	}
+	best := hit{pos: -1}
+	for _, h := range hits {
+		if y, _ := strconv.Atoi(h.year); y > maxYear {
+			continue
+		}
+		if h.pos < cut {
+			best = h
+		} else if best.pos < 0 {
+			best = h
+			break
+		}
+	}
+	return best.year, best.pos
+}
+
+// TMDB id 标签。兼容 Emby 的 [tmdbid=123]、Jellyfin 的 [tmdbid-123]、Plex 的 {tmdb-123}，
+// 以及 MoviePilot 的 {[tmdbid=123;type=tv]}（可带类型）
+var (
+	reTmdbTagBraced = regexp.MustCompile(`(?i)\{\[([^\]]*?\btmdbid\s*=\s*\d+[^\]]*)\]\}`)
+	reTmdbTagID     = regexp.MustCompile(`(?i)\btmdbid\s*=\s*(\d+)`)
+	reTmdbTagType   = regexp.MustCompile(`(?i)\btype\s*=\s*(movies?|tv)\b`)
+	reTmdbTag       = regexp.MustCompile(`(?i)[\[{]\s*tmdb(?:id)?\s*[=\-:]\s*(\d+)\s*[\]}]`)
+)
+
+// takeTmdbTag 摘出名字里的 TMDB id 标签，返回 id、类型（movie/tv，没写为空）与去掉标签后的名字
+func takeTmdbTag(name string) (int, string, string) {
+	if m := reTmdbTagBraced.FindStringSubmatchIndex(name); m != nil {
+		inner := name[m[2]:m[3]]
+		id := 0
+		if im := reTmdbTagID.FindStringSubmatch(inner); im != nil {
+			id, _ = strconv.Atoi(im[1])
+		}
+		kind := ""
+		if tm := reTmdbTagType.FindStringSubmatch(inner); tm != nil {
+			kind = strings.ToLower(tm[1])
+			if kind != "tv" {
+				kind = "movie"
+			}
+		}
+		if id > 0 {
+			return id, kind, strings.TrimSpace(name[:m[0]] + name[m[1]:])
+		}
+	}
+	if m := reTmdbTag.FindStringSubmatchIndex(name); m != nil {
+		id, _ := strconv.Atoi(name[m[2]:m[3]])
+		if id > 0 {
+			return id, "", strings.TrimSpace(name[:m[0]] + name[m[1]:])
+		}
+	}
+	return 0, "", name
+}
+
+// extractTmdbID 名字里的 TMDB id 标签（没有返回 0）
+func extractTmdbID(name string) (int, string) {
+	id, kind, _ := takeTmdbTag(name)
+	return id, kind
 }
 
 func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
+	// 名字里写明了 TMDB id：最硬的证据，直接按 id 取；取不到再退回按片名搜
+	if parsed.TmdbID > 0 {
+		media, err := tc.recognizeByTag(parsed)
+		if err != nil || media != nil {
+			return media, err
+		}
+	}
 	if parsed.Title == "" {
 		return nil, fmt.Errorf("无法从文件名提取标题")
 	}
 
+	// 剧集带上季号：非首季时文件名里的年份是这一季的，不能当首播年份用（searchTVSeason）
+	searchTV := func(q, year string) (*TmdbMedia, error) {
+		return tc.searchTVSeason(q, year, parsed.Season)
+	}
 	// movieThenTV：先电影后剧集（CMS 同款兜底顺序）。
 	// 年份单独传——AI 增强识别那一轮用的是模型给的年份，不是文件名里解析出来的。
 	movieThenTV := func(q, year string) (*TmdbMedia, error) {
@@ -653,40 +585,18 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		return tc.SearchTV(q, year)
 	}
 
-	// 第一轮：原始标题（剧集直接搜 TV）
+	// 第一轮：原始标题（剧集直接搜 TV）。
+	// 年份对不上的情况（跨年上映、首播差一年）已经在搜索内部处理：年份只参与候选打分，
+	// 原来单独的「去掉年份宽搜索」一轮不再需要
 	var media *TmdbMedia
 	var err error
 	if parsed.IsTV {
-		media, err = tc.SearchTV(parsed.Title, parsed.Year)
+		media, err = searchTV(parsed.Title, parsed.Year)
 	} else {
 		media, err = movieThenTV(parsed.Title, parsed.Year)
 	}
 	if err != nil || media != nil {
 		return media, err
-	}
-
-	// 第 1.5 轮：年份搜索无结果 → 去掉年份宽搜索，按年份最近匹配
-	// 场景：文件名写 2018 但 TMDB 记为 2017（跨年上映/首播）
-	if parsed.Year != "" {
-		var wide *TmdbMedia
-		if parsed.IsTV {
-			wide, err = tc.SearchTV(parsed.Title, "")
-		} else {
-			wide, err = tc.SearchMovie(parsed.Title, "")
-		}
-		if err == nil && wide != nil {
-			// 如果唯一结果或年份差 ≤1 年，接受
-			yearDiff := absYearDiff(wide.Year, parsed.Year)
-			if yearDiff <= 1 {
-				log.Printf("[整理] 年份宽搜索命中: %q 年份=%s（文件名=%s，差 %d 年）",
-					wide.Title, wide.Year, parsed.Year, yearDiff)
-				return wide, nil
-			}
-			// 如果多个结果，尝试找年份最接近的（在 SearchXxx 内已取第一个，
-			// 这里只处理唯一结果的情况；多结果的精确匹配需要改 SearchXxx 返回列表）
-			log.Printf("[整理] 年份宽搜索: 找到 %q 年份=%s，与文件名 %s 差 %d 年，跳过",
-				wide.Title, wide.Year, parsed.Year, yearDiff)
-		}
 	}
 
 	// 第二轮：清洗后的标题重试（去掉特殊字符/残留标记，压紧空白）
@@ -710,7 +620,7 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		for _, q := range []string{cjk, latin} {
 			log.Printf("[整理] 混合标题拆分搜索: %q（原 %q）", q, parsed.Title)
 			if parsed.IsTV {
-				media, err = tc.SearchTV(q, parsed.Year)
+				media, err = searchTV(q, parsed.Year)
 			} else {
 				media, err = movieThenTV(q, parsed.Year)
 			}
@@ -731,12 +641,65 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 			}
 			log.Printf("[整理] AI 增强识别提取: %q → %q (%s)", parsed.Title, g.Title, year)
 			if parsed.IsTV {
-				return tc.SearchTV(g.Title, year)
+				return searchTV(g.Title, year)
 			}
 			return movieThenTV(g.Title, year)
 		}
 	}
 	return media, nil
+}
+
+// recognizeByTag 按名字里的 TMDB id 标签取条目。
+//
+// 电影和剧集的 id 是两套编号，同一个数字两边往往都有条目（movie/1399 与 tv/1399 是两部片），
+// 所以类型要先定下来：标签写了 type 就用它；有季集号的当剧集；都没有就两边都取，
+// 拿片名和年份去比，谁对得上用谁。比不出高下宁可放弃标签、退回按片名搜，
+// 也不猜一个类型 —— 猜错了整部片会被搬进另一部片的目录（MoviePilot 的
+// _disambiguate_by_meta 也是比不出就不认）
+func (tc *TmdbClient) recognizeByTag(parsed *ParsedName) (*TmdbMedia, error) {
+	id := parsed.TmdbID
+	kinds := []bool{false, true} // isTV
+	switch {
+	case parsed.TmdbKind == "tv", parsed.TmdbKind == "" && parsed.IsTV:
+		kinds = []bool{true}
+	case parsed.TmdbKind == "movie":
+		kinds = []bool{false}
+	}
+	var found []*TmdbMedia
+	for _, isTV := range kinds {
+		m, err := tc.getByTmdbID(id, isTV)
+		if err != nil {
+			return nil, err
+		}
+		if m != nil {
+			found = append(found, m)
+		}
+	}
+	if len(found) == 1 {
+		log.Printf("[整理] 按 id 标签识别: tmdb=%d → %s (%s) [%s]", id, found[0].Title, found[0].Year, found[0].MediaType)
+		return found[0], nil
+	}
+	if len(found) == 0 {
+		log.Printf("[整理] ○ id 标签 tmdb=%d 在 TMDB 上找不到，改按片名识别", id)
+		return nil, nil
+	}
+	score := func(m *TmdbMedia) int {
+		s := titleLevel(titleKey(parsed.Title), m.Title, m.OriginalTitle) * 3
+		return s + yearScore(parsed.Year, m.Year)
+	}
+	sm, st := score(found[0]), score(found[1])
+	if sm != st {
+		pick := found[0]
+		if st > sm {
+			pick = found[1]
+		}
+		log.Printf("[整理] 按 id 标签识别: tmdb=%d 电影/剧集都有条目，按片名年份判为 %s (%s) [%s]",
+			id, pick.Title, pick.Year, pick.MediaType)
+		return pick, nil
+	}
+	log.Printf("[整理] ○ id 标签 tmdb=%d 电影「%s」与剧集「%s」都有条目，无法判断是哪一个，改按片名识别（标签可写成 {[tmdbid=%d;type=tv]} 指明类型）",
+		id, found[0].Title, found[1].Title, id)
+	return nil, nil
 }
 
 // splitCJKLatin 把中英混合标题拆成中文名与英文名（各自取最长连续段）。
