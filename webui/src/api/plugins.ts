@@ -12,24 +12,6 @@ export const saveCheckin = (body: { enabled: boolean; cron: string }) =>
   http.post('/115checkin/config', body)
 export const runCheckin = () => http.post<{ message?: string }>('/115checkin/run')
 
-// ---- 一键创建 Emby 媒体库 ----
-export interface EmbyLibraryItem {
-  name: string
-  type_label: string
-  emby_path: string
-  /** true = Emby 里已有同名库，创建时跳过 */
-  exists: boolean
-}
-
-export interface EmbyLibraryPreview {
-  emby_configured: boolean
-  data?: EmbyLibraryItem[]
-}
-
-export const embyLibraries = () => http.get<EmbyLibraryPreview>('/plugin/emby-libraries')
-export const createEmbyLibraries = () =>
-  http.post<{ message?: string; created?: number }>('/plugin/emby-libraries', {}, { timeoutMs: 120_000 })
-
 // ---- 媒体库封面生成 ----
 export interface CoverGenConfig {
   enabled: boolean

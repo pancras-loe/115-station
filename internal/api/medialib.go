@@ -129,9 +129,9 @@ func localTitleCount(dir string, depth int) int {
 	return n
 }
 
-// mediaLibLocalCounts 扫本地 STRM 树，按「Emby 建库用的那一层目录」给出实际部数。
+// mediaLibLocalCounts 扫本地 STRM 树，按媒体库分类目录给出实际部数。
 //
-// 目录层级与 scanLibCandidates 保持一致（根/库名/分类 → 每个分类一个 Emby 媒体库），
+// 目录层级为根/库名/分类，按分类统计各 Emby 媒体库的内容，
 // 这样这里数出来的名字能跟 Emby 媒体库卡片一一对上，差多少一眼就看出来。
 func mediaLibLocalCounts(localRoot string) []gin.H {
 	out := []gin.H{}

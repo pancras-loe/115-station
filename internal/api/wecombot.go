@@ -151,7 +151,6 @@ func wecomMenuCreate(cfg WecomConfig) error {
 				{Type: "click", Name: "任务状态", Key: "状态"},
 			}},
 			{Name: "插件功能", SubButton: []btn{
-				{Type: "click", Name: "创建 Emby 媒体库", Key: "建库"},
 				{Type: "click", Name: "使用帮助", Key: "帮助"},
 			}},
 		},
@@ -343,32 +342,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			return
 		}
 		h.wecomHandleGySearch(user, kw, reply)
-
-	case lower == "建库" || lower == "创建媒体库":
-		reply("已开始创建 Emby 媒体库，完成后通知。")
-		go func() {
-			cands, err := h.scanLibCandidates()
-			if err != nil {
-				reply("✗ 建库扫描失败: " + err.Error())
-				return
-			}
-			var items []embyLibCandidate
-			for _, c := range cands {
-				if !c.Exists {
-					items = append(items, c)
-				}
-			}
-			if len(items) == 0 {
-				reply("没有需要创建的媒体库（Emby 里都已存在）")
-				return
-			}
-			created, skipped := h.embyLibrariesCreateItems(items)
-			msg := fmt.Sprintf("✓ Emby 建库完成：新建 %d 个", len(created))
-			if len(skipped) > 0 {
-				msg += fmt.Sprintf("，跳过 %d 个", len(skipped))
-			}
-			reply(msg)
-		}()
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")

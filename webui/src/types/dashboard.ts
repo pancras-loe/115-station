@@ -114,6 +114,6 @@ export interface CalibrateResult {
   skipped: number
   removed: number
   sample: CalibrateSample[]
-  /** 本地 STRM 树实际数出来的部数，按 Emby 建库的那一层目录分组 */
+  /** 本地 STRM 树实际数出来的部数，按媒体库分类目录分组 */
   libraries: { name: string; count: number }[]
 }

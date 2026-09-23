@@ -219,7 +219,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 			continue
 		}
 		// 反向包含：目标路径在媒体库【之上】。全量同步传的就是媒体库根，
-		// 而一键建库把库建在根下面第二层 —— 只做正向判断的话一个都不命中，
+		// 媒体库可能建在根下面第二层，只做正向判断的话一个都不命中，
 		// 路径通知又落不到任何库上，整轮等于白发
 		covered := false
 		for _, lib := range libs {

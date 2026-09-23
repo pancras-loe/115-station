@@ -46,7 +46,7 @@ func TestEmbyEventCategory(t *testing.T) {
 }
 
 // /Library/VirtualFolders 回的是裸数组，不是 {"Items":[…]}。
-// 按 Items 解析解出来永远是空表，建库后的「固化库选项」于是静默跳过
+// 按 Items 解析会得到空表，封面推送无法找到媒体库 ItemId
 func TestEmbyVirtualFolderIdsParsesBareArray(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Library/VirtualFolders" {
