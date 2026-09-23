@@ -109,7 +109,9 @@ ffprobe 媒体信息补全、Emby 元数据回传、消息机器人——均来�
 |---|---|---|
 | Go 依赖（见 [`go.mod`](go.mod)） | Gin、GORM、115driver、jwt 等 | 各依赖自有许可证 |
 | [CodeMirror 5](https://codemirror.net/5/)（旧前端曾使用，现已移除） | YAML 配置编辑器 | MIT |
-| 思源黑体 Source Han Sans（`internal/api/assets/`） | 媒体库封面生成字体 | SIL OFL 1.1 |
+| 霞鹜文楷 LXGW WenKai（`internal/api/assets/`） | 媒体库海报 A、B、G、I 字体 | SIL OFL 1.1 |
+| 得意黑 Smiley Sans（`internal/api/assets/`） | 媒体库海报 C、D、F、H 字体 | SIL OFL 1.1 |
+| 站酷小薇体 ZCOOL XiaoWei（`internal/api/assets/`） | 媒体库海报 E 字体 | SIL OFL 1.1 |
 | FFmpeg（运行镜像内） | 媒体信息探测 | LGPL / GPL（Alpine 包） |
 
 ---

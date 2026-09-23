@@ -12,8 +12,9 @@
 
 | 组件 | 路径 | 许可证 | 全文 |
 |---|---|---|---|
-| 思源黑体 Source Han Sans | `internal/api/assets/sourcehansans.otf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-SourceHanSans.txt](licenses/OFL-1.1-SourceHanSans.txt) |
-| Noto Serif SC | `internal/api/assets/notoserifsc-vf.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-NotoSerifSC.txt](licenses/OFL-1.1-NotoSerifSC.txt) |
+| 霞鹜文楷 LXGW WenKai | `internal/api/assets/lxgwwenkai-medium.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-LXGWWenKai.txt](licenses/OFL-1.1-LXGWWenKai.txt) |
+| 得意黑 Smiley Sans | `internal/api/assets/smileysans-oblique.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-SmileySans.txt](licenses/OFL-1.1-SmileySans.txt) |
+| 站酷小薇体 ZCOOL XiaoWei | `internal/api/assets/zcoolxiaowei-regular.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-ZCOOLXiaoWei.txt](licenses/OFL-1.1-ZCOOLXiaoWei.txt) |
 | CodeMirror 5.65.16 | 旧前端曾使用，现已移除；保留许可副本 | MIT | [licenses/MIT-CodeMirror5.txt](licenses/MIT-CodeMirror5.txt) |
 | FFmpeg / ffprobe | 运行镜像内由 `apk add ffmpeg` 安装，未修改、未静态链接进本项目二进制 | LGPL / GPL（取决于 Alpine 构建选项） | 见镜像内 `/usr/share/licenses` 与 [Alpine ffmpeg 包](https://pkgs.alpinelinux.org/package/edge/community/x86_64/ffmpeg) |
 | Go 依赖 | 见 [`go.mod`](go.mod) / [`go.sum`](go.sum) | 各依赖自有许可证 | `go mod download` 后见各模块目录 |

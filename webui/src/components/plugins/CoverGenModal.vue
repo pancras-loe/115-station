@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   NButton,
   NColorPicker,
@@ -47,6 +47,7 @@ const DEFAULTS: CoverGenConfig = {
 
 const form = ref<CoverGenConfig>({ ...DEFAULTS })
 const tab = ref('style')
+const thumbsEl = ref<HTMLElement | null>(null)
 const saving = ref(false)
 
 const STYLES = [
@@ -55,6 +56,10 @@ const STYLES = [
   { v: 'editorial_c', label: 'C · 流媒体主视觉', desc: '四海报拼贴' },
   { v: 'editorial_d', label: 'D · 主海报标题栏', desc: '单张主视觉 · 深蓝标题' },
   { v: 'editorial_e', label: 'E · 胶片序列', desc: '五格画面 · 胶片齿孔' },
+  { v: 'editorial_f', label: 'F · 倾斜海报墙', desc: '错位海报墙 · 左侧标题' },
+  { v: 'editorial_g', label: 'G · 拍立得', desc: '散落相片 · 模糊背景' },
+  { v: 'editorial_h', label: 'H · 大字海报', desc: '巨型标题压图 · 竖排英文' },
+  { v: 'editorial_i', label: 'I · 封面流', desc: '居中放大 · 地面倒影' },
 ]
 
 const STRATEGIES = [
@@ -155,7 +160,10 @@ const stageSrc = computed(() => {
 })
 const stageBusy = computed(() => (liveOn.value ? liveLoading.value : samplesLoading.value && !stageSrc.value))
 const showBlur = computed(() => form.value.style === 'editorial_c')
-const showBackground = computed(() => form.value.style === 'editorial_a')
+// A、F–I 的底色、压暗和点缀色都跟随「背景」配置，B–E 是固定配色。
+const showBackground = computed(() =>
+  ['editorial_a', 'editorial_f', 'editorial_g', 'editorial_h', 'editorial_i'].includes(form.value.style),
+)
 
 // ============ 已生成 ============
 const covers = ref<{ name: string; time?: string }[]>([])
@@ -196,6 +204,9 @@ watch(show, async (v) => {
   }
   void loadSamples()
   void loadCovers()
+  // 已选样式可能排在列表后面，打开时把它滚进可视区。
+  await nextTick()
+  thumbsEl.value?.querySelector('.thumb.on')?.scrollIntoView({ block: 'nearest' })
 })
 
 async function save() {
@@ -219,41 +230,47 @@ defineExpose({ loadCovers })
     <NTabs v-model:value="tab" type="line" animated>
       <!-- ============ 样式 ============ -->
       <NTabPane name="style" tab="封面样式">
-        <div class="pane">
-          <div class="studio" :class="{ 'studio-full': !showBackground && !showBlur }">
-            <div class="stage-col">
-              <div class="stage">
-                <img v-if="stageSrc" :src="stageSrc" alt="封面预览" />
-                <div v-else-if="liveErr" class="stage-msg err">{{ liveErr }}</div>
-                <div v-if="stageBusy" class="stage-mask"><NSpin size="small" /></div>
-                <span class="stage-tag">
-                  <template v-if="liveOn">真实海报{{ liveLib ? ` · ${liveLib}` : '' }}</template>
-                  <template v-else>示意海报</template>
-                </span>
-              </div>
-              <div class="stage-bar">
-                <NButton size="small" :type="liveOn ? 'primary' : 'default'" :secondary="liveOn" @click="toggleLive">
-                  <template #icon><ImageUp :size="14" /></template>
-                  {{ liveOn ? '切回示意图' : '用真实海报预览' }}
-                </NButton>
-                <NSelect
-                  v-if="liveOn && liveLibs.length"
-                  v-model:value="liveLib"
-                  size="small"
-                  class="lib-select"
-                  :options="liveLibs.map((x) => ({ label: x, value: x }))"
-                />
-                <NButton v-if="liveOn" size="small" quaternary :loading="liveLoading" @click="loadLive">
-                  <template #icon><RefreshCw :size="14" /></template>
-                </NButton>
-                <span class="bar-hint">预览不保存、不推送 Emby</span>
-              </div>
+        <!-- 预览固定在左边、样式列表在右边独立滚动：之前列表排在预览下方，
+             往下翻着挑样式时预览已经滚出视野，选完还得再翻回去看效果。 -->
+        <div class="pane pane-style">
+          <div class="studio">
+            <div class="stage">
+              <img v-if="stageSrc" :src="stageSrc" alt="封面预览" />
+              <div v-else-if="liveErr" class="stage-msg err">{{ liveErr }}</div>
+              <div v-if="stageBusy" class="stage-mask"><NSpin size="small" /></div>
+              <span class="stage-tag">
+                <template v-if="liveOn">真实海报{{ liveLib ? ` · ${liveLib}` : '' }}</template>
+                <template v-else>示意海报</template>
+              </span>
+            </div>
+            <div class="stage-bar">
+              <NButton size="small" :type="liveOn ? 'primary' : 'default'" :secondary="liveOn" @click="toggleLive">
+                <template #icon><ImageUp :size="14" /></template>
+                {{ liveOn ? '切回示意图' : '用真实海报预览' }}
+              </NButton>
+              <NSelect
+                v-if="liveOn && liveLibs.length"
+                v-model:value="liveLib"
+                size="small"
+                class="lib-select"
+                :options="liveLibs.map((x) => ({ label: x, value: x }))"
+              />
+              <NButton v-if="liveOn" size="small" quaternary :loading="liveLoading" @click="loadLive">
+                <template #icon><RefreshCw :size="14" /></template>
+              </NButton>
+              <span class="bar-hint">预览不保存、不推送 Emby</span>
             </div>
 
-            <div class="knobs">
+            <div v-if="showBackground || showBlur" class="knobs">
               <div v-if="showBackground" class="knob">
                 <div class="knob-label">强调色取色</div>
                 <NSelect v-model:value="form.background" size="small" :options="BACKGROUNDS" />
+              </div>
+              <div v-if="showBackground" class="knob">
+                <div class="knob-label">
+                  强调色浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
+                </div>
+                <NSlider v-model:value="form.color_ratio" :min="0" :max="1" :step="0.01" :tooltip="false" />
               </div>
               <div v-if="showBackground && form.background === 'custom'" class="knob">
                 <div class="knob-label">自定义颜色</div>
@@ -265,12 +282,6 @@ defineExpose({ loadCovers })
                   :swatches="SWATCHES"
                 />
               </div>
-              <div v-if="showBackground" class="knob">
-                <div class="knob-label">
-                  强调色浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
-                </div>
-                <NSlider v-model:value="form.color_ratio" :min="0" :max="1" :step="0.01" :tooltip="false" />
-              </div>
               <div v-if="showBlur" class="knob">
                 <div class="knob-label">
                   遮罩浓度 <span class="knob-val">{{ form.blur }}</span>
@@ -281,19 +292,21 @@ defineExpose({ loadCovers })
             </div>
           </div>
 
-          <div class="thumbs">
+          <div ref="thumbsEl" class="thumbs" role="listbox" aria-label="封面样式">
             <button
               v-for="s in STYLES"
               :key="s.v"
               type="button"
+              role="option"
               class="thumb"
               :class="{ on: form.style === s.v }"
+              :aria-selected="form.style === s.v"
               @click="form.style = s.v"
             >
               <span class="thumb-img">
                 <img v-if="samples[s.v]" :src="samples[s.v]" :alt="s.label" />
               </span>
-              <span class="thumb-cap"><b>{{ s.label }}</b>{{ s.desc }}</span>
+              <span class="thumb-cap"><b>{{ s.label }}</b><span>{{ s.desc }}</span></span>
             </button>
           </div>
         </div>
@@ -395,13 +408,18 @@ defineExpose({ loadCovers })
   padding: 4px 2px 2px;
 }
 
-.studio {
+.pane-style {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 236px;
   gap: 16px;
+  overflow: hidden;
 }
-.studio-full {
-  grid-template-columns: minmax(0, 1fr);
+.studio {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 .stage {
   position: relative;
@@ -462,9 +480,12 @@ defineExpose({ loadCovers })
 }
 
 .knobs {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--c-border);
 }
 .knob-label {
   display: flex;
@@ -484,19 +505,24 @@ defineExpose({ loadCovers })
 }
 
 .thumbs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 6px 2px 2px;
 }
 .thumb {
   all: unset;
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
+  flex: none;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 5px;
   border: 1.5px solid var(--c-border);
   border-radius: var(--radius);
-  overflow: hidden;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .thumb:hover {
@@ -512,10 +538,9 @@ defineExpose({ loadCovers })
 }
 .thumb-img {
   aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
   background: var(--c-bg-raised);
-  display: grid;
-  place-items: center;
-  color: var(--c-text-3);
 }
 .thumb-img img {
   width: 100%;
@@ -525,11 +550,14 @@ defineExpose({ loadCovers })
 }
 .thumb-cap {
   display: flex;
-  gap: 6px;
-  align-items: baseline;
-  padding: 5px 8px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   font-size: 11px;
+  line-height: 1.35;
   color: var(--c-text-3);
+}
+.thumb-cap > * {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -607,11 +635,28 @@ defineExpose({ loadCovers })
     height: auto;
     max-height: calc(100vh - 220px);
   }
+  /* 窄屏上下排：样式改成预览上方的一条横向滑条，点选后效果就在正下方 */
+  .pane-style {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
   .studio {
-    grid-template-columns: 1fr;
+    overflow: visible;
   }
   .thumbs {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    order: -1;
+    flex-direction: row;
+    overflow: auto hidden;
+    padding: 2px 2px 6px;
+  }
+  .thumb {
+    grid-template-columns: 1fr;
+    width: 132px;
+    gap: 4px;
+  }
+  .knobs {
+    grid-template-columns: 1fr;
   }
   .gallery {
     grid-template-columns: 1fr 1fr;

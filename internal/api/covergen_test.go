@@ -121,14 +121,18 @@ func TestCoverRenderStyles(t *testing.T) {
 			t.Errorf("样式 %s 尺寸异常: %v", style, im.Bounds())
 		}
 	}
-	if coverFontObj == nil {
-		t.Fatalf("中文字体未加载（opentype 解析失败）")
-	}
-	if coverSerifFontObj == nil {
-		t.Fatalf("宋体字体未加载（opentype 解析失败）")
-	}
-	if w := coverTextWidthFor("动漫电影", 92, true); w <= 0 {
-		t.Errorf("宋体中文测宽失败: %d", w)
+}
+
+func TestCoverSelectedFontsLoad(t *testing.T) {
+	for _, family := range []coverFont{coverWenKai, coverSmiley, coverXiaoWei} {
+		if face := coverFaceFor(92, family); face == nil {
+			t.Fatalf("海报字体 %d 加载失败", family)
+		} else {
+			face.Close()
+		}
+		if width := coverTextWidthFor("动漫电影", 92, family); width <= 0 {
+			t.Fatalf("海报字体 %d 中文测宽失败", family)
+		}
 	}
 }
 
@@ -176,6 +180,48 @@ func TestCoverNewStylesWithOnePoster(t *testing.T) {
 	}
 }
 
+// G 只放真实海报、不循环复用；F 的海报墙是底纹，一张海报也要铺满右侧。
+func TestCoverRotatedStylesWithOnePoster(t *testing.T) {
+	poster := fakePoster(color.RGBA{R: 210, G: 55, B: 40, A: 255})
+	cfg := defaultCoverGenCfg()
+	cfg.Style = "editorial_g"
+	im := coverCompose(cfg, "动漫电影", []image.Image{poster})
+	if r, _, _, _ := im.At(880, 330).RGBA(); r>>8 < 150 {
+		t.Fatalf("拍立得主位没有画出海报：R=%d", r>>8)
+	}
+	for _, pt := range []image.Point{{X: 1090, Y: 330}, {X: 740, Y: 560}} {
+		if r, _, _, _ := im.At(pt.X, pt.Y).RGBA(); r>>8 > 150 {
+			t.Fatalf("单张海报被复制到了其他相片位 %v", pt)
+		}
+	}
+	cfg.Style = "editorial_f"
+	im = coverCompose(cfg, "动漫电影", []image.Image{poster})
+	red := 0
+	for y := 40; y < 720; y += 40 {
+		if r, g, _, _ := im.At(1180, y).RGBA(); r>>8 > 120 && g>>8 < 80 {
+			red++
+		}
+	}
+	if red < 8 {
+		t.Fatalf("海报墙没有铺满右侧：%d/17 个采样点命中", red)
+	}
+}
+
+// 封面流只放真实海报：单张时两侧位置保持空着，不复制主海报。
+func TestCoverCoverflowWithOnePoster(t *testing.T) {
+	cfg := defaultCoverGenCfg()
+	cfg.Style = "editorial_i"
+	im := coverCompose(cfg, "动漫电影", []image.Image{fakePoster(color.RGBA{R: 210, G: 55, B: 40, A: 255})})
+	if r, _, _, _ := im.At(640, 360).RGBA(); r>>8 < 150 {
+		t.Fatalf("封面流中央没有画出海报：R=%d", r>>8)
+	}
+	for _, x := range []int{400, 880, 196, 1084} {
+		if r, _, _, _ := im.At(x, 420).RGBA(); r>>8 > 150 {
+			t.Fatalf("单张海报被复制到了侧位 x=%d", x)
+		}
+	}
+}
+
 func TestCoverSortItems(t *testing.T) {
 	mk := func(title string, vote float64, year string) model.MediaLibrary {
 		return model.MediaLibrary{Title: title, VoteAverage: vote, Year: year}
@@ -214,8 +260,8 @@ func TestCoverSampleDemo(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Samples) != 5 {
-		t.Fatalf("应只展示五款新样式：%v", resp.Samples)
+	if len(resp.Samples) != len(coverSampleStyles) {
+		t.Fatalf("预览应覆盖全部 %d 款样式：%v", len(coverSampleStyles), resp.Samples)
 	}
 	for _, style := range coverSampleStyles {
 		u := resp.Samples[style]

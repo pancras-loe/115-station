@@ -36,19 +36,28 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-//go:embed assets/sourcehansans.otf
-var coverFontBytes []byte
+//go:embed assets/lxgwwenkai-medium.ttf
+var coverWenKaiBytes []byte
 
-//go:embed assets/notoserifsc-vf.ttf
-var coverSerifFontBytes []byte
+//go:embed assets/smileysans-oblique.ttf
+var coverSmileyBytes []byte
+
+//go:embed assets/zcoolxiaowei-regular.ttf
+var coverXiaoWeiBytes []byte
+
+type coverFont uint8
+
+const (
+	coverWenKai coverFont = iota
+	coverSmiley
+	coverXiaoWei
+)
 
 var (
-	coverFontOnce      sync.Once
-	coverFontObj       *opentype.Font
-	coverSerifFontOnce sync.Once
-	coverSerifFontObj  *opentype.Font
-	coverRunMu         sync.Mutex
-	coverLastRun       string
+	coverFontOnce [3]sync.Once
+	coverFontObj  [3]*opentype.Font
+	coverRunMu    sync.Mutex
+	coverLastRun  string
 )
 
 type coverGenCfg struct {
@@ -77,7 +86,7 @@ func normalizeCoverGenCfg(c coverGenCfg) coverGenCfg {
 	if c.Cron == "" {
 		c.Cron = "0 0 * * *"
 	}
-	if !map[string]bool{"editorial_a": true, "editorial_b": true, "editorial_c": true, "editorial_d": true, "editorial_e": true}[c.Style] {
+	if !map[string]bool{"editorial_a": true, "editorial_b": true, "editorial_c": true, "editorial_d": true, "editorial_e": true, "editorial_f": true, "editorial_g": true, "editorial_h": true, "editorial_i": true}[c.Style] {
 		c.Style = "editorial_c"
 	}
 	if !map[string]bool{"added": true, "release": true, "title": true, "rating": true}[c.Strategy] {
@@ -323,15 +332,20 @@ func coverCrop(dst draw.Image, src image.Image, rect image.Rectangle) {
 	draw.Draw(dst, rect, scaled, image.Pt(max(0, (dw-rect.Dx())/2), max(0, (dh-rect.Dy())/2)), draw.Src)
 }
 
-func coverFaceFor(size float64, serif bool) font.Face {
-	var obj *opentype.Font
-	if serif {
-		coverSerifFontOnce.Do(func() { coverSerifFontObj, _ = opentype.Parse(coverSerifFontBytes) })
-		obj = coverSerifFontObj
-	} else {
-		coverFontOnce.Do(func() { coverFontObj, _ = opentype.Parse(coverFontBytes) })
-		obj = coverFontObj
-	}
+func coverFaceFor(size float64, family coverFont) font.Face {
+	coverFontOnce[family].Do(func() {
+		var data []byte
+		switch family {
+		case coverWenKai:
+			data = coverWenKaiBytes
+		case coverSmiley:
+			data = coverSmileyBytes
+		case coverXiaoWei:
+			data = coverXiaoWeiBytes
+		}
+		coverFontObj[family], _ = opentype.Parse(data)
+	})
+	obj := coverFontObj[family]
 	if obj == nil {
 		return nil
 	}
@@ -339,28 +353,28 @@ func coverFaceFor(size float64, serif bool) font.Face {
 	return face
 }
 func coverDrawText(dst draw.Image, s string, size float64, x, y int, c color.Color) {
-	coverDrawTextFor(dst, s, size, x, y, c, false)
+	coverDrawTextFor(dst, s, size, x, y, c, coverSmiley)
 }
-func coverDrawTextFor(dst draw.Image, s string, size float64, x, y int, c color.Color, serif bool) {
-	face := coverFaceFor(size, serif)
+func coverDrawTextFor(dst draw.Image, s string, size float64, x, y int, c color.Color, family coverFont) {
+	face := coverFaceFor(size, family)
 	if face == nil {
 		return
 	}
 	(&font.Drawer{Dst: dst, Src: image.NewUniform(c), Face: face, Dot: fixed.P(x, y)}).DrawString(s)
 }
 func coverTextWidth(s string, size float64) int {
-	return coverTextWidthFor(s, size, false)
+	return coverTextWidthFor(s, size, coverSmiley)
 }
-func coverTextWidthFor(s string, size float64, serif bool) int {
-	face := coverFaceFor(size, serif)
+func coverTextWidthFor(s string, size float64, family coverFont) int {
+	face := coverFaceFor(size, family)
 	if face == nil {
 		return 0
 	}
 	return int((&font.Drawer{Face: face}).MeasureString(s) >> 6)
 }
 
-func coverDrawTrackedText(dst draw.Image, s string, size, tracking float64, x, y int, c color.Color, serif bool) {
-	face := coverFaceFor(size, serif)
+func coverDrawTrackedText(dst draw.Image, s string, size, tracking float64, x, y int, c color.Color, family coverFont) {
+	face := coverFaceFor(size, family)
 	if face == nil {
 		return
 	}
@@ -374,15 +388,15 @@ func coverDrawTrackedText(dst draw.Image, s string, size, tracking float64, x, y
 }
 
 // 长库名不能越过海报区；只缩小字号，不截断用户自定义标题。
-func coverFitSizeFor(s string, wanted, maxWidth float64, serif bool) float64 {
+func coverFitSizeFor(s string, wanted, maxWidth float64, family coverFont) float64 {
 	minimum := wanted / 6
-	for wanted > minimum && float64(coverTextWidthFor(s, wanted, serif)) > maxWidth {
+	for wanted > minimum && float64(coverTextWidthFor(s, wanted, family)) > maxWidth {
 		wanted -= 2
 	}
 	return wanted
 }
 func coverFitSize(s string, wanted, maxWidth float64) float64 {
-	return coverFitSizeFor(s, wanted, maxWidth, false)
+	return coverFitSizeFor(s, wanted, maxWidth, coverSmiley)
 }
 
 func coverFill(img draw.Image, rect image.Rectangle, c color.Color) {
@@ -414,191 +428,358 @@ func coverDesignARects(w, h int) [3]image.Rectangle {
 
 func coverDesignA(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	sx, sy := float64(w)/1280, float64(h)/720
-	px := func(v int) int { return int(float64(v) * sx) }
-	py := func(v int) int { return int(float64(v) * sy) }
-	// 海报图像留在暗部，标题所在区域单独压暗；整张图盖死会失去概念稿的电影氛围。
+	px, py, s := coverUnits(img)
+	deep := coverMix(bg, color.RGBA{R: 6, G: 10, B: 18, A: 255}, .82)
+	// 背景用首张海报的大半径模糊：竖版海报直接拉满横幅会放大出马赛克，模糊后只留色彩和光影。
 	if len(posters) > 0 {
-		coverCrop(img, posters[0], img.Bounds())
+		draw.Draw(img, img.Bounds(), coverBackdrop(posters[0], w, h, px(56)), image.Point{}, draw.Src)
+		coverDarken(img, .62, deep, .35)
+	} else {
+		coverFill(img, img.Bounds(), deep)
 	}
-	coverFill(img, img.Bounds(), color.NRGBA{R: 8, G: 16, B: 28, A: 170})
-	// 两个方向都渐隐，避免文字底板在海报图像上形成硬边矩形。
-	for y := 0; y < py(580); y++ {
-		fy := math.Min(1, math.Max(0, float64(py(580)-y)/float64(py(110))))
-		for x := 0; x < px(650); x++ {
-			fx := math.Min(1, math.Max(0, float64(px(650)-x)/float64(px(140))))
-			coverBlendPixel(img, x, y, color.RGBA{R: 7, G: 15, B: 27, A: 255}, uint8(155*fx*fy))
-		}
-	}
-	accent := color.RGBA{R: uint8(min(255, int(bg.R)+85)), G: uint8(min(255, int(bg.G)+85)), B: uint8(min(255, int(bg.B)+85)), A: 255}
-	coverFill(img, image.Rect(px(62), py(116), px(148), py(118)), accent)
-	coverDrawTrackedText(img, "CINEMA COLLECTION", 17*sy, 3*sy, px(62), py(100), color.NRGBA{R: 238, G: 225, B: 201, A: 210}, true)
-	// 三张同宽同高，固定间距错位成阶梯；少于三张时不复制真实海报。
+	// 标题所在的左半边从左往右渐隐压暗，不画硬边底板。
+	coverShade(img, image.Rect(0, 0, px(760), h), deep, .88, 0, true)
+	coverVignette(img, .6)
+	// 三张同宽同高，固定间距错位成阶梯；少于三张时不复制真实海报，
+	// 而是从中间那级起放，免得一张海报孤零零挂在左上角、右半边全空。
 	rects := coverDesignARects(w, h)
-	for i, p := range posters {
-		if i == 3 {
-			break
-		}
-		rect := rects[i]
-		coverFill(img, rect.Add(image.Pt(px(10), py(12))), color.NRGBA{A: 105})
-		coverCrop(img, p, rect)
+	start := 0
+	if len(posters) < 3 {
+		start = 1
 	}
-	zhSize := coverFitSizeFor(zh, 96*sy, float64(px(525)), true)
-	coverDrawTextFor(img, zh, zhSize, px(62), py(390), color.RGBA{R: 248, G: 241, B: 226, A: 255}, true)
-	coverFill(img, image.Rect(px(62), py(438), px(548), py(440)), accent)
-	enSize := coverFitSizeFor(en, 24*sy, float64(px(440)), true)
-	coverDrawTrackedText(img, en, enSize, 3*sy, px(62), py(486), color.NRGBA{R: 239, G: 226, B: 206, A: 225}, true)
+	for i := 0; i < len(posters) && start+i < len(rects); i++ {
+		coverCard(img, posters[i], rects[start+i], 10*s, .75, 0)
+	}
+	cream := color.RGBA{R: 248, G: 241, B: 226, A: 255}
+	accent := coverAccent(posters, bg, .72)
+	coverFill(img, image.Rect(px(80), py(262), px(112), py(262)+max(1, py(2))), accent)
+	coverDrawTrackedText(img, "CINEMA COLLECTION", 15*s, 4*s, px(126), py(269), coverAlpha(cream, .72), coverWenKai)
+	zhSize := coverFitSizeFor(zh, 100*s, float64(px(470)), coverWenKai)
+	coverTextShadow(img, zh, zhSize, 0, px(78), py(385), coverWenKai, px(18), .6)
+	coverDrawTextFor(img, zh, zhSize, px(78), py(385), cream, coverWenKai)
+	enSize := coverFitSizeFor(en, 22*s, float64(px(420)), coverWenKai)
+	coverDrawTrackedText(img, en, enSize, 5*s, px(82), py(440), coverAlpha(cream, .8), coverWenKai)
+	coverGrain(img, 4)
 }
 
 func coverDesignB(img *image.RGBA, zh, en string, posters []image.Image) {
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	sx, sy := float64(w)/1280, float64(h)/720
-	px := func(v int) int { return int(float64(v) * sx) }
-	py := func(v int) int { return int(float64(v) * sy) }
-	coverFill(img, img.Bounds(), color.RGBA{R: 246, G: 242, B: 234, A: 255})
-	// 左下角用真实海报的浅色轮廓托住标题，像画册里的低对比度版画。
+	h := img.Bounds().Dy()
+	px, py, s := coverUnits(img)
+	paper := color.RGBA{R: 245, G: 241, B: 233, A: 255}
+	ink := color.RGBA{R: 34, G: 36, B: 38, A: 255}
+	coverFill(img, img.Bounds(), paper)
+	// 左下角的海报底纹：首张海报转成单色版画，上沿和右沿都渐隐，低对比地托住标题区。
+	// 原先直接贴彩色海报再盖一层白、只有纵向渐变，右侧留下一道硬边，看着像没渲染完。
 	if len(posters) > 0 {
-		coverCrop(img, posters[0], image.Rect(0, py(490), px(690), h))
-		for y := py(490); y < h; y++ {
-			progress := float64(y-py(490)) / float64(h-py(490))
-			a := uint8(250 - 105*progress)
-			coverFill(img, image.Rect(0, y, px(690), y+1), color.NRGBA{R: 246, G: 242, B: 234, A: a})
-		}
-	}
-	// 一枚低饱和朱红圆作为画册印记，也补足左下角的视觉重量。
-	for y := py(545); y < py(675); y++ {
-		for x := px(505); x < px(635); x++ {
-			dx, dy := float64(x-px(570))/sx, float64(y-py(610))/sy
-			if dx*dx+dy*dy <= 65*65 {
-				coverBlendPixel(img, x, y, color.RGBA{R: 190, G: 55, B: 42, A: 255}, 115)
+		band := image.Rect(0, py(430), px(700), h)
+		tmp := image.NewRGBA(image.Rect(0, 0, band.Dx(), band.Dy()))
+		coverCrop(tmp, posters[0], tmp.Bounds())
+		tone := color.RGBA{R: 118, G: 110, B: 100, A: 255}
+		for y := 0; y < band.Dy(); y++ {
+			fy := coverSmooth(0, .6, float64(y)/float64(band.Dy()))
+			for x := 0; x < band.Dx(); x++ {
+				fx := 1 - coverSmooth(.55, 1, float64(x)/float64(band.Dx()))
+				i := tmp.PixOffset(x, y)
+				l := (.299*float64(tmp.Pix[i]) + .587*float64(tmp.Pix[i+1]) + .114*float64(tmp.Pix[i+2])) / 255
+				coverBlendPixel(img, band.Min.X+x, band.Min.Y+y, coverMix(tone, paper, l), uint8(255*.5*fx*fy))
 			}
 		}
 	}
-	ink := color.RGBA{R: 35, G: 38, B: 39, A: 255}
-	coverDrawTrackedText(img, "MEDIA LIBRARY", 17*sy, 3*sy, px(56), py(90), ink, true)
-	coverFill(img, image.Rect(px(56), py(110), px(615), py(112)), ink)
-	zhSize := coverFitSizeFor(zh, 100*sy, float64(px(590)), true)
-	for dx := -1; dx <= 1; dx++ {
-		coverDrawTextFor(img, zh, zhSize, px(56)+int(float64(dx)*sx), py(350), ink, true)
-	}
-	enSize := coverFitSizeFor(en, 26*sy, float64(px(500)), true)
-	coverDrawTrackedText(img, en, enSize, 4*sy, px(57), py(405), ink, true)
-	red := color.RGBA{R: 190, G: 55, B: 42, A: 255}
-	coverFill(img, image.Rect(px(56), py(452), px(75), py(471)), red)
-	coverFill(img, image.Rect(px(92), py(460), px(520), py(462)), color.RGBA{R: 158, G: 155, B: 148, A: 255})
+	coverGrain(img, 5)
 	for i := 0; i < 4 && len(posters) > 0; i++ {
-		p := posters[i%len(posters)]
-		x := px(700 + (i%2)*276)
-		y := py(40 + (i/2)*328)
-		coverCrop(img, p, image.Rect(x, y, x+px(264), y+py(312)))
+		x := px(708 + (i%2)*270)
+		y := py(48 + (i/2)*320)
+		coverCard(img, posters[i%len(posters)], image.Rect(x, y, x+px(254), y+py(304)), 8*s, .22, 0)
 	}
+	coverDrawTrackedText(img, "MEDIA LIBRARY", 15*s, 4*s, px(72), py(180), ink, coverWenKai)
+	coverFill(img, image.Rect(px(72), py(200), px(620), py(200)+max(1, py(2))), ink)
+	zhSize := coverFitSizeFor(zh, 100*s, float64(px(560)), coverWenKai)
+	// 霞鹜文楷 Medium 做大标题略单薄，横向叠一像素加粗；纵向也叠会把横画糊成一团。
+	coverDrawTextFor(img, zh, zhSize, px(70), py(360), ink, coverWenKai)
+	coverDrawTextFor(img, zh, zhSize, px(70)+max(1, px(1)), py(360), ink, coverWenKai)
+	enSize := coverFitSizeFor(en, 24*s, float64(px(540)), coverWenKai)
+	coverDrawTrackedText(img, en, enSize, 5*s, px(73), py(415), ink, coverWenKai)
+	// 朱红印章里放标题首字，取代原先孤零零的红色方块。
+	red := color.RGBA{R: 184, G: 52, B: 40, A: 255}
+	seal := image.Rect(px(72), py(470), px(124), py(522))
+	coverRoundFill(img, seal, 6*s, red)
+	if runes := []rune(zh); len(runes) > 0 {
+		ch := string(runes[0])
+		size := 32 * s
+		cw := coverTextWidthFor(ch, size, coverWenKai)
+		coverDrawTextFor(img, ch, size, seal.Min.X+(seal.Dx()-cw)/2, seal.Min.Y+seal.Dy()/2+int(size*.36), paper, coverWenKai)
+	}
+	coverFill(img, image.Rect(px(146), py(496), px(620), py(496)+max(1, py(1))), color.RGBA{R: 160, G: 156, B: 148, A: 255})
 }
 
 func coverDesignC(img *image.RGBA, zh, en string, posters []image.Image, blur int) {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	sx, sy := float64(w)/1280, float64(h)/720
-	px := func(v int) int { return int(float64(v) * sx) }
-	py := func(v int) int { return int(float64(v) * sy) }
-	for i := 0; i < 4 && len(posters) > 0; i++ {
-		p := posters[i%len(posters)]
-		x0, x1 := w*i/4, w*(i+1)/4
-		coverCrop(img, p, image.Rect(x0, 0, x1, h))
-	}
-	// 中央渐暗而两侧保留海报颜色；遮罩浓度滑块仍可调节。
-	for x := 0; x < w; x++ {
-		center := 1 - math.Min(1, math.Abs(float64(x)-float64(w)/2)/(float64(w)*.45))
-		a := uint8(min(240, int(45+float64(blur)*.45+175*center*center)))
-		coverFill(img, image.Rect(x, 0, x+1, h), color.NRGBA{R: 5, G: 10, B: 17, A: a})
-	}
-	zhSize := coverFitSize(zh, 105*sy, float64(px(1050)))
-	zw := coverTextWidth(zh, zhSize)
-	for dy := -1; dy <= 1; dy++ {
-		for dx := -1; dx <= 1; dx++ {
-			coverDrawText(img, zh, zhSize, (w-zw)/2+int(float64(dx)*sx), py(360)+int(float64(dy)*sy), color.White)
+	px, py, s := coverUnits(img)
+	// 四列海报两侧各外延一段、在接缝处交叠羽化；原先的硬接缝在暗部尤其扎眼。
+	feather := px(40)
+	for col := 0; col < 4 && len(posters) > 0; col++ {
+		x0, x1 := w*col/4, w*(col+1)/4
+		if col == 0 {
+			coverCrop(img, posters[0], image.Rect(0, 0, x1+feather, h))
+			continue
+		}
+		tmp := image.NewRGBA(image.Rect(0, 0, x1-x0+2*feather, h))
+		coverCrop(tmp, posters[col%len(posters)], tmp.Bounds())
+		for y := 0; y < h; y++ {
+			for x := 0; x < tmp.Rect.Dx() && x0-feather+x < w; x++ {
+				i := tmp.PixOffset(x, y)
+				a := coverSmooth(0, float64(2*feather), float64(x))
+				coverBlendPixel(img, x0-feather+x, y, color.RGBA{R: tmp.Pix[i], G: tmp.Pix[i+1], B: tmp.Pix[i+2], A: 255}, uint8(255*a))
+			}
 		}
 	}
-	lineW := min(px(540), zw)
-	coverFill(img, image.Rect((w-lineW)/2, py(397), (w+lineW)/2, py(400)), color.RGBA{R: 202, G: 134, B: 87, A: 255})
-	enSize := coverFitSize(en, 31*sy, float64(px(800)))
-	ew := coverTextWidth(en, enSize)
-	coverDrawText(img, en, enSize, (w-ew)/2, py(455), color.RGBA{R: 245, G: 244, B: 240, A: 255})
+	// 整体遮罩随「遮罩浓度」走；标题背后再压一团椭圆暗部，两侧仍能看清海报。
+	deep := color.RGBA{R: 5, G: 9, B: 16, A: 255}
+	coverFill(img, img.Bounds(), coverAlpha(deep, float64(25+blur*11/10)/255))
+	coverSpot(img, w/2, py(385), px(600), py(520), deep, .78)
+	coverVignette(img, .25)
+	zhSize := coverFitSize(zh, 112*s, float64(px(1000)))
+	zw := coverTextWidth(zh, zhSize)
+	zx, zy := (w-zw)/2, py(372)
+	coverTextShadow(img, zh, zhSize, 0, zx, zy, coverSmiley, px(24), .7)
+	coverDrawText(img, zh, zhSize, zx, zy, color.White)
+	coverDrawText(img, zh, zhSize, zx+max(1, px(1)), zy, color.White)
+	// 点缀线取自海报主色，两端渐隐。
+	accent := coverAccent(posters, color.RGBA{R: 202, G: 134, B: 87, A: 255}, .66)
+	lineW := min(px(420), zw)
+	for x := 0; x < lineW; x++ {
+		a := math.Sin(math.Pi * (float64(x) + .5) / float64(lineW))
+		for y := py(404); y < py(404)+max(2, py(3)); y++ {
+			coverBlendPixel(img, (w-lineW)/2+x, y, accent, uint8(255*a))
+		}
+	}
+	enSize := coverFitSize(en, 24*s, float64(px(800)))
+	ew := coverTrackedWidth(en, enSize, 5*s, coverSmiley)
+	coverTextShadow(img, en, enSize, 5*s, (w-ew)/2, py(458), coverSmiley, px(10), .6)
+	coverDrawTrackedText(img, en, enSize, 5*s, (w-ew)/2, py(458), color.NRGBA{R: 245, G: 244, B: 240, A: 225}, coverSmiley)
+	coverGrain(img, 3)
 }
 
 func coverDesignD(img *image.RGBA, zh, en string, posters []image.Image) {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	sx, sy := float64(w)/1280, float64(h)/720
-	px := func(v int) int { return int(float64(v) * sx) }
-	py := func(v int) int { return int(float64(v) * sy) }
-	if len(posters) > 0 {
-		coverCrop(img, posters[0], image.Rect(0, 0, px(765), h))
-	}
+	px, py, s := coverUnits(img)
 	ink := color.RGBA{R: 14, G: 29, B: 51, A: 255}
-	coverFill(img, image.Rect(px(765), 0, w, h), ink)
-	// 两条半透明接缝把图片和色块连起来，而不在主视觉上盖硬阴影。
-	coverFill(img, image.Rect(px(746), 0, px(765), h), color.NRGBA{R: 18, G: 38, B: 65, A: 92})
-	coverFill(img, image.Rect(px(765), 0, px(780), h), color.NRGBA{R: 240, G: 230, B: 211, A: 27})
+	split := px(765)
+	coverFill(img, img.Bounds(), ink)
+	if len(posters) > 0 {
+		coverCrop(img, posters[0], image.Rect(0, 0, split, h))
+		coverShade(img, image.Rect(0, h*3/5, split, h), color.RGBA{A: 255}, 0, .35, false)
+		// 主视觉在最后 220px 里渐隐进标题栏，替代原先两条半透明接缝。
+		coverShade(img, image.Rect(split-px(220), 0, split, h), ink, 0, 1, true)
+	}
+	coverShade(img, image.Rect(split, 0, w, h), color.RGBA{R: 5, G: 12, B: 24, A: 255}, 0, .5, false)
 	cream := color.RGBA{R: 251, G: 243, B: 227, A: 255}
-	copper := color.RGBA{R: 204, G: 136, B: 91, A: 255}
+	accent := coverAccent(posters, color.RGBA{R: 204, G: 136, B: 91, A: 255}, .68)
 	lines := []string{zh}
-	runes := []rune(zh)
-	if len(runes) >= 4 {
+	if runes := []rune(zh); len(runes) >= 4 {
 		mid := len(runes) / 2
 		lines = []string{string(runes[:mid]), string(runes[mid:])}
 	}
+	x := px(808)
 	if len(lines) == 2 {
 		for i, line := range lines {
-			size := coverFitSizeFor(line, 135*sy, float64(px(425)), true)
-			coverDrawTextFor(img, line, size, px(808), py(285+i*150), cream, true)
+			size := coverFitSizeFor(line, 135*s, float64(px(425)), coverSmiley)
+			coverDrawTextFor(img, line, size, x, py(272+i*150), cream, coverSmiley)
 		}
 	} else {
-		size := coverFitSizeFor(zh, 125*sy, float64(px(425)), true)
-		coverDrawTextFor(img, zh, size, px(808), py(390), cream, true)
+		size := coverFitSizeFor(zh, 125*s, float64(px(425)), coverSmiley)
+		coverDrawTextFor(img, zh, size, x, py(360), cream, coverSmiley)
 	}
-	coverFill(img, image.Rect(px(807), py(518), px(849), py(520)), cream)
-	enSize := coverFitSizeFor(en, 22*sy, float64(px(335)), true)
-	coverDrawTrackedText(img, en, enSize, 2*sy, px(862), py(526), cream, true)
-	coverFill(img, image.Rect(px(807), py(616), px(956), py(618)), copper)
-	coverDrawTextFor(img, "04", 45*sy, px(974), py(630), copper, true)
-	coverFill(img, image.Rect(px(1065), py(616), px(1225), py(618)), copper)
+	// 底部饰线：横线 — 英文名 — 横线。原先这里是一个写死的「04」，和库毫无关系。
+	enSize := coverFitSizeFor(en, 20*s, float64(px(300)), coverSmiley)
+	ew := coverTrackedWidth(en, enSize, 3*s, coverSmiley)
+	right := px(1225)
+	ex := x + (right-x-ew)/2
+	ly := py(552)
+	thick := max(1, py(2))
+	coverFill(img, image.Rect(x, ly, ex-px(22), ly+thick), accent)
+	coverFill(img, image.Rect(ex+ew+px(22), ly, right, ly+thick), accent)
+	coverDrawTrackedText(img, en, enSize, 3*s, ex, ly+int(enSize*.36), cream, coverSmiley)
+	coverGrain(img, 3)
 }
 
 func coverDesignE(img *image.RGBA, zh, en string, posters []image.Image) {
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	sx, sy := float64(w)/1280, float64(h)/720
-	px := func(v int) int { return int(float64(v) * sx) }
-	py := func(v int) int { return int(float64(v) * sy) }
+	w := img.Bounds().Dx()
+	px, py, s := coverUnits(img)
 	coverFill(img, img.Bounds(), color.RGBA{R: 22, G: 20, B: 18, A: 255})
-	// 稀疏颗粒只给纯色留白增加纸感，不遮住海报和标题。
-	for y := py(6); y < h; y += max(1, py(13)) {
-		for x := px(6); x < w; x += max(1, px(13)) {
-			if (x*31+y*17)%7 == 0 {
-				coverBlendPixel(img, x, y, color.RGBA{R: 164, G: 128, B: 89, A: 255}, 35)
-			}
-		}
-	}
+	accent := coverAccent(posters, color.RGBA{R: 201, G: 133, B: 85, A: 255}, .62)
+	// 胶片背后打一团放映机的暖光，纯色底看起来是空的。
+	coverSpot(img, w/2, py(424), px(860), py(340), accent, .14)
+	coverGrain(img, 5)
 	cream := color.RGBA{R: 241, G: 224, B: 196, A: 255}
-	copper := color.RGBA{R: 201, G: 133, B: 85, A: 255}
-	zhSize := coverFitSizeFor(zh, 83*sy, float64(px(640)), true)
-	coverDrawTextFor(img, zh, zhSize, px(60), py(145), cream, true)
-	enSize := coverFitSizeFor(en, 21*sy, float64(px(510)), true)
-	coverDrawTrackedText(img, en, enSize, 4*sy, px(62), py(190), cream, true)
-	lineX := px(86) + coverTextWidthFor(zh, zhSize, true)
-	if lineX < px(1210) {
-		coverFill(img, image.Rect(lineX, py(149), px(1210), py(151)), copper)
+	zhSize := coverFitSizeFor(zh, 80*s, float64(px(640)), coverXiaoWei)
+	coverDrawTextFor(img, zh, zhSize, px(62), py(128), cream, coverXiaoWei)
+	enSize := coverFitSizeFor(en, 20*s, float64(px(510)), coverXiaoWei)
+	coverDrawTrackedText(img, en, enSize, 4*s, px(64), py(172), coverAlpha(cream, .82), coverXiaoWei)
+	if lineX := px(88) + coverTextWidthFor(zh, zhSize, coverXiaoWei); lineX < px(1200) {
+		coverFill(img, image.Rect(lineX, py(122), px(1204), py(122)+max(1, py(2))), accent)
 	}
-	coverFill(img, image.Rect(px(1210), py(138), px(1224), py(151)), copper)
-	coverFill(img, image.Rect(0, py(220), w, py(543)), color.RGBA{R: 7, G: 7, B: 7, A: 255})
-	for x := px(7); x < w; x += max(1, px(35)) {
-		coverFill(img, image.Rect(x, py(230), x+px(13), py(242)), color.RGBA{R: 138, G: 119, B: 99, A: 255})
-		coverFill(img, image.Rect(x, py(521), x+px(13), py(533)), color.RGBA{R: 138, G: 119, B: 99, A: 255})
+	coverFill(img, image.Rect(px(1204), py(113), px(1216), py(125)), accent)
+	// 胶片占画面下部三分之二：原先胶片缩在中间、底部空出 180px。
+	top, bot := py(214), py(634)
+	coverFill(img, image.Rect(0, top, w, bot), color.RGBA{R: 8, G: 8, B: 8, A: 255})
+	hole := color.RGBA{R: 118, G: 104, B: 90, A: 255}
+	for x := px(10); x < w; x += max(1, px(35)) {
+		coverRoundFill(img, image.Rect(x, top+py(12), x+px(14), top+py(25)), 2.5*s, hole)
+		coverRoundFill(img, image.Rect(x, bot-py(25), x+px(14), bot-py(12)), 2.5*s, hole)
 	}
 	const count = 5
 	gap := px(11)
 	frameW := (w - gap*(count-1)) / count
 	for i := 0; i < count && len(posters) > 0; i++ {
 		x := i * (frameW + gap)
-		coverCrop(img, posters[i%len(posters)], image.Rect(x, py(251), x+frameW, py(511)))
+		coverCard(img, posters[i%len(posters)], image.Rect(x, top+py(38), x+frameW, bot-py(38)), 3*s, 0, 0)
 	}
+	coverVignette(img, .35)
+}
+
+// F · 倾斜海报墙：右侧一整面错位排列、顺时针倾斜的海报墙，左侧压暗放标题。
+// 海报墙是底纹，少于一屏时循环复用海报；相邻两格（横竖都算）不会是同一张。
+func coverDesignF(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
+	h := img.Bounds().Dy()
+	px, py, s := coverUnits(img)
+	deep := coverMix(bg, color.RGBA{R: 6, G: 9, B: 16, A: 255}, .8)
+	coverFill(img, img.Bounds(), deep)
+	if len(posters) > 0 {
+		// 先在正放的画布上排好整面墙再整体旋转一次：逐张旋转慢，相邻两张的接缝还会转出细缝。
+		const cols, rows = 4, 6
+		cw, ch, gap := px(196), py(294), px(20)
+		wall := image.NewRGBA(image.Rect(0, 0, cols*(cw+gap)+gap, (rows-1)*(ch+gap)))
+		coverFill(wall, wall.Bounds(), deep)
+		for c := 0; c < cols; c++ {
+			// 每列错开三分之一张，墙面才不像整齐的表格。
+			off := -((c*2)%3)*ch/3 - gap
+			for r := 0; r < rows; r++ {
+				x, y := gap+c*(cw+gap), off+r*(ch+gap)
+				coverCard(wall, posters[(r*cols+c)%len(posters)], image.Rect(x, y, x+cw, y+ch), 10*s, .45, 0)
+			}
+		}
+		coverDarken(wall, .88, deep, .08)
+		coverRotate(img, wall, px(930), py(360), 12, 0)
+	}
+	// 左侧 360px 实色，再往右 500px 渐隐进海报墙；标题压在实色区，任何海报都不影响可读性。
+	coverFill(img, image.Rect(0, 0, px(360), h), deep)
+	coverShade(img, image.Rect(px(360), 0, px(860), h), deep, 1, 0, true)
+	coverVignette(img, .4)
+	cream := color.RGBA{R: 250, G: 246, B: 238, A: 255}
+	accent := coverAccent(posters, color.RGBA{R: 214, G: 150, B: 96, A: 255}, .66)
+	coverFill(img, image.Rect(px(80), py(288), px(112), py(288)+max(1, py(3))), accent)
+	coverDrawTrackedText(img, "FEATURED", 15*s, 5*s, px(126), py(296), coverAlpha(cream, .7), coverSmiley)
+	zhSize := coverFitSize(zh, 108*s, float64(px(400)))
+	coverDrawText(img, zh, zhSize, px(78), py(408), cream)
+	coverDrawText(img, zh, zhSize, px(78)+max(1, px(1)), py(408), cream)
+	enSize := coverFitSize(en, 22*s, float64(px(400)))
+	coverDrawTrackedText(img, en, enSize, 5*s, px(82), py(460), coverAlpha(cream, .8), coverSmiley)
+	coverGrain(img, 3)
+}
+
+// G · 拍立得：海报做成白框相纸，散落在首张海报的模糊背景上，标题在左侧。
+// 只放真实海报，不循环复用：散落的相片里出现两张一样的会很假。
+func coverDesignG(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	px, py, s := coverUnits(img)
+	deep := coverMix(bg, color.RGBA{R: 14, G: 12, B: 12, A: 255}, .8)
+	if len(posters) > 0 {
+		draw.Draw(img, img.Bounds(), coverBackdrop(posters[0], w, h, px(64)), image.Point{}, draw.Src)
+		coverDarken(img, .55, deep, .3)
+	} else {
+		coverFill(img, img.Bounds(), deep)
+	}
+	coverShade(img, image.Rect(0, 0, px(680), h), deep, .7, 0, true)
+	coverVignette(img, .5)
+	// 按重要程度排：第一张居中压在最上面，其余往两侧、再往下方散开。
+	// 三张以内排成一行、垂直居中；四张起才分两行，否则一行时整组偏上、下半屏空着。
+	type slot struct {
+		x, y int
+		deg  float64
+	}
+	slots := []slot{{880, 360, -3}, {662, 330, -9}, {1092, 345, 7}}
+	if len(posters) > 3 {
+		slots = []slot{{880, 290, -3}, {662, 254, -9}, {1092, 272, 7}, {742, 498, 6}, {1040, 508, -5}}
+	}
+	for i := min(len(posters), len(slots)) - 1; i >= 0; i-- {
+		layer := coverPolaroid(posters[i], px(186), py(246), px(12), py(46))
+		coverRotate(img, layer, px(slots[i].x), py(slots[i].y), slots[i].deg, .6)
+	}
+	cream := color.RGBA{R: 248, G: 241, B: 226, A: 255}
+	accent := coverAccent(posters, bg, .72)
+	coverFill(img, image.Rect(px(80), py(270), px(112), py(270)+max(1, py(2))), accent)
+	coverDrawTrackedText(img, "SELECTED WORKS", 15*s, 4*s, px(126), py(277), coverAlpha(cream, .72), coverWenKai)
+	zhSize := coverFitSizeFor(zh, 92*s, float64(px(410)), coverWenKai)
+	coverTextShadow(img, zh, zhSize, 0, px(78), py(388), coverWenKai, px(18), .6)
+	coverDrawTextFor(img, zh, zhSize, px(78), py(388), cream, coverWenKai)
+	enSize := coverFitSizeFor(en, 22*s, float64(px(400)), coverWenKai)
+	coverDrawTrackedText(img, en, enSize, 5*s, px(82), py(440), coverAlpha(cream, .8), coverWenKai)
+	coverGrain(img, 4)
+}
+
+// H · 大字海报：以字为主角。纯色底上一张主海报，巨大的标题从左侧压过海报边缘，
+// 海报后错开一个细线框，英文名竖排在右侧。底色跟随「背景」配置。
+func coverDesignH(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
+	px, py, s := coverUnits(img)
+	field := coverMix(bg, color.RGBA{R: 16, G: 18, B: 22, A: 255}, .35)
+	coverFill(img, img.Bounds(), field)
+	coverShade(img, img.Bounds(), color.RGBA{A: 255}, 0, .35, false)
+	coverGrain(img, 5)
+	cream := color.RGBA{R: 250, G: 244, B: 232, A: 255}
+	card := image.Rect(px(820), py(96), px(1150), py(591))
+	coverOutline(img, card.Add(image.Pt(px(22), py(22))), max(1, px(2)), coverAlpha(cream, .5))
+	if len(posters) > 0 {
+		coverCard(img, posters[0], card, 6*s, .5, 0)
+	}
+	coverDrawTrackedText(img, "MEDIA LIBRARY", 15*s, 5*s, px(82), py(120), coverAlpha(cream, .75), coverSmiley)
+	// 标题有意压过海报左缘：字和图叠在一起才有海报感。只缩字号不截断，长库名最多压到海报中线。
+	zhSize := coverFitSize(zh, 190*s, float64(px(900)))
+	coverTextShadow(img, zh, zhSize, 0, px(76), py(420), coverSmiley, px(22), .55)
+	coverDrawText(img, zh, zhSize, px(76), py(420), cream)
+	coverDrawText(img, zh, zhSize, px(76)+max(1, px(1)), py(420), cream)
+	enSize := coverFitSize(en, 26*s, float64(px(640)))
+	coverTextShadow(img, en, enSize, 6*s, px(82), py(486), coverSmiley, px(10), .5)
+	coverDrawTrackedText(img, en, enSize, 6*s, px(82), py(486), cream, coverSmiley)
+	accent := coverAccent(posters, color.RGBA{R: 240, G: 190, B: 110, A: 255}, .7)
+	coverFill(img, image.Rect(px(82), py(526), px(202), py(526)+max(2, py(4))), accent)
+	coverVerticalText(img, en, 15*s, 6*s, px(1222), py(344), coverAlpha(cream, .7), coverSmiley)
+}
+
+// I · 封面流：首张海报居中最大，其余向两侧依次变小变暗，底下带倒影，标题在上方。
+// 只放真实海报，缺的位置空着，不复用。
+func coverDesignI(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	px, py, s := coverUnits(img)
+	deep := coverMix(bg, color.RGBA{R: 6, G: 8, B: 14, A: 255}, .82)
+	if len(posters) > 0 {
+		draw.Draw(img, img.Bounds(), coverBackdrop(posters[0], w, h, px(64)), image.Point{}, draw.Src)
+		coverDarken(img, .5, deep, .35)
+	} else {
+		coverFill(img, img.Bounds(), deep)
+	}
+	// 下半截压成「地面」，倒影才有落脚的地方。
+	coverShade(img, image.Rect(0, py(430), w, h), deep, 0, .85, false)
+	coverVignette(img, .45)
+	// 底边对齐在同一条地平线上；绘制从最外侧往中间，中间那张压在最上面。
+	slots := []struct {
+		cx, top, w, h int
+		dim           float64
+	}{{640, 180, 240, 360, 0}, {400, 240, 200, 300, .35}, {880, 240, 200, 300, .35}, {196, 300, 160, 240, .6}, {1084, 300, 160, 240, .6}}
+	for i := min(len(posters), len(slots)) - 1; i >= 0; i-- {
+		sl := slots[i]
+		rect := image.Rect(px(sl.cx-sl.w/2), py(sl.top), px(sl.cx+sl.w/2), py(sl.top+sl.h))
+		coverReflect(img, posters[i], rect, max(2, py(6)), .38, .32, sl.dim)
+		coverCard(img, posters[i], rect, 8*s, .6, sl.dim)
+	}
+	cream := color.RGBA{R: 248, G: 241, B: 226, A: 255}
+	zhSize := coverFitSizeFor(zh, 62*s, float64(px(900)), coverWenKai)
+	zw := coverTextWidthFor(zh, zhSize, coverWenKai)
+	coverTextShadow(img, zh, zhSize, 0, (w-zw)/2, py(98), coverWenKai, px(16), .6)
+	coverDrawTextFor(img, zh, zhSize, (w-zw)/2, py(98), cream, coverWenKai)
+	enSize := coverFitSizeFor(en, 17*s, float64(px(700)), coverWenKai)
+	ew := coverTrackedWidth(en, enSize, 5*s, coverWenKai)
+	coverDrawTrackedText(img, en, enSize, 5*s, (w-ew)/2, py(138), coverAlpha(cream, .75), coverWenKai)
 }
 
 func coverEnglishName(name string) string {
@@ -694,6 +875,14 @@ func coverCompose(cfg coverGenCfg, name string, posters []image.Image) *image.RG
 		coverDesignD(img, zh, en, posters)
 	case "editorial_e":
 		coverDesignE(img, zh, en, posters)
+	case "editorial_f":
+		coverDesignF(img, zh, en, posters, bg)
+	case "editorial_g":
+		coverDesignG(img, zh, en, posters, bg)
+	case "editorial_h":
+		coverDesignH(img, zh, en, posters, bg)
+	case "editorial_i":
+		coverDesignI(img, zh, en, posters, bg)
 	default:
 		coverDesignC(img, zh, en, posters, cfg.Blur)
 	}
@@ -944,7 +1133,7 @@ func (h *Handler) CoverGenPreview(c *gin.Context) {
 //   - 「用真实海报预览」取某个库的真实海报，按弹窗里尚未保存的配置渲染。
 // 两者都用 JPEG 且锁 480p/720p：预览是给眼睛看构图和配色的，没必要传几 MB 的 1080p PNG。
 
-var coverSampleStyles = []string{"editorial_a", "editorial_b", "editorial_c", "editorial_d", "editorial_e"}
+var coverSampleStyles = []string{"editorial_a", "editorial_b", "editorial_c", "editorial_d", "editorial_e", "editorial_f", "editorial_g", "editorial_h", "editorial_i"}
 
 // coverDemoPosters 合成占位海报：竖向双色渐变 + 下方一条浅色「标题带」，
 // 颜色取自 coverPalette，保证几种样式里海报之间能分得开。
