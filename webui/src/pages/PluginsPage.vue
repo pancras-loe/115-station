@@ -7,7 +7,7 @@ import {
   NRadioGroup,
   NTag,
 } from 'naive-ui'
-import { CalendarCheck, Images, Play, Settings2, Trash2 } from '@lucide/vue'
+import { CalendarCheck, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
@@ -102,16 +102,6 @@ const plugins = [
     runLabel: '立即生成',
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
-  },
-  {
-    key: 'clear115',
-    name: '115 文件夹清空',
-    icon: Trash2,
-    desc: '一键清空 115 指定文件夹，配合分享同步使用。',
-    available: false,
-    runLabel: '立即运行',
-    onConfig: () => {},
-    onRun: () => {},
   },
 ]
 
