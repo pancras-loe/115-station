@@ -161,14 +161,20 @@ func dlLinkFindByTask(db *gorm.DB, t offlineTaskInfo) (model.DownloadLink, error
 // dlLinkMatch 给整理记录找它的来源链接，返回 DownloadLink.ID（0 = 认不出来）。
 //
 // 只看认领窗口内的链接，新的优先：同名内容重复提交时归到最近那一次。
+// 窗口以记录的创建时间为准（新记录还没落库，CreatedAt 为零，按现在算），
+// 这样给存量记录补认领时也不会认到比它晚提交的链接。
 // 一条链接能被多条记录认领（合集分享拆成几部片、散文件逐集各一条），
 // 纯本地 DB 操作，不碰 115
 func dlLinkMatch(db *gorm.DB, rec *model.OrganizeRecord) uint {
 	if db == nil || rec == nil {
 		return 0
 	}
+	anchor := rec.CreatedAt
+	if anchor.IsZero() {
+		anchor = time.Now()
+	}
 	var rows []model.DownloadLink
-	if err := db.Where("created_at > ?", time.Now().Add(-dlClaimWindow)).
+	if err := db.Where("created_at > ? AND created_at <= ?", anchor.Add(-dlClaimWindow), anchor).
 		Order("id DESC").Limit(200).Find(&rows).Error; err != nil {
 		return 0
 	}
@@ -222,6 +228,57 @@ func recordLinks(db *gorm.DB, recs []model.OrganizeRecord) map[uint]*model.Downl
 		out[rows[i].ID] = &rows[i]
 	}
 	return out
+}
+
+// recordLinkBackfillKey 存量补认领做过的标记（Setting 表）。补认领要逐条跑 dlLinkMatch，
+// 记录多了每次启动都跑一遍不划算，做完一次就不再做
+const recordLinkBackfillKey = "migrate.record_link"
+
+// BackfillRecordLinks 给「来源链接挂在整理记录上」之前的存量记录补上 LinkID。
+//
+// 旧版是链接这一侧记 record_id，而且一条链接认成功一次就不再被别的记录认领，
+// 所以分两步：先按旧的 download_links.record_id 精确回填（列还在库里，GORM 不删列），
+// 剩下的再按 fid / 名字重新认领一遍 —— 合集分享拆出的第二部片、散文件的其它集
+// 在旧版里就是这样落空的。全程只读写本地库，不碰 115
+func BackfillRecordLinks(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	var done int64
+	db.Model(&model.Setting{}).Where("key = ?", recordLinkBackfillKey).Count(&done)
+	if done > 0 {
+		return
+	}
+	exact := int64(0)
+	if db.Migrator().HasColumn(&model.DownloadLink{}, "record_id") {
+		res := db.Exec(`UPDATE organize_records SET link_id = (
+			SELECT d.id FROM download_links d WHERE d.record_id = organize_records.id ORDER BY d.id DESC LIMIT 1)
+			WHERE link_id = 0 AND id IN (SELECT record_id FROM download_links WHERE record_id <> 0)`)
+		if res.Error != nil {
+			log.Printf("[来源链接] ✗ 存量记录按旧对应关系回填失败，下次启动重试: %v", res.Error)
+			return
+		}
+		exact = res.RowsAffected
+	}
+	var oldest model.DownloadLink
+	matched := 0
+	if db.Order("created_at ASC").First(&oldest).Error == nil {
+		var recs []model.OrganizeRecord
+		db.Where("link_id = 0 AND created_at >= ?", oldest.CreatedAt).Find(&recs)
+		for i := range recs {
+			if id := dlLinkMatch(db, &recs[i]); id != 0 {
+				if db.Model(&model.OrganizeRecord{}).Where("id = ?", recs[i].ID).Update("link_id", id).Error == nil {
+					matched++
+				}
+			}
+		}
+	}
+	if err := db.Create(&model.Setting{Key: recordLinkBackfillKey, Value: "1"}).Error; err != nil {
+		log.Printf("[来源链接] ○ 补认领标记写入失败（下次启动会再补一遍，结果不变）: %v", err)
+	}
+	if exact+int64(matched) > 0 {
+		log.Printf("[来源链接] ✓ 存量整理记录补上来源：按旧对应关系 %d 条、重新认领 %d 条", exact, matched)
+	}
 }
 
 // pruneDownloadLinks 清理过期记录（每日 prune 调用）

@@ -140,6 +140,8 @@ func main() {
 	if err := api.SyncCategoryRulesFromYAML(db); err != nil {
 		log.Printf("重建二级分类规则失败: %v", err)
 	}
+	// 存量整理记录补上来源链接（只做一次；记录多时要逐条认领，放后台不拖启动）
+	go api.BackfillRecordLinks(db)
 
 	api.SetVersion(BuildSHA)
 

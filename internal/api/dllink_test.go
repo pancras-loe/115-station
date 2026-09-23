@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"115-station/internal/config"
 	"115-station/internal/model"
@@ -130,5 +131,58 @@ func TestRecordLinksLookup(t *testing.T) {
 	}
 	if d := toRecordDTO(recs[2], links); d.Link != nil {
 		t.Errorf("已清理的链接不该带出: %+v", d.Link)
+	}
+}
+
+// 存量补认领：旧版 record_id 精确回填 + 旧版落空的记录重新认领；
+// 比链接更早的记录不能认到它，做完一次打标记不再重跑
+func TestBackfillRecordLinks(t *testing.T) {
+	if _, err := model.InitDB("file:dllink_backfill_test?mode=memory&cache=shared"); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	db := model.DB
+	db.Where("1=1").Delete(&model.DownloadLink{})
+	db.Where("1=1").Delete(&model.OrganizeRecord{})
+	db.Where("key = ?", recordLinkBackfillKey).Delete(&model.Setting{})
+	// 旧版库里还留着这一列（GORM 不删列），新建的测试库要手动补上
+	if !db.Migrator().HasColumn(&model.DownloadLink{}, "record_id") {
+		if err := db.Exec("ALTER TABLE download_links ADD COLUMN record_id integer DEFAULT 0").Error; err != nil {
+			t.Fatalf("补旧列: %v", err)
+		}
+	}
+	now := time.Now()
+	early := model.OrganizeRecord{Source: "合集第二部/", SourceFid: "3", Status: "success", CreatedAt: now.Add(-3 * time.Hour)}
+	db.Create(&early)
+	link := model.DownloadLink{Kind: "share", URL: "https://115cdn.com/s/abc", ResultNames: marshalStrs([]string{"合集第一部", "合集第二部"}),
+		CreatedAt: now.Add(-2 * time.Hour)}
+	db.Create(&link)
+	first := model.OrganizeRecord{Source: "改过名的目录/", SourceFid: "1", Status: "success", CreatedAt: now.Add(-time.Hour)}
+	second := model.OrganizeRecord{Source: "合集第二部/", SourceFid: "2", Status: "success", CreatedAt: now.Add(-time.Hour)}
+	db.Create(&first)
+	db.Create(&second)
+	db.Exec("UPDATE download_links SET record_id = ? WHERE id = ?", first.ID, link.ID)
+
+	BackfillRecordLinks(db)
+
+	get := func(id uint) uint {
+		var r model.OrganizeRecord
+		db.First(&r, id)
+		return r.LinkID
+	}
+	if got := get(first.ID); got != link.ID {
+		t.Errorf("旧 record_id 未回填: got=%d want=%d", got, link.ID)
+	}
+	if got := get(second.ID); got != link.ID {
+		t.Errorf("旧版落空的记录未重新认领: got=%d want=%d", got, link.ID)
+	}
+	if got := get(early.ID); got != 0 {
+		t.Errorf("比链接早的记录不该认到它: got=%d", got)
+	}
+
+	// 标记已写：再跑一次不动任何东西
+	db.Model(&model.OrganizeRecord{}).Where("id = ?", second.ID).Update("link_id", 0)
+	BackfillRecordLinks(db)
+	if got := get(second.ID); got != 0 {
+		t.Errorf("补认领不该重复执行: got=%d", got)
 	}
 }
