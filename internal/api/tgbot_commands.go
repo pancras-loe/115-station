@@ -306,7 +306,7 @@ func (b *tgConversation) resources(kind, title string) {
 					b.reply("正在转存 115…")
 					msg, ok, _, err := b.h.shareReceiveCore(it.URL, it.Password, b.h.shareFolderCid(), "机器人", true)
 					if err != nil {
-						b.reply("转存失败（请检查下载记录后再决定是否重试）：" + err.Error())
+						b.reply("转存失败（部分内容可能已转存，请先看一眼网盘转存目录再决定是否重试）：" + err.Error())
 						return
 					}
 					b.reply(fmt.Sprintf("%s\n成功 %d 项，已接入整理流程。", msg, ok))

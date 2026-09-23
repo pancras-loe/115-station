@@ -777,7 +777,7 @@ func (h *Handler) GyOffline(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少有效的磁力链接"})
 		return
 	}
-	if err := h.submitOfflineLink(req.Magnet); err != nil {
+	if err := h.submitOfflineLink(req.Magnet, "观影"); err != nil {
 		log.Printf("[观影] ✗ 离线提交失败: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "离线提交失败: " + err.Error()})
 		return

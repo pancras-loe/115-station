@@ -398,7 +398,7 @@ func (h *Handler) wecomHandleGyPick(user string, n int, reply func(...string)) {
 			reply("✗ " + err.Error())
 			return
 		}
-		if err := h.submitOfflineLink(magnet); err != nil {
+		if err := h.submitOfflineLink(magnet, "机器人"); err != nil {
 			reply("✗ 离线提交失败: " + err.Error())
 			return
 		}

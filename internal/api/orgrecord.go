@@ -30,14 +30,21 @@ import (
 // organizeRecordKeepDays 记录保留天数（随每日 prune 清理）
 const organizeRecordKeepDays = 90
 
-// orgRecordDTO 列表/详情返回体：Files 展开成数组，前端不必再解一层 JSON
+// orgRecordDTO 列表/详情返回体：Files 展开成数组，前端不必再解一层 JSON；
+// Link 是这批内容的来源链接（离线/分享提交的才有）
 type orgRecordDTO struct {
 	model.OrganizeRecord
-	FileList []orgRecordFile `json:"file_list"`
+	FileList []orgRecordFile     `json:"file_list"`
+	Link     *model.DownloadLink `json:"link,omitempty"`
 }
 
-func toRecordDTO(r model.OrganizeRecord) orgRecordDTO {
-	return orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files)}
+func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink) orgRecordDTO {
+	return orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files), Link: links[r.LinkID]}
+}
+
+// recordDTO 单条记录的返回体（详情、确认、重新整理之后回给前端的那一条）
+func (h *Handler) recordDTO(r model.OrganizeRecord) orgRecordDTO {
+	return toRecordDTO(r, recordLinks(h.DB, []model.OrganizeRecord{r}))
 }
 
 // ListOrganizeRecords GET /organize/records?status=&type=&q=&page=&size=
@@ -60,8 +67,11 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 			like := "%" + kw + "%"
 			q = q.Where("tmdb_id = ? OR source LIKE ? OR title LIKE ?", id, like, like)
 		} else {
+			// 也能按来源链接搜：粘一段磁力 hash / 分享码就能找到它下成了哪部片
 			like := "%" + kw + "%"
-			q = q.Where("source LIKE ? OR title LIKE ? OR target_dir LIKE ?", like, like, like)
+			links := h.DB.Model(&model.DownloadLink{}).Select("id").Where("url LIKE ? OR name LIKE ?", like, like)
+			q = q.Where("source LIKE ? OR title LIKE ? OR target_dir LIKE ? OR (link_id <> 0 AND link_id IN (?))",
+				like, like, like, links)
 		}
 	}
 	var total int64
@@ -78,9 +88,10 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	var rows []model.OrganizeRecord
 	q.Order("created_at DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows)
 
+	links := recordLinks(h.DB, rows)
 	items := make([]orgRecordDTO, 0, len(rows))
 	for _, r := range rows {
-		items = append(items, toRecordDTO(r))
+		items = append(items, toRecordDTO(r, links))
 	}
 	c.JSON(http.StatusOK, gin.H{"data": items, "total": total, "page": page, "size": size})
 }
@@ -92,7 +103,7 @@ func (h *Handler) GetOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": toRecordDTO(rec)})
+	c.JSON(http.StatusOK, gin.H{"data": h.recordDTO(rec)})
 }
 
 // DeleteOrganizeRecord DELETE /organize/records/:id （只删记录，不动任何文件）
@@ -175,7 +186,7 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "重新整理完成", "data": toRecordDTO(rec)})
+	c.JSON(http.StatusOK, gin.H{"message": "重新整理完成", "data": h.recordDTO(rec)})
 }
 
 // redoOrganize 原地重整理：按记录里的 fid 把文件改名 + 搬到指定 TMDB 条目对应的目录，

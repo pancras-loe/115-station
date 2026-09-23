@@ -98,29 +98,32 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、**媒体库台账校准**、离线下载、**下载记录**、媒体库封面生成、115 签到 |
+| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到 |
 
 ### 数据模型（`internal/model/model.go`）
 
 19 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
 `CategoryRule` / `ScrapeRule`（YAML 规则，洗版保存在 `type=wash_config`）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
 `MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）、
-`PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（下载记录，见下）。
+`PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（来源链接，见下）。
 
 > `MediaLibrary` 与 `OrganizeRecord` 不是一回事：前者「一部影视一条」（去重 upsert，仪表盘用），
 > 后者「一次整理动作一条」且失败与未识别同样留痕（记录页与「重新整理」用）。
 
-> `DownloadLink`（`dllink.go`）是下载记录：磁力/ed2k/HTTP 离线与 115 分享转存提交时落一行，
-> 内容整理入库后由 `orgSink.note` 里的 `dlLinkClaim` 把识别结果（片名 / 年份 / TMDB id /
-> 分类 / 落库目录 / 整理记录 id）回写到同一行。界面在「上传下载 → 下载记录」。
+> `DownloadLink`（`dllink.go`）是来源链接：磁力/ed2k/HTTP 离线与 115 分享转存提交时落一行，
+> 整理时 `orgSink.note` 用 `dlLinkMatch` 认领，把链接 id 记在 `OrganizeRecord.LinkID` 上
+> （一条链接可对应多条记录），整理记录页据此显示原始链接与提交来源。
+> **它没有独立页面**：原来的「上传下载 → 下载记录」已并进整理记录。下载/转存失败的反馈
+> 不靠翻记录 —— 同步失败由提交处当场回复（网页提示 / 机器人回复 / TG 订阅推通知），
+> 离线任务的异步失败由 `StartOfflineTaskMonitor` 推「✗ 离线下载失败」。新增提交入口时两头都要有。
 >
 > ⚠️ **认领产物不许新增任何 115 请求**，只能用已经在手的数据：离线走监视器既有的 30 秒轮询
 > （摘 `file_id` 与任务名），分享走 `/share/snap` 返回里的顶层条目名（转存后 115 保留原名）。
-> 认领因此是两级的：fid 精确、名字兜底，都对不上就让那一行停在「未认领」，不要为了配上
+> 认领因此是两级的：fid 精确、名字兜底，都对不上就让那条整理记录没有来源，不要为了配上
 > 去加一次列目录 —— 这条约束是需求方明确提的。
 >
 > **新增任何「提交链接 → 内容落进转存目录」的通道，记得一起 `dlLinkRecord`**，
-> 否则那条路进来的内容在下载记录里永远只有链接没有片名。
+> 否则那条路进来的内容在整理记录上永远认不出来源。
 
 > ⚠️ **`PathCache` 是有失效要求的缓存，不是普通的读缓存。** 目录被改名/移动/删除后
 > 必须失效或重定位对应子树，否则「已搬进冗余的目录」会被永久算成还在媒体库里 ——

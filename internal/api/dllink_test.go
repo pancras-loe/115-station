@@ -7,8 +7,8 @@ import (
 	"115-station/internal/model"
 )
 
-// 离线这条主链路：提交登记 → 监视器回填 file_id/任务名 → 整理结果认领到同一行。
-// 这条链断了，下载记录里就永远只有链接没有片名
+// 离线这条主链路：提交登记 → 监视器回填 file_id/任务名 → 整理记录认领到这条链接。
+// 这条链断了，整理记录上就永远看不到来源链接
 func TestDownloadLinkOfflineFlow(t *testing.T) {
 	if _, err := model.InitDB("file:dllink_test?mode=memory&cache=shared"); err != nil {
 		t.Fatalf("InitDB: %v", err)
@@ -17,14 +17,12 @@ func TestDownloadLinkOfflineFlow(t *testing.T) {
 	h := &Handler{DB: model.DB, Config: &config.Config{}}
 
 	magnet := "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01&dn=Some.Show.S01"
-	id := dlLinkRecord(h, magnet, "", "", "12345", "web", "submitted", nil)
-	if id == 0 {
-		t.Fatal("登记未落库")
-	}
+	dlLinkRecord(h, magnet, "", "", "web", nil)
 	var row model.DownloadLink
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
+	if err := h.DB.Last(&row).Error; err != nil {
+		t.Fatalf("登记未落库: %v", err)
 	}
+	id := row.ID
 	if row.Kind != "magnet" || row.Hash != "ABCDEF0123456789ABCDEF0123456789ABCDEF01" {
 		t.Errorf("类型/指纹不符: kind=%q hash=%q", row.Kind, row.Hash)
 	}
@@ -36,41 +34,21 @@ func TestDownloadLinkOfflineFlow(t *testing.T) {
 	if err := h.DB.First(&row, id).Error; err != nil {
 		t.Fatalf("查不到记录行: %v", err)
 	}
-	if row.Status != "done" || row.Name != "Some.Show.S01" {
-		t.Errorf("回填后状态/任务名不符: %+v", row)
+	if row.Name != "Some.Show.S01" {
+		t.Errorf("回填后任务名不符: %+v", row)
 	}
 	if fids := unmarshalStrs(row.ResultFids); len(fids) != 1 || fids[0] != "9001" {
 		t.Errorf("产物 fid 未回填: %q", row.ResultFids)
 	}
 
-	// 认领：整理记录的 SourceFid 命中产物 fid → 识别结果回写到链接那一行
-	rec := &model.OrganizeRecord{
-		ID: 77, Source: "Some.Show.S01/", SourceFid: "9001", SourceKind: "dir",
-		Status: "success", TmdbID: 1396, Title: "绝命毒师", Year: "2008",
-		MediaType: "tv", Category: "欧美剧", TargetDir: "欧美剧/绝命毒师 (2008)",
+	// 认领：整理记录的 SourceFid 命中产物 fid
+	rec := &model.OrganizeRecord{Source: "Some.Show.S01/", SourceFid: "9001", SourceKind: "dir", Status: "success"}
+	if got := dlLinkMatch(h.DB, rec); got != id {
+		t.Errorf("fid 未认领到链接: got=%d want=%d", got, id)
 	}
-	dlLinkClaim(h.DB, rec)
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
-	}
-	if row.OrganizeStatus != "success" || row.TmdbID != 1396 || row.Title != "绝命毒师" ||
-		row.Year != "2008" || row.MediaType != "tv" || row.RecordID != 77 ||
-		row.Category != "欧美剧" || row.TargetDir != "欧美剧/绝命毒师 (2008)" {
-		t.Errorf("识别结果未回写: %+v", row)
-	}
-	if row.OrganizedAt == nil {
-		t.Error("整理时间未写入")
-	}
-
-	// 已认成功的行不再被别的整理记录抢走
-	dlLinkClaim(h.DB, &model.OrganizeRecord{
-		ID: 78, Source: "Some.Show.S01/", SourceFid: "9001", Status: "failed", Title: "别的片",
-	})
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
-	}
-	if row.Title != "绝命毒师" || row.OrganizeStatus != "success" {
-		t.Errorf("成功结果被覆盖: %+v", row)
+	// 一条链接可以被多条记录认领（先失败后重做、合集拆成几条）
+	if got := dlLinkMatch(h.DB, &model.OrganizeRecord{Source: "Some.Show.S01/", SourceFid: "9001", Status: "failed"}); got != id {
+		t.Errorf("第二条记录未认领到同一链接: got=%d want=%d", got, id)
 	}
 }
 
@@ -84,20 +62,20 @@ func TestDownloadLinkClaimByFileFid(t *testing.T) {
 	h := &Handler{DB: model.DB, Config: &config.Config{}}
 
 	ed2k := "ed2k://|file|x.mkv|123|FEDCBA0987654321FEDCBA0987654321|/"
-	id := dlLinkRecord(h, ed2k, "", "", "1", "web", "submitted", nil)
+	dlLinkRecord(h, ed2k, "", "", "web", nil)
+	var row model.DownloadLink
+	if err := h.DB.Last(&row).Error; err != nil {
+		t.Fatalf("登记未落库: %v", err)
+	}
 	dlLinkSyncTask(h, offlineTaskInfo{key: "FEDCBA0987654321FEDCBA0987654321", name: "x.mkv", fileID: "9001", status: 2})
 
+	// Source 故意与任务名不同，只能靠文件 fid 对上
 	rec := &model.OrganizeRecord{
-		ID: 3, Source: "x.mkv", SourceFid: "7777", SourceKind: "file", Status: "success", Title: "某片",
-		Files: marshalRecordFiles([]orgRecordFile{{Fid: "9001", Name: "x.mkv", Kind: "video"}}),
+		Source: "y.mkv", SourceFid: "7777", SourceKind: "file", Status: "success",
+		Files: marshalRecordFiles([]orgRecordFile{{Fid: "9001", Name: "y.mkv", Kind: "video"}}),
 	}
-	dlLinkClaim(h.DB, rec)
-	var row model.DownloadLink
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
-	}
-	if row.Title != "某片" {
-		t.Errorf("文件 fid 未命中: %+v", row)
+	if got := dlLinkMatch(h.DB, rec); got != row.ID {
+		t.Errorf("文件 fid 未命中: got=%d want=%d", got, row.ID)
 	}
 }
 
@@ -110,39 +88,47 @@ func TestDownloadLinkShareClaimByName(t *testing.T) {
 	h := &Handler{DB: model.DB, Config: &config.Config{}}
 
 	link := "https://115cdn.com/s/swzabc123?password=a1b2"
-	id := dlLinkRecord(h, link, "share", "某合集", "999", "机器人", "done",
-		[]string{"某片名.2020.1080p", "说明.txt"})
+	dlLinkRecord(h, link, "share", "某合集", "机器人", []string{"某片名.2020.1080p", "说明.txt"})
 
 	var row model.DownloadLink
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
+	if err := h.DB.Last(&row).Error; err != nil {
+		t.Fatalf("登记未落库: %v", err)
 	}
-	if row.Hash != "swzabc123" || row.Status != "done" {
+	if row.Hash != "swzabc123" || row.Source != "机器人" {
 		t.Errorf("分享记录字段不符: %+v", row)
 	}
 
 	// 转存后 115 保留原名，整理记录的 Source 就是那个名字（目录带尾斜杠）
-	dlLinkClaim(h.DB, &model.OrganizeRecord{
-		ID: 9, Source: "某片名.2020.1080p/", SourceFid: "555", Status: "success",
-		Title: "某片名", Year: "2020", TmdbID: 42,
-	})
-	if err := h.DB.First(&row, id).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
+	if got := dlLinkMatch(h.DB, &model.OrganizeRecord{Source: "某片名.2020.1080p/", SourceFid: "555"}); got != row.ID {
+		t.Errorf("按名字未认领到: got=%d want=%d", got, row.ID)
 	}
-	if row.Title != "某片名" || row.TmdbID != 42 || row.OrganizeStatus != "success" {
-		t.Errorf("按名字未认领到: %+v", row)
-	}
-
 	// 无关内容不该被认领
-	model.DB.Where("1=1").Delete(&model.DownloadLink{})
-	id2 := dlLinkRecord(h, link, "share", "某合集", "999", "web", "done", []string{"甲"})
-	dlLinkClaim(h.DB, &model.OrganizeRecord{ID: 10, Source: "乙/", SourceFid: "666", Status: "success", Title: "乙片"})
-	// 用新变量查：复用已带主键的 row 会被 GORM 当成附加的 id 条件
-	var fresh model.DownloadLink
-	if err := h.DB.First(&fresh, id2).Error; err != nil {
-		t.Fatalf("查不到记录行: %v", err)
+	if got := dlLinkMatch(h.DB, &model.OrganizeRecord{Source: "乙/", SourceFid: "666"}); got != 0 {
+		t.Errorf("不该认领无关链接: got=%d", got)
 	}
-	if fresh.OrganizeStatus != "" {
-		t.Errorf("不该认领无关记录: %+v", fresh)
+}
+
+// 列表带出来源链接：LinkID 为 0 或指向已清理的链接时不带
+func TestRecordLinksLookup(t *testing.T) {
+	if _, err := model.InitDB("file:dllink_lookup_test?mode=memory&cache=shared"); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	model.DB.Where("1=1").Delete(&model.DownloadLink{})
+	h := &Handler{DB: model.DB, Config: &config.Config{}}
+	dlLinkRecord(h, "magnet:?xt=urn:btih:1111111111111111111111111111111111111111", "", "", "web", nil)
+	var row model.DownloadLink
+	if err := h.DB.Last(&row).Error; err != nil {
+		t.Fatalf("登记未落库: %v", err)
+	}
+	recs := []model.OrganizeRecord{{ID: 1, LinkID: row.ID}, {ID: 2}, {ID: 3, LinkID: row.ID + 100}}
+	links := recordLinks(h.DB, recs)
+	if d := toRecordDTO(recs[0], links); d.Link == nil || d.Link.URL != row.URL {
+		t.Errorf("来源链接未带出: %+v", d.Link)
+	}
+	if d := toRecordDTO(recs[1], links); d.Link != nil {
+		t.Errorf("无来源的记录不该带链接: %+v", d.Link)
+	}
+	if d := toRecordDTO(recs[2], links); d.Link != nil {
+		t.Errorf("已清理的链接不该带出: %+v", d.Link)
 	}
 }

@@ -27,6 +27,7 @@ import {
 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
 import { organizeApi, resourcesApi } from '@/api'
 import type { OrganizeRecord } from '@/api/organize'
@@ -385,7 +386,7 @@ async function clearAll() {
         />
         <NInput
           v-model:value="keyword"
-          placeholder="原名 / 片名 / 入库目录 / TMDB ID"
+          placeholder="原名 / 片名 / 入库目录 / 来源链接 / TMDB ID"
           clearable
           class="kw"
           @keyup.enter="refilter"
@@ -513,6 +514,7 @@ async function clearAll() {
                 <FileIcon v-else :size="13" class="src-icon" />
                 <span class="src-text">{{ r.source }}</span>
               </div>
+              <SourceLink v-if="r.link" class="from" :link="r.link.url" :kind="r.link.kind" />
 
               <!-- 待确认：最要紧的是「会被整理成什么、放到哪」，单独一行突出 -->
               <div v-if="r.status === 'awaiting'" class="plan" :class="{ 'plan-miss': !r.tmdb_id }">
@@ -536,6 +538,7 @@ async function clearAll() {
                 <span v-if="r.strm_created">STRM {{ r.strm_created }}</span>
                 <span v-if="r.total_size">{{ humanSize(r.total_size) }}</span>
                 <span v-if="r.redo_count">重做 {{ r.redo_count }} 次</span>
+                <span v-if="r.link?.source">经 {{ r.link.source }} 提交</span>
                 <button
                   v-if="r.file_list?.length"
                   type="button"
@@ -839,6 +842,10 @@ async function clearAll() {
 }
 .link:hover {
   color: var(--c-primary);
+}
+.from {
+  margin-top: 4px;
+  max-width: 560px;
 }
 .src {
   margin-top: 4px;

@@ -126,7 +126,7 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 			reply("✓ "+msg, fmt.Sprintf("成功 %d 项，完成后自动整理入库。", success))
 		case "offline":
 			reply("⏳ 提交 115 离线下载…")
-			if err := h.submitOfflineLink(it.URL); err != nil {
+			if err := h.submitOfflineLink(it.URL, "机器人"); err != nil {
 				reply("✗ 离线提交失败: " + err.Error())
 				return
 			}

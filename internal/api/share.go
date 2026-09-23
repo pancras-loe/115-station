@@ -173,8 +173,8 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 	// 1. 文件列表 + 分享信息（GET /share/snap）。
 	//    此前的 POST /share/info 与 POST /share/snap 均已失效（信息端点恒返
 	//    "开小差"、列表端点 405），p115client 权威协议为 GET + query
-	// 条目名（Name/FileName 三选一非空）：转存后 115 保留原名，下载记录靠它
-	// 认领整理结果。同一个响应里本来就有，不额外请求 115；字段名防御式地都收，
+	// 条目名（Name/FileName 三选一非空）：转存后 115 保留原名，整理记录靠它
+	// 认领来源链接。同一个响应里本来就有，不额外请求 115；字段名防御式地都收，
 	// 115 的列表接口在 n / file_name / name 之间换过
 	type snapItem struct {
 		Fid      string `json:"fid"`
@@ -252,7 +252,7 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 	msg = fmt.Sprintf("「%s」转存完成: 成功 %d（共 %d 项）", shareTitle, success, len(allItems))
 	log.Printf("[上传] %s", msg)
 
-	// 下载记录：分享转存不产生 115 离线任务，产物就是 snap 列表里的顶层条目，
+	// 来源链接：分享转存不产生 115 离线任务，产物就是 snap 列表里的顶层条目，
 	// 转存后 115 保留原名 —— 整理时按名字认领，不用再问 115 一次
 	names := make([]string, 0, len(allItems))
 	for _, it := range allItems {
@@ -260,7 +260,7 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 			names = append(names, n)
 		}
 	}
-	dlLinkRecord(h, shareURL, "share", shareTitle, target, source, "done", names)
+	dlLinkRecord(h, shareURL, "share", shareTitle, source, names)
 
 	// 转存成功且开启自动整理 → 触发「整理+增量」
 	if success > 0 && req.Organize {

@@ -424,7 +424,7 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 		}()
 		return
 	}
-	if err := h.submitOfflineLink(link); err != nil {
+	if err := h.submitOfflineLink(link, "机器人"); err != nil {
 		reply("✗ 提交失败: " + err.Error())
 		return
 	}
@@ -490,8 +490,9 @@ func (h *Handler) wecomSearchTMDB(q string) []string {
 	return []string{fmt.Sprintf("%s《%s》(%s) tmdb=%d — 可发送：下载 <磁力链接> 提交", typ, media.Title, media.Year, media.TmdbID)}
 }
 
-// submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）
-func (h *Handler) submitOfflineLink(rawURL string) error {
+// submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）。
+// source 是提交来源（机器人 / 观影 / TG订阅），整理记录上显示「经谁提交」
+func (h *Handler) submitOfflineLink(rawURL, source string) error {
 	cookie, err := h.get115Cookie()
 	if err != nil {
 		return err
@@ -513,7 +514,7 @@ func (h *Handler) submitOfflineLink(rawURL string) error {
 	}
 	log.Printf("[机器人] ✓ 离线下载已提交: %s", truncateStr(rawURL, 60))
 	offlineMineAdd(h, rawURL) // 归属标记（企微提交的同样只在本项目内通知）
-	// 下载记录：与 offlineSubmitCore 同样登记，机器人提交的也要进记录表
-	dlLinkRecord(h, rawURL, "", "", h.shareFolderCid(), "机器人", "submitted", nil)
+	// 来源链接：与 offlineSubmitCore 同样登记，整理记录才认得出这批内容从哪来
+	dlLinkRecord(h, rawURL, "", "", source, nil)
 	return nil
 }

@@ -64,6 +64,18 @@ export interface OrganizeRecordFile {
 }
 
 /** awaiting = 开了「人工确认」后识别完停下来的条目，文件还在待整理里原地没动 */
+/** 整理记录的来源链接：这批内容是从哪条离线 / 分享链接下来的 */
+export interface OrganizeRecordLink {
+  id: number
+  kind: 'magnet' | 'ed2k' | 'http' | 'ftp' | 'share' | string
+  url: string
+  name: string
+  /** 提交来源：web / 机器人 / 观影 / 影巢 / TG订阅 */
+  source: string
+  created_at: string
+}
+
+/** awaiting = 开了「人工确认」后识别完停下来的条目，文件还在待整理里原地没动 */
 export type OrganizeRecordStatus = 'success' | 'exists' | 'failed' | 'unrecognized' | 'awaiting'
 
 export interface OrganizeRecord {
@@ -101,6 +113,8 @@ export interface OrganizeRecord {
   redo_count: number
   created_at: string
   file_list: OrganizeRecordFile[]
+  /** 来源链接；不是离线 / 分享提交进来的（手动丢进待整理等）没有 */
+  link?: OrganizeRecordLink
 }
 
 export interface OrganizeRecordPage {

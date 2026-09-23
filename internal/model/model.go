@@ -195,44 +195,25 @@ type DeepDeleteRecord struct {
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
 }
 
-// DownloadLink 下载记录：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载，
-// 或一次 115 分享转存。提交时落库，内容被整理入库后把识别结果（片名 / 年份 /
-// TMDB id / 分类 / 落库目录）回写到同一行 —— 一条链接从「提交了什么」到
-// 「最后成了哪部片」都在这一行上。
+// DownloadLink 来源链接：一条 = 一次提交的磁力/ed2k/HTTP/FTP 离线下载，
+// 或一次 115 分享转存。它自己不再单独成页，只给整理记录当「来源」——
+// 内容整理时按产物 fid / 名字认领（OrganizeRecord.LinkID），记录页据此带出原始链接。
 //
 // ⚠️ 认领产物**不允许新增任何 115 请求**，只能用已经在手的数据：
 //   - 离线任务：监视器本来就在 30 秒轮询任务列表，顺手摘 file_id（产物 fid）与任务名
 //   - 分享转存：/share/snap 的返回里本来就有顶层条目名，转存后 115 保留原名
 type DownloadLink struct {
-	ID   uint   `json:"id" gorm:"primaryKey"`
-	Kind string `json:"kind" gorm:"index;size:16"` // magnet / ed2k / http / ftp / share
-	URL  string `json:"url" gorm:"size:1000"`      // 原始链接（分享链接不含提取码）
-	Hash string `json:"hash" gorm:"index;size:64"` // 磁力 btih / ed2k 文件 hash / 分享 share_code，与 115 任务列表对账用
-	Name string `json:"name" gorm:"size:500"`      // 任务名 / 分享标题 / 链接文件名（提交时取得到多少算多少，回填时补全）
-
-	TargetCid string `json:"target_cid" gorm:"size:64"` // 提交时指定的转存目录
-	Source    string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 影巢 / TG订阅
-	// Status 下载/转存侧的状态：submitted（已提交）/ downloading / done / failed。
-	// 分享转存是同步完成的，登记即 done
-	Status string `json:"status" gorm:"index;size:16"`
-	Note   string `json:"note" gorm:"size:500"` // 失败原因或补充说明
+	ID     uint   `json:"id" gorm:"primaryKey"`
+	Kind   string `json:"kind" gorm:"index;size:16"` // magnet / ed2k / http / ftp / share
+	URL    string `json:"url" gorm:"size:1000"`      // 原始链接（分享链接不含提取码）
+	Hash   string `json:"hash" gorm:"index;size:64"` // 磁力 btih / ed2k 文件 hash / 分享 share_code，与 115 任务列表对账用
+	Name   string `json:"name" gorm:"size:500"`      // 任务名 / 分享标题 / 链接文件名（提交时取得到多少算多少，回填时补全）
+	Source string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 观影 / 影巢 / TG订阅
 
 	// ResultFids / ResultNames 产物在转存目录里的定位信息（JSON 数组），
 	// 整理认领时用：fid 精确（离线任务的 file_id），名字兜底（分享转存只有名字）
 	ResultFids  string `json:"result_fids" gorm:"type:text"`
 	ResultNames string `json:"result_names" gorm:"type:text"`
-
-	// ---- 整理结果（内容被整理入库后回写，纯本地 DB 操作）----
-	OrganizeStatus string     `json:"organize_status" gorm:"index;size:16"` // ""（还没整理）/ success / exists / failed / unrecognized
-	OrganizedAt    *time.Time `json:"organized_at"`
-	RecordID       uint       `json:"record_id" gorm:"index"` // 对应的 OrganizeRecord.ID，前端跳整理记录用
-	TmdbID         int        `json:"tmdb_id" gorm:"index"`
-	Title          string     `json:"title" gorm:"size:255"`
-	Year           string     `json:"year" gorm:"size:10"`
-	MediaType      string     `json:"media_type" gorm:"size:20"`
-	PosterPath     string     `json:"poster_path" gorm:"size:255"` // 列表直接出图，走 /tmdb/img 代理
-	Category       string     `json:"category" gorm:"size:50"`
-	TargetDir      string     `json:"target_dir" gorm:"size:500"` // 库内相对路径（不含库名）
 
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -300,6 +281,10 @@ type OrganizeRecord struct {
 	// 与「人工确认」开关无关：开关关着时普通待确认会被自动整理接手，这种不会 ——
 	// 否则每一轮都会重新识别、重新调一次模型、又停回来
 	HoldAI bool `json:"hold_ai"`
+
+	// LinkID 这批内容是从哪条离线/分享链接下来的（DownloadLink.ID，0 = 认不出来源）。
+	// 一条链接可以对应多条记录（合集分享、散文件逐集），所以挂在记录这一侧
+	LinkID uint `json:"link_id" gorm:"index"`
 
 	ManualTmdb bool      `json:"manual_tmdb"` // 用户手动指定过 TMDB 条目
 	RedoCount  int       `json:"redo_count"`

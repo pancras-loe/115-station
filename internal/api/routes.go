@@ -377,11 +377,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 离线下载（磁力/ed2k/HTTP）
 		protected.POST("/offline/add", h.offlineAddTask)
 
-		// 下载记录（离线/分享转存提交过的链接 + 整理出来的识别结果）
-		protected.GET("/download/links", h.ListDownloadLinks)
-		protected.DELETE("/download/links/:id", h.DeleteDownloadLink)
-		protected.POST("/download/links/clear", h.ClearDownloadLinks)
-
 		// 302 代理
 
 		// 系统设置

@@ -448,6 +448,10 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	if rec.Status == orgStatusAwaiting && s.recog.holdAI {
 		rec.HoldAI = true
 	}
+	// 来源链接：这批内容如果是某条离线/分享链接下来的，记录上挂它的 id，记录页据此带出原始链接
+	if rec.LinkID == 0 {
+		rec.LinkID = dlLinkMatch(model.DB, rec)
+	}
 	var err error
 	if ref := s.reuse; ref != nil {
 		s.reuse = nil
@@ -461,8 +465,6 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		log.Printf("[整理] ○ 整理记录写入失败（不影响整理本身）: %v", err)
 		return
 	}
-	// 回写下载记录：这批内容如果是某条离线/分享链接下来的，把识别结果记到那一行上
-	dlLinkClaim(model.DB, rec)
 	s.mu.Lock()
 	s.records = append(s.records, rec)
 	s.mu.Unlock()

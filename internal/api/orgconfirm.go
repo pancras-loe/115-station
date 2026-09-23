@@ -206,10 +206,10 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 	}
 	r := out[0]
 	if r.Status != "success" {
-		c.JSON(http.StatusBadGateway, gin.H{"error": orDash(r.Message), "data": toRecordDTO(r)})
+		c.JSON(http.StatusBadGateway, gin.H{"error": orDash(r.Message), "data": h.recordDTO(r)})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("《%s》已入库", r.Title), "data": toRecordDTO(r)})
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("《%s》已入库", r.Title), "data": h.recordDTO(r)})
 }
 
 // ConfirmOrganizeRecords POST /organize/records/confirm  body: {"ids":[1,2,3]}

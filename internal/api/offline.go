@@ -102,8 +102,8 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 
 	log.Printf("[上传] ✓ 离线下载任务已提交: %s（%s）", truncateStr(rawURL, 60), linkType)
 	offlineMineAdd(h, rawURL) // 归属标记：完成通知只发给 115-Station 内提交的任务
-	// 下载记录：链接本身先落一行，产物 fid / 任务名由离线监视器的既有轮询回填
-	dlLinkRecord(h, rawURL, linkType, "", target, source, "submitted", nil)
+	// 来源链接：链接本身先落一行，产物 fid / 任务名由离线监视器的既有轮询回填
+	dlLinkRecord(h, rawURL, linkType, "", source, nil)
 
 	// 离线下载是异步的：提交后 10 秒先试探一轮（115 秒传命中时文件已就位，
 	// CMS 同款极速响应——秒传场景 ~15 秒即开始整理）；未命中则 60 秒后再试，
@@ -314,7 +314,7 @@ func offlineNextPollDelay() time.Duration {
 	}
 }
 
-// 磁力指纹用于离线任务归属与下载记录对账。
+// 磁力指纹用于离线任务归属与来源链接对账。
 var reMagnetBtih = regexp.MustCompile(`(?i)btih:([A-Za-z0-9]+)`)
 
 func offlineMineAdd(h *Handler, rawURL string) {
@@ -445,7 +445,8 @@ func StartTransferWatcher(h *Handler) {
 // StartOfflineTaskMonitor 离线任务监视器：30 秒轮询 115 离线任务列表。
 // 磁力下载不是百分百成功（资源失效/任务报错都常见），且完成时间不可控：
 //   - 任务完成（status=2）→ 立即触发整理（不等 60 秒目录轮询）
-//   - 任务失败（status=-1）→ 日志告警（此前静默失败，用户永远等不到）
+//   - 任务失败（status=-1）→ 推通知（此前静默失败，用户永远等不到）。
+//     这是异步失败的唯一出口：提交那一刻 115 还没报错，界面上也没有别处能看到
 //
 // 状态码语义与 LitePan/openapi 一致：-1 失败 / 0 排队 / 1 下载中 / 2 完成
 func StartOfflineTaskMonitor(h *Handler) {
@@ -483,7 +484,7 @@ func StartOfflineTaskMonitor(h *Handler) {
 				if !offlineMineMatch(h, mine, key, t.name) {
 					continue
 				}
-				// 下载记录回填：补任务名、产物 fid（整理认领靠它）与下载状态，
+				// 来源链接回填：补任务名与产物 fid（整理认领靠它），
 				// 数据都出自这次轮询，不额外请求 115。放在下面的「启动前旧任务」
 				// 闸门之前——重启前提交、重启后才完成的任务不通知不整理，但该回填还是要填
 				dlLinkSyncTask(h, t)
@@ -524,7 +525,8 @@ func StartOfflineTaskMonitor(h *Handler) {
 				go h.triggerOrganizeAndSync()
 			}
 			if len(failedNames) > 0 {
-				NotifyMessage("✗ 磁力下载失败", fmt.Sprintf("%d 个任务失败（115 离线任务报错，请检查资源或重新提交）：\n%s",
+				// ed2k / HTTP 同样走离线任务，标题别写死成「磁力」
+				NotifyMessage("✗ 离线下载失败",fmt.Sprintf("%d 个任务失败（115 离线任务报错，请检查资源或重新提交）：\n%s",
 					len(failedNames), clip(failedNames, 15)))
 			}
 			// 终态表防膨胀：只保留最近一轮见到的任务

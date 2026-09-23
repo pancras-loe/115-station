@@ -14,7 +14,6 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
-import DownloadRecordsTab from '@/pages/transfer/DownloadRecordsTab.vue'
 import { storageApi, transferApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
@@ -204,10 +203,6 @@ async function submit() {
           </FormActions>
         </SectionCard>
       </div>
-    </NTabPane>
-
-    <NTabPane name="records" tab="下载记录">
-      <DownloadRecordsTab />
     </NTabPane>
 
     <NTabPane name="upload" tab="监控上传">

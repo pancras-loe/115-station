@@ -195,15 +195,18 @@ func (h *Handler) tgSubAutoSave(link, pass string) {
 		}
 		msg, ok, fail, err := h.shareReceiveCore(link, pass, target, "TG订阅", true)
 		if err != nil {
+			// 订阅是无人值守的，只写日志等于没人知道：成功有通知，失败更要有
 			log.Printf("[TG订阅] ✗ 自动转存失败: %v", err)
+			NotifyMessage("✗ 订阅自动转存失败", fmt.Sprintf("%s\n%s", truncateStr(link, 80), err.Error()))
 			return
 		}
 		NotifyMessage("", fmt.Sprintf("🔔 订阅自动转存完成（%d 成功/%d 失败）\n%s", ok, fail, truncateStr(msg, 80)))
 		return
 	}
 	if strings.HasPrefix(link, "magnet:") || strings.HasPrefix(link, "ed2k:") {
-		if err := h.submitOfflineLink(link); err != nil {
+		if err := h.submitOfflineLink(link, "TG订阅"); err != nil {
 			log.Printf("[TG订阅] ✗ 自动离线提交失败: %v", err)
+			NotifyMessage("✗ 订阅自动离线提交失败", fmt.Sprintf("%s\n%s", truncateStr(link, 80), err.Error()))
 			return
 		}
 		NotifyMessage("", "🔔 订阅自动离线下载已提交")
