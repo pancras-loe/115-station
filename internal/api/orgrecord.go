@@ -181,6 +181,7 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 // redoOrganize 原地重整理：按记录里的 fid 把文件改名 + 搬到指定 TMDB 条目对应的目录，
 // 清掉旧的本地产物，重新落 STRM 并刮削。就地更新 rec
 func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType string) error {
+	prevID, prevType := rec.TmdbID, rec.MediaType // 判断这次是不是改了指定（改了才记进识别记忆）
 	files := unmarshalRecordFiles(rec.Files)
 	if len(files) == 0 {
 		return fmt.Errorf("这条记录没有登记任何文件，无法重新整理（只能删除记录）")
@@ -370,6 +371,10 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	}
 	log.Printf("[整理] ✅ 重新整理完成：%s (%s) → %s（本地根 %s），视频 %d 个，生成 STRM %d 个",
 		media.Title, media.Year, rootRel, sink.localRoot, videoTotal, strmTotal)
+	// 选了和原来不同的条目 = 自动识别在这个名字上错了，记下人工结论
+	if tmdbID != prevID || media.MediaType != prevType {
+		rememberRecognition(rec.RecogKey, media)
+	}
 	return nil
 }
 

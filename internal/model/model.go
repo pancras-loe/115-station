@@ -288,10 +288,29 @@ type OrganizeRecord struct {
 	ScrapeState string `json:"scrape_state" gorm:"size:16"` // done / failed / skipped
 	ScrapeMsg   string `json:"scrape_msg" gorm:"size:255"`
 
+	// RecogKey 识别时用的「归一化片名|年份」。用户在确认/重新整理里手动指定条目时，
+	// 按这个键记进 RecognizeMemory，下次同名的内容直接用人工的结论
+	RecogKey string `json:"-" gorm:"size:255"`
+
 	ManualTmdb bool      `json:"manual_tmdb"` // 用户手动指定过 TMDB 条目
 	RedoCount  int       `json:"redo_count"`
 	CreatedAt  time.Time `json:"created_at" gorm:"index"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// RecognizeMemory 识别记忆：人工指定过的「片名 + 年份 → TMDB 条目」。
+// 只在人给出结论时写（待确认里改指定 / 重新整理选了条目），自动识别的结果不写 ——
+// 自动结果下次照样能搜出来，写进来只会把一次误识别固化下去
+type RecognizeMemory struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	TitleKey  string    `json:"title_key" gorm:"size:255;uniqueIndex:idx_recog_mem"` // titleKey 归一化后的片名
+	Year      string    `json:"year" gorm:"size:10;uniqueIndex:idx_recog_mem"`       // 文件名里的年份，没有为空
+	TmdbID    int       `json:"tmdb_id"`
+	MediaType string    `json:"media_type" gorm:"size:20"`
+	Title     string    `json:"title" gorm:"size:255"` // TMDB 片名，日志与界面展示用
+	Hits      int       `json:"hits"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // EventSuppress 整理自产事件抑制表：整理自己做的每一次 move/rename 都登记 fid，
@@ -350,6 +369,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&EventSuppress{},
 		&PathCache{},
 		&DeepDeleteRecord{},
+		&RecognizeMemory{},
 	); err != nil {
 		return nil, err
 	}

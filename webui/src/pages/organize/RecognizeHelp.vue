@@ -17,8 +17,13 @@ import HelpDoc from '@/components/ui/HelpDoc.vue'
         这一页的作用就是先把这些噪音清掉，让 TMDB 搜得中。
       </p>
       <p class="note">
-        替换只作用在「送去识别的那份名字」上，<strong>不会改网盘里的文件名</strong>。
+        替换只作用在「送去识别的那份名字」（以及每一集的季集号解析）上，<strong>不会改网盘里的文件名</strong>。
         入库后叫什么由「重命名策略」决定，画质、编码、发布组这些也仍旧从<strong>原始文件名</strong>提取。
+      </p>
+      <p class="p">
+        识别不只看文件名：文件名里缺的片名、年份、季号，会<strong>由近及远</strong>从所在的子目录、
+        顶层目录、再外层的容器目录上补。<code>狂飙 (2023)/Season 2/E05.mkv</code> 能认出
+        「狂飙 2023 第二季第 5 集」；<code>Movies</code>、<code>合集</code> 这类分类目录名不会被当成片名。
       </p>
     </section>
 
@@ -58,6 +63,58 @@ import HelpDoc from '@/components/ui/HelpDoc.vue'
       </p>
     </section>
 
+    <section class="block">
+      <h3 class="block-title">直接指定条目、季号、集数偏移</h3>
+      <p class="p">
+        替换内容里可以写一个 <code>{[…]}</code> 标签，识别时会被摘出来单独处理，
+        不会混进片名去搜。各项用分号隔开，<strong>都可以单独写</strong>：
+      </p>
+      <table class="tb">
+        <tr>
+          <th style="width: 110px">写法</th>
+          <th>作用</th>
+        </tr>
+        <tr>
+          <td><code>tmdbid=69851</code></td>
+          <td>直接用这个 TMDB 条目，不再按片名搜。电影和剧集的编号是两套，最好同时写 <code>type</code></td>
+        </tr>
+        <tr>
+          <td><code>type=tv</code></td>
+          <td>条目类型：<code>tv</code> 剧集 / <code>movie</code> 电影</td>
+        </tr>
+        <tr>
+          <td><code>s=2</code></td>
+          <td>强制季号。适合文件名里没写季、或者写错季的资源</td>
+        </tr>
+        <tr>
+          <td><code>eo=-12</code></td>
+          <td>
+            集数偏移。番剧常见跨季连续编号：第二季从第 13 集编起，
+            写 <code>eo=-12</code> 就把 13 改回第 1 集
+          </td>
+        </tr>
+      </table>
+      <p class="p">
+        例：模式选「文本」，把 <code>某番</code> 替换成 <code>某番 {[tmdbid=12345;type=tv;s=2;eo=-12]}</code>，
+        这部番以后每一集都会进第二季、集号减 12。
+      </p>
+      <p class="note">
+        文件夹名本身写 <code>[tmdbid=123]</code>（Emby）、<code>[tmdbid-123]</code>（Jellyfin）、
+        <code>{tmdb-123}</code>（Plex）也会被认出来，不用配规则。
+      </p>
+    </section>
+    <section class="block">
+      <h3 class="block-title">识别记忆</h3>
+      <p class="p">
+        在「待确认」里<strong>改了指定</strong>、或在整理记录里<strong>重新整理并选了别的条目</strong>，
+        系统会记下「这个片名 + 年份 → 这个条目」。以后同名同年的内容（连载的新一集、换了发布组的资源）
+        直接用你的结论，不再重新搜。
+      </p>
+      <p class="note">
+        记错了就再改一次：重新整理选对的条目会覆盖原来的记忆。
+        同名但年份不同的片子各记各的；文件名没写年份、而同名记忆又不止一条时不会乱套用。
+      </p>
+    </section>
     <section class="block">
       <h3 class="block-title">发布组</h3>
       <p class="p">

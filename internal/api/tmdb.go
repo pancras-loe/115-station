@@ -394,7 +394,9 @@ func parseFileName(filename string) *ParsedName {
 	// id 标签要在去后缀之前摘：目录名 "Movie.1999.[tmdbid=603]" 没有扩展名，
 	// 最后一个点后面的标签会被当成后缀一起剪掉
 	name := filename
-	result.TmdbID, result.TmdbKind, name = takeTmdbTag(name)
+	tag, name := takeTags(name)
+	result.TmdbID, result.TmdbKind = tag.TmdbID, tag.Kind
+	defer applyNameTag(result, tag)
 	name = trimMediaExt(name)
 	// 先剥离发布站广告（【…】块/域名），再解析
 	name = stripReleaseAds(name)
@@ -474,6 +476,19 @@ func parseFileName(filename string) *ParsedName {
 }
 
 var reMultiSpace = regexp.MustCompile(`\s+`)
+
+// applyNameTag 标签里的季号 / 集偏移最后套上去，盖过从名字里解析出来的
+func applyNameTag(p *ParsedName, t nameTag) {
+	if t.Season > 0 {
+		p.Season, p.SeasonGuessed, p.IsTV = t.Season, false, true
+	}
+	if t.EpOffset != 0 && p.Episode > 0 && p.Episode+t.EpOffset > 0 {
+		p.Episode += t.EpOffset
+	}
+	if t.Kind == "tv" {
+		p.IsTV = true
+	}
+}
 
 // ---------- 季集号 ----------
 
@@ -736,47 +751,83 @@ func pickYear(name string) (string, int) {
 	return best.year, best.pos
 }
 
-// TMDB id 标签。兼容 Emby 的 [tmdbid=123]、Jellyfin 的 [tmdbid-123]、Plex 的 {tmdb-123}，
-// 以及 MoviePilot 的 {[tmdbid=123;type=tv]}（可带类型）
+// 名字里的识别标签。兼容 Emby 的 [tmdbid=123]、Jellyfin 的 [tmdbid-123]、Plex 的 {tmdb-123}，
+// 以及 MoviePilot 的 {[tmdbid=123;type=tv;s=2]}。
+//
+// 花括号写法是给「识别规则」用的：替换规则把某个片名换成「片名 {[tmdbid=…;type=tv;s=2;eo=-12]}」，
+// 就能直接指定条目、季号和集数偏移（MoviePilot 自定义识别词的「替换 + 集偏移」那一套）。
+// 里面的各项都可以单独写：只写 s=2 就是只改季号，照常按片名搜
 var (
-	reTmdbTagBraced = regexp.MustCompile(`(?i)\{\[([^\]]*?\btmdbid\s*=\s*\d+[^\]]*)\]\}`)
-	reTmdbTagID     = regexp.MustCompile(`(?i)\btmdbid\s*=\s*(\d+)`)
-	reTmdbTagType   = regexp.MustCompile(`(?i)\btype\s*=\s*(movies?|tv)\b`)
-	reTmdbTag       = regexp.MustCompile(`(?i)[\[{]\s*tmdb(?:id)?\s*[=\-:]\s*(\d+)\s*[\]}]`)
+	reTagBraced = regexp.MustCompile(`\{\[([^\]]*)\]\}`)
+	reTmdbTag   = regexp.MustCompile(`(?i)[\[{]\s*tmdb(?:id)?\s*[=\-:]\s*(\d+)\s*[\]}]`)
 )
 
-// takeTmdbTag 摘出名字里的 TMDB id 标签，返回 id、类型（movie/tv，没写为空）与去掉标签后的名字
-func takeTmdbTag(name string) (int, string, string) {
-	if m := reTmdbTagBraced.FindStringSubmatchIndex(name); m != nil {
-		inner := name[m[2]:m[3]]
-		id := 0
-		if im := reTmdbTagID.FindStringSubmatch(inner); im != nil {
-			id, _ = strconv.Atoi(im[1])
+// nameTag 从名字里摘出来的识别标签
+type nameTag struct {
+	TmdbID   int
+	Kind     string // movie / tv，没写为空
+	Season   int    // s=2：强制季号
+	EpOffset int    // eo=-12：集号偏移（跨季连续编号的番剧，第二季从 13 集开始编）
+}
+
+// takeTags 摘出名字里的识别标签，返回标签与去掉标签后的名字
+func takeTags(name string) (nameTag, string) {
+	var t nameTag
+	// 花括号写法可以有多段（id 一段、季号一段），逐段收
+	for {
+		m := reTagBraced.FindStringSubmatchIndex(name)
+		if m == nil {
+			break
 		}
-		kind := ""
-		if tm := reTmdbTagType.FindStringSubmatch(inner); tm != nil {
-			kind = strings.ToLower(tm[1])
-			if kind != "tv" {
-				kind = "movie"
+		known := false
+		for _, kv := range strings.Split(name[m[2]:m[3]], ";") {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok {
+				continue
+			}
+			k, v = strings.ToLower(strings.TrimSpace(k)), strings.TrimSpace(v)
+			switch k {
+			case "tmdbid", "tmdb":
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					t.TmdbID, known = n, true
+				}
+			case "type":
+				switch strings.ToLower(v) {
+				case "tv":
+					t.Kind, known = "tv", true
+				case "movie", "movies":
+					t.Kind, known = "movie", true
+				}
+			case "s":
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					t.Season, known = n, true
+				}
+			case "eo":
+				if n, err := strconv.Atoi(strings.TrimPrefix(v, "+")); err == nil {
+					t.EpOffset, known = n, true
+				}
 			}
 		}
-		if id > 0 {
-			return id, kind, strings.TrimSpace(name[:m[0]] + name[m[1]:])
+		if !known {
+			break // 不是我们认识的标签，原样留着
+		}
+		name = strings.TrimSpace(name[:m[0]] + name[m[1]:])
+	}
+	if t.TmdbID == 0 {
+		if m := reTmdbTag.FindStringSubmatchIndex(name); m != nil {
+			if id, _ := strconv.Atoi(name[m[2]:m[3]]); id > 0 {
+				t.TmdbID = id
+				name = strings.TrimSpace(name[:m[0]] + name[m[1]:])
+			}
 		}
 	}
-	if m := reTmdbTag.FindStringSubmatchIndex(name); m != nil {
-		id, _ := strconv.Atoi(name[m[2]:m[3]])
-		if id > 0 {
-			return id, "", strings.TrimSpace(name[:m[0]] + name[m[1]:])
-		}
-	}
-	return 0, "", name
+	return t, name
 }
 
 // extractTmdbID 名字里的 TMDB id 标签（没有返回 0）
 func extractTmdbID(name string) (int, string) {
-	id, kind, _ := takeTmdbTag(name)
-	return id, kind
+	t, _ := takeTags(name)
+	return t.TmdbID, t.Kind
 }
 
 func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
@@ -786,6 +837,10 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		if err != nil || media != nil {
 			return media, err
 		}
+	}
+	// 人工指定过的同名内容：直接用人工的结论（recogmemory.go）
+	if media, err := tc.recognizeByMemory(parsed); err != nil || media != nil {
+		return media, err
 	}
 	if parsed.Title == "" {
 		return nil, fmt.Errorf("无法从文件名提取标题")

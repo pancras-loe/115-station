@@ -299,16 +299,15 @@ func applySeasonHint(p, hint *ParsedName) {
 	}
 }
 
-// seasonHint 目录上的季号提示（renameBeforeMove 用；nil = 没有目录可参考）
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, seasonHint *ParsedName, onLog func(string)) map[string]string {
+// main 是整个条目识别时的解析结果，每一集的季号按 parseVideoInDir 的顺序补
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, rules []ReplaceRule, main *ParsedName, onLog func(string)) map[string]string {
 	// 计算单个视频的新名（保持原命名规则）
 	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
 	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
 	mediaCopy := *media
 	mediaCopy.Title = sanitizeName(mediaCopy.Title)
 	videoNewName := func(vf remoteFile) (string, bool) {
-		p := parseFileName(vf.Name)
-		applySeasonHint(p, seasonHint)
+		p := parseVideoInDir(vf, rules, main)
 		var file string
 		if mediaCopy.MediaType == "movie" {
 			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
@@ -1165,6 +1164,8 @@ type dirEntry struct {
 	Cid      string // 子目录 cid（仅文件夹有）
 	Sha1     string // 文件 sha1（散文件去重用）
 	PickCode string // 文件 pickcode（散文件一条龙落盘写 STRM 直链要用）
+	// Parent 容器目录名（「美剧/狂飙 (2023)/…」里的「美剧」）。识别时作为最外层的路径上下文
+	Parent string
 }
 
 // listPendingTopLevel 列出待整理目录下的顶层条目（不递归）
@@ -1483,6 +1484,7 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 		if !hasDirectVideo && len(subDirs) > 0 {
 			onLog(fmt.Sprintf("▣ %s/ 为容器目录（无直接视频，含 %d 个子目录），逐个处理", entry.Name, len(subDirs)))
 			for _, child := range subDirs {
+				child.Parent = entry.Name
 				results = append(results, processEntry(ctx, guards, child, depth+1, successCount)...)
 			}
 			// 容器壳处理：重新列目录确认真的空了才移冗余；
@@ -1579,6 +1581,7 @@ func fileKindSummary(files []remoteFile) string {
 
 // processDir 处理一个子目录（包含多个文件的影视目录）
 func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult {
+	ctx.sink.recogKey = "" // 识别之前就失败的记录不带键
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	var results []OrganizeResult
 
@@ -1681,46 +1684,16 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	onLog(fmt.Sprintf("▶ 开始识别: %s/（%s；样本: %s）",
 		shortLogName(dir.Name), fileKindSummary(files), shortLogName(mainVideo.Name)))
 
-	parsed := parseFileName(name)
-	// 文件名无法提取标题 → 用目录名识别（目录名通常比文件名规范）
-	// 场景：/西游记.1987/ep01.mkv — 文件名只有集数，目录名有标题和年份
-	useDirName := false
-	if parsed.Title == "" || isEpisodeOnly(parsed.Title) {
-		dirParsed := parseFileName(dir.Name)
-		if dirParsed.Title != "" && !isEpisodeOnly(dirParsed.Title) {
-			onLog(fmt.Sprintf("▣ 文件名 %q 无法识别，改用目录名 %q", name, dir.Name))
-			// 用目录名做识别，但保留文件名解析出的季集号
-			if parsed.Season == 0 {
-				parsed.Season = dirParsed.Season
-			}
-			if parsed.Episode == 0 {
-				parsed.Episode = dirParsed.Episode
-			}
-			if parsed.Year == "" {
-				parsed.Year = dirParsed.Year
-			}
-			parsed.IsTV = dirParsed.IsTV || parsed.IsTV
-			parsed = dirParsed // 用目录名的标题/年份
-			// 恢复文件名中的季集号（如果目录名没有的话）
-			if parsed.Season == 0 && parseFileName(name).Season > 0 {
-				parsed.Season = parseFileName(name).Season
-			}
-			if parsed.Episode == 0 && parseFileName(name).Episode > 0 {
-				parsed.Episode = parseFileName(name).Episode
-			}
-			if fp := parseFileName(name); fp.TmdbID > 0 {
-				parsed.TmdbID, parsed.TmdbKind = fp.TmdbID, fp.TmdbKind
-			}
-			useDirName = true
-		}
+	// 文件名缺的片名 / 年份 / 季号 / id 标签由各级目录补：子目录 → 顶层目录 → 容器目录。
+	// 场景：/西游记.1987/ep01.mkv（片名年份在目录上）、/狂飙/Season 2/E05.mkv（季号在子目录上）
+	dirNames := pathDirs(mainVideo.Path, dir.Parent)
+	dirParses := parseDirs(dirNames, replaceRules)
+	parsed, titleFrom := mergePathContext(parseFileName(name), dirParses, dirNames)
+	useDirName := titleFrom != ""
+	if useDirName {
+		onLog(fmt.Sprintf("▣ 文件名 %q 提取不出片名，改用目录名 %q", name, titleFrom))
 	}
-	// 目录名上的 id 标签同样算数（整理好的目录常见 "片名 (2019) [tmdbid=123]"，
-	// 里面的文件名却不带标签）；文件名自己带了的优先
-	if parsed.TmdbID == 0 {
-		parsed.TmdbID, parsed.TmdbKind = extractTmdbID(dir.Name)
-	}
-	// 文件名只有集号时季号是猜的 1，目录名上写了「第二季」就以目录为准
-	applySeasonHint(parsed, parseFileName(dir.Name))
+	ctx.sink.recogKey = recogKey(parsed)
 
 	var media *TmdbMedia
 	if ctx.forced != nil {
@@ -1743,19 +1716,19 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		var err error
 		media, err = tc.recognize(parsed)
 		if err != nil || media == nil {
-			// 文件名识别失败 → 如果还没试过目录名，用目录名再识别一次
-			if !useDirName {
-				dirParsed := parseFileName(dir.Name)
-				if dirParsed.Title != "" {
-					onLog(fmt.Sprintf("▣ 文件名识别失败，改用目录名 %q 重试", dir.Name))
-					// 保留文件名的季集号
-					if dirParsed.Season == 0 {
-						dirParsed.Season = parsed.Season
+			// 文件名识别失败 → 如果还没试过目录名，用最近一级能用的目录名再识别一次
+			// （文件名自己的片名可能是残缺的，目录名通常更规范）
+			if !useDirName && err == nil {
+				for i, d := range dirParses {
+					if !usableTitle(d.Title) || titleKey(d.Title) == titleKey(parsed.Title) {
+						continue
 					}
-					if dirParsed.Episode == 0 {
-						dirParsed.Episode = parsed.Episode
-					}
-					media, err = tc.recognize(dirParsed)
+					onLog(fmt.Sprintf("▣ 文件名识别失败，改用目录名 %q 重试", dirNames[i]))
+					retry := *parsed
+					retry.Title, retry.Year, retry.TmdbID, retry.TmdbKind = d.Title, d.Year, 0, ""
+					retry.IsTV = retry.IsTV || d.IsTV
+					media, err = tc.recognize(&retry)
+					break
 				}
 			}
 			if err != nil || media == nil {
@@ -1830,11 +1803,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1})
 	}
 	for _, vf := range videoFiles {
-		vp := parseFileName(vf.Name)
-		if vp.Season == 0 {
-			vp.Season = parsed.Season
-		}
-		applySeasonHint(vp, parsed)
+		vp := parseVideoInDir(vf, replaceRules, parsed)
 		vpath := buildNewNameWithTemplate(media, vp, vf.Name)
 		vdir := libSubPath(categoryDir(media.MediaType, category), pathDir(vpath))
 		plan := washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), onLog)
@@ -2013,7 +1982,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	for _, vf := range videoFiles {
 		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
 	}
-	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, parsed, onLog) {
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, replaceRules, parsed, onLog) {
 		finalNames[fid] = n
 	}
 
@@ -2405,6 +2374,7 @@ func stdPath(p string) string {
 // processSingleFile 处理一个散视频。第二个返回值是本次留下的整理记录：
 // 同前缀的兄弟文件会并进同一条记录（一部剧 24 集不该刷出 24 行）
 func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.OrganizeRecord) {
+	ctx.sink.recogKey = ""
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
 	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
@@ -2426,6 +2396,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	// SHA1 去重移到 TMDB 识别后（需要 media 信息来计算目标目录）
 	onLog(fmt.Sprintf("▶ 开始识别: %s", shortLogName(f.Name)))
 	parsed := parseFileName(name)
+	ctx.sink.recogKey = recogKey(parsed)
 	oldBase := baseName(f.Name)
 	// 人工确认：同前缀的其他集一起挂在这条待确认记录上，确认时一并入库
 	holdFiles := func() []orgRecordFile {
@@ -2920,7 +2891,7 @@ func episodeRangeStr(videoFiles []remoteFile) string {
 	type epRec struct{ season, ep int }
 	var eps []epRec
 	for _, vf := range videoFiles {
-		p := parseFileName(vf.Name)
+		p := parseVideoInDir(vf, nil, nil)
 		if p.Episode > 0 {
 			s := p.Season
 			if s == 0 {
@@ -2980,7 +2951,7 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 	type epRec struct{ season, ep int }
 	var eps []epRec
 	for _, vf := range videoFiles {
-		p := parseFileName(vf.Name)
+		p := parseVideoInDir(vf, nil, nil)
 		if p.Episode > 0 {
 			s := p.Season
 			if s == 0 {

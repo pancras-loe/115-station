@@ -314,7 +314,13 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 		sink.reuse = &awaitingRef{id: rec.ID, created: rec.CreatedAt, manual: tmdbID != rec.TmdbID}
 		log.Printf("[整理] ▶ 人工确认《%s》→ %s (%s) [tmdb=%d]", rec.Source, media.Title, media.Year, tmdbID)
 
-		if msg := confirmOne(ctx, &rec); msg != "" {
+		autoID, autoType, key := rec.TmdbID, rec.MediaType, rec.RecogKey
+		msg := confirmOne(ctx, &rec)
+		// 改了指定（或本来就没识别出来、由人指定）= 人给出的结论，记进识别记忆
+		if msg == "" && (tmdbID != autoID || mediaType != autoType) {
+			rememberRecognition(key, media)
+		}
+		if msg != "" {
 			sink.reuse = nil
 			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(map[string]interface{}{
 				"status": "failed", "stage": "confirm", "message": msg,

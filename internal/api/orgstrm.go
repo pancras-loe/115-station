@@ -62,6 +62,9 @@ type orgSink struct {
 	refreshDirs []string             // 本轮动过的库内目录（含库名前缀）
 	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
 	records     []*model.OrganizeRecord
+	// recogKey 当前条目识别用的键（recogKey），写记录时顺手带上，供人工改指定后记进识别记忆。
+	// 整理是逐条串行的：每个条目开始识别时重设
+	recogKey string
 
 	// reuse 下一条记录写回这条待确认记录（人工确认 / 开关关掉后自动接手），
 	// 而不是另起一行：记录页里同一个条目从「待确认」变成结果，不会一分为二
@@ -420,6 +423,9 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		return
 	}
 	rec.BatchID = s.batchID
+	if rec.RecogKey == "" {
+		rec.RecogKey = s.recogKey
+	}
 	var err error
 	if ref := s.reuse; ref != nil {
 		s.reuse = nil
