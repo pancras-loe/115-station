@@ -213,3 +213,11 @@ export const deleteRecognizeMemory = (id: number) =>
 
 export const clearRecognizeMemory = () =>
   http.post<{ message?: string; removed: number }>('/organize/recognize-memory/clear', {})
+
+// ---- 工作目录一键创建：网盘根下 /StrmStation/{转存,待整理,已存在,冗余}，只补未配置的 ----
+export interface WorkspaceInitResult {
+  message: string
+  created: { key: string; label: string; cid: string; path: string }[]
+}
+export const initWorkspace = () =>
+  http.post<WorkspaceInitResult>('/organize/workspace/init', undefined, { timeoutMs: 120_000 })

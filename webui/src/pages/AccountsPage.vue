@@ -13,7 +13,7 @@ import {
   NSelect,
   NTag,
 } from 'naive-ui'
-import { QrCode, ShieldCheck } from '@lucide/vue'
+import { FolderPlus, QrCode, ShieldCheck } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -21,7 +21,7 @@ import MeterBar from '@/components/ui/MeterBar.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
-import { storageApi } from '@/api'
+import { configApi, organizeApi, storageApi } from '@/api'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
@@ -29,7 +29,7 @@ import type { StorageCheck } from '@/types/storage'
 import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
 const media = useFullSetting()
 const cidInput = ref<InstanceType<typeof Cid115Input> | null>(null)
 const cidValue = ref({ cid: '', path: '' })
@@ -59,6 +59,51 @@ watch(
   },
   { immediate: true },
 )
+
+/**
+ * 还没配置的工作目录（转存 / 待整理 / 已存在 / 冗余）。
+ * 四个都配好了就不显示一键创建；媒体库没保存时后端会拒绝，按钮也不出。
+ */
+const missingWs = ref<string[]>([])
+const creatingWs = ref(false)
+
+async function loadMissingWs() {
+  try {
+    const [org, share] = await Promise.all([
+      configApi.getSetting<Record<string, string>>('org-basic', {}),
+      configApi.getSetting<Record<string, string>>('share', {}),
+    ])
+    const out: string[] = []
+    if (!share.folder) out.push('转存')
+    if (!org.pending) out.push('待整理')
+    if (!org.existing) out.push('已存在')
+    if (!org.redundant) out.push('冗余')
+    missingWs.value = out
+  } catch {
+    missingWs.value = []
+  }
+}
+
+function createWs() {
+  dialog.info({
+    title: '一键创建工作目录',
+    content: `将在 115 网盘根目录下创建 /StrmStation/{${missingWs.value.join('、')}} 并写入配置。已配置的目录保持不动，同名目录已存在则直接复用。`,
+    positiveText: '创建',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      creatingWs.value = true
+      try {
+        const res = await organizeApi.initWorkspace()
+        message.success(res.message)
+        await loadMissingWs()
+      } catch (e) {
+        toastError(e, '创建失败')
+      } finally {
+        creatingWs.value = false
+      }
+    },
+  })
+}
 
 const DEFAULT_COOKIE_PATH = '/config/115-cookies.txt'
 
@@ -207,7 +252,10 @@ function reset() {
   message.info('配置已重置（尚未保存）')
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadMissingWs()
+})
 </script>
 
 <template>
@@ -297,6 +345,24 @@ onMounted(load)
         <Cid115Input ref="cidInput" v-model="cidValue" />
       </FieldRow>
 
+      <NAlert
+        v-if="media.saved.value.cid && missingWs.length"
+        class="ws-note"
+        type="warning"
+        :bordered="false"
+      >
+        <div class="ws-row">
+          <span>
+            还没有配置{{ missingWs.join('、') }}目录。它们与媒体库目录必须互不包含，
+            可一键在网盘根目录下创建 /StrmStation 统一存放。
+          </span>
+          <NButton size="small" type="primary" ghost :loading="creatingWs" @click="createWs">
+            <template #icon><FolderPlus :size="15" /></template>
+            一键创建
+          </NButton>
+        </div>
+      </NAlert>
+
       <FieldRow
         label="本地媒体库根目录"
         required
@@ -377,6 +443,19 @@ onMounted(load)
 }
 .media-note {
   margin-bottom: 12px;
+}
+.ws-note {
+  margin-bottom: 12px;
+}
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ws-row > span {
+  flex: 1;
+  min-width: 200px;
 }
 .acc-avatar {
   width: 56px;

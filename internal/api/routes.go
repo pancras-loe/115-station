@@ -294,6 +294,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 整理流水线（识别 → 搬移 → STRM → 刮削 → 刷 Emby 一条龙）
 		protected.POST("/organize/pipeline", h.RunOrganizePipeline)
+		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
 
 		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理
 		protected.GET("/organize/records", h.ListOrganizeRecords)
@@ -1509,6 +1510,11 @@ func (h *Handler) SaveSetting(c *gin.Context) {
 	// 敏感键：表单回传的掩码字段回填旧值（未改动的密钥不丢）
 	if sensitiveSettingKeys[req.Key] {
 		req.Value = unmaskSensitiveJSON(req.Value, h.settingValueRaw(req.Key))
+	}
+	// 媒体库 / 转存 / 待整理 / 已存在 / 冗余 必须互不包含，见 workspace.go
+	if err := h.guardWorkspaceSetting(req.Key, req.Value); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if err := h.Config.SaveSetting(req.Key, req.Value); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
