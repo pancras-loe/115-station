@@ -689,12 +689,29 @@ var (
 	reCnNoiseShort = regexp.MustCompile(`(^|[\s._\-\[\]【】()（）+&])(?:中字|双字|国语|粤语|国配|台配|双语|内封|外挂|高清|超清|蓝光|原盘|合集|全集|完整版|未删减|无删减|连载|完结|中英|简繁|简中|繁中|官译|特效|日剧|美剧|韩剧|英剧|泰剧|国产剧|电视剧|动漫|动画|[全共]\s*[0-9` + cnDigits + `]+\s*[集话話期])+([\s._\-\[\]【】()（）+&]|$)`)
 )
 
+// reCnNoiseBracketWord 方括号块里除「全N集」之外的说明关键词
+var reCnNoiseBracketWord = regexp.MustCompile(`字幕|内封|外挂|内嵌|国语|粤语|双语|中字|双字|音轨|配音|国配|台配|简繁|繁简|中英`)
+
+// stripNoiseBracket 处理一个命中 reCnNoiseBracket 的括号块。
+// 带字幕/音轨这类词的块整块是说明，直接剥；只因为「全N集」命中的块常常把片名也包在里面
+// （[仁心俱乐部.全40集].2025…），整块剥掉片名就没了，只剩年份后面的平台名去搜 ——
+// 这种只剥「全N集」本身，其余内容留下
+func stripNoiseBracket(block string) string {
+	if reCnNoiseBracketWord.MatchString(block) {
+		return " "
+	}
+	rs := []rune(block)
+	inner := string(rs[1 : len(rs)-1])
+	inner = reCnTotalEpisodes.ReplaceAllString(inner, " ")
+	return " " + strings.Trim(inner, " ._-") + " "
+}
+
 // stripCnNoise 剥中文说明词（国语中字、全39集、高清…）。
 // 不剥的话它们留在片名里：「狂飙 全39集 国语中字」整串搜不到，中英拆分又会挑出更长的
 // 「集 国语中字」去搜。词表思路来自 MoviePilot metavideo.py 的 _name_nostring_re
 // 与 LitePan 的 cnQualityTagRe
 func stripCnNoise(name string) string {
-	name = reCnNoiseBracket.ReplaceAllString(name, " ")
+	name = reCnNoiseBracket.ReplaceAllStringFunc(name, stripNoiseBracket)
 	name = reCnNoiseLong.ReplaceAllString(name, " ")
 	// 相邻的两个短词共用中间的分隔符，一遍替换只能吃掉一个，循环到不再变化
 	for i := 0; i < 5; i++ {
