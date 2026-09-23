@@ -20,6 +20,12 @@
 | Go 依赖 | 见 [`go.mod`](go.mod) / [`go.sum`](go.sum) | 各依赖自有许可证 | `go mod download` 后见各模块目录 |
 | 前端 npm 依赖 | 见 [`webui/package.json`](webui/package.json) | 各依赖自有许可证 | `npm ci` 后见 `node_modules/*/LICENSE` |
 
+> **关于三款海报字体（已修改）**：嵌入的是子集而非原版——只保留约八千个常用汉字
+> （《通用规范汉字表》∪ GB2312）与西文/标点，并去掉 hinting、字形名和竖排度量，
+> 三款合计从约 34MB 降到约 10MB。按 OFL 第 3 条，Modified Version 不得以保留字体名
+> 作为主名称，因此子集的家族名改为 `StrmStation Cover WK / SM / XW`；原版权与许可证
+> 条目保留在字体 name 表内。生成脚本：`internal/api/assets/subset_fonts.py`。
+
 > **关于 CodeMirror（历史组件，现已移除）**：`web/vendor/cm5/*.min.js` 是 jsDelivr 用 Terser 压缩的产物，
 > 压缩过程删掉了原文件顶部的 MIT 版权声明。MIT 要求保留该声明，因此在
 > `licenses/MIT-CodeMirror5.txt` 中补回。
