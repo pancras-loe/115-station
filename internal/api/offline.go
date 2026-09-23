@@ -401,8 +401,8 @@ func StartTransferWatcher(h *Handler) {
 				continue
 			}
 			entries, _, err := ops.listEntries(cid, 0)
-			if err != nil || len(entries) == 0 {
-				continue
+			if err != nil || countUnheld(entries) == 0 {
+				continue // 只剩等人工确认的条目也算「没活」，否则每 5 分钟空跑一轮再被熔断
 			}
 			// 有内容：触发整理（内部自带互斥、与媒体库重叠校验、3 秒沉淀）。
 			// 发现本身不记日志——整理引擎会输出目录扫描结果，避免重复两行
@@ -426,7 +426,7 @@ func StartTransferWatcher(h *Handler) {
 			case rerr != nil:
 				// 查询失败≠未清空：不计失败次数（此前三次瞬时抖动就误触 30 分钟熔断）
 				log.Printf("[守望] ○ 复查转存目录失败（不计失败次数）: %v", rerr)
-			case len(remaining) == 0:
+			case countUnheld(remaining) == 0:
 				failCount = 0
 			default:
 				lastTrigger = time.Now() // 失败：恢复 5 分钟冷却
@@ -728,4 +728,23 @@ func (h *Handler) dirOverlapWithLibrary(shareCid, libCid string) bool {
 	return shareAbs == libAbs ||
 		strings.HasPrefix(shareAbs+"/", libAbs+"/") || // 转存目录在媒体库内
 		strings.HasPrefix(libAbs+"/", shareAbs+"/") // 转存目录覆盖媒体库
+}
+
+// countUnheld 目录列表里不在等人工确认的条目数（目录自身 id 在 cid 字段，文件在 fid）
+func countUnheld(entries []map[string]interface{}) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	held := awaitingFidSet()
+	n := 0
+	for _, d := range entries {
+		id := nilSprint(d["fid"])
+		if fmt.Sprint(d["f"]) == "0" && id == "" {
+			id = nilSprint(d["cid"])
+		}
+		if !held[id] {
+			n++
+		}
+	}
+	return n
 }

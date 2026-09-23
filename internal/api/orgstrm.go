@@ -62,6 +62,10 @@ type orgSink struct {
 	refreshDirs []string             // 本轮动过的库内目录（含库名前缀）
 	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
 	records     []*model.OrganizeRecord
+
+	// reuse 下一条记录写回这条待确认记录（人工确认 / 开关关掉后自动接手），
+	// 而不是另起一行：记录页里同一个条目从「待确认」变成结果，不会一分为二
+	reuse *awaitingRef
 }
 
 // embyVerifySample 一轮整理最多拿几个落盘文件去回查 Emby。
@@ -416,7 +420,16 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		return
 	}
 	rec.BatchID = s.batchID
-	if err := model.DB.Create(rec).Error; err != nil {
+	var err error
+	if ref := s.reuse; ref != nil {
+		s.reuse = nil
+		rec.ID, rec.CreatedAt = ref.id, ref.created
+		rec.ManualTmdb = rec.ManualTmdb || ref.manual
+		err = model.DB.Save(rec).Error
+	} else {
+		err = model.DB.Create(rec).Error
+	}
+	if err != nil {
 		log.Printf("[整理] ○ 整理记录写入失败（不影响整理本身）: %v", err)
 		return
 	}
@@ -443,7 +456,7 @@ func (s *orgSink) summaryLine() string {
 	if len(s.records) == 0 {
 		return ""
 	}
-	var ok, fail, exists int
+	var ok, fail, exists, awaiting int
 	strm := 0
 	for _, r := range s.records {
 		switch r.Status {
@@ -451,12 +464,18 @@ func (s *orgSink) summaryLine() string {
 			ok++
 		case "exists":
 			exists++
+		case orgStatusAwaiting:
+			awaiting++
 		default:
 			fail++
 		}
 		strm += r.StrmCreated
 	}
-	return fmt.Sprintf("成功 %d（生成 STRM %d）· 已存在 %d · 失败 %d", ok, strm, exists, fail)
+	line := fmt.Sprintf("成功 %d（生成 STRM %d）· 已存在 %d · 失败 %d", ok, strm, exists, fail)
+	if awaiting > 0 {
+		line += fmt.Sprintf(" · 待确认 %d", awaiting)
+	}
+	return line
 }
 
 // sumSizes 文件总字节数（整理记录的入库体积）

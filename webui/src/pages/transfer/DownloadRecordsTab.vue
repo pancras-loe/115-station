@@ -46,6 +46,8 @@ function stateOf(r: DownloadLink): { text: string; type: 'success' | 'info' | 'w
       return { text: '已入库', type: 'success' }
     case 'exists':
       return { text: '已存在', type: 'info' }
+    case 'awaiting':
+      return { text: '待确认', type: 'warning' }
     case 'unrecognized':
       return { text: '未识别', type: 'warning' }
     case 'failed':

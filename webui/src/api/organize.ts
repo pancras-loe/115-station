@@ -55,13 +55,16 @@ export const scrapeStatus = () =>
 export interface OrganizeRecordFile {
   fid: string
   name: string
+  /** 重命名之前的原名（与 name 相同时后端不存） */
+  orig?: string
   kind: 'video' | 'subtitle' | 'meta' | 'junk'
   pickcode?: string
   size?: number
   sha1?: string
 }
 
-export type OrganizeRecordStatus = 'success' | 'exists' | 'failed' | 'unrecognized'
+/** awaiting = 开了「人工确认」后识别完停下来的条目，文件还在待整理里原地没动 */
+export type OrganizeRecordStatus = 'success' | 'exists' | 'failed' | 'unrecognized' | 'awaiting'
 
 export interface OrganizeRecord {
   id: number
@@ -69,8 +72,9 @@ export interface OrganizeRecord {
   source: string
   source_fid: string
   source_kind: 'dir' | 'file'
+  source_cid: string
   status: OrganizeRecordStatus
-  /** 失败发生在哪一步：recognize / move / strm / scrape */
+  /** 失败发生在哪一步：recognize / move / strm / scrape / confirm */
   stage: string
   message: string
   tmdb_id: number
@@ -99,9 +103,41 @@ export interface OrganizeRecordPage {
   size: number
 }
 
-/** status 传 'problem' 取「失败 + 未识别」，前端最常用的一档 */
-export const listRecords = (params: { status?: string; q?: string; page?: number; size?: number }) =>
-  http.get<OrganizeRecordPage>('/organize/records', { params })
+/** status 传 'problem' 取「失败 + 未识别」；type 传 movie / tv；q 纯数字时也按 TMDB ID 匹配 */
+export const listRecords = (params: {
+  status?: string
+  type?: string
+  q?: string
+  page?: number
+  size?: number
+}) => http.get<OrganizeRecordPage>('/organize/records', { params })
+
+/** 各状态条数：all / awaiting / problem / success / exists / failed / unrecognized */
+export const recordStats = () =>
+  http.get<{ data: Record<string, number> }>('/organize/records/stats', { timeoutMs: 15_000 })
+
+/**
+ * 确认入库：按识别结果（或改指定的条目）走完后半条流水线。
+ * 和整理互斥，一部剧上百集时耗时按分钟计
+ */
+export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: string }) =>
+  http.post<{ message?: string; data: OrganizeRecord }>(
+    `/organize/records/${id}/confirm`,
+    pick ? { tmdb_id: pick.tmdbId, media_type: pick.mediaType } : {},
+    { timeoutMs: 30 * 60_000 },
+  )
+
+/** 批量按识别结果入库；没识别出来的由后端跳过 */
+export const confirmRecords = (ids: number[]) =>
+  http.post<{ message?: string; success: number; total: number }>(
+    '/organize/records/confirm',
+    { ids },
+    { timeoutMs: 60 * 60_000 },
+  )
+
+/** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */
+export const ignoreRecord = (id: number) =>
+  http.post<{ message?: string }>(`/organize/records/${id}/ignore`, {}, { timeoutMs: 5 * 60_000 })
 
 export const deleteRecord = (id: number) => http.del(`/organize/records/${id}`)
 

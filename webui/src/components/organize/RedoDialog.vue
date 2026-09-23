@@ -7,10 +7,28 @@ import type { TmdbCandidate } from '@/api/resources'
 import type { OrganizeRecord } from '@/api/organize'
 
 /**
- * 重新整理：让用户指定正确的 TMDB 条目，后端按记录里的 fid 原地重做。
+ * 指定 TMDB 条目。两种用途共用一个弹窗：
+ *   - redo：已整理过的条目识别错了，后端按记录里的 fid 原地重做；
+ *   - confirm：人工确认模式下还在待整理里的条目，按指定条目走完整流水线入库。
  * 搜索框既吃片名也吃纯数字的 TMDB ID（后端 /tmdb/search 已经区分处理）。
  */
-const props = defineProps<{ show: boolean; record: OrganizeRecord | null }>()
+const props = withDefaults(
+  defineProps<{ show: boolean; record: OrganizeRecord | null; mode?: 'redo' | 'confirm' }>(),
+  { mode: 'redo' },
+)
+const TEXT = {
+  redo: {
+    title: '重新整理',
+    note: '确认后会把这些文件从当前位置改名并搬到正确目录，旧的 STRM 与元数据一并清理。',
+    ok: '用这个条目重新整理',
+  },
+  confirm: {
+    title: '重新指定 TMDB 条目',
+    note: '确认后按这个条目继续整理：洗版、重命名、搬入媒体库、写 STRM 与刮削。',
+    ok: '按这个条目入库',
+  },
+}
+const text = computed(() => TEXT[props.mode])
 const emit = defineEmits<{
   'update:show': [boolean]
   /** 用户确认了某个条目 */
@@ -64,7 +82,7 @@ async function search() {
   <NModal
     :show="show"
     preset="card"
-    title="重新整理"
+    :title="text.title"
     style="width: 660px"
     @update:show="emit('update:show', $event)"
   >
@@ -72,6 +90,7 @@ async function search() {
       <p class="src">
         原条目：<b>{{ record?.source }}</b>
         <span v-if="record?.title"> · 当前识别为 {{ record.title }} {{ record.year }}</span>
+        <span v-else-if="mode === 'confirm'"> · 未能自动识别</span>
       </p>
 
       <div class="search">
@@ -125,12 +144,10 @@ async function search() {
 
     <template #footer>
       <div class="foot">
-        <span class="foot-note">
-          确认后会把这些文件从当前位置改名并搬到正确目录，旧的 STRM 与元数据一并清理。
-        </span>
+        <span class="foot-note">{{ text.note }}</span>
         <NButton @click="emit('update:show', false)">取消</NButton>
         <NButton type="primary" :disabled="!picked" @click="picked && emit('confirm', picked)">
-          用这个条目重新整理
+          {{ text.ok }}
         </NButton>
       </div>
     </template>

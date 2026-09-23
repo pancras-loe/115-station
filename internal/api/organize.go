@@ -41,8 +41,11 @@ type OrgConfig struct {
 	Library   string `json:"library"`   // 我的影视库 cid（整理后最终归宿）
 	Existing  string `json:"existing"`  // 已存在目录 cid（洗版重复）
 	Redundant string `json:"redundant"` // 冗余目录 cid（识别失败等）
-	MinSize   int64  `json:"-"`         // MB，loadOrgConfig 从「识别规则」配置注入
-	ShareCid  string `json:"-"`         // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
+	// ManualConfirm 人工确认：识别完只登记「待确认」记录、文件原地不动，
+	// 用户在整理记录里确认（或改指定 TMDB 条目）之后才继续后面的流水线
+	ManualConfirm bool   `json:"manual_confirm"`
+	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
+	ShareCid      string `json:"-"` // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
 }
 
 // orgCtx 一次整理运行的上下文：引擎各函数共用的只读配置 + 落盘出口。
@@ -56,6 +59,21 @@ type orgCtx struct {
 	sink   *orgSink   // 落盘出口：STRM / 附属文件 / 刮削目标 / 整理记录
 	pruner *dirPruner // 搬空之后的空文件夹清理（收尾统一 flush）
 	onLog  func(string)
+
+	// forced 人工确认/改指定时直接用这个条目，跳过 TMDB 识别（也就不会再停下来等确认）
+	forced *TmdbMedia
+	// held fid → 它所在的待确认记录。顶层条目在整理开始时一次列完，
+	// 本轮里新停下来的条目也要登记进来，否则同前缀的兄弟散文件会被当成新条目再识别一遍
+	held map[string]*awaitingRef
+	// handled 本轮已经被别的条目顺带处理掉的 fid（同前缀散文件批量入库）。
+	// 顶层清单是开头列好的快照，不跳过的话兄弟文件会被当成新条目再整理一次，
+	// 这时网盘里已经有同一份文件，于是被判「已存在」搬走
+	handled map[string]bool
+}
+
+// holdable 这一条要不要停下来等人工确认
+func (c *orgCtx) holdable() bool {
+	return c.cfg.ManualConfirm && c.forced == nil
 }
 
 // withPending 换一个扫描根（转存目录兜底扫描用），其余配置不变
@@ -1341,7 +1359,8 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		libAbs = absPathOf(ops.cookie, cfg.Library)
 	}
 	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
-		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}
+		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog,
+		held: loadAwaiting(), handled: map[string]bool{}}
 
 	// 五个工作区根目录（媒体库/待整理/已存在/冗余/转存目录）永不被移动：
 	// 引擎只往它们里面放内容，目录自身绝不能被当作影视条目处理
@@ -1358,7 +1377,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		}
 		filtered = append(filtered, e)
 	}
-	topEntries = filtered
+	topEntries = ctx.dropHeld(filtered)
 	if len(topEntries) == 0 {
 		return results, 0 // 空转静默：定时任务每 10 分钟一轮，不为空目录刷日志
 	}
@@ -1393,6 +1412,18 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 	if guards.skip(entry.Cid) {
 		onLog(fmt.Sprintf("○ 跳过媒体库/工作区内条目: %s（整理不处理库内内容）", entry.Name))
 		return results
+	}
+	if ctx.handled[entry.Fid] {
+		return results // 已随同前缀的散文件一起入库
+	}
+	if ref, ok := ctx.held[entry.Fid]; ok {
+		if ctx.cfg.ManualConfirm {
+			onLog(fmt.Sprintf("⏸ %s - 等待人工确认（整理记录 → 待确认），本轮跳过", entry.Name))
+			return results
+		}
+		// 开关已经关了：按自动整理走，结果写回那条待确认记录，而不是再添一行
+		ctx.adoptAwaiting(ref)
+		defer ctx.releaseAwaiting(ref)
 	}
 	if !entry.IsDir {
 		if classifyFile(entry.Name) != FileTypeVideo {
@@ -1668,49 +1699,68 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 	}
 
-	if parsed.Title == "" {
-		// 文件名和目录名都无法识别，移到冗余
-		moveQuietly(ops, cfg.Redundant, []string{dir.Fid}, dir.Name+"/", onLog)
-		onLog(fmt.Sprintf("○ %s/ - 无法提取标题，已移到冗余", dir.Name))
-		fail("unrecognized", "recognize", "文件名与目录名都提取不出片名，已移到冗余")
-		return results
-	}
-
-	// TMDB 识别
-	media, err := tc.recognize(parsed)
-	if err != nil || media == nil {
-		// 文件名识别失败 → 如果还没试过目录名，用目录名再识别一次
-		if !useDirName {
-			dirParsed := parseFileName(dir.Name)
-			if dirParsed.Title != "" {
-				onLog(fmt.Sprintf("▣ 文件名识别失败，改用目录名 %q 重试", dir.Name))
-				// 保留文件名的季集号
-				if dirParsed.Season == 0 {
-					dirParsed.Season = parsed.Season
-				}
-				if dirParsed.Episode == 0 {
-					dirParsed.Episode = parsed.Episode
-				}
-				media, err = tc.recognize(dirParsed)
+	var media *TmdbMedia
+	if ctx.forced != nil {
+		media = ctx.forced
+		onLog(fmt.Sprintf("✦ 人工确认: %s → %s (%s)", shortLogName(dir.Name), media.Title, media.Year))
+	} else {
+		if parsed.Title == "" {
+			if ctx.holdable() {
+				return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", nil, parsed, mainVideo.Name,
+					snapshot(nil), "文件名与目录名都提取不出片名，请手动指定 TMDB 条目"))
 			}
-		}
-		if err != nil || media == nil {
-			if err != nil {
-				// 瞬时错误（网络抖动/限流）≠ 找不到：绝不移冗余——
-				// 好内容被误分流后只能靠人工捞回。留在待整理目录，下轮重试
-				results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "TMDB 暂时不可达: " + err.Error()})
-				onLog(fmt.Sprintf("○ %s/ - TMDB 暂时不可达（%v），留在待整理目录下轮重试", dir.Name, err))
-				fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
-				return results
-			}
+			// 文件名和目录名都无法识别，移到冗余
 			moveQuietly(ops, cfg.Redundant, []string{dir.Fid}, dir.Name+"/", onLog)
-			onLog(fmt.Sprintf("○ %s/ - TMDB 未找到匹配，已移到冗余", dir.Name))
-			fail("unrecognized", "recognize", "TMDB 未找到匹配条目，已移到冗余")
+			onLog(fmt.Sprintf("○ %s/ - 无法提取标题，已移到冗余", dir.Name))
+			fail("unrecognized", "recognize", "文件名与目录名都提取不出片名，已移到冗余")
 			return results
 		}
-	}
 
-	onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(dir.Name), media.Title, media.Year))
+		// TMDB 识别
+		var err error
+		media, err = tc.recognize(parsed)
+		if err != nil || media == nil {
+			// 文件名识别失败 → 如果还没试过目录名，用目录名再识别一次
+			if !useDirName {
+				dirParsed := parseFileName(dir.Name)
+				if dirParsed.Title != "" {
+					onLog(fmt.Sprintf("▣ 文件名识别失败，改用目录名 %q 重试", dir.Name))
+					// 保留文件名的季集号
+					if dirParsed.Season == 0 {
+						dirParsed.Season = parsed.Season
+					}
+					if dirParsed.Episode == 0 {
+						dirParsed.Episode = parsed.Episode
+					}
+					media, err = tc.recognize(dirParsed)
+				}
+			}
+			if err != nil || media == nil {
+				if err != nil {
+					// 瞬时错误（网络抖动/限流）≠ 找不到：绝不移冗余——
+					// 好内容被误分流后只能靠人工捞回。留在待整理目录，下轮重试
+					results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "TMDB 暂时不可达: " + err.Error()})
+					onLog(fmt.Sprintf("○ %s/ - TMDB 暂时不可达（%v），留在待整理目录下轮重试", dir.Name, err))
+					fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
+					return results
+				}
+				if ctx.holdable() {
+					return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", nil, parsed, mainVideo.Name,
+						snapshot(nil), "TMDB 未找到匹配条目，请手动指定"))
+				}
+				moveQuietly(ops, cfg.Redundant, []string{dir.Fid}, dir.Name+"/", onLog)
+				onLog(fmt.Sprintf("○ %s/ - TMDB 未找到匹配，已移到冗余", dir.Name))
+				fail("unrecognized", "recognize", "TMDB 未找到匹配条目，已移到冗余")
+				return results
+			}
+		}
+
+		onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(dir.Name), media.Title, media.Year))
+		if ctx.holdable() {
+			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
+				snapshot(nil), ""))
+		}
+	}
 
 	// 直接查网盘去重（不依赖本地缓存表，不会过期）
 	// 检查网盘目标目录里是否有相同 SHA1 的文件
@@ -2101,22 +2151,53 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 // 同前缀的其他散文件共享识别结果（一部剧 24 集只需 1 次 TMDB 调用）
 // 前缀判定：文件名去掉 EP/SxxExx/集数 部分后剩余部分相同
 func processSingleFileWithSiblings(ctx *orgCtx, f remoteFile) []OrganizeResult {
-	ops, cfg, onLog := ctx.ops, ctx.cfg, ctx.onLog
+	onLog := ctx.onLog
 	// 先识别主文件
 	result, rec := processSingleFile(ctx, f)
 	if result.Status != "success" {
 		return []OrganizeResult{result}
 	}
 
-	// 识别成功 → 列出待整理目录中的其他散文件，找同前缀的视频
-	mainPrefix := extractSeriesPrefix(f.Name)
-	if mainPrefix == "" {
-		return []OrganizeResult{result} // 无法提取前缀，不批量处理
+	siblings := seriesSiblings(ctx, f)
+	if len(siblings) == 0 {
+		return []OrganizeResult{result} // 没有同前缀的其他文件
 	}
 
-	entries, _, err := ops.listEntries(cfg.Pending, 0)
+	onLog(fmt.Sprintf("▣ 发现 %d 个同前缀散文件，共享识别结果批量处理", len(siblings)))
+
+	// 构建与主文件相同的目标（分类/目录/媒体信息从 result 提取不行，
+	// 需要重新构造——用主文件的 parsed 和 media）
+	// 简化：直接用 processDir 逻辑处理剩余文件
+	var allResults = []OrganizeResult{result}
+	successCount := 1
+
+	for _, sib := range siblings {
+		ctx.handled[sib.Fid] = true
+		sibResult, sibFiles, sibStrm := organizeIdentifiedFile(ctx, sib, result)
+		allResults = append(allResults, sibResult)
+		if sibResult.Status == "success" {
+			successCount++
+		}
+		// 并进主文件那条记录：一部剧的 24 集是一个整理动作，不该刷出 24 行
+		ctx.sink.appendToRecord(rec, sibFiles, sibStrm, sib.Size)
+	}
+
+	onLog(fmt.Sprintf("✓ 散文件批量完成: 共 %d 个文件（成功 %d）", len(allResults), successCount))
+	return allResults
+}
+
+// seriesSiblings 扫描根里与 f 同前缀的其他散视频（同一部剧的其他集）。
+// 前缀判定：文件名去掉 EP/SxxExx/集数 部分后剩余部分相同；
+// 已经在等人工确认、或本轮已被处理掉的不算
+func seriesSiblings(ctx *orgCtx, f remoteFile) []remoteFile {
+	mainPrefix := extractSeriesPrefix(f.Name)
+	if mainPrefix == "" {
+		return nil // 无法提取前缀，不批量处理
+	}
+
+	entries, _, err := ctx.ops.listEntries(ctx.cfg.Pending, 0)
 	if err != nil {
-		return []OrganizeResult{result} // 列表失败，只处理主文件
+		return nil // 列表失败，只处理主文件
 	}
 
 	var siblings []remoteFile
@@ -2138,37 +2219,19 @@ func processSingleFileWithSiblings(ctx *orgCtx, f remoteFile) []OrganizeResult {
 				Size: 0,
 				Sha1: nilSprint(e["sha"]),
 			}
+			if ctx.handled[sib.Fid] || ctx.held[sib.Fid] != nil {
+				continue
+			}
 			if pc := nilSprint(e["pc"]); pc != "" {
 				sib.PickCode = pc // 散文件也要能触发补全探测（此前恒缺，静默跳过）
+			}
+			if sz, ok := e["s"].(float64); ok {
+				sib.Size = int64(sz)
 			}
 			siblings = append(siblings, sib)
 		}
 	}
-
-	if len(siblings) == 0 {
-		return []OrganizeResult{result} // 没有同前缀的其他文件
-	}
-
-	onLog(fmt.Sprintf("▣ 发现 %d 个同前缀散文件，共享识别结果批量处理", len(siblings)))
-
-	// 构建与主文件相同的目标（分类/目录/媒体信息从 result 提取不行，
-	// 需要重新构造——用主文件的 parsed 和 media）
-	// 简化：直接用 processDir 逻辑处理剩余文件
-	var allResults = []OrganizeResult{result}
-	successCount := 1
-
-	for _, sib := range siblings {
-		sibResult, sibFiles, sibStrm := organizeIdentifiedFile(ctx, sib, result)
-		allResults = append(allResults, sibResult)
-		if sibResult.Status == "success" {
-			successCount++
-		}
-		// 并进主文件那条记录：一部剧的 24 集是一个整理动作，不该刷出 24 行
-		ctx.sink.appendToRecord(rec, sibFiles, sibStrm, sib.Size)
-	}
-
-	onLog(fmt.Sprintf("✓ 散文件批量完成: 共 %d 个文件（成功 %d）", len(allResults), successCount))
-	return allResults
+	return siblings
 }
 
 // extractSeriesPrefix 提取剧集文件名的系列前缀（去掉 EP/SxxExx/集数部分）
@@ -2340,54 +2403,81 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	onLog(fmt.Sprintf("▶ 开始识别: %s", shortLogName(f.Name)))
 	parsed := parseFileName(name)
 	oldBase := baseName(f.Name)
-	if parsed.Title == "" {
-		// 无法识别，按原文件的剧集前缀归档（附件随行，避免字幕变孤儿）
-		holdingDir := sourceHoldingDir(f.Name, "")
-		holdingCid, err := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
-		if err != nil {
-			result.Status = "failed"
-			result.Message = "移到冗余失败: " + err.Error()
-			onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
-			return fail("failed", "move", result.Message)
+	// 人工确认：同前缀的其他集一起挂在这条待确认记录上，确认时一并入库
+	holdFiles := func() []orgRecordFile {
+		out := append([]orgRecordFile(nil), self...)
+		for _, sib := range seriesSiblings(ctx, f) {
+			out = append(out, orgRecordFile{Fid: sib.Fid, Name: sib.Name, Kind: recordFileKind(sib.Name),
+				PickCode: sib.PickCode, Size: sib.Size, Sha1: sib.Sha1})
 		}
-		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
-		result.Status = "failed"
-		result.Message = "无法提取标题，已移到 冗余/" + holdingDir
-		onLog(fmt.Sprintf("✗ %s - 无法提取标题，已移到 冗余/%s", f.Name, holdingDir))
-		return fail("unrecognized", "recognize", result.Message)
+		return out
 	}
+	var media *TmdbMedia
+	if ctx.forced != nil {
+		media = ctx.forced
+		onLog(fmt.Sprintf("✦ 人工确认: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
+	} else {
+		if parsed.Title == "" {
+			if ctx.holdable() {
+				return ctx.holdForConfirm(f.Name, f.Fid, "file", nil, parsed, f.Name, holdFiles(),
+					"文件名提取不出片名，请手动指定 TMDB 条目"), nil
+			}
+			// 无法识别，按原文件的剧集前缀归档（附件随行，避免字幕变孤儿）
+			holdingDir := sourceHoldingDir(f.Name, "")
+			holdingCid, err := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
+			if err != nil {
+				result.Status = "failed"
+				result.Message = "移到冗余失败: " + err.Error()
+				onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
+				return fail("failed", "move", result.Message)
+			}
+			appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
+			result.Status = "failed"
+			result.Message = "无法提取标题，已移到 冗余/" + holdingDir
+			onLog(fmt.Sprintf("✗ %s - 无法提取标题，已移到 冗余/%s", f.Name, holdingDir))
+			return fail("unrecognized", "recognize", result.Message)
+		}
 
-	// TMDB 识别
-	media, err := tc.recognize(parsed)
-	if err != nil {
-		// 瞬时错误（网络/限流）：留在待整理目录，下轮重试（移冗余会误分流好内容）
-		result.Status = "failed"
-		result.Message = "TMDB 暂时不可达，留在待整理: " + err.Error()
-		onLog(fmt.Sprintf("○ %s - TMDB 暂时不可达（%v），留在待整理目录下轮重试", f.Name, err))
-		return fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
-	}
-	if media == nil {
-		holdingDir := sourceHoldingDir(f.Name, parsed.Title)
-		holdingCid, moveErr := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
-		if moveErr != nil {
+		// TMDB 识别
+		var err error
+		media, err = tc.recognize(parsed)
+		if err != nil {
+			// 瞬时错误（网络/限流）：留在待整理目录，下轮重试（移冗余会误分流好内容）
 			result.Status = "failed"
-			result.Message = "移到冗余失败: " + moveErr.Error()
-			onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
-			return fail("failed", "move", result.Message)
+			result.Message = "TMDB 暂时不可达，留在待整理: " + err.Error()
+			onLog(fmt.Sprintf("○ %s - TMDB 暂时不可达（%v），留在待整理目录下轮重试", f.Name, err))
+			return fail("failed", "recognize", "TMDB 暂时不可达，留在待整理目录下轮重试: "+err.Error())
 		}
-		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
-		result.Status = "failed"
-		result.Message = "TMDB 未找到匹配，已移到 冗余/" + holdingDir
-		onLog(fmt.Sprintf("✗ %s - TMDB 未找到匹配，已移到 冗余/%s", f.Name, holdingDir))
-		return fail("unrecognized", "recognize", result.Message)
+		if media == nil {
+			if ctx.holdable() {
+				return ctx.holdForConfirm(f.Name, f.Fid, "file", nil, parsed, f.Name, holdFiles(),
+					"TMDB 未找到匹配条目，请手动指定"), nil
+			}
+			holdingDir := sourceHoldingDir(f.Name, parsed.Title)
+			holdingCid, moveErr := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
+			if moveErr != nil {
+				result.Status = "failed"
+				result.Message = "移到冗余失败: " + moveErr.Error()
+				onLog(fmt.Sprintf("✗ %s - %s", f.Name, result.Message))
+				return fail("failed", "move", result.Message)
+			}
+			appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
+			result.Status = "failed"
+			result.Message = "TMDB 未找到匹配，已移到 冗余/" + holdingDir
+			onLog(fmt.Sprintf("✗ %s - TMDB 未找到匹配，已移到 冗余/%s", f.Name, holdingDir))
+			return fail("unrecognized", "recognize", result.Message)
+		}
+
+		onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
+		if ctx.holdable() {
+			return ctx.holdForConfirm(f.Name, f.Fid, "file", media, parsed, f.Name, holdFiles(), ""), nil
+		}
 	}
 
 	result.TmdbID = media.TmdbID
 	result.Title = media.Title
 	result.Year = media.Year
 	result.MediaType = media.MediaType
-
-	onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
 	category := classifyMedia(media)
 	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
 	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
@@ -2617,7 +2707,8 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		libAbs = absPathOf(ops.cookie, cfg.Library)
 	}
 	ctx := &orgCtx{ops: ops, cfg: cfg, tc: tc, rules: replaceRules, libAbs: libAbs, sink: sink,
-		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog}
+		pruner: newDirPruner(ops, orgProtectedCids(cfg), onLog), onLog: onLog,
+		held: loadAwaiting(), handled: map[string]bool{}}
 
 	// 五个工作区根目录自身永不被当作条目处理（与 runOrganizeEngine 一致）
 	excluded := map[string]bool{cfg.Library: true, cfg.Existing: true, cfg.Redundant: true, cfg.Pending: true}
@@ -2631,7 +2722,10 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		}
 		filtered = append(filtered, e)
 	}
-	topEntries = filtered
+	topEntries = ctx.dropHeld(filtered)
+	if len(topEntries) == 0 {
+		return results, 0 // 只剩等待人工确认的条目：静默，记录页里看得到
+	}
 
 	guards := newOrgGuards(ops.cookie, cfg.Pending, cfg)
 	if guards.active {

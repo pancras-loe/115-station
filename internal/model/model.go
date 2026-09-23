@@ -261,9 +261,13 @@ type OrganizeRecord struct {
 	Source     string `json:"source" gorm:"size:500"`        // 原目录名 / 原文件名
 	SourceFid  string `json:"source_fid" gorm:"index;size:64"`
 	SourceKind string `json:"source_kind" gorm:"size:8"` // dir / file
+	// SourceCid 条目被扫到时所在的扫描根（待整理或转存目录）。
+	// 人工确认模式下条目原地等待，确认时要回到同一个根里找散文件的字幕等附件
+	SourceCid string `json:"source_cid" gorm:"size:64"`
 
-	Status  string `json:"status" gorm:"index;size:16"` // success / exists / failed / unrecognized
-	Stage   string `json:"stage" gorm:"size:16"`        // recognize / move / strm / scrape：失败发生在哪一步
+	// awaiting = 人工确认模式下识别完成、文件原地未动，等用户确认或改指定
+	Status  string `json:"status" gorm:"index;size:16"` // success / exists / failed / unrecognized / awaiting
+	Stage   string `json:"stage" gorm:"size:16"`        // recognize / move / strm / scrape / confirm：失败发生在哪一步
 	Message string `json:"message" gorm:"size:500"`
 
 	TmdbID     int    `json:"tmdb_id" gorm:"index"`

@@ -10,6 +10,8 @@ export interface OrgBasic {
   existing_path: string
   redundant: string
   redundant_path: string
+  /** 人工确认：识别完先停在整理记录里，确认后才搬移入库 */
+  manual_confirm: boolean
   enrich: {
     enabled: boolean
     mode: string
@@ -27,6 +29,7 @@ export const ORG_BASIC_DEFAULTS: OrgBasic = {
   existing_path: '',
   redundant: '',
   redundant_path: '',
+  manual_confirm: false,
   enrich: {
     enabled: false,
     mode: 'standard',

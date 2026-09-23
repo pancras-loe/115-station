@@ -40,7 +40,7 @@ func toRecordDTO(r model.OrganizeRecord) orgRecordDTO {
 	return orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files)}
 }
 
-// ListOrganizeRecords GET /organize/records?status=&q=&page=&size=
+// ListOrganizeRecords GET /organize/records?status=&type=&q=&page=&size=
 func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	q := h.DB.Model(&model.OrganizeRecord{})
 	if st := strings.TrimSpace(c.Query("status")); st != "" && st != "all" {
@@ -51,9 +51,18 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 			q = q.Where("status = ?", st)
 		}
 	}
+	if mt := strings.TrimSpace(c.Query("type")); mt == "movie" || mt == "tv" {
+		q = q.Where("media_type = ?", mt)
+	}
 	if kw := strings.TrimSpace(c.Query("q")); kw != "" {
-		like := "%" + kw + "%"
-		q = q.Where("source LIKE ? OR title LIKE ?", like, like)
+		if id, err := strconv.Atoi(kw); err == nil && id > 0 {
+			// 纯数字多半是 TMDB ID；片名里恰好是数字的（《1917》）也照样能按原名搜到
+			like := "%" + kw + "%"
+			q = q.Where("tmdb_id = ? OR source LIKE ? OR title LIKE ?", id, like, like)
+		} else {
+			like := "%" + kw + "%"
+			q = q.Where("source LIKE ? OR title LIKE ? OR target_dir LIKE ?", like, like, like)
+		}
 	}
 	var total int64
 	q.Count(&total)
@@ -143,6 +152,12 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 	var rec model.OrganizeRecord
 	if h.DB.First(&rec, c.Param("id")).Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		return
+	}
+	if rec.Status == orgStatusAwaiting {
+		// 待确认的文件还在待整理里原地没动，走确认入库（完整流水线），
+		// 重新整理是给「已经整理过、位置不对」的条目用的
+		c.JSON(http.StatusBadRequest, gin.H{"error": "待确认的条目请用「确认入库 / 重新指定」"})
 		return
 	}
 

@@ -307,6 +307,19 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 测试：`washbatch_test.go`（批量、分组、去重、缓存、失效行）、
       `wash_regression_test.go` / `washflow_test.go` / `wash_recycle_test.go`。
 
+14. **人工确认：停在识别之后、任何网盘写之前**（`orgconfirm.go`，开关是 `org-basic.manual_confirm`）：
+    打开后 `processDir` / `processSingleFile` 识别完（含没识别出来的）只登记一条
+    `status=awaiting` 的整理记录，文件原地留在待整理/转存目录，不搬、不改名、不查重、不洗版。
+    - 确认入库**复用** `processDir` / `processSingleFile` 本体（`orgCtx.forced` 跳过识别），
+      不要另写一条入库路径——洗版、去重、补全、落盘、刮削必须和自动整理同一套。
+    - 结果写回原来那条待确认记录（`orgSink.reuse`），不另起一行。
+    - 后续每轮整理按 fid 跳过待确认条目（`loadAwaiting` / `dropHeld`），散文件的待确认记录
+      挂着同前缀的其他集，这些 fid 同样算；转存守望者用 `countUnheld` 判断目录是否还有活，
+      否则只剩待确认条目时会被当成「整理后仍未清空」反复重试直到熔断。
+    - 开关关掉后，下一轮自动整理接手这些条目（`adoptAwaiting`），结果同样写回原记录。
+    - 新增识别之后的分支时，记得在 `ctx.holdable()` 为真时先停下，别在停之前发网盘写请求。
+    - 测试：`orgconfirm_test.go`。
+
 ---
 
 ## 7. 常见任务入口
@@ -323,7 +336,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
 | 改总览面板 | `internal/api/dashboard.go`（数据）+ `webui/src/pages/DashboardPage.vue`（界面）。**Emby 计数别再改回不带 `IncludeItemTypes`**，见 §6.11；台账校准在 `internal/api/medialib.go` + `webui/src/components/dashboard/CalibrateModal.vue` |
-| 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`）。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
+| 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`；`mode=confirm` 时用于待确认条目改指定）。筛选栏角标与页签角标共用 `recordStats.ts`。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
 | 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12），整理抢不到锁会先登记让路、等一段，仍抢不到才置位 `organizeMissed` 每分钟补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |

@@ -288,7 +288,8 @@ func (h *Handler) ListDownloadLinks(c *gin.Context) {
 	switch strings.TrimSpace(c.Query("status")) {
 	case "", "all":
 	case "pending":
-		q = q.Where("organize_status = '' AND status <> ?", "failed")
+		// 等人工确认的也还没整理出结果
+		q = q.Where("organize_status IN ? AND status <> ?", []string{"", orgStatusAwaiting}, "failed")
 	case "organized":
 		q = q.Where("organize_status = ?", "success")
 	case "failed":

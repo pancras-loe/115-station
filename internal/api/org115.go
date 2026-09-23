@@ -68,17 +68,22 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	}
 
 	totalFiles := len(orgResults)
-	existsCount := 0
-	failedCount := 0
+	existsCount, failedCount, awaitingCount := 0, 0, 0
 	for _, r := range orgResults {
-		if r.Status == "exists" {
+		switch r.Status {
+		case "exists":
 			existsCount++
-		}
-		if r.Status == "failed" {
+		case "failed":
 			failedCount++
+		case orgStatusAwaiting:
+			awaitingCount++
 		}
 	}
-	steps = append(steps, gin.H{"step": "整理", "status": "完成", "message": fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)})
+	msg := fmt.Sprintf("共 %d 个文件，成功 %d，已存在 %d，失败 %d", totalFiles, successCount, existsCount, failedCount)
+	if awaitingCount > 0 {
+		msg += fmt.Sprintf("，待人工确认 %d", awaitingCount)
+	}
+	steps = append(steps, gin.H{"step": "整理", "status": "完成", "message": msg})
 
 	// ---- 收尾：刮削与 Emby 刷新按片目聚合，一部剧只做一次 ----
 	strmCreated := sink.strmTotal()
@@ -134,18 +139,24 @@ func organizeSummaryLine(sink *orgSink, results []OrganizeResult) string {
 	if line := sink.summaryLine(); line != "" {
 		return line
 	}
-	ok, exists, fail := 0, 0, 0
+	ok, exists, fail, awaiting := 0, 0, 0, 0
 	for _, r := range results {
 		switch r.Status {
 		case "success":
 			ok++
 		case "exists":
 			exists++
+		case orgStatusAwaiting:
+			awaiting++
 		default:
 			fail++
 		}
 	}
-	return fmt.Sprintf("成功 %d（生成 STRM %d）· 已存在 %d · 失败 %d", ok, sink.strmTotal(), exists, fail)
+	line := fmt.Sprintf("成功 %d（生成 STRM %d）· 已存在 %d · 失败 %d", ok, sink.strmTotal(), exists, fail)
+	if awaiting > 0 {
+		line += fmt.Sprintf(" · 待确认 %d", awaiting)
+	}
+	return line
 }
 
 // RunOrganizePipeline 整理流水线 HTTP 入口

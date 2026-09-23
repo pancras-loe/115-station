@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { NTabPane, NTabs } from 'naive-ui'
+import { onMounted } from 'vue'
+import { NBadge, NTabPane, NTabs } from 'naive-ui'
 import BasicTab from './organize/BasicTab.vue'
 import RecordsTab from './organize/RecordsTab.vue'
 import ScrapeTab from './organize/ScrapeTab.vue'
@@ -11,14 +12,30 @@ import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
 import { useTabQuery } from '@/composables/useTabQuery'
+import { recordStats, refreshRecordStats } from './organize/recordStats'
 
 const tab = useTabQuery('basic')
+// 开着人工确认时，待确认的条目要在哪个页签都看得见，不然只能靠用户自己想起来去翻记录
+onMounted(refreshRecordStats)
 </script>
 
 <template>
   <NTabs v-model:value="tab" type="line" animated>
     <NTabPane name="basic" tab="基础配置"><BasicTab /></NTabPane>
-    <NTabPane name="records" tab="整理记录" display-directive="if"><RecordsTab /></NTabPane>
+    <NTabPane name="records" display-directive="if">
+      <template #tab>
+        <NBadge
+          :value="recordStats.awaiting || 0"
+          :show="(recordStats.awaiting || 0) > 0"
+          type="warning"
+          :max="99"
+          :offset="[10, -2]"
+        >
+          整理记录
+        </NBadge>
+      </template>
+      <RecordsTab />
+    </NTabPane>
     <NTabPane name="scrape" tab="影视刮削"><ScrapeTab /></NTabPane>
     <NTabPane name="recognize" tab="识别规则"><RecognizeTab /></NTabPane>
     <NTabPane name="ai" tab="AI 增强识别"><AiTab /></NTabPane>

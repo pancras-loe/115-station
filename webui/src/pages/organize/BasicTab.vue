@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NAlert, NButton, NPopconfirm } from 'naive-ui'
+import { NAlert, NButton, NPopconfirm, NSwitch } from 'naive-ui'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -150,18 +150,18 @@ async function saveAll(): Promise<boolean> {
   if (!(await resolveAll())) return false
   if (!(await saveCron())) return false
   // org-basic 是整对象覆盖存，而 enrich 那半边在「媒体补全」页签改：
-  // 先把库里最新的拉回来，再盖上本页解析好的目录，免得把对面刚存的策略还原成打开本页时的旧值
-  const dirs = pickDirs()
+  // 先把库里最新的拉回来，再盖上本页的字段，免得把对面刚存的策略还原成打开本页时的旧值
+  const mine = pickMine()
   await load()
-  Object.assign(model.value, dirs)
+  Object.assign(model.value, mine)
   const ok = await save()
   warnOverlap()
   return ok
 }
 
-/** resolveAll 回填到 model 上的那六个目录字段 */
-function pickDirs() {
-  const d: Record<string, string> = {}
+/** 本页管的字段：resolveAll 回填的六个目录 + 人工确认开关 */
+function pickMine() {
+  const d: Record<string, string | boolean> = { manual_confirm: model.value.manual_confirm }
   for (const { key } of DIRS) {
     d[key] = model.value[key]
     d[`${key}_path`] = model.value[`${key}_path` as const]
@@ -198,8 +198,17 @@ async function runOrganize() {
     message.info('整理任务执行中…')
     task.poll()
     const d = await organizeApi.runPipeline()
-    const failed = (d.details ?? []).filter((x) => x.status !== 'success' && x.status !== 'exists').length
-    const ok = (d.details ?? []).filter((x) => x.status === 'success').length
+    const details = d.details ?? []
+    const awaiting = details.filter((x) => x.status === 'awaiting').length
+    const failed = details.filter(
+      (x) => x.status !== 'success' && x.status !== 'exists' && x.status !== 'awaiting',
+    ).length
+    const ok = details.filter((x) => x.status === 'success').length
+    if (awaiting) {
+      message.info(`识别完成，${awaiting} 项等待人工确认`, { duration: 6000 })
+      void router.push({ query: { tab: 'records', status: 'awaiting' } })
+      return
+    }
     message.success(
       d.message || `整理完成：成功 ${ok}${failed ? `，失败 ${failed}` : ''}，详情见实时日志`,
     )
@@ -239,6 +248,22 @@ async function runOrganize() {
       </FieldRow>
 
       <FieldRow
+        label="人工确认"
+        tip="打开后整理识别完就停下：条目原地留在待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
+      >
+        <div class="switch-row">
+          <NSwitch v-model:value="model.manual_confirm" />
+          <span class="switch-hint">
+            {{
+              model.manual_confirm
+                ? '识别完先停在「整理记录 → 待确认」，确认后才入库'
+                : '识别完直接入库（全自动）'
+            }}
+          </span>
+        </div>
+      </FieldRow>
+
+      <FieldRow
         label="自动整理 Cron"
         tip="标准 5 字段 cron（分 时 日 月 周）。它只负责「到点跑一遍」，留空不影响下面列出的即时触发。"
       >
@@ -249,6 +274,7 @@ async function runOrganize() {
         <p class="al-p">
           不管哪种触发，跑的都是同一条流水线：识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 →
           写 STRM / 下字幕封面 → 刮削 → 刷新 Emby。区别只在<strong>什么时候开始</strong>和<strong>扫哪个目录</strong>。
+          打开「人工确认」后，流水线在识别之后停下，等你在整理记录里确认才接着走。
         </p>
         <ul class="al-ul">
           <li>
@@ -305,6 +331,16 @@ async function runOrganize() {
 
 <style scoped>
 .alert-action { margin-top: 12px; }
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+.switch-hint {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
 .note-top {
   margin: 4px 0 12px;
 }
