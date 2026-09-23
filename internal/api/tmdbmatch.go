@@ -369,6 +369,15 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 	}
 	if len(exact) > 0 {
 		seasonCheck(exact)
+		// 片名相等但年份差得远，而另有一条片名相近、年份分毫不差的：多半是续集。
+		// 中英拆分搜「流浪地球」（文件是 2023 年的流浪地球2）时，相等的那条是 2019 年的第一部
+		if !p.seasonYearMode() && p.year != "" && absYearDiff(p.year, exact[0].c.year()) > 1 {
+			for _, s := range scored {
+				if s.level == titleLoose && s.c.year() == p.year {
+					return finish(s, "片名相等的年份不符，取片名相近且同年的")
+				}
+			}
+		}
 		return finish(exact[0], "片名相等")
 	}
 

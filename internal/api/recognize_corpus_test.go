@@ -232,3 +232,43 @@ func TestTitleLevel(t *testing.T) {
 		}
 	}
 }
+
+// 目录名上明写的季号要盖过文件名里缺省的第 1 季，但盖不过文件名自己写的季号
+func TestApplySeasonHint(t *testing.T) {
+	dir := parseFileName("庆余年 第二季")
+	cases := []struct {
+		file string
+		want int
+	}{
+		{"01.mp4", 2},
+		{"庆余年.EP05.mp4", 2},
+		{"庆余年.S01E05.mp4", 1}, // 文件名明写了季号，以文件为准
+	}
+	for _, c := range cases {
+		p := parseFileName(c.file)
+		applySeasonHint(p, dir)
+		if p.Season != c.want {
+			t.Errorf("%s 在「庆余年 第二季」目录下：季号 %d，期望 %d", c.file, p.Season, c.want)
+		}
+	}
+	// 目录名自己的季号也是猜的（目录名只有集号）时不作数
+	p := parseFileName("05.mp4")
+	applySeasonHint(p, parseFileName("01"))
+	if p.Season != 1 || !p.SeasonGuessed {
+		t.Errorf("猜出来的季号不该覆盖: %+v", p)
+	}
+}
+
+func TestTitleCandidates(t *testing.T) {
+	cases := map[string][]string{
+		"骗不了人的男人 Softie Conman":        {"骗不了人的男人", "Softie Conman", "骗不了人的男人 Softie Conman"},
+		"流浪地球2 The Wandering Earth II": {"流浪地球2", "The Wandering Earth II", "流浪地球2 The Wandering Earth II"},
+		"流浪地球 2":                       {"流浪地球 2"}, // 英文部分只剩数字，不拆
+		"The Boys":                     {"The Boys"},
+	}
+	for in, want := range cases {
+		if got := titleCandidates(in); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("titleCandidates(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

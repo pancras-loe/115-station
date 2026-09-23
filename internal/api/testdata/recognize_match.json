@@ -1,97 +1,473 @@
 {
   "_说明": "识别回归语料（recognize_corpus_test.go 读取）：假 TMDB 的搜索/详情返回 + 每个文件名期望识别到的条目。search 的键是「类型|查询词|年份参数」（year 或 first_air_date_year，没有则留空）；没写到的搜索一律返回空页，没写到的详情一律 404。want 为空表示应当判为未识别。",
   "cases": [
-    {"name": "Blade.Runner.2049.2017.1080p.BluRay.x264-SPARKS.mkv", "want": "movie/335984", "note": "片名带四位数：以前按 2049 当年份、搜 Blade Runner 取第一条，认成 1982 版"},
-    {"name": "Some.Obscure.Indie.Film.2020.1080p.mkv", "want": "", "note": "搜索只返回不相干的热门条目：以前照单全收第一条，现在判未识别"},
-    {"name": "Shogun.S01E01.2024.1080p.mkv", "want": "tv/126308", "note": "第一条是片名相近的别的剧；正确条目原名 SHŌGUN，靠别名 Shogun 对上"},
-    {"name": "The.Boys.S04E01.2024.2160p.AMZN.WEB-DL.mkv", "want": "tv/76479", "note": "第四季的年份不能当首播年份；同名剧里靠第 4 季播出年份选中"},
-    {"name": "Dune.2021.1080p.mkv", "want": "movie/438631", "note": "同名翻拍按年份选"},
-    {"name": "Solaris.2002.mkv", "want": "movie/2103", "note": "同名不同年：原名相等且年份相符的胜出"},
-    {"name": "Some.Film.2018.mkv", "want": "movie/50", "note": "片名相等、年份差一年（跨年上映）照样接受"},
-    {"name": "Parasite.2020.1080p.mkv", "want": "movie/496243", "note": "文件名用英文译名：标题原名都对不上，靠译名对上"},
-    {"name": "The.Office.US.S02E03.mkv", "want": "tv/2316", "note": "片名包含关系、文件名没有年份：接受"},
-    {"name": "Close.Enough.2015.mkv", "want": "", "note": "片名只是包含关系且年份差很远：不接受"},
-    {"name": "骗不了人的男人.Softie.Conman.2022.1080p.mkv", "want": "tv/222", "note": "中英混合整串搜不到，拆出中文名后电影无果转剧集命中"},
-    {"name": "The.Matrix.1999.[tmdbid=603].mkv", "want": "movie/603", "note": "id 标签：只有电影有这个 id"},
-    {"name": "Foo.2010.[tmdbid=100].mkv", "want": "movie/100", "note": "id 标签电影剧集都有：按片名年份判为电影"},
-    {"name": "Qux.[tmdbid=200].mkv", "want": "movie/300", "note": "id 标签电影剧集都有且片名都对不上：放弃标签按片名搜"},
-    {"name": "Game.of.Thrones.S01E01.[tmdbid=1399].mkv", "want": "tv/1399", "note": "id 标签 + 季集号：按剧集取，不看同号电影"},
-    {"name": "Nothing.[tmdbid=9999].mkv", "want": "movie/301", "note": "id 标签在 TMDB 上不存在：退回按片名搜"}
+    {
+      "name": "Blade.Runner.2049.2017.1080p.BluRay.x264-SPARKS.mkv",
+      "want": "movie/335984",
+      "note": "片名带四位数：以前按 2049 当年份、搜 Blade Runner 取第一条，认成 1982 版"
+    },
+    {
+      "name": "Some.Obscure.Indie.Film.2020.1080p.mkv",
+      "want": "",
+      "note": "搜索只返回不相干的热门条目：以前照单全收第一条，现在判未识别"
+    },
+    {
+      "name": "Shogun.S01E01.2024.1080p.mkv",
+      "want": "tv/126308",
+      "note": "第一条是片名相近的别的剧；正确条目原名 SHŌGUN，靠别名 Shogun 对上"
+    },
+    {
+      "name": "The.Boys.S04E01.2024.2160p.AMZN.WEB-DL.mkv",
+      "want": "tv/76479",
+      "note": "第四季的年份不能当首播年份；同名剧里靠第 4 季播出年份选中"
+    },
+    {
+      "name": "Dune.2021.1080p.mkv",
+      "want": "movie/438631",
+      "note": "同名翻拍按年份选"
+    },
+    {
+      "name": "Solaris.2002.mkv",
+      "want": "movie/2103",
+      "note": "同名不同年：原名相等且年份相符的胜出"
+    },
+    {
+      "name": "Some.Film.2018.mkv",
+      "want": "movie/50",
+      "note": "片名相等、年份差一年（跨年上映）照样接受"
+    },
+    {
+      "name": "Parasite.2020.1080p.mkv",
+      "want": "movie/496243",
+      "note": "文件名用英文译名：标题原名都对不上，靠译名对上"
+    },
+    {
+      "name": "The.Office.US.S02E03.mkv",
+      "want": "tv/2316",
+      "note": "片名包含关系、文件名没有年份：接受"
+    },
+    {
+      "name": "Close.Enough.2015.mkv",
+      "want": "",
+      "note": "片名只是包含关系且年份差很远：不接受"
+    },
+    {
+      "name": "骗不了人的男人.Softie.Conman.2022.1080p.mkv",
+      "want": "tv/222",
+      "note": "中英混合整串搜不到，拆出中文名后电影无果转剧集命中"
+    },
+    {
+      "name": "The.Matrix.1999.[tmdbid=603].mkv",
+      "want": "movie/603",
+      "note": "id 标签：只有电影有这个 id"
+    },
+    {
+      "name": "Foo.2010.[tmdbid=100].mkv",
+      "want": "movie/100",
+      "note": "id 标签电影剧集都有：按片名年份判为电影"
+    },
+    {
+      "name": "Qux.[tmdbid=200].mkv",
+      "want": "movie/300",
+      "note": "id 标签电影剧集都有且片名都对不上：放弃标签按片名搜"
+    },
+    {
+      "name": "Game.of.Thrones.S01E01.[tmdbid=1399].mkv",
+      "want": "tv/1399",
+      "note": "id 标签 + 季集号：按剧集取，不看同号电影"
+    },
+    {
+      "name": "Nothing.[tmdbid=9999].mkv",
+      "want": "movie/301",
+      "note": "id 标签在 TMDB 上不存在：退回按片名搜"
+    },
+    {
+      "name": "寄生虫.Parasite.2019.1080p.mkv",
+      "want": "movie/496243",
+      "note": "中英双名先搜中文名：整串搜出来的是片名相近的幕后特辑"
+    },
+    {
+      "name": "流浪地球.2023.mkv",
+      "want": "movie/842675",
+      "note": "片名相等的是 2019 年第一部，年份分毫不差的是续集流浪地球2"
+    },
+    {
+      "name": "庆余年第二季.第05集.2024.4K.mp4",
+      "want": "tv/69851",
+      "note": "中文季号粘在片名上；2024 是第二季的年份"
+    },
+    {
+      "name": "[ANi] 葬送的芙莉莲 - 01 [1080P][Baha][WEB-DL][AAC AVC][CHT].mp4",
+      "want": "tv/209867",
+      "note": "字幕组命名：剥掉 [ANi] 与「 - 01 」后按剧集搜"
+    },
+    {
+      "name": "狂飙.全39集.国语中字.2023.1080p.WEB-DL.mkv",
+      "want": "tv/205050",
+      "note": "剥掉全39集、国语中字；全N集判为剧集"
+    }
   ],
   "search": {
     "movie|Blade Runner 2049|": [
-      {"id": 335984, "title": "银翼杀手2049", "original_title": "Blade Runner 2049", "release_date": "2017-10-04"},
-      {"id": 78, "title": "银翼杀手", "original_title": "Blade Runner", "release_date": "1982-06-25"}
+      {
+        "id": 335984,
+        "title": "银翼杀手2049",
+        "original_title": "Blade Runner 2049",
+        "release_date": "2017-10-04"
+      },
+      {
+        "id": 78,
+        "title": "银翼杀手",
+        "original_title": "Blade Runner",
+        "release_date": "1982-06-25"
+      }
     ],
     "movie|Blade Runner|": [
-      {"id": 78, "title": "银翼杀手", "original_title": "Blade Runner", "release_date": "1982-06-25"},
-      {"id": 335984, "title": "银翼杀手2049", "original_title": "Blade Runner 2049", "release_date": "2017-10-04"}
+      {
+        "id": 78,
+        "title": "银翼杀手",
+        "original_title": "Blade Runner",
+        "release_date": "1982-06-25"
+      },
+      {
+        "id": 335984,
+        "title": "银翼杀手2049",
+        "original_title": "Blade Runner 2049",
+        "release_date": "2017-10-04"
+      }
     ],
     "movie|Some Obscure Indie Film|": [
-      {"id": 11, "title": "肖申克的救赎", "original_title": "The Shawshank Redemption", "release_date": "1994-09-23"},
-      {"id": 12, "title": "黑色电影", "original_title": "Film Noir", "release_date": "2007-01-01"}
+      {
+        "id": 11,
+        "title": "肖申克的救赎",
+        "original_title": "The Shawshank Redemption",
+        "release_date": "1994-09-23"
+      },
+      {
+        "id": 12,
+        "title": "黑色电影",
+        "original_title": "Film Noir",
+        "release_date": "2007-01-01"
+      }
     ],
     "tv|Some Obscure Indie Film|": [
-      {"id": 21, "name": "独立游戏", "original_name": "Indie Game", "first_air_date": "2012-01-01"}
+      {
+        "id": 21,
+        "name": "独立游戏",
+        "original_name": "Indie Game",
+        "first_air_date": "2012-01-01"
+      }
     ],
     "tv|Shogun|2024": [
-      {"id": 999, "name": "将军刺客", "original_name": "Shogun Assassin", "first_air_date": "2024-01-01"},
-      {"id": 126308, "name": "幕府将军", "original_name": "SHŌGUN", "first_air_date": "2024-02-27"}
+      {
+        "id": 999,
+        "name": "将军刺客",
+        "original_name": "Shogun Assassin",
+        "first_air_date": "2024-01-01"
+      },
+      {
+        "id": 126308,
+        "name": "幕府将军",
+        "original_name": "SHŌGUN",
+        "first_air_date": "2024-02-27"
+      }
     ],
     "tv|The Boys|2024": [
-      {"id": 7777, "name": "蓝衣男孩", "original_name": "The Boys in Blue", "first_air_date": "2024-03-01"}
+      {
+        "id": 7777,
+        "name": "蓝衣男孩",
+        "original_name": "The Boys in Blue",
+        "first_air_date": "2024-03-01"
+      }
     ],
     "tv|The Boys|": [
-      {"id": 5555, "name": "The Boys", "original_name": "The Boys", "first_air_date": "1993-01-01"},
-      {"id": 76479, "name": "黑袍纠察队", "original_name": "The Boys", "first_air_date": "2019-07-25"},
-      {"id": 5556, "name": "The Boys 2030", "original_name": "The Boys 2030", "first_air_date": "2030-01-01"}
+      {
+        "id": 5555,
+        "name": "The Boys",
+        "original_name": "The Boys",
+        "first_air_date": "1993-01-01"
+      },
+      {
+        "id": 76479,
+        "name": "黑袍纠察队",
+        "original_name": "The Boys",
+        "first_air_date": "2019-07-25"
+      },
+      {
+        "id": 5556,
+        "name": "The Boys 2030",
+        "original_name": "The Boys 2030",
+        "first_air_date": "2030-01-01"
+      }
     ],
     "movie|Dune|": [
-      {"id": 841, "title": "沙丘", "original_title": "Dune", "release_date": "1984-12-14"},
-      {"id": 438631, "title": "沙丘", "original_title": "Dune", "release_date": "2021-09-15"}
+      {
+        "id": 841,
+        "title": "沙丘",
+        "original_title": "Dune",
+        "release_date": "1984-12-14"
+      },
+      {
+        "id": 438631,
+        "title": "沙丘",
+        "original_title": "Dune",
+        "release_date": "2021-09-15"
+      }
     ],
     "movie|Solaris|": [
-      {"id": 593, "title": "飞向太空", "original_title": "Солярис", "release_date": "1972-02-05"},
-      {"id": 2103, "title": "索拉里斯星", "original_title": "Solaris", "release_date": "2002-11-27"}
+      {
+        "id": 593,
+        "title": "飞向太空",
+        "original_title": "Солярис",
+        "release_date": "1972-02-05"
+      },
+      {
+        "id": 2103,
+        "title": "索拉里斯星",
+        "original_title": "Solaris",
+        "release_date": "2002-11-27"
+      }
     ],
     "movie|Some Film|": [
-      {"id": 50, "title": "Some Film", "original_title": "Some Film", "release_date": "2017-12-29"}
+      {
+        "id": 50,
+        "title": "Some Film",
+        "original_title": "Some Film",
+        "release_date": "2017-12-29"
+      }
     ],
     "movie|Parasite|": [
-      {"id": 496243, "title": "寄生虫", "original_title": "기생충", "release_date": "2019-05-30"}
+      {
+        "id": 496243,
+        "title": "寄生虫",
+        "original_title": "기생충",
+        "release_date": "2019-05-30"
+      }
     ],
     "tv|The Office US|": [
-      {"id": 2316, "name": "办公室", "original_name": "The Office", "first_air_date": "2005-03-24"}
+      {
+        "id": 2316,
+        "name": "办公室",
+        "original_name": "The Office",
+        "first_air_date": "2005-03-24"
+      }
     ],
     "movie|Close Enough|": [
-      {"id": 60, "title": "Close Enough to Touch", "original_title": "Close Enough to Touch", "release_date": "1987-01-01"}
+      {
+        "id": 60,
+        "title": "Close Enough to Touch",
+        "original_title": "Close Enough to Touch",
+        "release_date": "1987-01-01"
+      }
     ],
     "tv|骗不了人的男人|2022": [
-      {"id": 222, "name": "骗不了人的男人", "original_name": "騙徒", "first_air_date": "2022-10-03"}
+      {
+        "id": 222,
+        "name": "骗不了人的男人",
+        "original_name": "騙徒",
+        "first_air_date": "2022-10-03"
+      }
     ],
     "movie|Qux|": [
-      {"id": 300, "title": "Qux", "original_title": "Qux", "release_date": "2001-01-01"}
+      {
+        "id": 300,
+        "title": "Qux",
+        "original_title": "Qux",
+        "release_date": "2001-01-01"
+      }
     ],
     "movie|Nothing|": [
-      {"id": 301, "title": "Nothing", "original_title": "Nothing", "release_date": "2003-01-01"}
+      {
+        "id": 301,
+        "title": "Nothing",
+        "original_title": "Nothing",
+        "release_date": "2003-01-01"
+      }
+    ],
+    "movie|寄生虫|": [
+      {
+        "id": 496243,
+        "title": "寄生虫",
+        "original_title": "기생충",
+        "release_date": "2019-05-30"
+      }
+    ],
+    "movie|寄生虫 Parasite|": [
+      {
+        "id": 777,
+        "title": "寄生虫 Parasite 幕后特辑",
+        "original_title": "Parasite Behind the Scenes",
+        "release_date": "2019-06-01"
+      }
+    ],
+    "movie|流浪地球|": [
+      {
+        "id": 535167,
+        "title": "流浪地球",
+        "original_title": "流浪地球",
+        "release_date": "2019-02-05"
+      },
+      {
+        "id": 842675,
+        "title": "流浪地球2",
+        "original_title": "流浪地球2",
+        "release_date": "2023-01-22"
+      }
+    ],
+    "tv|庆余年|": [
+      {
+        "id": 69851,
+        "name": "庆余年",
+        "original_name": "庆余年",
+        "first_air_date": "2019-11-26"
+      }
+    ],
+    "tv|葬送的芙莉莲|": [
+      {
+        "id": 209867,
+        "name": "葬送的芙莉莲",
+        "original_name": "葬送のフリーレン",
+        "first_air_date": "2023-09-29"
+      }
+    ],
+    "tv|狂飙|2023": [
+      {
+        "id": 205050,
+        "name": "狂飙",
+        "original_name": "狂飙",
+        "first_air_date": "2023-01-14"
+      }
     ]
   },
   "detail": {
-    "tv/126308": {"id": 126308, "name": "幕府将军", "original_name": "SHŌGUN", "first_air_date": "2024-02-27",
-      "alternative_titles": {"results": [{"title": "Shogun"}]}},
-    "tv/5555": {"id": 5555, "name": "The Boys", "original_name": "The Boys", "first_air_date": "1993-01-01",
-      "seasons": [{"season_number": 1, "air_date": "1993-01-01"}]},
-    "tv/76479": {"id": 76479, "name": "黑袍纠察队", "original_name": "The Boys", "first_air_date": "2019-07-25", "origin_country": ["US"],
-      "seasons": [{"season_number": 1, "air_date": "2019-07-25"}, {"season_number": 4, "air_date": "2024-06-13"}]},
-    "movie/496243": {"id": 496243, "title": "寄生虫", "original_title": "기생충", "release_date": "2019-05-30", "origin_country": ["KR"],
-      "translations": {"translations": [{"data": {"title": "Parasite"}}]}},
-    "tv/2316": {"id": 2316, "name": "办公室", "original_name": "The Office", "first_air_date": "2005-03-24"},
-    "movie/603": {"id": 603, "title": "黑客帝国", "original_title": "The Matrix", "release_date": "1999-03-30"},
-    "movie/100": {"id": 100, "title": "Foo", "original_title": "Foo", "release_date": "2010-01-01"},
-    "tv/100": {"id": 100, "name": "Bar", "original_name": "Bar", "first_air_date": "2015-01-01"},
-    "movie/200": {"id": 200, "title": "Alpha", "original_title": "Alpha", "release_date": "2010-01-01"},
-    "tv/200": {"id": 200, "name": "Beta", "original_name": "Beta", "first_air_date": "2010-01-01"},
-    "movie/1399": {"id": 1399, "title": "别的电影", "original_title": "Other Movie", "release_date": "2000-01-01"},
-    "tv/1399": {"id": 1399, "name": "权力的游戏", "original_name": "Game of Thrones", "first_air_date": "2011-04-17"}
+    "tv/126308": {
+      "id": 126308,
+      "name": "幕府将军",
+      "original_name": "SHŌGUN",
+      "first_air_date": "2024-02-27",
+      "alternative_titles": {
+        "results": [
+          {
+            "title": "Shogun"
+          }
+        ]
+      }
+    },
+    "tv/5555": {
+      "id": 5555,
+      "name": "The Boys",
+      "original_name": "The Boys",
+      "first_air_date": "1993-01-01",
+      "seasons": [
+        {
+          "season_number": 1,
+          "air_date": "1993-01-01"
+        }
+      ]
+    },
+    "tv/76479": {
+      "id": 76479,
+      "name": "黑袍纠察队",
+      "original_name": "The Boys",
+      "first_air_date": "2019-07-25",
+      "origin_country": [
+        "US"
+      ],
+      "seasons": [
+        {
+          "season_number": 1,
+          "air_date": "2019-07-25"
+        },
+        {
+          "season_number": 4,
+          "air_date": "2024-06-13"
+        }
+      ]
+    },
+    "movie/496243": {
+      "id": 496243,
+      "title": "寄生虫",
+      "original_title": "기생충",
+      "release_date": "2019-05-30",
+      "origin_country": [
+        "KR"
+      ],
+      "translations": {
+        "translations": [
+          {
+            "data": {
+              "title": "Parasite"
+            }
+          }
+        ]
+      }
+    },
+    "tv/2316": {
+      "id": 2316,
+      "name": "办公室",
+      "original_name": "The Office",
+      "first_air_date": "2005-03-24"
+    },
+    "movie/603": {
+      "id": 603,
+      "title": "黑客帝国",
+      "original_title": "The Matrix",
+      "release_date": "1999-03-30"
+    },
+    "movie/100": {
+      "id": 100,
+      "title": "Foo",
+      "original_title": "Foo",
+      "release_date": "2010-01-01"
+    },
+    "tv/100": {
+      "id": 100,
+      "name": "Bar",
+      "original_name": "Bar",
+      "first_air_date": "2015-01-01"
+    },
+    "movie/200": {
+      "id": 200,
+      "title": "Alpha",
+      "original_title": "Alpha",
+      "release_date": "2010-01-01"
+    },
+    "tv/200": {
+      "id": 200,
+      "name": "Beta",
+      "original_name": "Beta",
+      "first_air_date": "2010-01-01"
+    },
+    "movie/1399": {
+      "id": 1399,
+      "title": "别的电影",
+      "original_title": "Other Movie",
+      "release_date": "2000-01-01"
+    },
+    "tv/1399": {
+      "id": 1399,
+      "name": "权力的游戏",
+      "original_name": "Game of Thrones",
+      "first_air_date": "2011-04-17"
+    },
+    "tv/69851": {
+      "id": 69851,
+      "name": "庆余年",
+      "original_name": "庆余年",
+      "first_air_date": "2019-11-26",
+      "origin_country": [
+        "CN"
+      ],
+      "seasons": [
+        {
+          "season_number": 1,
+          "air_date": "2019-11-26"
+        },
+        {
+          "season_number": 2,
+          "air_date": "2024-05-16"
+        }
+      ]
+    }
   }
 }

@@ -336,6 +336,8 @@ type ParsedName struct {
 	// TmdbKind 只有 {[tmdbid=1;type=tv]} 这种写法才带，其余为空，由识别时判断类型
 	TmdbID   int
 	TmdbKind string
+	// SeasonGuessed 季号是缺省填的 1（文件名只有集号）。目录名上明写了季号时以目录名为准
+	SeasonGuessed bool
 }
 
 var (
@@ -346,9 +348,11 @@ var (
 	reEpisodeOnly = regexp.MustCompile(`(?:^|[\.\s_-])(?:[Ee][Pp]?|第)(\d{1,3})(?:[集話话])?(?:$|[\.\s_-])`)
 	// 动漫字幕组命名的方括号集数：[01] / [01v2]（vN=修正版）。
 	// 限 1-3 位数字：4 位会被 "[2001]" 这类年份方括号误伤
-	reBracketEpisode = regexp.MustCompile(`(?:^|[\.\s_-])\[(\d{1,3})(?:[vV]\d+)?\]`)
+	// 前面可以紧挨着另一个方括号：[组][片名][01]
+	reBracketEpisode = regexp.MustCompile(`(?:^|[\.\s_\]】-])[\[【](\d{1,3})(?:[vV]\d+)?[\]】]`)
 	// 仅季：Season 1, 第一季
-	reSeasonOnly = regexp.MustCompile(`[Ss](\d{1,2})\b`)
+	// 两侧必须是分隔符。此前不设边界、而且只认不截，"The.Boys.S04.2160p" 的片名成了 "The Boys S04"
+	reSeasonOnly = regexp.MustCompile(`(?:^|[\s._\-\[])[Ss](\d{1,2})(?:$|[\s._\-\]])`)
 	// 年份：(2023) 或 .2023. 或空格2023空格
 	reYear = regexp.MustCompile(`[\(\.\s_-](19\d{2}|20\d{2})(?:[\)\.\s_-]|$)`)
 	// 分辨率
@@ -378,41 +382,63 @@ func stripReleaseAds(name string) string {
 	return strings.Trim(name, " -_.@")
 }
 
-// parseFileName 从视频文件名解析标题、年份、季集等信息
+// parseFileName 从视频文件名（或目录名）解析标题、年份、季集等信息。
+//
+// 片名 = 原名开头到「最早出现的那个标记」为止：季集号、年份、发布标记（1080p/BluRay…）。
+// 所有标记都在同一个 name 上找位置，最后按最小位置截一刀；中间只做等长替换（. _ → 空格），
+// 位置不会错开。季集号的写法覆盖了中文（第二季 / 第05集 / 全39集）和动漫字幕组
+// （[组][片名][01]、片名 - 01 [1080p]），规则思路参考 MoviePilot metavideo.py / metaanime.py
+// 与 LitePan rules/regex.go，实现是自己写的
 func parseFileName(filename string) *ParsedName {
 	result := &ParsedName{}
 	// id 标签要在去后缀之前摘：目录名 "Movie.1999.[tmdbid=603]" 没有扩展名，
 	// 最后一个点后面的标签会被当成后缀一起剪掉
 	name := filename
 	result.TmdbID, result.TmdbKind, name = takeTmdbTag(name)
-	// 去掉文件后缀
-	if idx := strings.LastIndex(name, "."); idx > 0 {
-		name = name[:idx]
-	}
+	name = trimMediaExt(name)
 	// 先剥离发布站广告（【…】块/域名），再解析
 	name = stripReleaseAds(name)
+	// 「全39集 / 共39集」是整季打包的标志：记下是剧集，再和其他中文噪声词一起剥掉
+	if reCnTotalEpisodes.MatchString(name) {
+		result.IsTV = true
+	}
+	name = stripCnNoise(name)
 
-	// 检测季集
-	if m := reSeasonEpisode.FindStringSubmatch(name); m != nil {
-		result.IsTV = true
-		result.Season, _ = strconv.Atoi(m[1])
-		result.Episode, _ = strconv.Atoi(m[2])
-	} else if m := reEpisodeOnly.FindStringSubmatch(name); m != nil {
-		// EP01 / E01 / 第01集：无季信息，缺省第 1 季
-		result.IsTV = true
-		result.Season = 1
+	// 目录里的 01.mp4：只有集号，片名留空交给调用方用目录名补
+	if m := reBareEpisodeName.FindStringSubmatch(name); m != nil {
+		result.IsTV, result.Season, result.SeasonGuessed = true, 1, true
 		result.Episode, _ = strconv.Atoi(m[1])
-	} else if m := reBracketEpisode.FindStringSubmatch(name); m != nil {
-		// 动漫字幕组命名 [01] / [01v2]：无季信息，缺省第 1 季。
-		// 同时剥离开头的 [字幕组] 前缀——仅在确认是这种命名形态时才剥，
-		// 防止误伤 "[REC].2007" 这类以方括号开头的电影名
+		return result
+	}
+	name = stripAnimeGroup(name)
+
+	cut := len(name)
+	mark := func(i int) {
+		if i >= 0 && i < cut {
+			cut = i
+		}
+	}
+
+	if loc := reSeasonEpisode.FindStringSubmatchIndex(name); loc != nil {
+		result.Season, _ = strconv.Atoi(name[loc[2]:loc[3]])
+		result.Episode, _ = strconv.Atoi(name[loc[4]:loc[5]])
+		mark(loc[0])
+	} else {
+		if s, at := findSeason(name); s > 0 {
+			result.Season = s
+			mark(at)
+		}
+		if e, at := findEpisode(name); e > 0 {
+			result.Episode = e
+			mark(at)
+			if result.Season == 0 {
+				// 没写季号：缺省第 1 季，但记下是猜的 —— 目录名上写了「第二季」时要让目录名说了算
+				result.Season, result.SeasonGuessed = 1, true
+			}
+		}
+	}
+	if result.Season > 0 || result.Episode > 0 {
 		result.IsTV = true
-		result.Season = 1
-		result.Episode, _ = strconv.Atoi(m[1])
-		name = regexp.MustCompile(`^\[[^\]]*\]\s*`).ReplaceAllString(name, "")
-	} else if m := reSeasonOnly.FindStringSubmatch(name); m != nil {
-		result.IsTV = true
-		result.Season, _ = strconv.Atoi(m[1])
 	}
 
 	// 检测分辨率
@@ -420,54 +446,251 @@ func parseFileName(filename string) *ParsedName {
 		result.Resolution = strings.ToUpper(m[1])
 	}
 
-	// 检测年份
+	// 检测年份。按年份在名字里的位置截，而不是在标题里找第一个同样的数字
+	// （2046.2004 的片名本身就是个年份样的数字）
 	yearPos := -1
 	result.Year, yearPos = pickYear(name)
+	if yearPos > 0 {
+		mark(yearPos)
+	}
+	// 发布标记
+	if idx := reReleaseMarkers.FindStringIndex(name); idx != nil {
+		mark(idx[0])
+	}
 
-	// 提取标题：从开头到第一个发布标记/季集/年份处截断
-	title := name
-
-	// 将分隔符 . _ 替换为空格
+	title := name[:cut]
 	title = strings.ReplaceAll(title, ".", " ")
 	title = strings.ReplaceAll(title, "_", " ")
-
-	// 在季集标记处截断
-	if idx := reSeasonEpisode.FindStringIndex(title); idx != nil {
-		title = title[:idx[0]]
-	}
-	// 在仅集数标记（EP01/E01/第01集）处截断，避免集号污染标题搜索
-	if idx := reEpisodeOnly.FindStringIndex(title); idx != nil {
-		title = title[:idx[0]]
-	}
-	// 在方括号集数（[01]/[01v2]）处截断，同时去掉后面的编码/语言标签
-	if idx := reBracketEpisode.FindStringIndex(title); idx != nil {
-		title = title[:idx[0]]
-	}
-	if !result.IsTV {
-		if idx := reSeasonOnly.FindStringIndex(title); idx != nil {
-			title = title[:idx[0]]
-		}
-	}
-
-	// 在发布标记处截断
-	if idx := reReleaseMarkers.FindStringIndex(title); idx != nil {
-		title = title[:idx[0]]
-	}
-
-	// 在年份处截断。按年份在原名里的位置截，而不是在标题里找第一个同样的数字：
-	// 前面几步只把 . _ 换成等长的空格、只截尾巴，位置是对得上的
-	if yearPos > 0 && yearPos < len(title) {
-		title = title[:yearPos]
-	}
-
 	// 清理首尾空格和标点。尾部的左括号是年份被截走后剩下的（"Movie (1999)" → "Movie ("）；
-	// 开头的不动，"(500) Days of Summer" 的括号是片名的一部分
-	title = strings.Trim(strings.TrimRight(title, " -.([（【"), " -.")
+	// 开头的圆括号不动，"(500) Days of Summer" 的括号是片名的一部分。
+	// 方括号两头都剥：字幕组命名的片名常整个包在方括号里（[Sousou no Frieren][01]）
+	title = strings.TrimRight(title, " -.([（【")
+	title = strings.Trim(title, " -.[]【】")
 	// 合并多个空格
-	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
+	title = reMultiSpace.ReplaceAllString(title, " ")
 
 	result.Title = title
 	return result
+}
+
+var reMultiSpace = regexp.MustCompile(`\s+`)
+
+// ---------- 季集号 ----------
+
+const cnDigits = `零〇一二两三四五六七八九十百`
+
+var (
+	// 第二季 / 第2季（可以和片名粘在一起：庆余年第二季）
+	reCnSeason = regexp.MustCompile(`第\s*([0-9]{1,2}|[` + cnDigits + `]{1,3})\s*季`)
+	// Season 2 / Season.02
+	reEnSeason = regexp.MustCompile(`(?i)(?:^|[\s._\-\[(])Season[\s._]*(\d{1,2})(?:$|[\s._\-\])])`)
+	// 第05集 / 第十二话（可以和片名粘在一起：庆余年第二季第05集）
+	reCnEpisode = regexp.MustCompile(`第\s*([0-9]{1,4}|[` + cnDigits + `]{1,6})\s*[集话話回期]`)
+	// 全39集 / 共39集
+	reCnTotalEpisodes = regexp.MustCompile(`[全共]\s*([0-9]{1,4}|[` + cnDigits + `]{1,6})\s*[集话話期]`)
+	// 字幕组「片名 - 01 [1080p]」：前后都要有空格包着的短横线，集号后面是结尾、空格或括号
+	reAnimeDashEpisode = regexp.MustCompile(`\s-\s(\d{1,4})(?:[vV]\d+)?(?:$|[\s\[(（【.])`)
+	// 片名结尾的裸集号「鬼灭之刃 刀匠村篇 03」的候选数字
+	reTrailingNumber = regexp.MustCompile(`(?:^|[\s._\-])(\d{1,3})(?:[vV]\d)?(?:[\s._\-]|$)`)
+	// 整个名字只有集号：01 / 01v2（4 位留给年份）
+	reBareEpisodeName = regexp.MustCompile(`^\s*(\d{1,3})(?:[vV]\d+)?\s*$`)
+	// 裸数字紧跟在日期后面（快乐大本营.2019.03.15）不是集号
+	reDateBefore = regexp.MustCompile(`\d{4}[\s._\-](?:\d{1,2}[\s._\-])?$`)
+)
+
+// findSeason 季号及其位置：第二季 → Season 2 → S02（没写集号的季包）
+func findSeason(name string) (int, int) {
+	if loc := reCnSeason.FindStringSubmatchIndex(name); loc != nil {
+		if n := parseCnNumber(name[loc[2]:loc[3]]); n > 0 {
+			return n, loc[0]
+		}
+	}
+	if loc := reEnSeason.FindStringSubmatchIndex(name); loc != nil {
+		n, _ := strconv.Atoi(name[loc[2]:loc[3]])
+		return n, loc[0]
+	}
+	if loc := reSeasonOnly.FindStringSubmatchIndex(name); loc != nil {
+		n, _ := strconv.Atoi(name[loc[2]:loc[3]])
+		return n, loc[0]
+	}
+	return 0, -1
+}
+
+// findEpisode 集号及其位置，按可信度依次试：
+// EP01 / E01 / 第01集 → 粘连的中文集号 → [01] → 「 - 01 」→ 片名末尾的裸集号
+func findEpisode(name string) (int, int) {
+	if loc := reEpisodeOnly.FindStringSubmatchIndex(name); loc != nil {
+		n, _ := strconv.Atoi(name[loc[2]:loc[3]])
+		return n, loc[0]
+	}
+	if loc := reCnEpisode.FindStringSubmatchIndex(name); loc != nil {
+		if n := parseCnNumber(name[loc[2]:loc[3]]); n > 0 {
+			return n, loc[0]
+		}
+	}
+	if loc := reBracketEpisode.FindStringSubmatchIndex(name); loc != nil {
+		n, _ := strconv.Atoi(name[loc[2]:loc[3]])
+		return n, loc[0]
+	}
+	if loc := reAnimeDashEpisode.FindStringSubmatchIndex(name); loc != nil {
+		if n, ok := plausibleEpisode(name[loc[2]:loc[3]]); ok {
+			return n, loc[0]
+		}
+	}
+	return trailingEpisode(name)
+}
+
+// plausibleEpisode 排除长得像年份、分辨率的数字
+func plausibleEpisode(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	if len(s) == 4 && n >= 1900 && n <= 2099 {
+		return 0, false
+	}
+	switch n {
+	case 480, 576, 720, 1080, 1440, 2160:
+		return 0, false
+	}
+	return n, true
+}
+
+// trailingEpisode 片名后面的裸集号：「鬼灭之刃 刀匠村篇 03」「西游记 12 [1080P]」。
+//
+// 裸数字最容易和续集编号撞（Toy Story 3、流浪地球 2），所以只认两种：
+// 带前导零的（03），或紧跟在中文后面的两三位数（MoviePilot 的经验：中文名后面跟的
+// 非年份数字极有可能是集）。数字后面必须是名字结尾、括号或发布标记，
+// 夹在片名中间的数字不算
+func trailingEpisode(name string) (int, int) {
+	for _, loc := range reTrailingNumber.FindAllStringSubmatchIndex(name, -1) {
+		digits := name[loc[2]:loc[3]]
+		rest := strings.TrimLeft(name[loc[3]:], "vV0123456789")
+		restTrim := strings.TrimLeft(rest, " ._-")
+		tail := restTrim == "" || strings.ContainsAny(restTrim[:1], "[【(（")
+		if !tail {
+			if m := reReleaseMarkers.FindStringIndex(rest); m != nil && m[0] == 0 {
+				tail = true
+			}
+		}
+		if !tail || reDateBefore.MatchString(name[:loc[2]]) {
+			continue
+		}
+		n, ok := plausibleEpisode(digits)
+		if !ok {
+			continue
+		}
+		before := []rune(strings.TrimRight(name[:loc[2]], " ._-"))
+		afterCJK := len(before) > 0 && isCJKRune(before[len(before)-1])
+		if strings.HasPrefix(digits, "0") || (afterCJK && len(digits) >= 2) {
+			return n, loc[2]
+		}
+	}
+	return 0, -1
+}
+
+func isCJKRune(r rune) bool {
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r)
+}
+
+// parseCnNumber 阿拉伯数字或中文数字（一 / 十二 / 二十三 / 一百零五 / 两）
+func parseCnNumber(s string) int {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	digit := map[rune]int{'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4,
+		'五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+	total, cur := 0, 0
+	for _, r := range s {
+		switch r {
+		case '十':
+			if cur == 0 {
+				cur = 1
+			}
+			total += cur * 10
+			cur = 0
+		case '百':
+			if cur == 0 {
+				cur = 1
+			}
+			total += cur * 100
+			cur = 0
+		default:
+			d, ok := digit[r]
+			if !ok {
+				return 0
+			}
+			cur = d
+		}
+	}
+	return total + cur
+}
+
+// ---------- 动漫字幕组 ----------
+
+var reLeadingBracket = regexp.MustCompile(`^\s*[\[【][^\]】]*[\]】]\s*`)
+
+// stripAnimeGroup 剥开头的 [字幕组]。只在确认是字幕组命名形态（有 [01] 或「 - 01 」集号）、
+// 且剥掉之后集号前面还剩片名时才剥：
+// "[REC].2007" 是电影名、"[葬送的芙莉莲][01]" 的第一个方括号就是片名，都不能剥
+func stripAnimeGroup(name string) string {
+	loc := reLeadingBracket.FindStringIndex(name)
+	if loc == nil {
+		return name
+	}
+	rest := name[loc[1]:]
+	at := -1
+	if l := reBracketEpisode.FindStringIndex(rest); l != nil {
+		at = l[0]
+	} else if l := reAnimeDashEpisode.FindStringIndex(rest); l != nil {
+		at = l[0]
+	}
+	if at <= 0 || strings.Trim(rest[:at], " ._-[]【】") == "" {
+		return name
+	}
+	return rest
+}
+
+// ---------- 中文噪声词 ----------
+
+var (
+	// 方括号/圆括号里带这些关键词的整块都是说明，不是片名：[国日多音轨+中文字幕]、(国语中字)
+	reCnNoiseBracket = regexp.MustCompile(`[\[【(（][^\]】)）]*?(?:字幕|内封|外挂|内嵌|国语|粤语|双语|中字|双字|音轨|配音|国配|台配|简繁|繁简|中英|[全共]\s*[0-9` + cnDigits + `]+\s*[集话話期])[^\]】)）]*?[\]】)）]`)
+	// 长词：信息量足够，出现在哪都剥（可能和片名粘在一起：流浪地球国语中字）
+	reCnNoiseLong = regexp.MustCompile(`国语中字|国粤双语|国英双语|国日双语|中英双字|中日双字|中英字幕|简繁中字|简体中字|繁体中字|中文字幕|双语字幕|内封字幕|内嵌字幕|外挂字幕|特效字幕|国语配音|粤语中字|简繁内封|杜比视界|杜比全景声|无水印|未删减版|无删减版|导演剪辑版|蓝光原盘|修复版|★?[0-9一二三四五六七八九十]{0,3}月?新番★?`)
+	// 短词：只在自成一段时才剥（前后是分隔符或括号），免得切到片名里的字
+	reCnNoiseShort = regexp.MustCompile(`(^|[\s._\-\[\]【】()（）+&])(?:中字|双字|国语|粤语|国配|台配|双语|内封|外挂|高清|超清|蓝光|原盘|合集|全集|完整版|未删减|无删减|连载|完结|中英|简繁|简中|繁中|官译|特效|日剧|美剧|韩剧|英剧|泰剧|国产剧|电视剧|动漫|动画|[全共]\s*[0-9` + cnDigits + `]+\s*[集话話期])+([\s._\-\[\]【】()（）+&]|$)`)
+)
+
+// stripCnNoise 剥中文说明词（国语中字、全39集、高清…）。
+// 不剥的话它们留在片名里：「狂飙 全39集 国语中字」整串搜不到，中英拆分又会挑出更长的
+// 「集 国语中字」去搜。词表思路来自 MoviePilot metavideo.py 的 _name_nostring_re
+// 与 LitePan 的 cnQualityTagRe
+func stripCnNoise(name string) string {
+	name = reCnNoiseBracket.ReplaceAllString(name, " ")
+	name = reCnNoiseLong.ReplaceAllString(name, " ")
+	// 相邻的两个短词共用中间的分隔符，一遍替换只能吃掉一个，循环到不再变化
+	for i := 0; i < 5; i++ {
+		next := reCnNoiseShort.ReplaceAllString(name, "$1$2")
+		if next == name {
+			break
+		}
+		name = next
+	}
+	return strings.Trim(name, " ._-")
+}
+
+// ---------- 扩展名 ----------
+
+var reMediaExt = regexp.MustCompile(`(?i)^(mkv|mp4|avi|ts|m2ts|mts|iso|rmvb|rm|wmv|flv|mov|m4v|webm|mpg|mpeg|vob|3gp|strm|srt|ass|ssa|sub|idx|sup|vtt|nfo|jpg|jpeg|png|webp|gif|bmp|mka|flac|mp3|aac)$`)
+
+// trimMediaExt 只剥认识的扩展名。目录名没有扩展名，按「最后一个点」一刀切的话
+// "Blade.Runner.2049.2017" 会被剪成 "Blade.Runner.2049"，年份就丢了
+func trimMediaExt(name string) string {
+	if idx := strings.LastIndex(name, "."); idx > 0 && reMediaExt.MatchString(name[idx+1:]) {
+		return name[:idx]
+	}
+	return name
 }
 
 // pickYear 取文件名里的年份及其位置（位置指年份数字的起点，没有则 -1）。
@@ -585,18 +808,22 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		return tc.SearchTV(q, year)
 	}
 
-	// 第一轮：原始标题（剧集直接搜 TV）。
+	// 第一轮：原始标题（剧集直接搜 TV）。中英双名先分别用中文名、英文名搜，最后才用整串：
+	// TMDB 对「骗不了人的男人 Softie Conman」这种混合串整体几乎搜不到
+	// （MoviePilot _prepare_search_names 同样是中文名 → 英文名依次试）。
 	// 年份对不上的情况（跨年上映、首播差一年）已经在搜索内部处理：年份只参与候选打分，
 	// 原来单独的「去掉年份宽搜索」一轮不再需要
 	var media *TmdbMedia
 	var err error
-	if parsed.IsTV {
-		media, err = searchTV(parsed.Title, parsed.Year)
-	} else {
-		media, err = movieThenTV(parsed.Title, parsed.Year)
-	}
-	if err != nil || media != nil {
-		return media, err
+	for _, q := range titleCandidates(parsed.Title) {
+		if parsed.IsTV {
+			media, err = searchTV(q, parsed.Year)
+		} else {
+			media, err = movieThenTV(q, parsed.Year)
+		}
+		if err != nil || media != nil {
+			return media, err
+		}
 	}
 
 	// 第二轮：清洗后的标题重试（去掉特殊字符/残留标记，压紧空白）
@@ -700,6 +927,39 @@ func (tc *TmdbClient) recognizeByTag(parsed *ParsedName) (*TmdbMedia, error) {
 	log.Printf("[整理] ○ id 标签 tmdb=%d 电影「%s」与剧集「%s」都有条目，无法判断是哪一个，改按片名识别（标签可写成 {[tmdbid=%d;type=tv]} 指明类型）",
 		id, found[0].Title, found[1].Title, id)
 	return nil, nil
+}
+
+// titleCandidates 片名的搜索候选：中英双名拆成「中文名、英文名、整串」，其余只有整串。
+//
+// 按空格分词，含中文的词整个归中文名 —— 「流浪地球2 The Wandering Earth II」的 2
+// 跟着中文走，拆成「流浪地球2」而不是「流浪地球」（那是另一部片）。
+// 和下面的 splitCJKLatin 不同：那个按字符切、取最长段，只在前几轮都落空时兜底用。
+// 分词归属的做法参考 openStrm organize/parse-name.ts 的 titleCandidates
+func titleCandidates(title string) []string {
+	var cjk, latin []string
+	for _, w := range strings.Fields(title) {
+		if strings.IndexFunc(w, isCJKRune) >= 0 {
+			cjk = append(cjk, w)
+		} else {
+			latin = append(latin, w)
+		}
+	}
+	if len(cjk) == 0 || len(latin) == 0 {
+		return []string{title}
+	}
+	l := strings.Join(latin, " ")
+	letters := 0
+	for _, r := range l {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			letters++
+		}
+	}
+	// 英文部分至少要有两个字母才算一个名字。「流浪地球 2」的 2 是续集编号，
+	// 拆开来单搜「流浪地球」搜到的是另一部片
+	if letters < 2 {
+		return []string{title}
+	}
+	return []string{strings.Join(cjk, " "), l, title}
 }
 
 // splitCJKLatin 把中英混合标题拆成中文名与英文名（各自取最长连续段）。

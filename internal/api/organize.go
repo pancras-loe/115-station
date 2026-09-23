@@ -288,7 +288,19 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 //
 // 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
 // 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, onLog func(string)) map[string]string {
+// applySeasonHint 文件名只有集号（季号是缺省的 1）时，改用目录名上明写的季号：
+// 「庆余年 第二季/01.mp4」「The.Boys.Season.4/E01.mkv」不能被当成第一季
+func applySeasonHint(p, hint *ParsedName) {
+	if hint == nil || hint.Season <= 0 || hint.SeasonGuessed {
+		return
+	}
+	if p.Season == 0 || p.SeasonGuessed {
+		p.Season, p.SeasonGuessed = hint.Season, false
+	}
+}
+
+// seasonHint 目录上的季号提示（renameBeforeMove 用；nil = 没有目录可参考）
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, seasonHint *ParsedName, onLog func(string)) map[string]string {
 	// 计算单个视频的新名（保持原命名规则）
 	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
 	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
@@ -296,6 +308,7 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 	mediaCopy.Title = sanitizeName(mediaCopy.Title)
 	videoNewName := func(vf remoteFile) (string, bool) {
 		p := parseFileName(vf.Name)
+		applySeasonHint(p, seasonHint)
 		var file string
 		if mediaCopy.MediaType == "movie" {
 			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
@@ -1706,6 +1719,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	if parsed.TmdbID == 0 {
 		parsed.TmdbID, parsed.TmdbKind = extractTmdbID(dir.Name)
 	}
+	// 文件名只有集号时季号是猜的 1，目录名上写了「第二季」就以目录为准
+	applySeasonHint(parsed, parseFileName(dir.Name))
 
 	var media *TmdbMedia
 	if ctx.forced != nil {
@@ -1819,6 +1834,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		if vp.Season == 0 {
 			vp.Season = parsed.Season
 		}
+		applySeasonHint(vp, parsed)
 		vpath := buildNewNameWithTemplate(media, vp, vf.Name)
 		vdir := libSubPath(categoryDir(media.MediaType, category), pathDir(vpath))
 		plan := washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), onLog)
@@ -1997,7 +2013,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	for _, vf := range videoFiles {
 		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
 	}
-	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, onLog) {
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, parsed, onLog) {
 		finalNames[fid] = n
 	}
 
