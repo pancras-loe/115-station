@@ -6,6 +6,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import RecognizeHelp from './RecognizeHelp.vue'
+import RecognizeMemoryCard from '@/components/organize/RecognizeMemoryCard.vue'
 import { useSetting } from '@/composables/useSetting'
 import {
   PREVIEW_SAMPLE,
@@ -202,6 +203,8 @@ const helpVisible = ref(false)
     </FormActions>
   </SectionCard>
 
+  <RecognizeMemoryCard class="memory-card" />
+
   <NModal v-model:show="presetVisible" preset="card" title="常用规则" style="width: min(660px, 92vw)">
     <div class="presets">
       <label v-for="p in RULE_PRESETS" :key="p.key" class="preset">
@@ -244,6 +247,9 @@ const helpVisible = ref(false)
 </template>
 
 <style scoped>
+.memory-card {
+  margin-top: 16px;
+}
 .rules {
   display: flex;
   flex-direction: column;

@@ -308,6 +308,7 @@ type RecognizeMemory struct {
 	TmdbID    int       `json:"tmdb_id"`
 	MediaType string    `json:"media_type" gorm:"size:20"`
 	Title     string    `json:"title" gorm:"size:255"` // TMDB 片名，日志与界面展示用
+	Sample    string    `json:"sample" gorm:"size:500"` // 当时人工指定的那条记录的原名，让人看得出这条记忆是怎么来的
 	Hits      int       `json:"hits"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

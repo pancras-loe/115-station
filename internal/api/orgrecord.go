@@ -373,7 +373,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 		media.Title, media.Year, rootRel, sink.localRoot, videoTotal, strmTotal)
 	// 选了和原来不同的条目 = 自动识别在这个名字上错了，记下人工结论
 	if tmdbID != prevID || media.MediaType != prevType {
-		rememberRecognition(rec.RecogKey, media)
+		rememberRecognition(rec.RecogKey, rec.Source, media)
 	}
 	return nil
 }

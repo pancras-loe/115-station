@@ -10,9 +10,13 @@ package api
 // 纠错的办法就是再改一次：重新整理选别的条目会覆盖同一个键
 
 import (
+	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"115-station/internal/model"
@@ -31,7 +35,7 @@ func recogKey(p *ParsedName) string {
 }
 
 // rememberRecognition 记下人工结论
-func rememberRecognition(key string, media *TmdbMedia) {
+func rememberRecognition(key, sample string, media *TmdbMedia) {
 	if model.DB == nil || media == nil || media.TmdbID <= 0 {
 		return
 	}
@@ -40,10 +44,10 @@ func rememberRecognition(key string, media *TmdbMedia) {
 		return
 	}
 	row := model.RecognizeMemory{TitleKey: title, Year: year, TmdbID: media.TmdbID,
-		MediaType: media.MediaType, Title: media.Title}
+		MediaType: media.MediaType, Title: media.Title, Sample: sample}
 	err := model.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "title_key"}, {Name: "year"}},
-		DoUpdates: clause.AssignmentColumns([]string{"tmdb_id", "media_type", "title", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"tmdb_id", "media_type", "title", "sample", "updated_at"}),
 	}).Create(&row).Error
 	if err != nil {
 		log.Printf("[整理] ○ 识别记忆写入失败（不影响整理）: %v", err)
@@ -113,4 +117,36 @@ func (tc *TmdbClient) recognizeByMemory(parsed *ParsedName) (*TmdbMedia, error) 
 	log.Printf("[整理] 按识别记忆采用人工结论：%q%s → %s (%s) [%s/%d]",
 		parsed.Title, yearSuffix(parsed.Year), media.Title, media.Year, media.MediaType, media.TmdbID)
 	return media, nil
+}
+
+// ---------- 管理接口（识别规则页「识别记忆」卡片）----------
+
+// ListRecognizeMemory GET /organize/recognize-memory
+// 记忆只在人工改指定时写，量级是几十到几百条，一次全给、前端自己筛
+func (h *Handler) ListRecognizeMemory(c *gin.Context) {
+	var rows []model.RecognizeMemory
+	if err := h.DB.Order("updated_at DESC").Limit(2000).Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+// DeleteRecognizeMemory DELETE /organize/recognize-memory/:id
+func (h *Handler) DeleteRecognizeMemory(c *gin.Context) {
+	if err := h.DB.Delete(&model.RecognizeMemory{}, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已删除，同名内容下次按正常流程识别"})
+}
+
+// ClearRecognizeMemory POST /organize/recognize-memory/clear
+func (h *Handler) ClearRecognizeMemory(c *gin.Context) {
+	res := h.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.RecognizeMemory{})
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清空 %d 条识别记忆", res.RowsAffected), "removed": res.RowsAffected})
 }

@@ -318,7 +318,7 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 		msg := confirmOne(ctx, &rec)
 		// 改了指定（或本来就没识别出来、由人指定）= 人给出的结论，记进识别记忆
 		if msg == "" && (tmdbID != autoID || mediaType != autoType) {
-			rememberRecognition(key, media)
+			rememberRecognition(key, rec.Source, media)
 		}
 		if msg != "" {
 			sink.reuse = nil

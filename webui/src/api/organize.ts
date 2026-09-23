@@ -165,3 +165,30 @@ export const redoRecord = (id: number, tmdbId: number, mediaType: string) =>
     { tmdb_id: tmdbId, media_type: mediaType },
     { timeoutMs: 30 * 60_000 },
   )
+
+// ---- 识别记忆（人工改指定过的「片名 + 年份 → 条目」）----
+
+export interface RecognizeMemory {
+  id: number
+  /** 归一化后的片名（小写、去标点），识别时按它匹配 */
+  title_key: string
+  year: string
+  tmdb_id: number
+  media_type: 'movie' | 'tv' | string
+  /** TMDB 片名 */
+  title: string
+  /** 当时人工指定的那条记录的原名 */
+  sample: string
+  hits: number
+  created_at: string
+  updated_at: string
+}
+
+export const listRecognizeMemory = () =>
+  http.get<{ data: RecognizeMemory[] }>('/organize/recognize-memory')
+
+export const deleteRecognizeMemory = (id: number) =>
+  http.del<{ message?: string }>(`/organize/recognize-memory/${id}`)
+
+export const clearRecognizeMemory = () =>
+  http.post<{ message?: string; removed: number }>('/organize/recognize-memory/clear', {})

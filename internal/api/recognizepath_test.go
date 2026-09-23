@@ -2,8 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"115-station/internal/model"
 )
@@ -102,7 +107,7 @@ func TestRecognizeMemory(t *testing.T) {
 	tc := fakeTmdb(t, &c)
 
 	// 搜索会把 Dune.2021 认成 438631；人工改指定成 841 之后，下次同名同年按记忆走
-	rememberRecognition(recogKey(parseFileName("Dune.2021.1080p.mkv")),
+	rememberRecognition(recogKey(parseFileName("Dune.2021.1080p.mkv")), "Dune.2021.1080p.mkv",
 		&TmdbMedia{TmdbID: 841, MediaType: "movie", Title: "沙丘"})
 	media, err := tc.recognize(parseFileName("Dune.2021.2160p.REMUX.mkv"))
 	if err != nil || media == nil || media.TmdbID != 841 {
@@ -113,21 +118,73 @@ func TestRecognizeMemory(t *testing.T) {
 	if media == nil || media.TmdbID != 2103 {
 		t.Fatalf("记忆串到别的片子上: %+v", media)
 	}
-	rememberRecognition("solaris|1972", &TmdbMedia{TmdbID: 593, MediaType: "movie", Title: "飞向太空"})
+	rememberRecognition("solaris|1972", "", &TmdbMedia{TmdbID: 593, MediaType: "movie", Title: "飞向太空"})
 	if media, _ = tc.recognize(parseFileName("Solaris.2002.mkv")); media == nil || media.TmdbID != 2103 {
 		t.Fatalf("1972 的记忆不该作用在 2002 的文件上: %+v", media)
 	}
 	// 文件名没年份：同名记忆有两条（2021 与 1972）时分不出来，不用记忆
-	rememberRecognition("solaris|2002", &TmdbMedia{TmdbID: 2103, MediaType: "movie", Title: "索拉里斯星"})
+	rememberRecognition("solaris|2002", "", &TmdbMedia{TmdbID: 2103, MediaType: "movie", Title: "索拉里斯星"})
 	if mem := recallRecognition(parseFileName("Solaris.mkv")); mem != nil {
 		t.Fatalf("同名多条记忆不该随便挑一条: %+v", mem)
 	}
 	// 再改一次指定会覆盖同一个键
-	rememberRecognition(recogKey(parseFileName("Dune.2021.mkv")),
+	rememberRecognition(recogKey(parseFileName("Dune.2021.mkv")), "",
 		&TmdbMedia{TmdbID: 438631, MediaType: "movie", Title: "沙丘"})
 	var n int64
 	model.DB.Model(&model.RecognizeMemory{}).Where("title_key = ?", "dune").Count(&n)
 	if mem := recallRecognition(parseFileName("Dune.2021.mkv")); n != 1 || mem == nil || mem.TmdbID != 438631 {
 		t.Fatalf("改指定应覆盖原记忆: 条数=%d %+v", n, mem)
+	}
+}
+
+// 识别记忆的管理接口：列表带上原名样例，删一条、清空都生效
+func TestRecognizeMemoryHandlers(t *testing.T) {
+	newTestDB(t, "recognize-memory-api.db")
+	h := &Handler{DB: model.DB}
+	rememberRecognition("dune|2021", "Dune.2021.1080p.mkv", &TmdbMedia{TmdbID: 438631, MediaType: "movie", Title: "沙丘"})
+	rememberRecognition("庆余年|", "庆余年第二季/", &TmdbMedia{TmdbID: 69851, MediaType: "tv", Title: "庆余年"})
+
+	list := func() []model.RecognizeMemory {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+		h.ListRecognizeMemory(c)
+		var out struct {
+			Data []model.RecognizeMemory `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Data
+	}
+	rows := list()
+	if len(rows) != 2 {
+		t.Fatalf("应有 2 条记忆，得到 %d", len(rows))
+	}
+	var dune model.RecognizeMemory
+	for _, r := range rows {
+		if r.TitleKey == "dune" {
+			dune = r
+		}
+	}
+	if dune.Sample != "Dune.2021.1080p.mkv" || dune.TmdbID != 438631 {
+		t.Fatalf("列表里缺原名或条目: %+v", dune)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = gin.Params{{Key: "id", Value: strconv.Itoa(int(dune.ID))}}
+	c.Request = httptest.NewRequest(http.MethodDelete, "/", nil)
+	h.DeleteRecognizeMemory(c)
+	if rows = list(); len(rows) != 1 || rows[0].TitleKey != "庆余年" {
+		t.Fatalf("删除后应只剩庆余年: %+v", rows)
+	}
+
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	h.ClearRecognizeMemory(c)
+	if rows = list(); len(rows) != 0 {
+		t.Fatalf("清空后应为空: %+v", rows)
 	}
 }
