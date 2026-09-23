@@ -301,7 +301,8 @@ func yearScore(want, got string) int {
 // 同一关内按分数排：标题相等 +3、包含 +1，年份见 yearScore；同分保持 TMDB 的相关度顺序。
 // 详情请求失败且最终没选出结果时返回错误，不能把网络抖动当成「确定没有」
 // （调用方会缓存「没有」并据此把文件移进冗余）
-func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDetail, error) {
+// 第四个返回值是通过的是哪一关（日志与 AI 打分用）
+func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDetail, string, error) {
 	qk := titleKey(p.query)
 	var detailErr error
 	detail := func(id int) *tmdbDetail {
@@ -354,10 +355,10 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 		}
 		sort.SliceStable(list, func(i, j int) bool { return list[i].score > list[j].score })
 	}
-	finish := func(s scoredCand, how string) (*tmdbCand, *tmdbDetail, error) {
+	finish := func(s scoredCand, how string) (*tmdbCand, *tmdbDetail, string, error) {
 		vlog("[整理] 候选采用: %s（%s，得分 %d）", s.c, how, s.score)
 		c := s.c
-		return &c, detail(c.ID), nil
+		return &c, detail(c.ID), how, nil
 	}
 
 	// 第一关：标题 / 原名相等
@@ -421,7 +422,7 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 		vlog("[整理] 搜索 %q（%s，年份=%s）有 %d 个候选，但片名都对不上，不采用: %s",
 			p.query, p.kind, p.year, len(cands), strings.Join(top, " | "))
 	}
-	return nil, nil, detailErr
+	return nil, nil, "", detailErr
 }
 
 func pickYearPrefix(date string) string {
@@ -446,7 +447,7 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 			vlog("[整理] 搜索 %q（%s，参数 %v）无结果", p.query, p.kind, params)
 			continue
 		}
-		c, d, err := tc.choose(p, cands)
+		c, d, how, err := tc.choose(p, cands)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -458,7 +459,9 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 			if d != nil {
 				country = d.OriginCountry
 			}
-			return c.media(p.kind, country), nil
+			m := c.media(p.kind, country)
+			m.matchHow = how
+			return m, nil
 		}
 	}
 	return nil, firstErr

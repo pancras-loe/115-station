@@ -34,6 +34,7 @@ type awaitingRef struct {
 	id      uint
 	created time.Time
 	manual  bool // 用户改指定过 TMDB 条目（写回记录的 ManualTmdb）
+	ai      bool // AI 判定停下的（OrganizeRecord.HoldAI）：「人工确认」开关关着也不自动接手
 	fids    []string
 }
 
@@ -45,9 +46,9 @@ func loadAwaiting() map[string]*awaitingRef {
 		return out
 	}
 	var rows []model.OrganizeRecord
-	model.DB.Select("id, created_at, source_fid, files").Where("status = ?", orgStatusAwaiting).Find(&rows)
+	model.DB.Select("id, created_at, source_fid, files, hold_ai").Where("status = ?", orgStatusAwaiting).Find(&rows)
 	for _, r := range rows {
-		ref := &awaitingRef{id: r.ID, created: r.CreatedAt}
+		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI}
 		if r.SourceFid != "" {
 			ref.fids = append(ref.fids, r.SourceFid)
 		}
@@ -67,12 +68,13 @@ func loadAwaiting() map[string]*awaitingRef {
 // 每轮给同一批待确认条目各打一行日志没有意义，记录页里看得到。
 // 开关关掉之后不过滤——processEntry 会接手，把结果写回那条待确认记录
 func (c *orgCtx) dropHeld(entries []dirEntry) []dirEntry {
-	if !c.cfg.ManualConfirm || len(c.held) == 0 {
+	if len(c.held) == 0 {
 		return entries
 	}
 	out := entries[:0]
 	for _, e := range entries {
-		if c.held[e.Fid] == nil {
+		// AI 判定停下的不管开关怎样都跳过：接手就是重新识别、再调一次模型、再停回来
+		if ref := c.held[e.Fid]; ref == nil || (!c.cfg.ManualConfirm && !ref.ai) {
 			out = append(out, e)
 		}
 	}
@@ -121,6 +123,9 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 			rec.TargetDir = libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 		}
 		rec.Message = "识别完成，等待人工确认后入库"
+		if reason != "" {
+			rec.Message = reason // AI 判定停下的：说清楚是几分、为什么停
+		}
 		res.TmdbID, res.Title, res.Year, res.MediaType, res.Category =
 			media.TmdbID, media.Title, media.Year, media.MediaType, category
 		c.onLog(fmt.Sprintf("⏸ %s → %s (%s)，等待人工确认", shortLogName(source), media.Title, media.Year))
@@ -131,7 +136,7 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 	res.Message = rec.Message
 	c.sink.note(rec)
 	// 本轮后面的顶层条目里还有这些文件（同前缀的其他集），别再当新条目识别一遍
-	ref := &awaitingRef{id: rec.ID, created: rec.CreatedAt}
+	ref := &awaitingRef{id: rec.ID, created: rec.CreatedAt, ai: rec.HoldAI}
 	for _, f := range files {
 		ref.fids = append(ref.fids, f.Fid)
 	}

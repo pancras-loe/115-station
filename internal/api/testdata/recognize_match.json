@@ -337,6 +337,15 @@
         "original_name": "狂飙",
         "first_air_date": "2023-01-14"
       }
+    ],
+    "tv|Sousou no Frieren|": [
+      {
+        "id": 209867,
+        "name": "葬送的芙莉莲",
+        "original_name": "葬送のフリーレン",
+        "first_air_date": "2023-09-29",
+        "overview": "打倒魔王之后，精灵魔法使芙莉莲踏上了新的旅途。"
+      }
     ]
   },
   "detail": {
@@ -480,6 +489,15 @@
       "title": "索拉里斯星",
       "original_title": "Solaris",
       "release_date": "2002-11-27"
+    },
+    "tv/209867": {
+      "id": 209867,
+      "name": "葬送的芙莉莲",
+      "original_name": "葬送のフリーレン",
+      "first_air_date": "2023-09-29",
+      "origin_country": [
+        "JP"
+      ]
     }
   }
 }

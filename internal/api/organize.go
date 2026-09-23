@@ -76,6 +76,19 @@ func (c *orgCtx) holdable() bool {
 	return c.cfg.ManualConfirm && c.forced == nil
 }
 
+// aiHold AI 判定的结果按「AI 增强识别 → 判定后」的设置要不要停下来等确认；
+// 要停返回原因（同时把这条标成 AI 停下的，见 OrganizeRecord.HoldAI），不停返回空
+func (c *orgCtx) aiHold(media *TmdbMedia) string {
+	if c.forced != nil {
+		return ""
+	}
+	reason := aiHoldReason(loadAIRecognizeCfg(), media)
+	if reason != "" {
+		c.sink.recog.holdAI = true
+	}
+	return reason
+}
+
 // withPending 换一个扫描根（转存目录兜底扫描用），其余配置不变
 func (c *orgCtx) withPending(cfg *OrgConfig) *orgCtx {
 	n := *c
@@ -1431,7 +1444,7 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 		return results // 已随同前缀的散文件一起入库
 	}
 	if ref, ok := ctx.held[entry.Fid]; ok {
-		if ctx.cfg.ManualConfirm {
+		if ctx.cfg.ManualConfirm || ref.ai {
 			onLog(fmt.Sprintf("⏸ %s - 等待人工确认（整理记录 → 待确认），本轮跳过", entry.Name))
 			return results
 		}
@@ -1581,7 +1594,7 @@ func fileKindSummary(files []remoteFile) string {
 
 // processDir 处理一个子目录（包含多个文件的影视目录）
 func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult {
-	ctx.sink.recogKey = "" // 识别之前就失败的记录不带键
+	ctx.sink.recog = recogMeta{} // 识别之前就失败的记录不带键
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	var results []OrganizeResult
 
@@ -1689,11 +1702,12 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	dirNames := pathDirs(mainVideo.Path, dir.Parent)
 	dirParses := parseDirs(dirNames, replaceRules)
 	parsed, titleFrom := mergePathContext(parseFileName(name), dirParses, dirNames)
+	parsed.Source, parsed.Context = mainVideo.Name, dirNames // AI 增强识别要看原文
 	useDirName := titleFrom != ""
 	if useDirName {
 		onLog(fmt.Sprintf("▣ 文件名 %q 提取不出片名，改用目录名 %q", name, titleFrom))
 	}
-	ctx.sink.recogKey = recogKey(parsed)
+	ctx.sink.recog.key = recogKey(parsed)
 
 	var media *TmdbMedia
 	if ctx.forced != nil {
@@ -1752,6 +1766,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 
 		onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(dir.Name), media.Title, media.Year))
+		ctx.sink.recog.markAI(media)
+		if reason := ctx.aiHold(media); reason != "" {
+			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
+				snapshot(nil), reason))
+		}
 		if ctx.holdable() {
 			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
 				snapshot(nil), ""))
@@ -2374,7 +2393,7 @@ func stdPath(p string) string {
 // processSingleFile 处理一个散视频。第二个返回值是本次留下的整理记录：
 // 同前缀的兄弟文件会并进同一条记录（一部剧 24 集不该刷出 24 行）
 func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.OrganizeRecord) {
-	ctx.sink.recogKey = ""
+	ctx.sink.recog = recogMeta{}
 	ops, cfg, tc, replaceRules, libAbs, onLog := ctx.ops, ctx.cfg, ctx.tc, ctx.rules, ctx.libAbs, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
 	self := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
@@ -2396,7 +2415,8 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	// SHA1 去重移到 TMDB 识别后（需要 media 信息来计算目标目录）
 	onLog(fmt.Sprintf("▶ 开始识别: %s", shortLogName(f.Name)))
 	parsed := parseFileName(name)
-	ctx.sink.recogKey = recogKey(parsed)
+	parsed.Source = f.Name // AI 增强识别要看原文
+	ctx.sink.recog.key = recogKey(parsed)
 	oldBase := baseName(f.Name)
 	// 人工确认：同前缀的其他集一起挂在这条待确认记录上，确认时一并入库
 	holdFiles := func() []orgRecordFile {
@@ -2464,6 +2484,10 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		}
 
 		onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
+		ctx.sink.recog.markAI(media)
+		if reason := ctx.aiHold(media); reason != "" {
+			return ctx.holdForConfirm(f.Name, f.Fid, "file", media, parsed, f.Name, holdFiles(), reason), nil
+		}
 		if ctx.holdable() {
 			return ctx.holdForConfirm(f.Name, f.Fid, "file", media, parsed, f.Name, holdFiles(), ""), nil
 		}

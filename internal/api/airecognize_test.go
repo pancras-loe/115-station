@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,24 +214,48 @@ func TestAIChatNoRetryOnAuthError(t *testing.T) {
 	}
 }
 
-func TestAIExtractTitle(t *testing.T) {
+func TestAIGuessTitle(t *testing.T) {
+	var gotBody string
 	cfgURL := func(reply string) *aiRecognizeCfg {
-		srv := chatStub(t, nil, reply)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": reply}}},
+			})
+		}))
 		t.Cleanup(srv.Close)
 		return &aiRecognizeCfg{URL: srv.URL, Model: "m"}
 	}
+	p := &ParsedName{Title: "Interstellar", Source: "Interstellar.2014.2160p.mkv", Context: []string{"星际", "电影"}}
 
-	if g := aiExtractTitle(cfgURL(`{"title":"星际穿越","year":"2014"}`), "Interstellar.2014.2160p"); g == nil || g.Title != "星际穿越" || g.Year != "2014" {
+	g := aiGuessTitle(cfgURL(`{"title":"星际穿越","original_title":"Interstellar","year":"2014","type":"movie","season":0,"episode":0,"confidence":92}`), p)
+	if g == nil || g.Title != "星际穿越" || g.OriginalTitle != "Interstellar" || g.Year != "2014" || g.Type != "movie" || g.Confidence != 92 {
 		t.Errorf("正常提取 = %+v", g)
 	}
-	// 年份直接喂给 TMDB 搜索，模型给的非四位年份必须丢掉而不是原样传下去
-	if g := aiExtractTitle(cfgURL(`{"title":"A","year":"未知"}`), "x"); g == nil || g.Year != "" {
-		t.Errorf("非法年份应清空, got %+v", g)
+	// 模型要看到原始文件名和目录，不能只给解析后的片名
+	for _, want := range []string{"Interstellar.2014.2160p.mkv", "星际 / 电影"} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("请求里缺少上下文 %q", want)
+		}
 	}
-	if g := aiExtractTitle(cfgURL(`{"title":"","year":"2014"}`), "x"); g != nil {
+	// 年份直接喂给 TMDB 搜索，模型给的非四位年份必须丢掉而不是原样传下去
+	if g := aiGuessTitle(cfgURL(`{"title":"A","year":"未知","type":"电视剧","confidence":300}`), p); g == nil || g.Year != "" || g.Type != "" || g.Confidence != 100 {
+		t.Errorf("非法年份/类型/把握度应清理, got %+v", g)
+	}
+	// 季集号写成字符串：退回只取片名年份，不整条作废
+	if g := aiGuessTitle(cfgURL(`{"title":"A","year":"2014","season":"2"}`), p); g == nil || g.Title != "A" || g.Season != 0 {
+		t.Errorf("季集号类型不对时应退回片名年份, got %+v", g)
+	}
+	// 只给了原名：原名顶上
+	if g := aiGuessTitle(cfgURL(`{"title":"","original_title":"Dune"}`), p); g == nil || g.Title != "Dune" {
+		t.Errorf("中文名为空时应用原名, got %+v", g)
+	}
+	if g := aiGuessTitle(cfgURL(`{"title":"","year":"2014"}`), p); g != nil {
 		t.Errorf("空标题应返回 nil, got %+v", g)
 	}
-	if g := aiExtractTitle(cfgURL("抱歉，我无法识别"), "x"); g != nil {
+	if g := aiGuessTitle(cfgURL("抱歉，我无法识别"), p); g != nil {
 		t.Errorf("无 JSON 应返回 nil, got %+v", g)
 	}
 }

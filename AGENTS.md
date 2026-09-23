@@ -94,7 +94,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **路由与认证** | `routes.go` | `Handler{DB, Config}` + 全部路由注册 + 登录防爆破 + 备份/日志接口 |
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
-| **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是 TMDB 全部搜索策略都落空后的 AI 兜底（OpenAI 协议，界面「AI 增强识别」） |
+| **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
@@ -318,7 +318,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       否则只剩待确认条目时会被当成「整理后仍未清空」反复重试直到熔断。
     - 开关关掉后，下一轮自动整理接手这些条目（`adoptAwaiting`），结果同样写回原记录。
     - 新增识别之后的分支时，记得在 `ctx.holdable()` 为真时先停下，别在停之前发网盘写请求。
-    - 测试：`orgconfirm_test.go`。
+    - **AI 判定停下的待确认是另一种**（`OrganizeRecord.HoldAI`，由 `ctx.aiHold` 按
+      「AI 增强识别 → 判定后」的 off / auto / force 与分数线决定）：开关关着时**也不许**被
+      `adoptAwaiting` 接手 —— 接手就是重新识别、再调一次模型、又停回来，每轮都烧一次模型调用。
+      `dropHeld` 与 `processEntry` 两处都认 `ref.ai`，改这块别只改一处。
+    - 测试：`orgconfirm_test.go`、`aiflow_test.go`。
 
 ---
 

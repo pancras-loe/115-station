@@ -291,6 +291,15 @@ type OrganizeRecord struct {
 	// RecogKey 识别时用的「归一化片名|年份」。用户在确认/重新整理里手动指定条目时，
 	// 按这个键记进 RecognizeMemory，下次同名的内容直接用人工的结论
 	RecogKey string `json:"-" gorm:"size:255"`
+	// RecogVia 识别出处：ai_title / ai_pick 是 AI 增强识别判定的，其余为空。
+	// AIScore / AINote 是 AI 判定的分数与打分依据，记录页据此标注「AI 判定」
+	RecogVia string `json:"recog_via" gorm:"size:16"`
+	AIScore  int    `json:"ai_score"`
+	AINote   string `json:"ai_note" gorm:"size:500"`
+	// HoldAI 这条待确认是 AI 判定分数不够（或设置为一律确认）停下来的。
+	// 与「人工确认」开关无关：开关关着时普通待确认会被自动整理接手，这种不会 ——
+	// 否则每一轮都会重新识别、重新调一次模型、又停回来
+	HoldAI bool `json:"hold_ai"`
 
 	ManualTmdb bool      `json:"manual_tmdb"` // 用户手动指定过 TMDB 条目
 	RedoCount  int       `json:"redo_count"`

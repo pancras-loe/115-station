@@ -491,6 +491,18 @@ async function clearAll() {
                   >tmdb={{ r.tmdb_id }}</a
                 >
                 <NTag v-if="r.manual_tmdb" size="small" :bordered="false" type="success">手动指定</NTag>
+                <NTooltip v-else-if="r.recog_via" :disabled="!r.ai_note">
+                  <template #trigger>
+                    <NTag
+                      size="small"
+                      :bordered="false"
+                      :type="(r.ai_score ?? 0) >= 80 ? 'info' : 'warning'"
+                    >
+                      {{ r.recog_via === 'ai_pick' ? 'AI 选定' : 'AI 识别' }} {{ r.ai_score ?? 0 }} 分
+                    </NTag>
+                  </template>
+                  {{ r.ai_note }}
+                </NTooltip>
                 <span v-if="r.stage && r.status !== 'success' && r.status !== 'awaiting'" class="dim">
                   {{ STAGE_TEXT[r.stage] ?? r.stage }}
                 </span>

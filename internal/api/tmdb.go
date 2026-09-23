@@ -47,6 +47,14 @@ type TmdbMedia struct {
 	// TV 专属
 	SeasonNum   int                `json:"season_number,omitempty"`
 	EpisodeNum  int                `json:"episode_number,omitempty"`
+
+	// 识别出处（整理记录上的标注与 AI 判定的确认策略用，不对外输出）：
+	// Via 为 ai_title（模型改写片名后搜中）/ ai_pick（模型从候选里选中），其余为空
+	Via     string `json:"-"`
+	AIScore int    `json:"-"` // 0-100，见 aiScore
+	AINote  string `json:"-"` // 打分依据，给人看的一句话
+	// matchHow 候选校验在哪一关通过（choose 的 how），AI 打分要看它
+	matchHow string
 }
 
 // loadTmdbClient 从数据库加载配置构建客户端
@@ -338,6 +346,10 @@ type ParsedName struct {
 	TmdbKind string
 	// SeasonGuessed 季号是缺省填的 1（文件名只有集号）。目录名上明写了季号时以目录名为准
 	SeasonGuessed bool
+	// Source / Context 原始文件名与所在各级目录（由近及远），只给 AI 增强识别看：
+	// 解析器截错、丢掉的信息，模型能从原文里自己读出来
+	Source  string
+	Context []string
 }
 
 var (
@@ -912,21 +924,10 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		}
 	}
 
-	// 第三轮：AI 增强识别（配好模型接口时）——从原始文件名提取标题/年份再搜。
-	// 年份以模型给的为准（文件名里那个前几轮已经搜过了，搜不到才走到这），
-	// 模型没给年份才退回文件名解析出来的。
+	// 第三轮：AI 增强识别（开关开着才走）。给模型原始文件名与目录，改写片名再搜，
+	// 搜不中再让它从候选里挑；详见 airecogflow.go
 	if aiCfg := loadAIRecognizeCfg(); aiCfg != nil {
-		if g := aiExtractTitle(aiCfg, parsed.Title); g != nil && g.Title != parsed.Title {
-			year := g.Year
-			if year == "" {
-				year = parsed.Year
-			}
-			log.Printf("[整理] AI 增强识别提取: %q → %q (%s)", parsed.Title, g.Title, year)
-			if parsed.IsTV {
-				return searchTV(g.Title, year)
-			}
-			return movieThenTV(g.Title, year)
-		}
+		return tc.recognizeByAI(aiCfg, parsed)
 	}
 	return media, nil
 }

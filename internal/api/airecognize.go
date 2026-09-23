@@ -36,7 +36,21 @@ type aiRecognizeCfg struct {
 	URL   string // 用户填的地址：可能是 base、带 /v1、或者整条 /v1/chat/completions
 	Key   string // 可空——本地 Ollama / vLLM 通常不校验
 	Model string
+
+	// ConfirmMode AI 判定出来的结果要不要等人工确认（见 aiHoldReason）：
+	// off = 直接入库；auto = 分数低于 MinScore 才等确认；force = 一律等确认
+	ConfirmMode string
+	MinScore    int
 }
+
+// AI 判定结果的确认策略
+const (
+	aiConfirmOff   = "off"
+	aiConfirmAuto  = "auto"
+	aiConfirmForce = "force"
+
+	aiDefaultMinScore = 80
+)
 
 var aiCfgCache struct {
 	sync.Mutex
@@ -52,10 +66,12 @@ func loadAIRecognizeCfg() *aiRecognizeCfg {
 		return aiCfgCache.val
 	}
 	var cfg struct {
-		Enabled bool   `json:"enabled"`
-		URL     string `json:"url"`
-		Key     string `json:"key"`
-		Model   string `json:"model"`
+		Enabled     bool   `json:"enabled"`
+		URL         string `json:"url"`
+		Key         string `json:"key"`
+		Model       string `json:"model"`
+		ConfirmMode string `json:"confirm_mode"`
+		MinScore    *int   `json:"min_score"` // 指针：区分「没填」（用默认 80）和「填了 0」
 	}
 	aiCfgCache.val = nil
 	aiCfgCache.at = time.Now()
@@ -73,7 +89,17 @@ func loadAIRecognizeCfg() *aiRecognizeCfg {
 	if cfg.URL == "" || cfg.Model == "" {
 		return nil
 	}
-	aiCfgCache.val = &aiRecognizeCfg{URL: cfg.URL, Key: strings.TrimSpace(cfg.Key), Model: cfg.Model}
+	out := &aiRecognizeCfg{URL: cfg.URL, Key: strings.TrimSpace(cfg.Key), Model: cfg.Model,
+		ConfirmMode: cfg.ConfirmMode, MinScore: aiDefaultMinScore}
+	switch out.ConfirmMode {
+	case aiConfirmOff, aiConfirmAuto, aiConfirmForce:
+	default:
+		out.ConfirmMode = aiConfirmAuto // 没选过就按分数：比「全都直接入库」稳，又不至于每条都要人点
+	}
+	if cfg.MinScore != nil {
+		out.MinScore = min(max(*cfg.MinScore, 0), 100)
+	}
+	aiCfgCache.val = out
 	return aiCfgCache.val
 }
 
@@ -236,25 +262,51 @@ func aiParamRejected(body []byte) bool {
 	return strings.Contains(s, "max_tokens") || strings.Contains(s, "temperature")
 }
 
-// ==================== 文件名 → 标题/年份 ====================
+// ==================== 文件名 → 片名 / 年份 / 类型 / 季集 ====================
 
-// aiTitleGuess 大模型给出的标题/年份
+// aiTitleGuess 大模型对一个文件的判断
 type aiTitleGuess struct {
-	Title string `json:"title"`
-	Year  string `json:"year"`
+	Title         string `json:"title"`          // 中文片名（没有中文名就是原名）
+	OriginalTitle string `json:"original_title"` // 原始语言片名或英文名
+	Year          string `json:"year"`
+	Type          string `json:"type"` // movie / tv，拿不准为空
+	Season        int    `json:"season"`
+	Episode       int    `json:"episode"`
+	Confidence    int    `json:"confidence"` // 模型自评 0-100，没给为 0
 }
 
 var aiYearRe = regexp.MustCompile(`^(19|20)\d{2}$`)
 
-// aiExtractTitle 让模型从文件名里提取标准标题与年份；拿不到可信结果返回 nil
-func aiExtractTitle(cfg *aiRecognizeCfg, filename string) *aiTitleGuess {
-	if cfg == nil || filename == "" {
+// aiContext 给模型看的上下文：原始文件名、所在各级目录（由近及远）、解析器提取出的片名。
+// 此前只给解析后的片名 —— 解析器截错的地方模型也看不到，目录名里的信息更是完全拿不到
+func aiContext(p *ParsedName) string {
+	var b strings.Builder
+	src := p.Source
+	if src == "" {
+		src = p.Title
+	}
+	fmt.Fprintf(&b, "文件名：%s\n", src)
+	if len(p.Context) > 0 {
+		fmt.Fprintf(&b, "所在目录（由近及远）：%s\n", strings.Join(p.Context, " / "))
+	}
+	if p.Title != "" && p.Title != src {
+		fmt.Fprintf(&b, "解析器提取的片名：%s\n", p.Title)
+	}
+	return b.String()
+}
+
+// aiGuessTitle 让模型判断这是哪部作品；拿不到可信结果返回 nil
+func aiGuessTitle(cfg *aiRecognizeCfg, p *ParsedName) *aiTitleGuess {
+	if cfg == nil || p == nil || (p.Source == "" && p.Title == "") {
 		return nil
 	}
 	content, err := aiChat(*cfg, []map[string]string{
-		{"role": "system", "content": `从影视文件名中提取标准标题和上映/开播年份。只输出 JSON：{"title":"...","year":"..."}，找不到年份输出空字符串。`},
-		{"role": "user", "content": filename},
-	}, 200, 30*time.Second)
+		{"role": "system", "content": `你是影视文件识别助手。根据文件名和所在目录判断这是哪部电影或剧集。` +
+			`只输出一个 JSON 对象，不要其他内容：` +
+			`{"title":"中文片名，没有中文名就写原名","original_title":"原始语言片名或英文名","year":"首映或首播年份，不确定就留空",` +
+			`"type":"movie 或 tv","season":季号数字（电影或不确定填 0）,"episode":集号数字（不确定填 0）,"confidence":0 到 100 的把握程度}`},
+		{"role": "user", "content": aiContext(p)},
+	}, 400, 30*time.Second)
 	if err != nil {
 		log.Printf("[AI识别] ✗ %v", err)
 		return nil
@@ -266,10 +318,24 @@ func aiExtractTitle(cfg *aiRecognizeCfg, filename string) *aiTitleGuess {
 	}
 	var out aiTitleGuess
 	if json.Unmarshal([]byte(obj), &out) != nil {
-		return nil
+		// 季集号有的模型写成字符串 "2"，整条解析失败不值得：退回只要片名年份
+		var loose struct {
+			Title         string `json:"title"`
+			OriginalTitle string `json:"original_title"`
+			Year          string `json:"year"`
+			Type          string `json:"type"`
+		}
+		if json.Unmarshal([]byte(obj), &loose) != nil {
+			return nil
+		}
+		out = aiTitleGuess{Title: loose.Title, OriginalTitle: loose.OriginalTitle, Year: loose.Year, Type: loose.Type}
 	}
 	out.Title = strings.TrimSpace(out.Title)
+	out.OriginalTitle = strings.TrimSpace(out.OriginalTitle)
 	out.Year = strings.TrimSpace(out.Year)
+	if out.Title == "" {
+		out.Title, out.OriginalTitle = out.OriginalTitle, ""
+	}
 	if out.Title == "" {
 		return nil
 	}
@@ -277,7 +343,79 @@ func aiExtractTitle(cfg *aiRecognizeCfg, filename string) *aiTitleGuess {
 	if !aiYearRe.MatchString(out.Year) {
 		out.Year = ""
 	}
+	out.Type = strings.ToLower(strings.TrimSpace(out.Type))
+	if out.Type != "movie" && out.Type != "tv" {
+		out.Type = ""
+	}
+	if out.Season < 0 || out.Season > 99 {
+		out.Season = 0
+	}
+	if out.Episode < 0 || out.Episode > 9999 {
+		out.Episode = 0
+	}
+	out.Confidence = min(max(out.Confidence, 0), 100)
 	return &out
+}
+
+// ==================== 从 TMDB 候选里选 ====================
+
+// aiCandidate 交给模型挑的一条 TMDB 候选
+type aiCandidate struct {
+	Kind string // movie / tv
+	C    tmdbCand
+}
+
+// aiPickCandidate 让模型从候选里选出这个文件对应的那一条。
+// 返回候选下标（-1 = 都不是）、模型自评把握度、一句理由。
+//
+// 比「让模型写片名再去搜」可靠：只能从 TMDB 真实存在的条目里选，编不出不存在的片子；
+// 判断「这个文件是不是这部片」也比凭空想出 TMDB 上的准确写法容易
+func aiPickCandidate(cfg *aiRecognizeCfg, p *ParsedName, cands []aiCandidate) (int, int, string) {
+	if cfg == nil || len(cands) == 0 {
+		return -1, 0, ""
+	}
+	var b strings.Builder
+	b.WriteString(aiContext(p))
+	b.WriteString("\nTMDB 候选：\n")
+	for i, c := range cands {
+		kind := "电影"
+		if c.Kind == "tv" {
+			kind = "剧集"
+		}
+		name := c.C.Title
+		if c.C.Original != "" && c.C.Original != c.C.Title {
+			name += " / " + c.C.Original
+		}
+		fmt.Fprintf(&b, "%d. [%s] %s (%s)", i+1, kind, name, orDash(c.C.year()))
+		if ov := strings.TrimSpace(c.C.Overview); ov != "" {
+			fmt.Fprintf(&b, " — %s", truncateStr(ov, 60))
+		}
+		b.WriteString("\n")
+	}
+	content, err := aiChat(*cfg, []map[string]string{
+		{"role": "system", "content": `你是影视文件识别助手。下面给出一个文件和 TMDB 搜到的候选条目，判断文件对应哪一个。` +
+			`只输出一个 JSON 对象，不要其他内容：{"pick":候选编号（都不是就填 0）,"confidence":0 到 100 的把握程度,"reason":"一句话理由"}。` +
+			`拿不准就填 0，不要硬选。`},
+		{"role": "user", "content": b.String()},
+	}, 300, 30*time.Second)
+	if err != nil {
+		log.Printf("[AI识别] ✗ %v", err)
+		return -1, 0, ""
+	}
+	obj := aiJSONObject(content)
+	var out struct {
+		Pick       int    `json:"pick"`
+		Confidence int    `json:"confidence"`
+		Reason     string `json:"reason"`
+	}
+	if obj == "" || json.Unmarshal([]byte(obj), &out) != nil {
+		log.Printf("[AI识别] ○ 候选判断的回复看不懂：%s", truncateStr(strings.TrimSpace(content), 100))
+		return -1, 0, ""
+	}
+	if out.Pick < 1 || out.Pick > len(cands) {
+		return -1, 0, strings.TrimSpace(out.Reason)
+	}
+	return out.Pick - 1, min(max(out.Confidence, 0), 100), strings.TrimSpace(out.Reason)
 }
 
 // aiJSONObject 从回复里抠出 JSON 对象：推理模型的 <think> 段、Markdown 代码围栏、

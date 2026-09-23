@@ -91,6 +91,13 @@ export interface OrganizeRecord {
   scrape_state: string
   scrape_msg: string
   manual_tmdb: boolean
+  /** 识别出处：ai_title（模型改写片名后搜中）/ ai_pick（模型从候选里选中），规则识别的为空 */
+  recog_via?: string
+  /** AI 判定的分数 0-100 与打分依据 */
+  ai_score?: number
+  ai_note?: string
+  /** 因为 AI 判定停下来等确认（与「人工确认」开关无关） */
+  hold_ai?: boolean
   redo_count: number
   created_at: string
   file_list: OrganizeRecordFile[]

@@ -62,9 +62,9 @@ type orgSink struct {
 	refreshDirs []string             // 本轮动过的库内目录（含库名前缀）
 	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
 	records     []*model.OrganizeRecord
-	// recogKey 当前条目识别用的键（recogKey），写记录时顺手带上，供人工改指定后记进识别记忆。
+	// recog 当前条目的识别信息，写记录时顺手带上（识别记忆的键、AI 判定的标注）。
 	// 整理是逐条串行的：每个条目开始识别时重设
-	recogKey string
+	recog recogMeta
 
 	// reuse 下一条记录写回这条待确认记录（人工确认 / 开关关掉后自动接手），
 	// 而不是另起一行：记录页里同一个条目从「待确认」变成结果，不会一分为二
@@ -417,6 +417,22 @@ func recordFileKind(name string) string {
 	return "junk"
 }
 
+// recogMeta 一个条目的识别信息
+type recogMeta struct {
+	key    string // recogKey：人工改指定时记进识别记忆
+	via    string // ai_title / ai_pick；规则环节识别的为空
+	score  int
+	note   string
+	holdAI bool // 因为 AI 判定停下来等确认
+}
+
+// markAI 记下 AI 判定的标注（规则环节识别的结果什么都不记）
+func (m *recogMeta) markAI(media *TmdbMedia) {
+	if media != nil && media.Via != "" {
+		m.via, m.score, m.note = media.Via, media.AIScore, media.AINote
+	}
+}
+
 // note 落一条整理记录（成功与失败都留痕）
 func (s *orgSink) note(rec *model.OrganizeRecord) {
 	if rec == nil || model.DB == nil {
@@ -424,7 +440,13 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	}
 	rec.BatchID = s.batchID
 	if rec.RecogKey == "" {
-		rec.RecogKey = s.recogKey
+		rec.RecogKey = s.recog.key
+	}
+	if rec.RecogVia == "" && s.recog.via != "" {
+		rec.RecogVia, rec.AIScore, rec.AINote = s.recog.via, s.recog.score, s.recog.note
+	}
+	if rec.Status == orgStatusAwaiting && s.recog.holdAI {
+		rec.HoldAI = true
 	}
 	var err error
 	if ref := s.reuse; ref != nil {
