@@ -2180,18 +2180,12 @@ func processSingleFileWithSiblings(ctx *orgCtx, f remoteFile) []OrganizeResult {
 	// 构建与主文件相同的目标（分类/目录/媒体信息从 result 提取不行，
 	// 需要重新构造——用主文件的 parsed 和 media）
 	// 简化：直接用 processDir 逻辑处理剩余文件
-	var allResults = []OrganizeResult{result}
-	successCount := 1
-
-	for _, sib := range siblings {
-		ctx.handled[sib.Fid] = true
-		sibResult, sibFiles, sibStrm := organizeIdentifiedFile(ctx, sib, result)
-		allResults = append(allResults, sibResult)
-		if sibResult.Status == "success" {
+	allResults := append([]OrganizeResult{result}, organizeSiblings(ctx, rec, result, siblings)...)
+	successCount := 0
+	for _, r := range allResults {
+		if r.Status == "success" {
 			successCount++
 		}
-		// 并进主文件那条记录：一部剧的 24 集是一个整理动作，不该刷出 24 行
-		ctx.sink.appendToRecord(rec, sibFiles, sibStrm, sib.Size)
 	}
 
 	onLog(fmt.Sprintf("✓ 散文件批量完成: 共 %d 个文件（成功 %d）", len(allResults), successCount))
@@ -2290,9 +2284,22 @@ func isAllDigits(s string) bool {
 // organizeIdentifiedFile 用已识别的媒体信息处理单个散文件（跳过 TMDB 识别）
 // organizeIdentifiedFile 用主文件的识别结果处理一个同前缀兄弟文件。
 // 返回结果 + 本文件的记录条目 + 生成的 STRM 数（由调用方并进主记录）
-func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult) (OrganizeResult, []orgRecordFile, int) {
+// sibOutcome 同前缀散文件一集的整理结果。files 是这次搬动过的文件（入库或进「已存在」），
+// 失败时为空 —— 失败的集还留在原地，下一轮会作为独立条目重新整理并留痕
+type sibOutcome struct {
+	result   OrganizeResult
+	files    []orgRecordFile
+	strm     int
+	decision string // 判为已存在时的洗版判定（washNotBetter / washSameFile）
+	holding  string // 判为已存在时搬进的 已存在/ 下的子目录
+}
+
+func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult) sibOutcome {
 	ops, cfg, replaceRules, onLog := ctx.ops, ctx.cfg, ctx.rules, ctx.onLog
 	result := OrganizeResult{FileName: f.Name}
+	fail := func(msg string) sibOutcome {
+		return sibOutcome{result: OrganizeResult{FileName: f.Name, Status: "failed", Message: msg}}
+	}
 
 	// sha1 去重不再在这里抢答：它是一句全表查询，命中就直接跳过洗版且不打日志，
 	// 用户配着 replace 只能看到「已存在」而无从解释。现在同一份文件的判定
@@ -2326,33 +2333,36 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
 	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, onLog); decision {
 	case washFailed:
-		return OrganizeResult{FileName: f.Name, Status: "failed", Message: "洗版旧版让位失败"}, nil, 0
+		return fail("洗版旧版让位失败")
 	case washReplaced:
 		// 旧版已让位，落入下方正常入库
 	case washNotBetter, washSameFile:
 		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
 		if err != nil {
-			return OrganizeResult{FileName: f.Name, Status: "failed", Message: "移到已存在失败: " + err.Error()}, nil, 0
+			return fail("移到已存在失败: " + err.Error())
 		}
-		moveSiblingAttachments(ops, cfg.Pending, baseName(f.Name), "", holdingCid, false, onLog)
+		attachments := moveSiblingAttachments(ops, cfg.Pending, baseName(f.Name), "", holdingCid, false, onLog)
 		msg := washExistsMsg(decision) + "，已移到 已存在/" + holdingDir
 		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
-		return OrganizeResult{FileName: f.Name, Status: "exists", Message: msg}, nil, 0
+		// 文件已经离开转存/待整理目录，必须带回快照交给调用方登记，
+		// 否则记录页里查不到它去了哪（此前这里返回 nil，整批兄弟集的「已存在」无迹可寻）
+		files := []orgRecordFile{{Fid: f.Fid, Name: f.Name, Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+		for _, a := range attachments {
+			files = append(files, orgRecordFile{Fid: a.Fid, Name: a.Name, Kind: recordFileKind(a.Name), PickCode: a.PickCode, Sha1: a.Sha1})
+		}
+		return sibOutcome{result: OrganizeResult{FileName: f.Name, Status: "exists", Message: msg},
+			files: files, decision: decision, holding: holdingDir}
 	}
 
 	rootRel := libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
-		result.Status = "failed"
-		result.Message = "创建目录失败: " + err.Error()
-		return result, nil, 0
+		return fail("创建目录失败: " + err.Error())
 	}
 
 	if err := ops.moveFiles(targetCid, []string{f.Fid}); err != nil {
-		result.Status = "failed"
-		result.Message = "移动失败: " + err.Error()
-		return result, nil, 0
+		return fail("移动失败: " + err.Error())
 	}
 
 	// 重命名为标准名
@@ -2382,7 +2392,74 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	result.Status = "success"
 	result.Message = fmt.Sprintf("→ %s (%s) [%s] → %s", mainResult.Title, mainResult.Year, category, targetDir)
 	onLog(fmt.Sprintf("✓ %s → %s", f.Name, stdPath(newPath)))
-	return result, recFiles, strmCreated
+	return sibOutcome{result: result, files: recFiles, strm: strmCreated}
+}
+
+// organizeSiblings 用主文件的识别结果整理同前缀的其他集。
+// 入库的并进主文件那条记录（一部剧的 24 集是一个整理动作，不该刷出 24 行）；
+// 判为已存在的另记一条 exists —— 和 processDir 的写法一致，不混进「成功」那条，
+// 否则一条记录里成功和已存在搅在一起，看不出哪几集进了库
+func organizeSiblings(ctx *orgCtx, rec *model.OrganizeRecord, main OrganizeResult, siblings []remoteFile) []OrganizeResult {
+	var out []OrganizeResult
+	var exists []sibOutcome
+	for _, sib := range siblings {
+		ctx.handled[sib.Fid] = true
+		o := organizeIdentifiedFile(ctx, sib, main)
+		out = append(out, o.result)
+		switch o.result.Status {
+		case "success":
+			ctx.sink.appendToRecord(rec, o.files, o.strm, sib.Size)
+		case "exists":
+			exists = append(exists, o)
+		}
+	}
+	if er := siblingExistsRecord(main, rec, exists); er != nil {
+		ctx.sink.note(er)
+	}
+	return out
+}
+
+// siblingExistsRecord 把判为已存在的兄弟集汇成一条 exists 记录（纯函数，便于单测）
+func siblingExistsRecord(main OrganizeResult, rec *model.OrganizeRecord, exists []sibOutcome) *model.OrganizeRecord {
+	var files []orgRecordFile
+	sameFile := 0
+	holding := ""
+	for i, o := range exists {
+		files = append(files, o.files...)
+		if o.decision == washSameFile {
+			sameFile++
+		}
+		if i == 0 {
+			holding = o.holding
+		} else if holding != o.holding {
+			holding = "" // 各集进了不同子目录：文案里只说到「已存在」这一级
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	reason := "库内已有更优版本"
+	switch {
+	case sameFile == len(exists):
+		reason = washExistsMsg(washSameFile)
+	case sameFile > 0:
+		reason = "库内已有同一份文件或更优版本"
+	}
+	dest := "已存在"
+	if holding != "" {
+		dest += "/" + holding
+	}
+	er := &model.OrganizeRecord{
+		Source: files[0].Name, SourceFid: files[0].Fid, SourceKind: "file",
+		Status: "exists", Message: fmt.Sprintf("%s，%d 个视频已移到 %s", reason, len(exists), dest),
+		TmdbID: main.TmdbID, Title: main.Title, Year: main.Year, MediaType: main.MediaType,
+		Category: main.Category, TargetDir: main.TargetDir,
+		Files: marshalRecordFiles(files), VideoCount: len(exists),
+	}
+	if rec != nil {
+		er.PosterPath = rec.PosterPath
+	}
+	return er
 }
 
 func stdPath(p string) string {

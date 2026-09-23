@@ -391,10 +391,7 @@ func confirmOne(ctx *orgCtx, rec *model.OrganizeRecord) string {
 	if result.Status != "success" {
 		return ""
 	}
-	for _, sib := range others {
-		_, sibFiles, sibStrm := organizeIdentifiedFile(ctx, sib, result)
-		ctx.sink.appendToRecord(newRec, sibFiles, sibStrm, sib.Size)
-	}
+	organizeSiblings(ctx, newRec, result, others)
 	return ""
 }
 
