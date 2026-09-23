@@ -12,7 +12,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/jpeg"
+	"image/jpeg"
 	"image/png"
 	"io"
 	"log"
@@ -420,6 +420,16 @@ func coverBackground(cfg coverGenCfg, name string, posters []image.Image) color.
 }
 
 func coverRender(cfg coverGenCfg, name string, posters []image.Image) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, coverCompose(cfg, name, posters)); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// 半透明色一律用 color.NRGBA：color.RGBA 是预乘 alpha，写成 {255,255,255,205}
+// 这种「白色 80%」是非法值，合成出来文字带彩边、叠色发黑、沉浸背景的遮罩把海报整个盖死。
+func coverCompose(cfg coverGenCfg, name string, posters []image.Image) *image.RGBA {
 	w, h := coverResolution(cfg.Resolution)
 	style := cfg.Style
 	if style == "random" {
@@ -440,7 +450,7 @@ func coverRender(cfg coverGenCfg, name string, posters []image.Image) ([]byte, e
 		}
 		draw.Draw(img, image.Rect(0, 0, w*58/100, h), image.NewUniform(bg), image.Point{}, draw.Src)
 		text(zh, 88, 72, 326, color.White)
-		text(en, 31, 76, 382, color.RGBA{255, 255, 255, 205})
+		text(en, 31, 76, 382, color.NRGBA{255, 255, 255, 205})
 	case "static_3":
 		pw, ph := w/5, h*49/100
 		for i, p := range posters {
@@ -452,16 +462,16 @@ func coverRender(cfg coverGenCfg, name string, posters []image.Image) ([]byte, e
 			coverCrop(img, p, image.Rect(x, y, x+pw, y+ph))
 		}
 		text(zh, 82, 68, 335, color.White)
-		text(en, 29, 72, 390, color.RGBA{255, 255, 255, 205})
+		text(en, 29, 72, 390, color.NRGBA{255, 255, 255, 205})
 	case "static_4":
 		if len(posters) > 0 {
 			coverCrop(img, posters[0], img.Bounds())
 		}
-		draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{bg.R, bg.G, bg.B, uint8(min(245, 150+cfg.Blur))}), image.Point{}, draw.Over)
+		draw.Draw(img, img.Bounds(), image.NewUniform(color.NRGBA{bg.R, bg.G, bg.B, uint8(min(245, 150+cfg.Blur))}), image.Point{}, draw.Over)
 		zw := coverTextWidth(zh, 96*sy)
-		text(zh, 96, int((float64(w-zw)/2)/sx), 350, color.RGBA{255, 255, 255, 240})
+		text(zh, 96, int((float64(w-zw)/2)/sx), 350, color.NRGBA{255, 255, 255, 240})
 		ew := coverTextWidth(en, 32*sy)
-		text(en, 32, int((float64(w-ew)/2)/sx), 414, color.RGBA{255, 255, 255, 220})
+		text(en, 32, int((float64(w-ew)/2)/sx), 414, color.NRGBA{255, 255, 255, 220})
 	default:
 		pw, ph := int(270*sx), int(405*sy)
 		for i, p := range posters {
@@ -471,15 +481,11 @@ func coverRender(cfg coverGenCfg, name string, posters []image.Image) ([]byte, e
 			x, y := int((590+float64(i)*125)*sx), int((30+float64(i)*60)*sy)
 			coverCrop(img, p, image.Rect(x, y, x+pw, y+ph))
 		}
-		draw.Draw(img, image.Rect(int(76*sx), int(430*sy), int(86*sx), int(605*sy)), image.NewUniform(color.RGBA{255, 255, 255, 230}), image.Point{}, draw.Src)
+		draw.Draw(img, image.Rect(int(76*sx), int(430*sy), int(86*sx), int(605*sy)), image.NewUniform(color.NRGBA{255, 255, 255, 230}), image.Point{}, draw.Over)
 		text(zh, 88, 106, 550, color.White)
-		text(coverSpaced(en), 29, 109, 610, color.RGBA{255, 255, 255, 210})
+		text(coverSpaced(en), 29, 109, 610, color.NRGBA{255, 255, 255, 210})
 	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return img
 }
 
 func (h *Handler) coverRenderWith(style, name string, posters []image.Image) ([]byte, error) {
@@ -525,18 +531,44 @@ func (h *Handler) coverPushEmby(name, itemID string, data []byte) error {
 	return nil
 }
 
+// coverLibraries 按配置列出要生成的媒体库：配置了 Emby 用 Emby 的库，否则退回本地整理台账。
+func (h *Handler) coverLibraries(cfg coverGenCfg) ([]coverLib, error) {
+	if _, key, ok := h.embyServerInfo(); !ok || key == "" {
+		return h.coverCollectLibs(cfg), nil
+	}
+	return h.coverEmbyLibs(cfg)
+}
+
+func (h *Handler) coverPosters(cfg coverGenCfg, lib coverLib) []image.Image {
+	imgs := []image.Image{}
+	for _, id := range lib.PosterIDs {
+		if len(imgs) >= cfg.PosterCount {
+			break
+		}
+		if im := h.coverEmbyPoster(id); im != nil {
+			imgs = append(imgs, im)
+		}
+	}
+	for _, item := range lib.Items {
+		if len(imgs) >= cfg.PosterCount {
+			break
+		}
+		if im := coverFetchPoster(item.PosterPath); im != nil {
+			imgs = append(imgs, im)
+		}
+	}
+	return imgs
+}
+
 func (h *Handler) runCoverGen() (int, []string, []string, error) {
 	if !coverRunMu.TryLock() {
 		return 0, nil, nil, fmt.Errorf("媒体库海报正在生成，请稍候")
 	}
 	defer coverRunMu.Unlock()
 	cfg := h.loadCoverGenCfg()
-	libs, err := h.coverEmbyLibs(cfg)
+	libs, err := h.coverLibraries(cfg)
 	if err != nil {
 		return 0, nil, nil, err
-	}
-	if _, key, ok := h.embyServerInfo(); !ok || key == "" {
-		libs = h.coverCollectLibs(cfg)
 	}
 	if len(libs) == 0 {
 		return 0, nil, nil, fmt.Errorf("没有可用媒体库，请检查包含/排除设置与 Emby 配置")
@@ -547,23 +579,7 @@ func (h *Handler) runCoverGen() (int, []string, []string, error) {
 	}
 	done, skipped := []string{}, []string{}
 	for _, lib := range libs {
-		imgs := []image.Image{}
-		for _, id := range lib.PosterIDs {
-			if len(imgs) >= cfg.PosterCount {
-				break
-			}
-			if im := h.coverEmbyPoster(id); im != nil {
-				imgs = append(imgs, im)
-			}
-		}
-		for _, item := range lib.Items {
-			if len(imgs) >= cfg.PosterCount {
-				break
-			}
-			if im := coverFetchPoster(item.PosterPath); im != nil {
-				imgs = append(imgs, im)
-			}
-		}
+		imgs := h.coverPosters(cfg, lib)
 		if len(imgs) == 0 {
 			skipped = append(skipped, lib.Name+"：没有可用海报")
 			continue
@@ -707,4 +723,151 @@ func (h *Handler) CoverGenPreview(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	c.File(p)
+}
+
+// ============ 配置弹窗里的预览 ============
+//
+// 预览只出图、不落盘、不推 Emby。两种来源：
+//   - 样式缩略图用合成的占位海报，不走网络，打开弹窗就能看到每种样式的构图；
+//   - 「用真实海报预览」取某个库的真实海报，按弹窗里尚未保存的配置渲染。
+// 两者都用 JPEG 且锁 480p/720p：预览是给眼睛看构图和配色的，没必要传几 MB 的 1080p PNG。
+
+var coverSampleStyles = []string{"static_1", "static_2", "static_3", "static_4"}
+
+// coverDemoPosters 合成占位海报：竖向双色渐变 + 下方一条浅色「标题带」，
+// 颜色取自 coverPalette，保证几种样式里海报之间能分得开。
+func coverDemoPosters(n int) []image.Image {
+	out := make([]image.Image, 0, n)
+	for i := 0; i < n; i++ {
+		top := coverPalette[i%len(coverPalette)]
+		bot := coverPalette[(i+2)%len(coverPalette)]
+		img := image.NewRGBA(image.Rect(0, 0, 200, 300))
+		for y := 0; y < 300; y++ {
+			t := float64(y) / 299
+			c := color.RGBA{
+				uint8(float64(top.R)*(1-t) + float64(bot.R)*t*.6),
+				uint8(float64(top.G)*(1-t) + float64(bot.G)*t*.6),
+				uint8(float64(top.B)*(1-t) + float64(bot.B)*t*.6),
+				255,
+			}
+			draw.Draw(img, image.Rect(0, y, 200, y+1), image.NewUniform(c), image.Point{}, draw.Src)
+		}
+		draw.Draw(img, image.Rect(24, 232, 176, 244), image.NewUniform(color.NRGBA{255, 255, 255, 150}), image.Point{}, draw.Over)
+		draw.Draw(img, image.Rect(24, 254, 130, 262), image.NewUniform(color.NRGBA{255, 255, 255, 90}), image.Point{}, draw.Over)
+		out = append(out, img)
+	}
+	return out
+}
+
+func coverJPEGDataURL(img image.Image) (string, error) {
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
+}
+
+// 真实海报缓存：切样式、拖滑块都会重新请求预览，每次都去 Emby/TMDB 拉一遍海报太慢。
+// 键带上策略与数量，这两项一改取到的海报就不同了。
+type coverPosterEntry struct {
+	at   time.Time
+	imgs []image.Image
+}
+
+var (
+	coverPosterMu    sync.Mutex
+	coverPosterCache = map[string]coverPosterEntry{}
+)
+
+const coverPosterTTL = 5 * time.Minute
+
+func (h *Handler) coverPreviewPosters(cfg coverGenCfg, lib coverLib) []image.Image {
+	key := fmt.Sprintf("%s|%s|%d", lib.Name, cfg.Strategy, cfg.PosterCount)
+	coverPosterMu.Lock()
+	for k, e := range coverPosterCache {
+		if time.Since(e.at) > coverPosterTTL {
+			delete(coverPosterCache, k)
+		}
+	}
+	e, ok := coverPosterCache[key]
+	coverPosterMu.Unlock()
+	if ok {
+		return e.imgs
+	}
+	imgs := h.coverPosters(cfg, lib)
+	if len(imgs) > 0 {
+		coverPosterMu.Lock()
+		coverPosterCache[key] = coverPosterEntry{at: time.Now(), imgs: imgs}
+		coverPosterMu.Unlock()
+	}
+	return imgs
+}
+
+// CoverGenSample 渲染预览。body 是弹窗里当前（可能未保存）的配置：
+//
+//	{"config": {...}, "live": false}                → {"samples": {"static_1": dataURL, ...}}
+//	{"config": {...}, "live": true, "library": "x"} → {"image": dataURL, "library": "x", "libraries": [...]}
+func (h *Handler) CoverGenSample(c *gin.Context) {
+	var req struct {
+		Config  coverGenCfg `json:"config"`
+		Live    bool        `json:"live"`
+		Library string      `json:"library"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数无效"})
+		return
+	}
+	cfg := normalizeCoverGenCfg(req.Config)
+	if !req.Live {
+		cfg.Resolution = "480p"
+		name := strings.TrimSpace(req.Library)
+		if name == "" {
+			name = "电影"
+		}
+		posters := coverDemoPosters(6)
+		samples := gin.H{}
+		for _, style := range coverSampleStyles {
+			cfg.Style = style
+			u, err := coverJPEGDataURL(coverCompose(cfg, name, posters))
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "渲染失败"})
+				return
+			}
+			samples[style] = u
+		}
+		c.JSON(http.StatusOK, gin.H{"samples": samples})
+		return
+	}
+
+	libs, err := h.coverLibraries(cfg)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(libs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "没有可用媒体库，请检查包含/排除设置与 Emby 配置"})
+		return
+	}
+	names := make([]string, 0, len(libs))
+	lib := libs[0]
+	for _, l := range libs {
+		names = append(names, l.Name)
+		if l.Name == req.Library {
+			lib = l
+		}
+	}
+	imgs := h.coverPreviewPosters(cfg, lib)
+	if len(imgs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库《" + lib.Name + "》没有可用海报", "libraries": names})
+		return
+	}
+	if cfg.Resolution == "1080p" {
+		cfg.Resolution = "720p"
+	}
+	u, err := coverJPEGDataURL(coverCompose(cfg, lib.Name, imgs))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "渲染失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"image": u, "library": lib.Name, "libraries": names})
 }

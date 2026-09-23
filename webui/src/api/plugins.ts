@@ -55,6 +55,16 @@ export const coverGenList = () =>
   http.get<{ data?: { name: string; time?: string }[] }>('/covergen/list')
 export const cleanCoverGen = () => http.post<{ message?: string }>('/covergen/clean')
 
+/** 预览：live=false 返回四种样式的示意图；live=true 用某个库的真实海报按当前（未保存）配置出一张 */
+export interface CoverGenSample {
+  samples?: Record<string, string>
+  image?: string
+  library?: string
+  libraries?: string[]
+}
+export const coverGenSample = (body: { config: CoverGenConfig; live: boolean; library?: string }) =>
+  http.post<CoverGenSample>('/covergen/sample', body, { timeoutMs: 120_000 })
+
 /** 封面预览图直接走 <img src>，带时间戳绕开浏览器缓存（重新生成后要能立刻看到） */
 export const coverPreviewUrl = (name: string) =>
   `/api/covergen/preview?name=${encodeURIComponent(name)}&t=${Date.now()}`
