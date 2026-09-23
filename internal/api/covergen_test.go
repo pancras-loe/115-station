@@ -108,7 +108,7 @@ func TestCoverRenderStyles(t *testing.T) {
 		fakePoster(color.RGBA{200, 180, 60, 255}),
 		fakePoster(color.RGBA{160, 60, 200, 255}),
 	}
-	for _, style := range []string{"1", "2", "3"} {
+	for _, style := range []string{"1", "2", "3", "editorial_a", "editorial_b", "editorial_c"} {
 		out, err := h.coverRenderWith(style, "动漫电影", posters)
 		if err != nil {
 			t.Fatalf("样式 %s 渲染失败: %v", style, err)
@@ -130,6 +130,23 @@ func TestCoverRenderStyles(t *testing.T) {
 	// 写一张样例图供人工检查
 	out, _ := h.coverRenderWith("1", "动漫电影", posters)
 	_ = os.WriteFile(os.TempDir()+"/cover-sample.png", out, 0644)
+}
+
+func TestCoverEditorialAEqualStaircase(t *testing.T) {
+	for _, size := range [][2]int{{854, 480}, {1280, 720}, {1920, 1080}} {
+		rects := coverDesignARects(size[0], size[1])
+		for i := 1; i < len(rects); i++ {
+			if rects[i].Dx() != rects[0].Dx() || rects[i].Dy() != rects[0].Dy() {
+				t.Fatalf("%dx%d: 海报尺寸不一致：%v", size[0], size[1], rects)
+			}
+			if rects[i].Min.X <= rects[i-1].Min.X || rects[i].Min.Y <= rects[i-1].Min.Y {
+				t.Fatalf("%dx%d: 海报未呈阶梯排列：%v", size[0], size[1], rects)
+			}
+		}
+		if rects[2].Max.X > size[0] || rects[2].Max.Y > size[1] {
+			t.Fatalf("%dx%d: 最后一张海报越界：%v", size[0], size[1], rects[2])
+		}
+	}
 }
 
 func TestCoverSortItems(t *testing.T) {

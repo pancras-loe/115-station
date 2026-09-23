@@ -31,7 +31,7 @@ const { message } = useFeedback()
 const DEFAULTS: CoverGenConfig = {
   enabled: true,
   cron: '0 0 * * *',
-  style: 'static_1',
+  style: 'editorial_c',
   strategy: 'added',
   include: '',
   blacklist: '',
@@ -50,6 +50,9 @@ const tab = ref('style')
 const saving = ref(false)
 
 const STYLES = [
+  { v: 'editorial_a', label: 'A · 电影档案馆', desc: '等尺寸阶梯海报' },
+  { v: 'editorial_b', label: 'B · 美术馆画册', desc: '暖白四宫格' },
+  { v: 'editorial_c', label: 'C · 流媒体主视觉', desc: '四海报拼贴' },
   { v: 'static_1', label: '层叠卡片', desc: '斜向海报墙' },
   { v: 'static_2', label: '对角色块', desc: '标题 + 主海报' },
   { v: 'static_3', label: '矩阵海报', desc: '标题 + 海报矩阵' },
@@ -153,7 +156,8 @@ const stageSrc = computed(() => {
   return samples.value[form.value.style === 'random' ? 'static_1' : form.value.style] ?? ''
 })
 const stageBusy = computed(() => (liveOn.value ? liveLoading.value : samplesLoading.value && !stageSrc.value))
-const showBlur = computed(() => form.value.style === 'static_4' || form.value.style === 'random')
+const showBlur = computed(() => form.value.style === 'static_4' || form.value.style === 'editorial_c' || form.value.style === 'random')
+const showBackground = computed(() => form.value.style !== 'editorial_b' && form.value.style !== 'editorial_c')
 
 // ============ 已生成 ============
 const covers = ref<{ name: string; time?: string }[]>([])
@@ -250,11 +254,11 @@ defineExpose({ loadCovers })
             </div>
 
             <div class="knobs">
-              <div class="knob">
+              <div v-if="showBackground" class="knob">
                 <div class="knob-label">背景取色</div>
                 <NSelect v-model:value="form.background" size="small" :options="BACKGROUNDS" />
               </div>
-              <div v-if="form.background === 'custom'" class="knob">
+              <div v-if="showBackground && form.background === 'custom'" class="knob">
                 <div class="knob-label">自定义颜色</div>
                 <NColorPicker
                   v-model:value="form.custom_color"
@@ -264,7 +268,7 @@ defineExpose({ loadCovers })
                   :swatches="SWATCHES"
                 />
               </div>
-              <div class="knob">
+              <div v-if="showBackground" class="knob">
                 <div class="knob-label">
                   色彩浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
                 </div>
@@ -275,7 +279,7 @@ defineExpose({ loadCovers })
                   遮罩浓度 <span class="knob-val">{{ form.blur }}</span>
                 </div>
                 <NSlider v-model:value="form.blur" :min="0" :max="95" :step="1" :tooltip="false" />
-                <div class="knob-hint">仅「沉浸背景」：越大海报越暗、标题越清楚</div>
+                <div class="knob-hint">「流媒体主视觉」和「沉浸背景」：越大海报越暗、标题越清楚</div>
               </div>
             </div>
           </div>
@@ -296,7 +300,7 @@ defineExpose({ loadCovers })
             </button>
             <button type="button" class="thumb" :class="{ on: form.style === 'random' }" @click="form.style = 'random'">
               <span class="thumb-img dice"><Dices :size="26" :stroke-width="1.6" /></span>
-              <span class="thumb-cap"><b>随机</b>每库一种</span>
+              <span class="thumb-cap"><b>随机旧版</b>每库一种</span>
             </button>
           </div>
         </div>
@@ -335,7 +339,7 @@ defineExpose({ loadCovers })
           <FieldRow label="海报选取策略">
             <NSelect v-model:value="form.strategy" :options="STRATEGIES" />
           </FieldRow>
-          <FieldRow label="取图数量" tip="每个媒体库按选取策略取 1–12 张海报；层叠卡片用前 5 张，矩阵用前 6 张。">
+          <FieldRow label="取图数量" tip="每个媒体库按选取策略取 1–12 张海报；A 用前 3 张，B/C 用前 4 张，旧样式依原规则取用。">
             <NInputNumber v-model:value="form.poster_count" :min="1" :max="12" />
           </FieldRow>
           <FieldRow label="输出分辨率">

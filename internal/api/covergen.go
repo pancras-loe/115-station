@@ -65,7 +65,7 @@ type coverGenCfg struct {
 }
 
 func defaultCoverGenCfg() coverGenCfg {
-	return coverGenCfg{Enabled: true, Cron: "0 0 * * *", Style: "static_1", Strategy: "added", Resolution: "720p", PosterCount: 6, Background: "auto", Blur: 36, ColorRatio: .72, UsePrimary: true}
+	return coverGenCfg{Enabled: true, Cron: "0 0 * * *", Style: "editorial_c", Strategy: "added", Resolution: "720p", PosterCount: 6, Background: "auto", Blur: 36, ColorRatio: .72, UsePrimary: true}
 }
 
 func normalizeCoverGenCfg(c coverGenCfg) coverGenCfg {
@@ -76,8 +76,8 @@ func normalizeCoverGenCfg(c coverGenCfg) coverGenCfg {
 	case "1", "2", "3", "4":
 		c.Style = "static_" + c.Style
 	}
-	if !map[string]bool{"static_1": true, "static_2": true, "static_3": true, "static_4": true, "random": true}[c.Style] {
-		c.Style = "static_1"
+	if !map[string]bool{"static_1": true, "static_2": true, "static_3": true, "static_4": true, "editorial_a": true, "editorial_b": true, "editorial_c": true, "random": true}[c.Style] {
+		c.Style = "editorial_c"
 	}
 	if !map[string]bool{"added": true, "release": true, "title": true, "rating": true}[c.Strategy] {
 		c.Strategy = "added"
@@ -345,8 +345,120 @@ func coverTextWidth(s string, size float64) int {
 	return int((&font.Drawer{Face: face}).MeasureString(s) >> 6)
 }
 
+// 长库名不能越过海报区；只缩小字号，不截断用户自定义标题。
+func coverFitSize(s string, wanted, maxWidth float64) float64 {
+	minimum := wanted / 6
+	for wanted > minimum && float64(coverTextWidth(s, wanted)) > maxWidth {
+		wanted -= 2
+	}
+	return wanted
+}
+
+func coverFill(img draw.Image, rect image.Rectangle, c color.Color) {
+	draw.Draw(img, rect, image.NewUniform(c), image.Point{}, draw.Over)
+}
+
+func coverDesignARects(w, h int) [3]image.Rectangle {
+	sx, sy := float64(w)/1280, float64(h)/720
+	px := func(v int) int { return int(float64(v) * sx) }
+	py := func(v int) int { return int(float64(v) * sy) }
+	var rects [3]image.Rectangle
+	for i := range rects {
+		x, y := px(590+i*205), py(85+i*80)
+		rects[i] = image.Rect(x, y, x+px(240), y+py(390))
+	}
+	return rects
+}
+
+func coverDesignA(img *image.RGBA, zh, en string, posters []image.Image, bg color.RGBA) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	sx, sy := float64(w)/1280, float64(h)/720
+	px := func(v int) int { return int(float64(v) * sx) }
+	py := func(v int) int { return int(float64(v) * sy) }
+	// 主海报的暗色铺底让空白区有层次，标题仍由实底保证清晰。
+	if len(posters) > 0 {
+		coverCrop(img, posters[0], img.Bounds())
+	}
+	coverFill(img, img.Bounds(), color.NRGBA{R: 8, G: 16, B: 28, A: 225})
+	coverFill(img, image.Rect(0, 0, px(585), h), color.NRGBA{R: 7, G: 15, B: 27, A: 205})
+	accent := color.RGBA{R: uint8(min(255, int(bg.R)+85)), G: uint8(min(255, int(bg.G)+85)), B: uint8(min(255, int(bg.B)+85)), A: 255}
+	coverFill(img, image.Rect(px(62), py(116), px(148), py(118)), accent)
+	coverDrawText(img, "CINEMA COLLECTION", 21*sy, px(62), py(100), color.NRGBA{R: 238, G: 225, B: 201, A: 210})
+	// 三张同宽同高，固定间距错位成阶梯；少于三张时不复制真实海报。
+	rects := coverDesignARects(w, h)
+	for i, p := range posters {
+		if i == 3 {
+			break
+		}
+		rect := rects[i]
+		coverFill(img, rect.Add(image.Pt(px(10), py(12))), color.NRGBA{A: 105})
+		coverCrop(img, p, rect)
+	}
+	zhSize := coverFitSize(zh, 88*sy, float64(px(530)))
+	coverDrawText(img, zh, zhSize, px(62), py(390), color.RGBA{R: 248, G: 241, B: 226, A: 255})
+	coverFill(img, image.Rect(px(62), py(438), px(548), py(440)), accent)
+	enSize := coverFitSize(en, 28*sy, float64(px(490)))
+	coverDrawText(img, en, enSize, px(62), py(486), color.NRGBA{R: 239, G: 226, B: 206, A: 225})
+}
+
+func coverDesignB(img *image.RGBA, zh, en string, posters []image.Image) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	sx, sy := float64(w)/1280, float64(h)/720
+	px := func(v int) int { return int(float64(v) * sx) }
+	py := func(v int) int { return int(float64(v) * sy) }
+	coverFill(img, img.Bounds(), color.RGBA{R: 246, G: 242, B: 234, A: 255})
+	ink := color.RGBA{R: 35, G: 38, B: 39, A: 255}
+	coverDrawText(img, "MEDIA LIBRARY", 20*sy, px(56), py(90), ink)
+	coverFill(img, image.Rect(px(56), py(110), px(615), py(112)), ink)
+	zhSize := coverFitSize(zh, 88*sy, float64(px(590)))
+	coverDrawText(img, zh, zhSize, px(56), py(350), ink)
+	enSize := coverFitSize(en, 30*sy, float64(px(580)))
+	coverDrawText(img, en, enSize, px(57), py(405), ink)
+	red := color.RGBA{R: 190, G: 55, B: 42, A: 255}
+	coverFill(img, image.Rect(px(56), py(452), px(75), py(471)), red)
+	coverFill(img, image.Rect(px(92), py(460), px(520), py(462)), color.RGBA{R: 158, G: 155, B: 148, A: 255})
+	for i, p := range posters {
+		if i == 4 {
+			break
+		}
+		x := px(700 + (i%2)*276)
+		y := py(40 + (i/2)*328)
+		coverCrop(img, p, image.Rect(x, y, x+px(264), y+py(312)))
+	}
+}
+
+func coverDesignC(img *image.RGBA, zh, en string, posters []image.Image, blur int) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	sx, sy := float64(w)/1280, float64(h)/720
+	px := func(v int) int { return int(float64(v) * sx) }
+	py := func(v int) int { return int(float64(v) * sy) }
+	for i, p := range posters {
+		if i == 4 {
+			break
+		}
+		x0, x1 := w*i/4, w*(i+1)/4
+		coverCrop(img, p, image.Rect(x0, 0, x1, h))
+	}
+	// 中央渐暗而两侧保留海报颜色；遮罩浓度滑块仍可调节。
+	for x := 0; x < w; x++ {
+		center := 1 - math.Min(1, math.Abs(float64(x)-float64(w)/2)/(float64(w)*.45))
+		a := uint8(min(240, int(45+float64(blur)*.45+175*center*center)))
+		coverFill(img, image.Rect(x, 0, x+1, h), color.NRGBA{R: 5, G: 10, B: 17, A: a})
+	}
+	zhSize := coverFitSize(zh, 105*sy, float64(px(1050)))
+	zw := coverTextWidth(zh, zhSize)
+	coverDrawText(img, zh, zhSize, (w-zw)/2, py(360), color.White)
+	lineW := min(px(540), zw)
+	coverFill(img, image.Rect((w-lineW)/2, py(397), (w+lineW)/2, py(400)), color.RGBA{R: 202, G: 134, B: 87, A: 255})
+	enSize := coverFitSize(en, 31*sy, float64(px(800)))
+	ew := coverTextWidth(en, enSize)
+	coverDrawText(img, en, enSize, (w-ew)/2, py(455), color.RGBA{R: 245, G: 244, B: 240, A: 255})
+}
+
 func coverEnglishName(name string) string {
 	switch {
+	case (strings.Contains(name, "动漫") || strings.Contains(name, "动画")) && strings.Contains(name, "电影"):
+		return "ANIMATION FILMS"
 	case strings.Contains(name, "动漫"), strings.Contains(name, "动画"):
 		return "ANIMATION"
 	case strings.Contains(name, "纪录"):
@@ -444,6 +556,12 @@ func coverCompose(cfg coverGenCfg, name string, posters []image.Image) *image.RG
 		coverDrawText(img, s, size*sy, int(float64(x)*sx), int(float64(y)*sy), c)
 	}
 	switch style {
+	case "editorial_a":
+		coverDesignA(img, zh, en, posters, bg)
+	case "editorial_b":
+		coverDesignB(img, zh, en, posters)
+	case "editorial_c":
+		coverDesignC(img, zh, en, posters, cfg.Blur)
 	case "static_2":
 		if len(posters) > 0 {
 			coverCrop(img, posters[0], image.Rect(w*43/100, 0, w, h))
@@ -732,7 +850,7 @@ func (h *Handler) CoverGenPreview(c *gin.Context) {
 //   - 「用真实海报预览」取某个库的真实海报，按弹窗里尚未保存的配置渲染。
 // 两者都用 JPEG 且锁 480p/720p：预览是给眼睛看构图和配色的，没必要传几 MB 的 1080p PNG。
 
-var coverSampleStyles = []string{"static_1", "static_2", "static_3", "static_4"}
+var coverSampleStyles = []string{"editorial_a", "editorial_b", "editorial_c", "static_1", "static_2", "static_3", "static_4"}
 
 // coverDemoPosters 合成占位海报：竖向双色渐变 + 下方一条浅色「标题带」，
 // 颜色取自 coverPalette，保证几种样式里海报之间能分得开。
