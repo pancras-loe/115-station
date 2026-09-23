@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterLink, useRoute } from 'vue-router'
 import { navItems } from './navItems'
+import BrandMark from '@/components/BrandMark.vue'
 
 defineProps<{ version?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
@@ -10,9 +11,9 @@ const route = useRoute()
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark">115</div>
+      <BrandMark :size="34" class="brand-mark" />
       <div class="brand-text">
-        <span class="brand-name">115<span class="brand-accent">Station</span></span>
+        <span class="brand-name">Strm<span class="brand-accent">Station</span></span>
         <span class="brand-sub">媒体库自动化</span>
       </div>
     </div>
@@ -33,7 +34,7 @@ const route = useRoute()
     </nav>
 
     <div class="sidebar-foot">
-      <span class="foot-version">{{ version || '115-Station' }}</span>
+      <span class="foot-version">{{ version || 'StrmStation' }}</span>
       <a
         class="foot-link"
         href="https://t.me/+7b_HYMltYMozZTk1"
@@ -61,28 +62,20 @@ const route = useRoute()
   padding: 18px 18px 14px;
 }
 .brand-mark {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
   border-radius: var(--radius);
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: #fff;
-  background: linear-gradient(135deg, var(--c-primary), var(--c-primary-hover));
-  box-shadow: var(--shadow-sm);
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--c-primary) 55%, transparent);
 }
 .brand-text {
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 .brand-name {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
   color: var(--c-text-1);
 }
 .brand-accent {
@@ -90,6 +83,7 @@ const route = useRoute()
 }
 .brand-sub {
   font-size: 11px;
+  letter-spacing: 0.06em;
   color: var(--c-text-3);
 }
 

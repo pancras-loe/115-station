@@ -108,5 +108,5 @@ router.beforeEach((to) => {
 
 router.afterEach((to) => {
   const t = to.meta.title as string | undefined
-  document.title = t ? `${t} · 115-Station` : '115-Station'
+  document.title = t ? `${t} · StrmStation` : 'StrmStation'
 })

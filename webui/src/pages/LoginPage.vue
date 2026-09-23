@@ -6,6 +6,7 @@ import { KeyRound, UserRound } from '@lucide/vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuthStore } from '@/stores/auth'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import BrandMark from '@/components/BrandMark.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -46,9 +47,9 @@ async function submit() {
 
     <div class="auth-card">
       <div class="brand">
-        <div class="brand-mark">115</div>
-        <div class="brand-name">115<span>Station</span></div>
-        <div class="brand-sub">115 媒体库管理 · STRM 自动生成</div>
+        <BrandMark :size="56" class="brand-mark" />
+        <div class="brand-name">Strm<span>Station</span></div>
+        <div class="brand-sub">网盘媒体库管理 · STRM 自动生成</div>
       </div>
 
       <div v-if="notInitialized" class="notice">
@@ -146,22 +147,14 @@ async function submit() {
   margin-bottom: 26px;
 }
 .brand-mark {
-  width: 56px;
-  height: 56px;
-  border-radius: var(--radius-lg);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, var(--c-primary), var(--c-primary-hover));
-  box-shadow: var(--shadow-md);
+  border-radius: 15px;
+  box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--c-primary) 60%, transparent);
   margin-bottom: 14px;
 }
 .brand-name {
   font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   color: var(--c-text-1);
 }
 .brand-name span {
