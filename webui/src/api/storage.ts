@@ -57,7 +57,9 @@ export interface DirListResult {
   truncated?: boolean
 }
 
-export const dirs115 = (cid: string) => http.get<DirListResult>('/storage/115/dirs', { params: { cid } })
+/** refresh 跳过后端 5 分钟的目录缓存，给选择器的「刷新」按钮用 */
+export const dirs115 = (cid: string, refresh = false) =>
+  http.get<DirListResult>('/storage/115/dirs', { params: refresh ? { cid, refresh: 1 } : { cid } })
 
 /** 把 /影视/电影 这样的路径逐段解析成 cid */
 export const resolve115 = (path: string) =>

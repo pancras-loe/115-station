@@ -33,16 +33,19 @@ var (
 const dirCacheTTL = 5 * time.Minute
 
 // List115Dirs 浏览 115 网盘目录（只返回文件夹）
-// GET /storage/115/dirs?cid=0
+// GET /storage/115/dirs?cid=0[&refresh=1]
 func (h *Handler) List115Dirs(c *gin.Context) {
 	cid := c.Query("cid")
 	if cid == "" {
 		cid = "0"
 	}
-	// 命中缓存直接返回（5 分钟）
+	// 命中缓存直接返回（5 分钟）。refresh=1 是选择器上的「刷新」按钮：
+	// 用户刚在 115 上新建的文件夹，没有它要等缓存过期才看得到。
+	// 只跳过读缓存，结果照常写回，后续普通打开拿到的就是新列表
 	cacheKey := cid
+	refresh := c.Query("refresh") == "1"
 	dirCacheMu.Lock()
-	if e, ok := dirCache[cacheKey]; ok && time.Now().Before(e.expires) {
+	if e, ok := dirCache[cacheKey]; ok && !refresh && time.Now().Before(e.expires) {
 		dirs, count, origin := e.dirs, e.count, e.origin
 		dirCacheMu.Unlock()
 		c.JSON(http.StatusOK, gin.H{"data": dirs, "cid": cid, "count": count, "origin": origin, "channel": "cache"})

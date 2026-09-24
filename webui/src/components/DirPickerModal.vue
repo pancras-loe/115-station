@@ -4,7 +4,7 @@ import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
-import { ChevronRight, CornerLeftUp, Folder } from '@lucide/vue'
+import { ChevronRight, CornerLeftUp, Folder, RefreshCw } from '@lucide/vue'
 import { storageApi } from '@/api'
 import type { DirEntry } from '@/api/storage'
 
@@ -37,7 +37,7 @@ const path = ref('')
 
 const currentLabel = ref('')
 
-async function load115(nextCid: string, opts?: { enter?: string; restore?: string[] }) {
+async function load115(nextCid: string, opts?: { enter?: string; restore?: string[]; refresh?: boolean }) {
   loading.value = true
   note.value = ''
   try {
@@ -50,7 +50,7 @@ async function load115(nextCid: string, opts?: { enter?: string; restore?: strin
       trail.value = [] // 根目录 / 手动跳转
       history.value = []
     }
-    const data = await storageApi.dirs115(nextCid)
+    const data = await storageApi.dirs115(nextCid, opts?.refresh)
     cid.value = nextCid
     currentLabel.value = trail.value.length ? '/' + trail.value.join('/') : '根目录'
     items.value = data.data ?? []
@@ -115,6 +115,12 @@ function goUp() {
   }
 }
 
+/** 重新拉取当前目录。115 侧绕过后端缓存，否则刚新建的文件夹要等缓存过期才出现 */
+function refresh() {
+  if (props.mode === '115') load115(cid.value, { restore: [...trail.value], refresh: true })
+  else loadLocal(path.value)
+}
+
 /** 手动输入跳转。115 同时支持纯数字 cid 与 /路径/写法 */
 async function jump() {
   const v = jumpText.value.trim()
@@ -170,6 +176,10 @@ watch(() => props.show, (v) => v && reset())
           上级
         </HButton>
         <span class="crumb-path">{{ currentLabel }}</span>
+        <HButton size="sm" variant="ghost" :disabled="loading" @click="refresh">
+          <template #icon><RefreshCw /></template>
+          刷新
+        </HButton>
       </div>
 
       <div class="list" :aria-busy="loading">
