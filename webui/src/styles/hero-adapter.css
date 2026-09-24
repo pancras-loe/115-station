@@ -143,3 +143,50 @@
     @apply slide-out-to-bottom-8 zoom-out-100;
   }
 }
+
+/* ============================================================
+   迁移期的两个通用布局类（替代 Naive 的 NInputGroup / 包裹式 NSpin）
+   ============================================================ */
+
+/* 输入框 + 旁边的按钮。HeroUI 不把按钮焊在输入框上，而是并排两颗独立的圆角件；
+   手机上按钮换到下一行铺满，拇指好点，输入框也不会被挤窄 */
+.h-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  & > :first-child {
+    flex: 1;
+    min-width: 0;
+  }
+  & > .button {
+    flex: none;
+  }
+}
+@media (max-width: 720px) {
+  .h-field-row {
+    flex-wrap: wrap;
+
+    & > :first-child {
+      flex-basis: 100%;
+    }
+    & > .button {
+      flex: 1;
+    }
+  }
+}
+
+/* 加载中的内容区：保留旧内容淡出、不可点，页面高度不跳（比盖一层转圈更平静） */
+.h-loading {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+/* 带页签的页面外壳：页签栏与内容之间的间距（替代 NTabs 自带的那段） */
+.h-tabs-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}

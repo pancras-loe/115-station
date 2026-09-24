@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NModal, NSpin } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { storageApi } from '@/api'
 import type { QrChannel } from '@/api/storage'
 
@@ -118,22 +119,16 @@ watch(
 </script>
 
 <template>
-  <NModal
-    :show="show"
-    preset="card"
-    title="扫码登录 115"
-    style="width: 340px"
-    @update:show="emit('update:show', $event)"
-  >
+  <HModal :show="show" title="扫码登录 115" width="340px" @update:show="emit('update:show', $event)">
     <div class="qr">
       <div class="qr-frame">
-        <NSpin v-if="loading" size="small" />
+        <HSpinner v-if="loading" size="sm" />
         <img v-else-if="qrSrc" :src="qrSrc" alt="115 登录二维码" />
         <span v-else class="qr-fail">二维码获取失败</span>
       </div>
       <p class="qr-status" :class="{ fail: failed }">{{ statusText }}</p>
     </div>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

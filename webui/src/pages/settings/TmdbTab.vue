@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NAlert, NButton, NInput, NRadioButton, NRadioGroup } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import { heroTone } from '@/components/hero/tone'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -118,23 +122,23 @@ onMounted(load)
 
 <template>
   <SectionCard title="TMDB 配置" hint="识别与刮削的元数据来源">
-    <NAlert v-if="loadError" type="error" :bordered="false">
+    <HAlert status="danger" v-if="loadError">
       TMDB 配置读取失败，请重试后再修改。
-      <div class="alert-action"><NButton @click="load">重新加载</NButton></div>
-    </NAlert>
-    <NAlert v-else :type="verifiedSaved ? 'success' : 'info'" :bordered="false">
+      <div class="alert-action"><HButton variant="tertiary" @click="load">重新加载</HButton></div>
+    </HAlert>
+    <HAlert :status="heroTone(verifiedSaved ? 'success' : 'info')" v-else>
       {{ verifiedSaved ? 'TMDB 已保存并验证可用，可以开始整理。' : '自动整理、影视搜片与刮削需要 TMDB API Key。填写后点击「保存并测试」确认可用。' }}
       <div v-if="verifiedSaved && route.query.from === 'organize'" class="alert-action">
-        <NButton v-if="verifiedSaved && route.query.from === 'organize'" size="small" @click="router.push('/organize')">返回自动整理</NButton>
+        <HButton variant="tertiary" size="sm" v-if="verifiedSaved && route.query.from === 'organize'" @click="router.push('/organize')">返回自动整理</HButton>
       </div>
-    </NAlert>
+    </HAlert>
     <fieldset :disabled="busy || loadError" class="tmdb-fields">
     <FieldRow label="API 域名" tip="TMDB API 地址，国内网络可换反代加速。">
-      <NInput v-model:value="model.api_url" placeholder="https://api.tmdb.org" />
+      <HInput v-model="model.api_url" placeholder="https://api.tmdb.org" />
     </FieldRow>
 
     <FieldRow label="图片域名" tip="TMDB 海报图片域名，可换反代加速。">
-      <NInput v-model:value="model.image_url" placeholder="https://image.tmdb.org" />
+      <HInput v-model="model.image_url" placeholder="https://image.tmdb.org" />
     </FieldRow>
 
     <FieldRow
@@ -144,22 +148,19 @@ onMounted(load)
       tip="登录 TMDB → 设置 → API，复制 API Key（不是较长的 API Read Access Token）。"
     >
       <SecretInput ref="keyInput" v-model="model.api_key" :status="keyError ? 'error' : undefined" name="tmdb-api-key" placeholder="填写 TMDB API Key（必填）" />
-      <NButton text tag="a" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">获取 API Key ↗</NButton>
+      <HButton variant="ghost" class="text-btn" tag="a" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noopener noreferrer">获取 API Key ↗</HButton>
     </FieldRow>
 
     <FieldRow label="语言" tip="中文优先返回中文片名与简介；英文返回原名。">
-      <NRadioGroup v-model:value="model.language">
-        <NRadioButton value="zh-CN">中文</NRadioButton>
-        <NRadioButton value="en-US">英文</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="model.language" :options="[{ label: '中文', value: 'zh-CN' }, { label: '英文', value: 'en-US' }]" />
     </FieldRow>
 
     </fieldset>
     <FormActions>
-      <NButton type="primary" :loading="busy" :disabled="busy || loadError" @click="saveAndTest">保存并测试</NButton>
-      <NButton :disabled="busy || loadError" @click="save">仅保存</NButton>
-      <NButton :disabled="busy || loadError" @click="test">测试当前填写</NButton>
-      <NButton :disabled="busy || loadError" @click="reset">恢复默认地址与语言</NButton>
+      <HButton variant="primary" :loading="busy" :disabled="busy || loadError" @click="saveAndTest">保存并测试</HButton>
+      <HButton variant="tertiary" :disabled="busy || loadError" @click="save">仅保存</HButton>
+      <HButton variant="tertiary" :disabled="busy || loadError" @click="test">测试当前填写</HButton>
+      <HButton variant="tertiary" :disabled="busy || loadError" @click="reset">恢复默认地址与语言</HButton>
     </FormActions>
 
     <TestBanner :state="banner" />

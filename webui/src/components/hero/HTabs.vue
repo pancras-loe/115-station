@@ -15,6 +15,8 @@ export interface TabItem<V extends string = string> {
   count?: number
   /** 角标颜色，默认 accent */
   countTone?: 'accent' | 'warning' | 'danger'
+  /** 标签右上的小圆点（「这个通道已配置」这类只要有 / 无的状态） */
+  dot?: boolean
 }
 
 withDefaults(
@@ -58,6 +60,7 @@ watch(
             :data-selected="model === it.value || undefined"
           >
             <span>{{ it.label }}</span>
+            <i v-if="it.dot" class="h-tab-dot" aria-label="已配置" />
             <span v-if="it.count" class="h-tab-count" :class="`tone-${it.countTone ?? 'accent'}`">
               {{ it.count > 99 ? '99+' : it.count }}
             </span>
@@ -102,6 +105,13 @@ watch(
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.h-tab-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: var(--success);
 }
 .tone-accent {
   background: var(--accent-soft);

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NInput } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -66,14 +67,14 @@ async function networkCheck() {
       label="代理地址"
       tip="HTTP(S) 代理，用于访问 TMDB 等外网服务，格式 http://IP:端口，留空不代理。"
     >
-      <NInput v-model:value="model.url" placeholder="如 http://127.0.0.1:7890，留空不代理" />
+      <HInput v-model="model.url" placeholder="如 http://127.0.0.1:7890，留空不代理" />
     </FieldRow>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save()">保存配置</NButton>
-      <NButton :loading="testingProxy" @click="testProxy">测试延迟</NButton>
-      <NButton :loading="testingNet" @click="networkCheck">网络连接测试</NButton>
-      <NButton @click="reset">重置配置</NButton>
+      <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+      <HButton variant="tertiary" :loading="testingProxy" @click="testProxy">测试延迟</HButton>
+      <HButton variant="tertiary" :loading="testingNet" @click="networkCheck">网络连接测试</HButton>
+      <HButton variant="tertiary" @click="reset">重置配置</HButton>
     </FormActions>
 
     <TestBanner :state="banner" />

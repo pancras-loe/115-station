@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NAlert, NButton, NInput, NInputGroup, NRadioButton, NRadioGroup } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -154,22 +157,18 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         required
         tip="Emby 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
       >
-        <NInput
-          v-model:value="model.server_url"
-          placeholder="如 http://192.168.1.100:8096"
-          :input-props="plainProps('emby-server-url')"
-        />
+        <HInput v-model="model.server_url" placeholder="如 http://192.168.1.100:8096" :input-attrs="plainProps('emby-server-url')" />
       </FieldRow>
 
       <FieldRow label="API 密钥" tip="Emby 后台「设置 → API 密钥」生成，用于按库刷新与连接测试。">
-        <NInputGroup>
+        <div class="h-field-row">
           <SecretInput
             v-model="model.api_key"
             name="emby-api-key"
             placeholder="Emby 设置 → API 密钥 中生成"
           />
-          <NButton :loading="testing" @click="testConnection">测试连接</NButton>
-        </NInputGroup>
+          <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>
+        </div>
         <TestBanner :state="banner" />
       </FieldRow>
 
@@ -180,27 +179,24 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         <div class="path-pair">
           <label>
             <span>本地媒体库目录</span>
-            <NInput :value="media.model.value.local_path || '未配置'" readonly />
+            <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
           </label>
           <span class="path-arrow">→</span>
           <label>
             <span>Emby 媒体库目录</span>
-            <NInput v-model:value="embyMediaRoot" placeholder="如 /media" />
+            <HInput v-model="embyMediaRoot" placeholder="如 /media" />
           </label>
         </div>
-        <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+        <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
           前往「账号与媒体库」修改本地目录
-        </NButton>
+        </HButton>
       </FieldRow>
 
       <FieldRow
         label="路径风格"
         tip="通知 Emby 的路径分隔符：Unix（/）或 Windows（\），与 Emby 挂载方式一致。"
       >
-        <NRadioGroup v-model:value="model.style">
-          <NRadioButton value="unix">Unix 风格</NRadioButton>
-          <NRadioButton value="windows">Windows 风格</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="model.style" :options="[{ label: 'Unix 风格', value: 'unix' }, { label: 'Windows 风格', value: 'windows' }]" />
       </FieldRow>
 
       <FieldRow
@@ -208,7 +204,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         wide
         tip="输入一个本地路径，下方显示转换后的 Emby 路径，一致则说明映射正确。"
       >
-        <NInput v-model:value="pathProbe" placeholder="如 /media/电影/钢铁侠.mkv" />
+        <HInput v-model="pathProbe" placeholder="如 /media/电影/钢铁侠.mkv" />
         <CopyBox v-if="pathResult" class="probe-out" :value="pathResult" tone="success" />
       </FieldRow>
 
@@ -216,28 +212,25 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         label="入库时刷新"
         tip="启用后 STRM 生成时自动通知 Emby 刷新对应媒体库（用上方服务器地址与 API 密钥）。"
       >
-        <NRadioGroup v-model:value="model.refresh_enabled">
-          <NRadioButton :value="true">启用</NRadioButton>
-          <NRadioButton :value="false">禁用</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="model.refresh_enabled" :options="[{ label: '启用', value: true }, { label: '禁用', value: false }]" />
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="saveEmby">保存配置</NButton>
-        <NButton @click="reset">重置配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="saveEmby">保存配置</HButton>
+        <HButton variant="tertiary" @click="reset">重置配置</HButton>
       </FormActions>
 
-      <NAlert class="note" type="info" :bordered="false">
+      <HAlert status="accent" class="note">
         配置 Emby 连接后，STRM 生成时按库刷新对应媒体库，整理入库更快。非必须——开启 Emby
         实时监控也一样，此通知只是能更快入库。
-      </NAlert>
+      </HAlert>
     </SectionCard>
 
     <SectionCard title="Emby Webhook" hint="入库 / 删除 / 播放时的消息通知">
-      <NAlert class="note-top" type="info" :bordered="false">
+      <HAlert status="accent" class="note-top">
         把下方地址填到 Emby 的 Webhooks（请求方式 POST，内容类型 application/json）。
         推送哪些事件由 Emby 侧勾选决定；token 为本实例自动生成的鉴权密钥。
-      </NAlert>
+      </HAlert>
 
       <FieldRow
         label="接收地址"
@@ -253,14 +246,10 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         tip="自动生成，可改成自己好记的（仅字母数字）；修改后立即生效，Emby 侧地址需同步更新。"
         hint="Emby 推送时必须携带相同 token，否则返回 401；「换一个」随机重新生成。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="notifyToken"
-            placeholder="自动生成，可自定义"
-            @blur="saveToken(notifyToken)"
-          />
-          <NButton @click="rotateToken">换一个</NButton>
-        </NInputGroup>
+        <div class="h-field-row">
+          <HInput v-model="notifyToken" placeholder="自动生成，可自定义" @blur="saveToken(notifyToken)" />
+          <HButton variant="tertiary" @click="rotateToken">换一个</HButton>
+        </div>
       </FieldRow>
     </SectionCard>
   </div>

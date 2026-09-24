@@ -1,19 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import {
-  NAlert,
-  NButton,
-  NCollapse,
-  NCollapseItem,
-  NInput,
-  NInputGroup,
-  NInputNumber,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NTag,
-} from 'naive-ui'
-import { FolderPlus, QrCode, ShieldCheck } from '@lucide/vue'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
+import { ChevronRight, FolderPlus, QrCode, ShieldCheck } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -266,40 +260,33 @@ onMounted(() => {
         label="Cookie 路径"
         tip="指定 115 Cookie 文件路径，扫码登录后自动写入该文件。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="form.cookie_path"
-            placeholder="/config/115-cookies.txt"
-            :input-props="plainProps('acc-cookie-path')"
-          />
-          <NButton type="primary" ghost :loading="checking" @click="check">
+        <div class="h-field-row">
+          <HInput v-model="form.cookie_path" placeholder="/config/115-cookies.txt" :input-attrs="plainProps('acc-cookie-path')" />
+          <HButton variant="secondary" :loading="checking" @click="check">
             <template #icon><ShieldCheck :size="15" /></template>
             检测可用性
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
 
       <FieldRow
         label="Cookie 设备"
         tip="网页端 Cookie 与 115Browser UA 配套，兼容性最好（默认推荐）。App 端 Cookie 有设备槽位校验，与桌面 UA 不匹配会报“服务器开小差”。避免选常用设备导致被挤下线。"
       >
-        <NInputGroup>
-          <NSelect v-model:value="form.device" :options="DEVICE_OPTIONS" />
-          <NButton type="primary" @click="qrShow = true">
+        <div class="h-field-row">
+          <HSelect v-model="form.device" :options="DEVICE_OPTIONS" />
+          <HButton variant="primary" @click="qrShow = true">
             <template #icon><QrCode :size="15" /></template>
             二维码登录
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
 
       <FieldRow
         label="启用 OPENAPI"
         tip="需先在 115 开放平台（open.115.com）申请应用拿到 AppID。没有 AppID 请保持「禁用」——Cookie 通道功能完整，且全量同步可用「快速模式」。"
       >
-        <NRadioGroup v-model:value="form.openapi_enabled">
-          <NRadioButton :value="true">启用</NRadioButton>
-          <NRadioButton :value="false">禁用（默认）</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="form.openapi_enabled" :options="[{ label: '启用', value: true }, { label: '禁用（默认）', value: false }]" />
       </FieldRow>
 
       <FieldRow
@@ -308,35 +295,31 @@ onMounted(() => {
         required
         tip="在 115 开放平台（open.115.com）申请应用后获取。填入后点击“保存并扫码授权”，用 115 App 扫码完成 OAuth 授权。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="form.app_id"
-            placeholder="请输入 115 开放平台 AppID"
-            :input-props="plainProps('acc-open-app-id')"
-          />
-          <NButton type="primary" ghost @click="saveAndScan">保存并扫码授权</NButton>
-        </NInputGroup>
+        <div class="h-field-row">
+          <HInput v-model="form.app_id" placeholder="请输入 115 开放平台 AppID" :input-attrs="plainProps('acc-open-app-id')" />
+          <HButton variant="secondary" @click="saveAndScan">保存并扫码授权</HButton>
+        </div>
       </FieldRow>
 
       <FieldRow
         label="API 请求间隔"
         tip="设置 API 请求间隔可以减少风控概率。读接口默认 1s，写接口建议 ≥3s。"
       >
-        <NInputNumber v-model:value="form.interval" :min="0.5" :step="0.5" style="width: 150px">
+        <HNumberInput v-model="form.interval" :min="0.5" :step="0.5" style="width: 150px">
           <template #suffix>秒</template>
-        </NInputNumber>
+        </HNumberInput>
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
-        <NButton @click="reset">重置配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
+        <HButton variant="tertiary" @click="reset">重置配置</HButton>
       </FormActions>
     </SectionCard>
 
     <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
-      <NAlert class="media-note" type="info" :bordered="false">
+      <HAlert status="accent" class="media-note">
         此处是全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共同使用的统一位置配置。
-      </NAlert>
+      </HAlert>
 
       <FieldRow
         label="115 媒体库目录"
@@ -346,23 +329,18 @@ onMounted(() => {
         <Cid115Input ref="cidInput" v-model="cidValue" />
       </FieldRow>
 
-      <NAlert
-        v-if="media.saved.value.cid && missingWs.length"
-        class="ws-note"
-        type="warning"
-        :bordered="false"
-      >
+      <HAlert status="warning" v-if="media.saved.value.cid && missingWs.length" class="ws-note">
         <div class="ws-row">
           <span>
             还没有配置{{ missingWs.join('、') }}目录。它们与媒体库目录必须互不包含，
             可一键在网盘根目录下创建 /StrmStation 统一存放。
           </span>
-          <NButton size="small" type="primary" ghost :loading="creatingWs" @click="createWs">
+          <HButton variant="secondary" size="sm" :loading="creatingWs" @click="createWs">
             <template #icon><FolderPlus :size="15" /></template>
             一键创建
-          </NButton>
+          </HButton>
         </div>
-      </NAlert>
+      </HAlert>
 
       <FieldRow
         label="本地媒体库根目录"
@@ -373,7 +351,7 @@ onMounted(() => {
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</NButton>
+        <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
       </FormActions>
     </SectionCard>
 
@@ -387,7 +365,7 @@ onMounted(() => {
         <div class="acc-body">
           <div class="acc-head">
             <span class="acc-name">{{ account.username || '-' }}</span>
-            <NTag v-if="vipBadge" size="small" type="warning" :bordered="false">{{ vipBadge }}</NTag>
+            <HChip color="warning" v-if="vipBadge">{{ vipBadge }}</HChip>
             <span class="acc-channel">通道：{{ account.channel || 'Cookie' }}</span>
           </div>
 
@@ -405,8 +383,13 @@ onMounted(() => {
             </div>
           </template>
 
-          <NCollapse v-if="account.devices?.length" class="acc-devices">
-            <NCollapseItem :title="`登录设备（${account.devices.length}）`" name="d">
+          <!-- 原生 details：展开收起不需要任何脚本，键盘和读屏也天然可用 -->
+          <details v-if="account.devices?.length" class="acc-devices">
+            <summary class="acc-devices-sum">
+              <ChevronRight :size="15" class="acc-devices-chev" />
+              登录设备（{{ account.devices.length }}）
+            </summary>
+            <div class="acc-devices-list">
               <div v-for="(d, i) in account.devices" :key="i" class="dev">
                 <span class="dev-dot" :class="{ current: d.is_current }" />
                 <span class="dev-name">{{ d.name || d.device || '未知设备' }}</span>
@@ -415,8 +398,8 @@ onMounted(() => {
                   {{ d.utime && d.utime > 0 ? new Date(d.utime * 1000).toLocaleString('zh-CN') : '' }}
                 </span>
               </div>
-            </NCollapseItem>
-          </NCollapse>
+            </div>
+          </details>
         </div>
       </div>
     </SectionCard>
@@ -561,5 +544,29 @@ onMounted(() => {
   .dev-time {
     display: none;
   }
+}
+.acc-devices-sum {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.acc-devices-sum::-webkit-details-marker {
+  display: none;
+}
+.acc-devices-chev {
+  color: var(--muted);
+  transition: transform 150ms ease;
+}
+.acc-devices[open] .acc-devices-chev {
+  transform: rotate(90deg);
+}
+.acc-devices-list {
+  padding: 4px 0 4px 21px;
 }
 </style>
