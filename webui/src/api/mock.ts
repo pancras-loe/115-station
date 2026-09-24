@@ -5,6 +5,7 @@
  * 用途：本地没有 Go 后端 / 没有 115 账号时预览界面与配色。
  */
 import type { Dashboard } from '@/types/dashboard'
+import type { OrganizeRecord } from '@/api/organize'
 
 const TITLES: [string, string, string][] = [
   ['沙丘 2', '2024', '科幻电影'],
@@ -74,7 +75,127 @@ const dashboard: Dashboard = {
   pending_events: 3,
 }
 
+/** 整理记录：几种状态各来一条，覆盖待确认 / AI 识别 / 来源链接 / 文件清单这些分支 */
+const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
+const baseRecord = {
+  batch_id: 'b1',
+  source_fid: '',
+  source_cid: '',
+  stage: '',
+  message: '',
+  poster_path: '',
+  category: '',
+  target_dir: '',
+  target_cid: '',
+  video_count: 1,
+  total_size: 0,
+  strm_created: 0,
+  scrape_state: '',
+  scrape_msg: '',
+  manual_tmdb: false,
+  redo_count: 0,
+  file_list: [],
+} as const
+const records: OrganizeRecord[] = [
+  {
+    ...baseRecord,
+    id: 1,
+    source: 'Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR.H265.mkv',
+    source_kind: 'file',
+    status: 'awaiting',
+    tmdb_id: 693134,
+    title: '沙丘 2',
+    year: '2024',
+    media_type: 'movie',
+    target_dir: '/媒体库/电影/科幻电影/沙丘 2 (2024)',
+    recog_via: 'ai_title',
+    ai_score: 92,
+    ai_note: '文件名英文片名与 TMDB 原名一致，年份吻合',
+    created_at: ago(3),
+    total_size: 32_500_000_000,
+    link: { id: 1, kind: 'magnet', url: 'magnet:?xt=urn:btih:5f3c2e8a9d1b4c7e6f0a2b3c4d5e6f7a8b9c0d1e', name: 'Dune', source: 'TG订阅', created_at: ago(40) },
+  },
+  {
+    ...baseRecord,
+    id: 2,
+    source: '[某字幕组] 未知动画 01-12 [1080p]/',
+    source_kind: 'dir',
+    status: 'awaiting',
+    tmdb_id: 0,
+    title: '',
+    year: '',
+    media_type: '',
+    message: '未能自动识别，请重新指定 TMDB 条目',
+    created_at: ago(8),
+    video_count: 12,
+  },
+  {
+    ...baseRecord,
+    id: 3,
+    source: 'The.Last.of.Us.S01.1080p.BluRay/',
+    source_kind: 'dir',
+    status: 'success',
+    tmdb_id: 100088,
+    title: '最后生还者',
+    year: '2023',
+    media_type: 'tv',
+    category: '欧美剧集',
+    target_dir: '/媒体库/剧集/欧美剧集/最后生还者 (2023)/Season 01',
+    message: '→ /媒体库/剧集/欧美剧集/最后生还者 (2023)/Season 01',
+    video_count: 9,
+    strm_created: 9,
+    total_size: 41_000_000_000,
+    created_at: ago(95),
+    file_list: [
+      { fid: 'f1', name: '最后生还者 S01E01.mkv', orig: 'The.Last.of.Us.S01E01.1080p.BluRay.mkv', kind: 'video', size: 4_600_000_000 },
+      { fid: 'f2', name: '最后生还者 S01E02.mkv', orig: 'The.Last.of.Us.S01E02.1080p.BluRay.mkv', kind: 'video', size: 4_400_000_000 },
+      { fid: 'f3', name: '最后生还者 S01E01.chs.ass', kind: 'subtitle', size: 88_000 },
+    ],
+    link: { id: 2, kind: 'share', url: 'https://115cdn.com/s/swzabc123?password=x1y2', name: 'TLOU', source: 'web', created_at: ago(120) },
+  },
+  {
+    ...baseRecord,
+    id: 4,
+    source: 'Oppenheimer.2023.2160p.UHD.BluRay.mkv',
+    source_kind: 'file',
+    status: 'exists',
+    tmdb_id: 872585,
+    title: '奥本海默',
+    year: '2023',
+    media_type: 'movie',
+    category: '剧情电影',
+    message: '库内已有相同或更优版本（洗版策略判定保留旧版）',
+    created_at: ago(60 * 26),
+    file_list: [{ fid: 'f4', name: '奥本海默 (2023).mkv', kind: 'video', size: 68_000_000_000 }],
+  },
+  {
+    ...baseRecord,
+    id: 5,
+    source: 'Some.Random.Clip.2019.mp4',
+    source_kind: 'file',
+    status: 'failed',
+    stage: 'move',
+    tmdb_id: 0,
+    title: '',
+    year: '',
+    media_type: '',
+    message: '搬移失败：115 返回「操作过于频繁」，已计入下一轮重试',
+    created_at: ago(60 * 50),
+  },
+]
+
 const ROUTES: Record<string, unknown> = {
+  '/organize/records': { data: records, total: 86, page: 1, size: 20 },
+  '/organize/records/stats': {
+    data: { all: 86, awaiting: 2, problem: 7, success: 61, exists: 16, unrecognized: 4, failed: 3 },
+  },
+  '/tmdb/search': {
+    data: [
+      { id: 693134, media_type: 'movie', title: '沙丘 2', year: '2024', vote: 8.2, poster: '', overview: '保罗·厄崔迪与契妮和弗雷曼人联手，踏上向毁灭他家族的阴谋者复仇的战争之路。' },
+      { id: 438631, media_type: 'movie', title: '沙丘', year: '2021', vote: 7.8, poster: '', overview: '天赋异禀的少年保罗·厄崔迪必须前往宇宙中最危险的星球。' },
+      { id: 90228, media_type: 'tv', title: '沙丘：预言', year: '2024', vote: 7.1, poster: '', overview: '' },
+    ],
+  },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },
   '/version': { version: '2.4.1-preview' },

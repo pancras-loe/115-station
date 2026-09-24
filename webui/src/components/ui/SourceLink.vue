@@ -4,7 +4,7 @@
  * 整理记录用它显示这批内容的来源链接，不占版面。
  */
 import { computed, ref } from 'vue'
-import { NTooltip } from 'naive-ui'
+import HTooltip from '@/components/hero/HTooltip.vue'
 import { Check, Copy, ExternalLink } from '@lucide/vue'
 
 const props = defineProps<{ link: string; kind?: string }>()
@@ -50,23 +50,17 @@ async function copy() {
   <div class="src-link">
     <span class="kind">{{ label }}</span>
     <span class="text" :title="link">{{ link }}</span>
-    <NTooltip>
-      <template #trigger>
-        <button class="act" :aria-label="copied ? '已复制' : '复制链接'" @click="copy">
-          <Check v-if="copied" :size="13" />
-          <Copy v-else :size="13" />
-        </button>
-      </template>
-      {{ copied ? '已复制' : '复制链接' }}
-    </NTooltip>
-    <NTooltip v-if="openable">
-      <template #trigger>
-        <a class="act" :href="link" target="_blank" rel="noopener" aria-label="打开链接">
-          <ExternalLink :size="13" />
-        </a>
-      </template>
-      在新标签打开
-    </NTooltip>
+    <HTooltip :content="copied ? '已复制' : '复制链接'">
+      <button class="act" :aria-label="copied ? '已复制' : '复制链接'" @click="copy">
+        <Check v-if="copied" :size="13" />
+        <Copy v-else :size="13" />
+      </button>
+    </HTooltip>
+    <HTooltip v-if="openable" content="在新标签打开">
+      <a class="act" :href="link" target="_blank" rel="noopener" aria-label="打开链接">
+        <ExternalLink :size="13" />
+      </a>
+    </HTooltip>
   </div>
 </template>
 

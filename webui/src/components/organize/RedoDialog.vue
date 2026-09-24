@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { NButton, NInput, NModal, NSpin, NTag } from 'naive-ui'
-import { Clapperboard, Search, Star } from '@lucide/vue'
+import { Clapperboard, Star } from '@lucide/vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HSearchField from '@/components/hero/HSearchField.vue'
+import HSkeleton from '@/components/hero/HSkeleton.vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OrganizeRecord } from '@/api/organize'
@@ -79,13 +83,7 @@ async function search() {
 </script>
 
 <template>
-  <NModal
-    :show="show"
-    preset="card"
-    :title="text.title"
-    style="width: 660px"
-    @update:show="emit('update:show', $event)"
-  >
+  <HModal :show="show" :title="text.title" width="660px" @update:show="emit('update:show', $event)">
     <div class="body">
       <p class="src">
         原条目：<b>{{ record?.source }}</b>
@@ -94,129 +92,159 @@ async function search() {
       </p>
 
       <div class="search">
-        <NInput
-          v-model:value="keyword"
+        <HSearchField
+          v-model="keyword"
+          class="search-input"
           placeholder="输入片名，或直接填 TMDB ID（纯数字）"
-          clearable
-          @keyup.enter="search"
-        >
-          <template #prefix><Search :size="14" /></template>
-        </NInput>
-        <NButton type="primary" :loading="loading" @click="search">搜索</NButton>
+          @search="search"
+        />
+        <HButton variant="primary" :loading="loading" @click="search">搜索</HButton>
       </div>
 
-      <div v-if="loading" class="state"><NSpin size="small" /><span>TMDB 搜索中…</span></div>
+      <div v-if="loading" class="cands" aria-busy="true">
+        <div v-for="i in 3" :key="i" class="cand cand-skel">
+          <HSkeleton width="60px" height="90px" radius="10px" />
+          <div class="skel-lines">
+            <HSkeleton width="50%" height="14px" radius="999px" />
+            <HSkeleton width="90%" height="11px" radius="999px" />
+            <HSkeleton width="75%" height="11px" radius="999px" />
+          </div>
+        </div>
+      </div>
 
       <template v-else>
         <p v-if="hint" class="hint">{{ hint }}</p>
 
-        <button
-          v-for="it in items"
-          :key="`${it.media_type}-${it.id}`"
-          class="cand"
-          :class="{ picked: picked?.id === it.id && picked?.media_type === it.media_type }"
-          @click="picked = it"
-        >
-          <img
-            v-if="it.poster"
-            :src="resourcesApi.tmdbImageUrl(it.poster)"
-            class="poster"
-            loading="lazy"
-            :alt="it.title"
-          />
-          <div v-else class="poster poster-none"><Clapperboard :size="18" /></div>
+        <div class="cands" role="radiogroup" aria-label="TMDB 候选">
+          <button
+            v-for="it in items"
+            :key="`${it.media_type}-${it.id}`"
+            type="button"
+            role="radio"
+            class="cand"
+            :aria-checked="picked?.id === it.id && picked?.media_type === it.media_type"
+            :class="{ picked: picked?.id === it.id && picked?.media_type === it.media_type }"
+            @click="picked = it"
+          >
+            <img
+              v-if="it.poster"
+              :src="resourcesApi.tmdbImageUrl(it.poster)"
+              class="poster"
+              loading="lazy"
+              :alt="it.title"
+            />
+            <div v-else class="poster poster-none"><Clapperboard :size="18" /></div>
 
-          <div class="cand-body">
-            <div class="cand-head">
-              <NTag size="small" :bordered="false" :type="it.media_type === 'tv' ? 'info' : 'warning'">
-                {{ it.media_type === 'tv' ? '剧集' : '电影' }}
-              </NTag>
-              <b class="cand-title">{{ it.title }}</b>
-              <span class="cand-year">{{ it.year }}</span>
-              <span class="cand-id">tmdb={{ it.id }}</span>
-              <span v-if="it.vote" class="cand-vote"><Star :size="12" />{{ it.vote.toFixed(1) }}</span>
+            <div class="cand-body">
+              <div class="cand-head">
+                <HChip :color="it.media_type === 'tv' ? 'accent' : 'warning'">
+                  {{ it.media_type === 'tv' ? '剧集' : '电影' }}
+                </HChip>
+                <b class="cand-title">{{ it.title }}</b>
+                <span class="cand-year">{{ it.year }}</span>
+                <span class="cand-id">tmdb={{ it.id }}</span>
+                <span v-if="it.vote" class="cand-vote"><Star :size="12" />{{ it.vote.toFixed(1) }}</span>
+              </div>
+              <p v-if="it.overview" class="cand-overview">{{ it.overview }}</p>
             </div>
-            <p v-if="it.overview" class="cand-overview">{{ it.overview }}</p>
-          </div>
-        </button>
+          </button>
+        </div>
       </template>
     </div>
 
     <template #footer>
-      <div class="foot">
-        <span class="foot-note">{{ text.note }}</span>
-        <NButton @click="emit('update:show', false)">取消</NButton>
-        <NButton type="primary" :disabled="!picked" @click="picked && emit('confirm', picked)">
+      <span class="foot-note">{{ text.note }}</span>
+      <div class="foot-btns">
+        <HButton variant="tertiary" @click="emit('update:show', false)">取消</HButton>
+        <HButton variant="primary" :disabled="!picked" @click="picked && emit('confirm', picked)">
           {{ text.ok }}
-        </NButton>
+        </HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>
 .body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 62vh;
-  overflow-y: auto;
+  gap: 12px;
 }
 .src {
   margin: 0;
   font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
   word-break: break-all;
 }
 .src b {
-  color: var(--c-text-1);
+  color: var(--foreground);
+  font-weight: 500;
 }
+/* 搜索栏在弹窗正文里吸顶：候选一长，往下翻也随时能改关键词 */
 .search {
   display: flex;
   gap: 8px;
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--c-bg-elevated);
-  padding-bottom: 2px;
+  background: var(--overlay);
+  padding-bottom: 4px;
 }
-.state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 30px 0;
-  color: var(--c-text-3);
-  font-size: 13px;
+.search-input {
+  flex: 1;
+  min-width: 0;
 }
 .hint {
   margin: 0;
-  padding: 20px 0;
+  padding: 24px 0;
   text-align: center;
-  color: var(--c-text-3);
+  color: var(--muted);
   font-size: 13px;
 }
 
+.cands {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .cand {
   all: unset;
   box-sizing: border-box;
   display: flex;
   gap: 12px;
   padding: 10px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
+  border-radius: 18px;
+  background: var(--surface-secondary);
   cursor: pointer;
   transition:
-    background-color 0.15s,
-    border-color 0.15s;
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
 }
-.cand:hover {
-  background: var(--c-bg-hover);
-  border-color: var(--c-border-strong);
+@media (hover: hover) {
+  .cand:hover {
+    background: color-mix(in oklab, var(--surface-secondary) 70%, var(--surface-tertiary));
+  }
+}
+.cand:active {
+  transform: scale(0.99);
+}
+.cand:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
 }
 .cand.picked {
-  border-color: var(--c-primary);
-  background: var(--c-bg-hover);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.cand-skel {
+  cursor: default;
+  align-items: center;
+}
+.skel-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .poster {
@@ -224,13 +252,13 @@ async function search() {
   height: 90px;
   flex: none;
   object-fit: cover;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-hover);
+  border-radius: 10px;
+  background: var(--default);
 }
 .poster-none {
   display: grid;
   place-items: center;
-  color: var(--c-text-4);
+  color: var(--muted);
 }
 
 .cand-body {
@@ -245,25 +273,26 @@ async function search() {
 }
 .cand-title {
   font-size: 14px;
-  color: var(--c-text-1);
+  font-weight: 600;
+  color: var(--foreground);
 }
 .cand-year,
 .cand-id {
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .cand-vote {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   font-size: 12px;
-  color: var(--c-warning);
+  color: var(--warning-soft-foreground);
 }
 .cand-overview {
-  margin: 5px 0 0;
+  margin: 6px 0 0;
   font-size: 12.5px;
   line-height: 1.6;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
   display: -webkit-box;
   -webkit-line-clamp: 3;
   line-clamp: 3;
@@ -271,14 +300,27 @@ async function search() {
   overflow: hidden;
 }
 
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .foot-note {
   margin-right: auto;
+  flex: 1 1 240px;
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
+}
+.foot-btns {
+  display: flex;
+  gap: 8px;
+}
+
+/* 手机：说明文字单独一行，两个按钮平分宽度 */
+@media (max-width: 639px) {
+  .foot-note {
+    flex-basis: 100%;
+  }
+  .foot-btns {
+    width: 100%;
+  }
+  .foot-btns > * {
+    flex: 1;
+  }
 }
 </style>

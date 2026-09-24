@@ -2,18 +2,6 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  NAlert,
-  NButton,
-  NCheckbox,
-  NInput,
-  NPagination,
-  NPopconfirm,
-  NSelect,
-  NSpin,
-  NTag,
-  NTooltip,
-} from 'naive-ui'
-import {
   Ban,
   Check,
   ChevronDown,
@@ -26,6 +14,17 @@ import {
   Trash2,
 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HPagination from '@/components/hero/HPagination.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HSearchField from '@/components/hero/HSearchField.vue'
+import HSelect from '@/components/hero/HSelect.vue'
+import HSkeleton from '@/components/hero/HSkeleton.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import HTooltip from '@/components/hero/HTooltip.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
@@ -70,6 +69,24 @@ const TYPE_OPTIONS = [
 ]
 
 const SIZE_OPTIONS = [20, 50, 100]
+
+/** 筛选栏用页签的样子：每档带条数，「待确认」「需要处理」的角标用实色，有货时一眼看得到 */
+const filterTabs = computed(() =>
+  FILTERS.map((f) => ({
+    value: f.key,
+    label: f.label,
+    count: recordStats.value[f.key] ?? 0,
+    countTone:
+      f.key === 'awaiting' ? ('warning' as const) : f.key === 'problem' ? ('danger' as const) : ('accent' as const),
+  })),
+)
+
+/** 状态语义 → HeroUI chip 颜色 */
+function chipColor(t?: TagType) {
+  return ({ success: 'success', warning: 'warning', error: 'danger', info: 'accent' } as const)[
+    t as 'success' | 'warning' | 'error' | 'info'
+  ] ?? 'default'
+}
 
 const STATUS_META: Record<string, { text: string; type: TagType }> = {
   awaiting: { text: '待确认', type: 'warning' },
@@ -131,6 +148,11 @@ function pickStatus(key: string) {
   status.value = key
   selected.value = new Set()
   refilter()
+}
+
+function onPageChange(n: number) {
+  page.value = n
+  void load()
 }
 
 function onSizeChange(n: number) {
@@ -349,93 +371,83 @@ async function clearAll() {
 <template>
   <div class="stack">
     <SectionCard title="整理记录" hint="每次整理的留痕；待确认的条目在这里确认或改指定后入库">
-      <NAlert
+      <HAlert
         v-if="(recordStats.awaiting || 0) > 0 && status !== 'awaiting'"
-        type="warning"
-        :bordered="false"
+        status="warning"
         class="banner"
+        :title="`有 ${recordStats.awaiting} 项等你确认后入库`"
       >
-        有 <b>{{ recordStats.awaiting }}</b> 项识别完成、等你确认后入库。
-        <NButton size="tiny" type="warning" secondary class="banner-btn" @click="pickStatus('awaiting')">
-          去确认
-        </NButton>
-      </NAlert>
+        识别已经完成，文件还留在待整理目录里，确认之前不会搬动。
+        <template #actions>
+          <HButton size="sm" variant="primary" @click="pickStatus('awaiting')">去确认</HButton>
+        </template>
+      </HAlert>
 
-      <div class="chips" role="tablist">
-        <button
-          v-for="f in FILTERS"
-          :key="f.key"
-          type="button"
-          role="tab"
-          class="chip"
-          :class="[`chip-${f.type}`, { active: status === f.key }]"
-          :aria-selected="status === f.key"
-          @click="pickStatus(f.key)"
-        >
-          <span>{{ f.label }}</span>
-          <span class="chip-n">{{ recordStats[f.key] ?? 0 }}</span>
-        </button>
-      </div>
+      <HTabs
+        :model-value="status"
+        :items="filterTabs"
+        class="filters"
+        @update:model-value="pickStatus"
+      />
 
       <div class="toolbar">
-        <NSelect
-          v-model:value="mediaType"
-          :options="TYPE_OPTIONS"
-          class="type"
-          @update:value="refilter"
-        />
-        <NInput
-          v-model:value="keyword"
-          placeholder="原名 / 片名 / 入库目录 / 来源链接 / TMDB ID"
-          clearable
+        <div class="type">
+          <HSelect v-model="mediaType" :options="TYPE_OPTIONS" aria-label="媒体类型" @update:model-value="refilter" />
+        </div>
+        <HSearchField
+          v-model="keyword"
           class="kw"
-          @keyup.enter="refilter"
-          @clear="refilter"
-        >
-          <template #prefix><Search :size="14" /></template>
-        </NInput>
-        <NButton @click="refilter">查询</NButton>
-        <NTooltip>
-          <template #trigger>
-            <NButton quaternary :loading="loading" @click="reload"><RefreshCw :size="14" /></NButton>
-          </template>
-          刷新
-        </NTooltip>
+          placeholder="原名 / 片名 / 入库目录 / 来源链接 / TMDB ID"
+          @search="refilter"
+        />
+        <HButton variant="tertiary" class="query-btn" @click="refilter">查询</HButton>
+        <HTooltip content="刷新">
+          <HButton variant="ghost" icon-only :loading="loading" aria-label="刷新" @click="reload">
+            <RefreshCw />
+          </HButton>
+        </HTooltip>
         <span class="grow" />
-        <NPopconfirm @positive-click="void clearAll()">
-          <template #trigger>
-            <NButton quaternary type="error" :disabled="!total">
-              <Trash2 :size="14" /><span class="btn-label">清空</span>
-            </NButton>
-          </template>
-          {{ clearHint }}
-        </NPopconfirm>
+        <HPopconfirm danger confirm-text="清空" :disabled="!total" @confirm="clearAll">
+          <HButton variant="danger-soft" :disabled="!total">
+            <template #icon><Trash2 /></template>
+            <span class="btn-label">清空</span>
+          </HButton>
+          <template #content>{{ clearHint }}</template>
+        </HPopconfirm>
       </div>
 
       <div v-if="confirmable.length" class="batch">
-        <NCheckbox
-          :checked="allPicked"
-          :indeterminate="somePicked"
-          @update:checked="toggleAll"
-        >
+        <HCheckbox :checked="allPicked" :indeterminate="somePicked" @update:checked="toggleAll">
           全选本页可确认的 {{ confirmable.length }} 项
-        </NCheckbox>
+        </HCheckbox>
         <span class="grow" />
         <span v-if="selected.size" class="dim">已选 {{ selected.size }} 项</span>
-        <NButton
-          type="primary"
-          size="small"
+        <HButton
+          variant="primary"
+          size="sm"
           :disabled="!selected.size || busy"
           :loading="batching"
           @click="confirmSelected"
         >
-          <Check :size="14" /><span class="btn-label">确认所选并入库</span>
-        </NButton>
+          <template #icon><Check /></template>
+          确认所选并入库
+        </HButton>
       </div>
 
-      <NSpin :show="loading">
+      <div class="list-wrap" :class="{ 'is-loading': loading && rows.length }" :aria-busy="loading">
+        <div v-if="loading && !rows.length" class="list">
+          <div v-for="i in 4" :key="i" class="row row-skel">
+            <HSkeleton width="46px" height="69px" radius="10px" />
+            <div class="skel-lines">
+              <HSkeleton width="45%" height="14px" radius="999px" />
+              <HSkeleton width="80%" height="11px" radius="999px" />
+              <HSkeleton width="60%" height="11px" radius="999px" />
+            </div>
+          </div>
+        </div>
+
         <EmptyState
-          v-if="!rows.length && !loading"
+          v-else-if="!rows.length"
           :text="
             status === 'awaiting'
               ? '没有待确认的条目'
@@ -453,9 +465,10 @@ async function clearAll() {
             :class="{ 'row-awaiting': r.status === 'awaiting', picked: selected.has(r.id) }"
           >
             <div v-if="r.status === 'awaiting'" class="pick">
-              <NCheckbox
+              <HCheckbox
                 :checked="selected.has(r.id)"
                 :disabled="!r.tmdb_id"
+                :aria-label="`选择 ${r.title || r.source}`"
                 @update:checked="(v: boolean) => toggleSelect(r.id, v)"
               />
             </div>
@@ -474,15 +487,13 @@ async function clearAll() {
 
             <div class="main">
               <div class="head">
-                <NTag size="small" :bordered="false" :type="STATUS_META[r.status]?.type ?? 'default'">
+                <HChip :color="chipColor(STATUS_META[r.status]?.type)">
                   {{ STATUS_META[r.status]?.text ?? r.status }}
-                </NTag>
+                </HChip>
                 <b v-if="r.title" class="title">{{ r.title }}</b>
                 <b v-else class="title untitled">未识别</b>
                 <span v-if="r.year" class="dim">{{ r.year }}</span>
-                <NTag v-if="typeText(r.media_type)" size="small" :bordered="false">
-                  {{ typeText(r.media_type) }}
-                </NTag>
+                <HChip v-if="typeText(r.media_type)">{{ typeText(r.media_type) }}</HChip>
                 <a
                   v-if="r.tmdb_id"
                   class="dim link"
@@ -491,19 +502,19 @@ async function clearAll() {
                   rel="noopener"
                   >tmdb={{ r.tmdb_id }}</a
                 >
-                <NTag v-if="r.manual_tmdb" size="small" :bordered="false" type="success">手动指定</NTag>
-                <NTooltip v-else-if="r.recog_via" :disabled="!r.ai_note">
-                  <template #trigger>
-                    <NTag
-                      size="small"
-                      :bordered="false"
-                      :type="(r.ai_score ?? 0) >= 80 ? 'info' : 'warning'"
-                    >
-                      {{ r.recog_via === 'ai_pick' ? 'AI 选定' : 'AI 识别' }} {{ r.ai_score ?? 0 }} 分
-                    </NTag>
-                  </template>
-                  {{ r.ai_note }}
-                </NTooltip>
+                <HChip v-if="r.manual_tmdb" color="success">手动指定</HChip>
+                <template v-else-if="r.recog_via">
+                  <HTooltip v-if="r.ai_note" :content="r.ai_note">
+                    <span tabindex="0" class="chip-trigger">
+                      <HChip :color="(r.ai_score ?? 0) >= 80 ? 'accent' : 'warning'">
+                        {{ r.recog_via === 'ai_pick' ? 'AI 选定' : 'AI 识别' }} {{ r.ai_score ?? 0 }} 分
+                      </HChip>
+                    </span>
+                  </HTooltip>
+                  <HChip v-else :color="(r.ai_score ?? 0) >= 80 ? 'accent' : 'warning'">
+                    {{ r.recog_via === 'ai_pick' ? 'AI 选定' : 'AI 识别' }} {{ r.ai_score ?? 0 }} 分
+                  </HChip>
+                </template>
                 <span v-if="r.stage && r.status !== 'success' && r.status !== 'awaiting'" class="dim">
                   {{ STAGE_TEXT[r.stage] ?? r.stage }}
                 </span>
@@ -526,10 +537,8 @@ async function clearAll() {
               </div>
 
               <div class="meta">
-                <NTooltip>
-                  <template #trigger><span>{{ relTime(r.created_at) }}</span></template>
-                  {{ fullTime(r.created_at) }}
-                </NTooltip>
+                <!-- 精确时间放 title：触屏没有 hover，长按也能看到 -->
+                <span :title="fullTime(r.created_at)">{{ relTime(r.created_at) }}</span>
                 <span v-if="r.target_dir && r.status !== 'awaiting'" class="meta-dir" :title="r.target_dir">
                   → {{ r.target_dir }}
                 </span>
@@ -544,6 +553,7 @@ async function clearAll() {
                   type="button"
                   class="files-toggle"
                   :class="{ open: expanded.has(r.id) }"
+                  :aria-expanded="expanded.has(r.id)"
                   @click="toggleFiles(r.id)"
                 >
                   文件 {{ r.file_list.length }}<ChevronDown :size="13" />
@@ -568,84 +578,100 @@ async function clearAll() {
 
             <div class="ops">
               <template v-if="r.status === 'awaiting'">
-                <NTooltip :disabled="!!r.tmdb_id">
-                  <template #trigger>
-                    <NButton
-                      size="small"
-                      type="primary"
-                      :disabled="!r.tmdb_id || busy"
-                      :loading="acting === r.id"
-                      @click="confirmOne(r)"
-                    >
-                      <Check :size="14" /><span class="btn-label">确认入库</span>
-                    </NButton>
+                <HButton
+                  size="sm"
+                  variant="primary"
+                  :disabled="!r.tmdb_id || busy"
+                  :loading="acting === r.id"
+                  :title="r.tmdb_id ? undefined : '没有识别结果，请先「重新指定」'"
+                  @click="confirmOne(r)"
+                >
+                  <template #icon><Check /></template>
+                  确认入库
+                </HButton>
+                <HButton size="sm" variant="tertiary" :disabled="busy" @click="openPick(r)">
+                  <template #icon><PencilLine /></template>
+                  重新指定
+                </HButton>
+                <HPopconfirm confirm-text="忽略" :disabled="busy" @confirm="ignoreOne(r)">
+                  <HButton size="sm" variant="ghost" :disabled="busy">
+                    <template #icon><Ban /></template>
+                    忽略
+                  </HButton>
+                  <template #content>
+                    不整理这一项：移到冗余目录，记录改为「未识别」。<br />之后仍可在记录上重新整理捞回来。
                   </template>
-                  没有识别结果，请先「重新指定」
-                </NTooltip>
-                <NButton size="small" :disabled="busy" @click="openPick(r)">
-                  <PencilLine :size="14" /><span class="btn-label">重新指定</span>
-                </NButton>
-                <NPopconfirm @positive-click="void ignoreOne(r)">
-                  <template #trigger>
-                    <NButton size="small" quaternary :disabled="busy">
-                      <Ban :size="14" /><span class="btn-label">忽略</span>
-                    </NButton>
-                  </template>
-                  不整理这一项：移到冗余目录，记录改为「未识别」。<br />之后仍可在记录上重新整理捞回来。
-                </NPopconfirm>
+                </HPopconfirm>
               </template>
 
               <template v-else>
-                <NTooltip v-if="r.file_list?.length">
-                  <template #trigger>
-                    <NButton size="small" :disabled="busy" :loading="acting === r.id" @click="openPick(r)">
-                      <RotateCcw :size="14" /><span class="btn-label">重新整理</span>
-                    </NButton>
-                  </template>
-                  指定正确的 TMDB 条目，把这 {{ r.file_list.length }} 个文件从当前位置改名并搬到正确目录
-                </NTooltip>
+                <HButton
+                  v-if="r.file_list?.length"
+                  size="sm"
+                  variant="tertiary"
+                  :disabled="busy"
+                  :loading="acting === r.id"
+                  :title="`指定正确的 TMDB 条目，把这 ${r.file_list.length} 个文件从当前位置改名并搬到正确目录`"
+                  @click="openPick(r)"
+                >
+                  <template #icon><RotateCcw /></template>
+                  重新整理
+                </HButton>
                 <!-- 两个删除按钮差别极大，必须让人一眼分清：
-                     这个删网盘真文件（实心红 + 文字），下面那个只删记录（弱化图标） -->
-                <NPopconfirm v-if="r.file_list?.length" @positive-click="void deepDeleteRecord(r)">
-                  <template #trigger>
-                    <NButton size="small" type="error" ghost :disabled="busy">
-                      <Trash2 :size="14" /><span class="btn-label">深度删除</span>
-                    </NButton>
+                     这个删网盘真文件（红色实底 + 文字），下面那个只删记录（弱化的图标） -->
+                <HPopconfirm
+                  v-if="r.file_list?.length"
+                  danger
+                  confirm-text="深度删除"
+                  :disabled="busy"
+                  @confirm="deepDeleteRecord(r)"
+                >
+                  <HButton size="sm" variant="danger-soft" :disabled="busy">
+                    <template #icon><Trash2 /></template>
+                    深度删除
+                  </HButton>
+                  <template #content>
+                    连同 <b>115 网盘上的源文件</b>一起删掉《{{ r.title || r.source }}》的
+                    {{ r.file_list.length }} 个文件，本地 STRM 与台账一并清理。<br />
+                    文件进入 115 回收站，可以还原。
                   </template>
-                  连同 <b>115 网盘上的源文件</b>一起删掉《{{ r.title || r.source }}》的
-                  {{ r.file_list.length }} 个文件，本地 STRM 与台账一并清理。<br />
-                  文件进入 115 回收站，可以还原。
-                </NPopconfirm>
+                </HPopconfirm>
               </template>
 
-              <NPopconfirm @positive-click="void removeRecord(r)">
-                <template #trigger>
-                  <NButton size="small" quaternary type="error" :disabled="acting === r.id">
-                    <Trash2 :size="14" />
-                  </NButton>
+              <HPopconfirm confirm-text="删除记录" :disabled="acting === r.id" @confirm="removeRecord(r)">
+                <HButton
+                  size="sm"
+                  variant="ghost"
+                  icon-only
+                  class="rm-record"
+                  :disabled="acting === r.id"
+                  aria-label="删除这条记录"
+                  title="只删记录"
+                >
+                  <Trash2 />
+                </HButton>
+                <template #content>
+                  删除这条记录？只删记录，网盘与本地文件不受影响。
+                  <template v-if="r.status === 'awaiting'">
+                    <br />条目仍在待整理目录里，下次整理会重新识别。
+                  </template>
                 </template>
-                删除这条记录？只删记录，网盘与本地文件不受影响。
-                <template v-if="r.status === 'awaiting'">
-                  <br />条目仍在待整理目录里，下次整理会重新识别。
-                </template>
-              </NPopconfirm>
+              </HPopconfirm>
             </div>
           </li>
         </ul>
-      </NSpin>
-
-      <div v-if="total > 0" class="pager">
-        <span class="dim">共 {{ total }} 条</span>
-        <NPagination
-          v-model:page="page"
-          :page-size="size"
-          :item-count="total"
-          :page-sizes="SIZE_OPTIONS"
-          show-size-picker
-          @update:page="load"
-          @update:page-size="onSizeChange"
-        />
       </div>
+
+      <HPagination
+        v-if="total > 0"
+        :page="page"
+        :page-size="size"
+        class="pager"
+        :total="total"
+        :page-sizes="SIZE_OPTIONS"
+        @update:page="onPageChange"
+        @update:page-size="onSizeChange"
+      />
     </SectionCard>
 
     <RedoDialog v-model:show="pickShow" :record="pickTarget" :mode="pickMode" @confirm="doPick" />
@@ -659,86 +685,13 @@ async function clearAll() {
   gap: 16px;
 }
 .banner {
-  margin-bottom: 12px;
-}
-.banner-btn {
-  margin-left: 8px;
+  margin-bottom: 14px;
+  background: var(--warning-soft);
+  box-shadow: none;
 }
 
-/* ---- 状态筛选 ---- */
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.chip {
-  all: unset;
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  font-size: 12.5px;
-  color: var(--c-text-2);
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
-}
-.chip:hover {
-  background: var(--c-bg-hover);
-}
-.chip:focus-visible {
-  outline: 2px solid var(--c-primary-border);
-  outline-offset: 1px;
-}
-.chip-n {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--c-bg-hover);
-  color: var(--c-text-3);
-  font-size: 11.5px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.chip.active {
-  border-color: var(--c-primary-border);
-  background: var(--c-primary-soft);
-  color: var(--c-primary);
-}
-.chip.active .chip-n {
-  background: var(--c-primary);
-  color: var(--c-text-inverse);
-}
-.chip-warning.active {
-  border-color: var(--c-warning);
-  background: var(--c-warning-soft);
-  color: var(--c-warning);
-}
-.chip-warning.active .chip-n {
-  background: var(--c-warning);
-}
-.chip-error.active {
-  border-color: var(--c-danger);
-  background: var(--c-danger-soft);
-  color: var(--c-danger);
-}
-.chip-error.active .chip-n {
-  background: var(--c-danger);
-}
-.chip-success.active {
-  border-color: var(--c-success);
-  background: var(--c-success-soft);
-  color: var(--c-success);
-}
-.chip-success.active .chip-n {
-  background: var(--c-success);
+.filters {
+  margin-bottom: 12px;
 }
 
 .toolbar {
@@ -749,10 +702,10 @@ async function clearAll() {
   flex-wrap: wrap;
 }
 .type {
-  width: 120px;
+  width: 124px;
 }
 .kw {
-  width: 260px;
+  width: 300px;
   max-width: 100%;
 }
 .grow {
@@ -764,13 +717,21 @@ async function clearAll() {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 8px 12px;
-  margin-bottom: 10px;
-  border-radius: var(--radius);
-  background: var(--c-warning-soft);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  background: var(--warning-soft);
 }
 
 /* ---- 列表 ---- */
+.list-wrap {
+  transition: opacity 150ms ease;
+}
+/* 翻页/筛选时保留旧列表淡出，而不是闪成骨架：页面高度不跳 */
+.list-wrap.is-loading {
+  opacity: 0.55;
+  pointer-events: none;
+}
 .list {
   list-style: none;
   margin: 0;
@@ -781,38 +742,50 @@ async function clearAll() {
 }
 .row {
   display: flex;
-  gap: 12px;
-  padding: 10px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  transition: border-color 0.15s;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 20px;
+  background: var(--surface-secondary);
+  transition: background-color 150ms ease;
 }
-.row:hover {
-  border-color: var(--c-border-strong);
+@media (hover: hover) {
+  .row:hover {
+    background: color-mix(in oklab, var(--surface-secondary) 70%, var(--surface-tertiary));
+  }
 }
+/* 待确认：左侧一道警示色，列表里一眼能挑出来 */
 .row-awaiting {
-  border-left: 3px solid var(--c-warning);
+  box-shadow: inset 3px 0 0 var(--warning);
 }
 .row.picked {
-  background: var(--c-bg-raised);
+  background: var(--accent-soft);
+}
+.row-skel {
+  align-items: center;
+}
+.skel-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .pick {
   display: flex;
   align-items: flex-start;
-  padding-top: 2px;
+  padding-top: 4px;
 }
 .poster {
   width: 46px;
   height: 69px;
   flex: none;
   object-fit: cover;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-hover);
+  border-radius: 10px;
+  background: var(--default);
 }
 .poster-none {
   display: grid;
   place-items: center;
-  color: var(--c-text-4);
+  color: var(--muted);
 }
 
 .main {
@@ -825,40 +798,49 @@ async function clearAll() {
   gap: 8px;
   flex-wrap: wrap;
 }
+.chip-trigger {
+  display: inline-flex;
+  border-radius: 999px;
+  outline: none;
+}
+.chip-trigger:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
 .title {
   font-size: 14px;
-  color: var(--c-text-1);
+  font-weight: 600;
+  color: var(--foreground);
 }
 .untitled {
-  color: var(--c-text-3);
+  color: var(--muted);
   font-weight: normal;
 }
 .dim {
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .link {
   text-decoration: none;
 }
 .link:hover {
-  color: var(--c-primary);
+  color: var(--accent);
 }
 .from {
   margin-top: 4px;
   max-width: 560px;
 }
 .src {
-  margin-top: 4px;
+  margin-top: 6px;
   display: flex;
   align-items: center;
   gap: 5px;
   font-size: 12.5px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
   min-width: 0;
 }
 .src-icon {
   flex: none;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .src-text {
   overflow: hidden;
@@ -873,31 +855,31 @@ async function clearAll() {
   gap: 8px;
   flex-wrap: wrap;
   font-size: 12.5px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
 }
 .plan-label {
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .plan-dir {
-  padding: 1px 6px;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-hover);
-  color: var(--c-text-1);
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--foreground);
   font-size: 12px;
   word-break: break-all;
 }
 .plan-miss {
-  color: var(--c-warning);
+  color: var(--warning-soft-foreground);
 }
 
 .meta {
-  margin-top: 5px;
+  margin-top: 6px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
   flex-wrap: wrap;
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .meta-dir {
   max-width: 420px;
@@ -911,7 +893,8 @@ async function clearAll() {
   align-items: center;
   gap: 2px;
   cursor: pointer;
-  color: var(--c-primary);
+  color: var(--accent);
+  font-weight: 500;
 }
 .files-toggle :deep(svg) {
   transition: transform 0.15s;
@@ -920,29 +903,29 @@ async function clearAll() {
   transform: rotate(180deg);
 }
 .files-toggle:focus-visible {
-  outline: 2px solid var(--c-primary-border);
-  border-radius: 2px;
+  border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .msg {
-  margin: 5px 0 0;
+  margin: 6px 0 0;
   font-size: 12.5px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
   word-break: break-all;
 }
 .msg-failed {
-  color: var(--c-danger);
+  color: var(--danger-soft-foreground);
 }
 .msg-unrecognized {
-  color: var(--c-warning);
+  color: var(--warning-soft-foreground);
 }
 
 .files {
   list-style: none;
-  margin: 8px 0 0;
-  padding: 6px 8px;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-raised);
+  margin: 10px 0 0;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: var(--surface);
   max-height: 260px;
   overflow-y: auto;
 }
@@ -950,20 +933,20 @@ async function clearAll() {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 3px 0;
+  padding: 5px 0;
   font-size: 12px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
 }
 .file + .file {
-  border-top: 1px dashed var(--c-border);
+  border-top: 1px solid var(--separator);
 }
 .file-kind {
   flex: none;
   width: 42px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .k-video {
-  color: var(--c-primary);
+  color: var(--accent);
 }
 .file-name {
   flex: 1;
@@ -972,11 +955,11 @@ async function clearAll() {
 }
 .file-orig {
   display: block;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .file-size {
   flex: none;
-  color: var(--c-text-3);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -989,33 +972,67 @@ async function clearAll() {
   justify-content: flex-end;
   max-width: 380px;
 }
-.btn-label {
-  margin-left: 4px;
+.rm-record {
+  color: var(--muted);
+}
+@media (hover: hover) {
+  .rm-record:hover {
+    color: var(--danger);
+  }
 }
 
 .pager {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 @media (max-width: 720px) {
+  /* 手机上：搜索框独占第一行，类型 / 刷新 / 清空排第二行 */
+  .kw {
+    order: -1;
+    flex: 1 1 100%;
+    width: auto;
+  }
+  .type {
+    width: 116px;
+  }
+  .query-btn {
+    display: none;
+  }
+  .btn-label {
+    display: none;
+  }
+
   .row {
+    position: relative;
     flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 18px;
   }
   .main {
     flex-basis: calc(100% - 70px);
+  }
+  .row-awaiting .main {
+    flex-basis: calc(100% - 100px);
+  }
+  /* 「只删记录」挪到卡片右上角：操作行留给真正的动作，三个按钮一排放得下 */
+  .head {
+    padding-right: 28px;
+  }
+  .rm-record {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+  }
+  .meta-dir {
+    max-width: 100%;
   }
   .ops {
     max-width: none;
     width: 100%;
     justify-content: flex-start;
-  }
-  .kw {
-    width: 100%;
+    padding-top: 10px;
+    border-top: 1px solid var(--separator);
   }
 }
 </style>

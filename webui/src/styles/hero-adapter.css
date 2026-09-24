@@ -31,3 +31,93 @@
   word-break: normal;
   line-height: 1.55;
 }
+
+/* ---- Popover / Select 弹层（Reka 的 PopoverContent / SelectContent，data-state=open|closed） ---- */
+.h-popover {
+  z-index: var(--z-index-overlay, 100000);
+
+  &[data-state='open'] {
+    @apply animate-in duration-150 ease-smooth fade-in-0 zoom-in-95;
+  }
+  &[data-state='open'][data-side='top'] {
+    @apply slide-in-from-bottom-1;
+  }
+  &[data-state='open'][data-side='bottom'] {
+    @apply slide-in-from-top-1;
+  }
+  &[data-state='closed'] {
+    @apply animate-out duration-100 ease-smooth zoom-out-95 fade-out pointer-events-none;
+  }
+}
+.popover.h-popover {
+  transform-origin: var(--reka-popover-content-transform-origin);
+}
+.select__popover.h-popover {
+  transform-origin: var(--reka-select-content-transform-origin);
+  /* HeroUI 用 --trigger-width 撑最小宽度；Reka 给的是自己的变量名 */
+  min-width: var(--reka-select-trigger-width);
+  max-height: min(320px, var(--reka-select-content-available-height));
+}
+
+/* Select 的选项：键盘/鼠标高亮 Reka 给 data-highlighted，选中给 data-state=checked */
+.list-box-item[data-highlighted] {
+  @apply bg-default;
+}
+.list-box-item[data-state='checked'] {
+  @apply font-medium;
+}
+.select__trigger[data-state='open'] .select__indicator {
+  @apply rotate-180;
+}
+.select__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Tabs：Reka 的 TabsIndicator 用两个 CSS 变量报告选中项的位置与宽度 ---- */
+.tabs__indicator.h-tabs-indicator {
+  top: 4px;
+  left: 0;
+  width: var(--reka-tabs-indicator-size);
+  height: calc(100% - 8px);
+  translate: var(--reka-tabs-indicator-position) 0;
+  z-index: 0;
+}
+.tabs--secondary .tabs__indicator.h-tabs-indicator {
+  top: auto;
+  bottom: 0;
+  height: 2px;
+}
+
+/* ---- Checkbox：焦点在里面的 Reka 按钮上，HeroUI 的焦点环选择器看的是外层 label ---- */
+.checkbox__control:focus-visible {
+  @apply status-focused;
+}
+
+/* ---- Modal：Overlay 与 Content 是兄弟节点，各自按 data-state 播进出场 ---- */
+.modal__backdrop {
+  &[data-state='open'] {
+    @apply animate-in duration-150 ease-out fade-in-0;
+  }
+  &[data-state='closed'] {
+    @apply animate-out duration-100 ease-out fade-out-0;
+  }
+}
+.modal__container {
+  &[data-state='open'] {
+    @apply animate-in duration-250 ease-out-quad fade-in-0 zoom-in-105;
+  }
+  &[data-state='closed'] {
+    @apply animate-out duration-100 ease-out-quad fade-out-0 zoom-out-95;
+  }
+}
+/* 手机底部抽屉从下往上滑，比缩放更像原生 */
+@media (max-width: 639px) {
+  .modal__container[data-state='open'] {
+    @apply slide-in-from-bottom-8 zoom-in-100;
+  }
+  .modal__container[data-state='closed'] {
+    @apply slide-out-to-bottom-8 zoom-out-100;
+  }
+}
