@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NDrawer, NDropdown, NTooltip } from 'naive-ui'
+import { NDrawer, NDropdown } from 'naive-ui'
 import { h } from 'vue'
 import { LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
 import AppSidebar from './AppSidebar.vue'
+import MobileTabBar from './MobileTabBar.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HTooltip from '@/components/hero/HTooltip.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
@@ -53,9 +56,9 @@ function onAccount(key: string) {
 
     <div class="main">
       <header class="topbar">
-        <NButton class="menu-btn" quaternary circle aria-label="菜单" @click="drawerOpen = true">
+        <HButton class="menu-btn" variant="ghost" icon-only aria-label="菜单" @click="drawerOpen = true">
           <Menu :size="19" />
-        </NButton>
+        </HButton>
 
         <div class="titles">
           <h1 class="title">{{ title }}</h1>
@@ -63,22 +66,19 @@ function onAccount(key: string) {
         </div>
 
         <div class="actions">
-          <NTooltip>
-            <template #trigger>
-              <NButton quaternary circle aria-label="实时日志" @click="router.push({ name: 'logs' })">
-                <ScrollText :size="18" />
-              </NButton>
-            </template>
-            实时日志
-          </NTooltip>
+          <HTooltip content="实时日志" side="bottom">
+            <HButton variant="ghost" icon-only aria-label="实时日志" @click="router.push({ name: 'logs' })">
+              <ScrollText :size="18" />
+            </HButton>
+          </HTooltip>
 
           <ThemeToggle />
 
           <NDropdown trigger="click" :options="accountOptions" @select="onAccount">
-            <NButton quaternary class="account-btn">
+            <HButton variant="ghost" class="account-btn" :aria-label="auth.username || '账号'">
               <template #icon><UserRound :size="17" /></template>
               <span class="account-name">{{ auth.username || '账号' }}</span>
-            </NButton>
+            </HButton>
           </NDropdown>
         </div>
       </header>
@@ -91,14 +91,17 @@ function onAccount(key: string) {
         </RouterView>
       </main>
     </div>
+
+    <!-- 手机底部导航（≤720px 显示），「更多」打开同一个侧栏抽屉 -->
+    <MobileTabBar class="tabbar-mobile" @more="drawerOpen = true" />
   </div>
 </template>
 
 <style scoped>
 .layout {
   display: flex;
-  height: 100%;
-  background: var(--c-bg-base);
+  min-height: 100%;
+  background: var(--background);
 }
 
 .sidebar-desktop {
@@ -115,6 +118,7 @@ function onAccount(key: string) {
   flex-direction: column;
 }
 
+/* 顶栏与页面同底色、不画分隔线；滚动时靠半透明 + 模糊和内容区分开 */
 .topbar {
   position: sticky;
   top: 0;
@@ -123,10 +127,10 @@ function onAccount(key: string) {
   align-items: center;
   gap: 12px;
   min-height: var(--topbar-h);
-  padding: 10px 20px;
-  background: color-mix(in srgb, var(--c-bg-base) 82%, transparent);
-  backdrop-filter: saturate(180%) blur(12px);
-  border-bottom: 1px solid var(--c-border);
+  padding: 12px 28px 8px;
+  background: color-mix(in oklab, var(--background) 80%, transparent);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
 }
 
 .menu-btn {
@@ -139,18 +143,18 @@ function onAccount(key: string) {
 }
 .title {
   margin: 0;
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--c-text-1);
+  letter-spacing: -0.02em;
+  color: var(--foreground);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .desc {
   margin: 2px 0 0;
-  font-size: 12.5px;
-  color: var(--c-text-3);
+  font-size: 13px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -159,7 +163,7 @@ function onAccount(key: string) {
 .actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   flex-shrink: 0;
 }
 .account-name {
@@ -171,8 +175,12 @@ function onAccount(key: string) {
 
 .content {
   flex: 1;
-  padding: 20px;
+  padding: 12px 28px 28px;
   min-width: 0;
+}
+
+.tabbar-mobile {
+  display: none;
 }
 
 /* 切页淡入：位移只有 4px，够表达「换了内容」又不会让人等动画 */
@@ -188,6 +196,7 @@ function onAccount(key: string) {
   opacity: 0;
 }
 
+/* 平板：侧栏收进抽屉，左上角出菜单按钮 */
 @media (max-width: 960px) {
   .sidebar-desktop {
     display: none;
@@ -202,7 +211,30 @@ function onAccount(key: string) {
     display: none;
   }
   .content {
-    padding: 16px;
+    padding: 8px 20px 24px;
+  }
+  .topbar {
+    padding: 10px 20px 6px;
+  }
+}
+
+/* 手机：导航交给底栏，顶栏只留标题和两个图标按钮 */
+@media (max-width: 720px) {
+  .menu-btn {
+    display: none;
+  }
+  .tabbar-mobile {
+    display: grid;
+  }
+  .topbar {
+    min-height: 52px;
+    padding: calc(8px + env(safe-area-inset-top)) 16px 6px;
+  }
+  .title {
+    font-size: 18px;
+  }
+  .content {
+    padding: 4px 16px calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 20px);
   }
 }
 </style>

@@ -192,7 +192,7 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
   align-items: baseline;
   gap: 8px;
   padding: 5px 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   font-size: 11.5px;
 }
@@ -254,7 +254,7 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
   width: 100%;
   box-sizing: border-box;
   padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   cursor: pointer;
   font-size: 12px;
   color: var(--c-text-2);

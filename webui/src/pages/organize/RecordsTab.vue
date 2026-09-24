@@ -806,7 +806,7 @@ async function clearAll() {
   height: 69px;
   flex: none;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-hover);
 }
 .poster-none {
@@ -880,7 +880,7 @@ async function clearAll() {
 }
 .plan-dir {
   padding: 1px 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-hover);
   color: var(--c-text-1);
   font-size: 12px;
@@ -941,7 +941,7 @@ async function clearAll() {
   list-style: none;
   margin: 8px 0 0;
   padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   max-height: 260px;
   overflow-y: auto;

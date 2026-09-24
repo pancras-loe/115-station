@@ -35,7 +35,7 @@ const active = defineModel<string>({ required: true })
   display: flex;
   gap: 8px;
   padding: 6px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-lg);
   background: var(--c-bg-elevated);
   border: 1px solid var(--c-border);
   box-shadow: var(--shadow-card);
@@ -76,7 +76,7 @@ const active = defineModel<string>({ required: true })
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   border: 1px solid var(--c-border);
   color: var(--c-text-3);

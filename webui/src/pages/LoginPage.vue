@@ -136,7 +136,7 @@ async function submit() {
   padding: 36px 32px 32px;
   background: var(--c-bg-elevated);
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--r-xl);
   box-shadow: var(--shadow-lg);
 }
 

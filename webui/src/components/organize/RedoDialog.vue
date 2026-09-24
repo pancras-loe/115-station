@@ -224,7 +224,7 @@ async function search() {
   height: 90px;
   flex: none;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-hover);
 }
 .poster-none {

@@ -76,7 +76,7 @@ async function copy(text: string) {
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   cursor: pointer;
   color: var(--c-text-3);
   transition: background-color 0.15s, color 0.15s;

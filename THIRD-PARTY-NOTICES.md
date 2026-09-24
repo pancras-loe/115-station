@@ -18,6 +18,9 @@
 | CodeMirror 5.65.16 | 旧前端曾使用，现已移除；保留许可副本 | MIT | [licenses/MIT-CodeMirror5.txt](licenses/MIT-CodeMirror5.txt) |
 | FFmpeg / ffprobe | 运行镜像内由 `apk add ffmpeg` 安装，未修改、未静态链接进本项目二进制 | LGPL / GPL（取决于 Alpine 构建选项） | 见镜像内 `/usr/share/licenses` 与 [Alpine ffmpeg 包](https://pkgs.alpinelinux.org/package/edge/community/x86_64/ffmpeg) |
 | Go 依赖 | 见 [`go.mod`](go.mod) / [`go.sum`](go.sum) | 各依赖自有许可证 | `go mod download` 后见各模块目录 |
+| HeroUI Styles（`@heroui/styles`） | 组件 CSS 经 Tailwind 编译后内联进 `webui/dist/index.html` | Apache-2.0（见下方说明） | [licenses/Apache-2.0-HeroUI-styles.txt](licenses/Apache-2.0-HeroUI-styles.txt) |
+| Reka UI（`reka-ui`） | 打包进 `webui/dist/index.html` | MIT | [licenses/MIT-RekaUI.txt](licenses/MIT-RekaUI.txt) |
+| tw-animate-css | 动画工具类编译后内联进 `webui/dist/index.html` | MIT | [licenses/MIT-tw-animate-css.txt](licenses/MIT-tw-animate-css.txt) |
 | 前端 npm 依赖 | 见 [`webui/package.json`](webui/package.json) | 各依赖自有许可证 | `npm ci` 后见 `node_modules/*/LICENSE` |
 
 > **关于三款海报字体（已修改）**：嵌入的是子集而非原版——只保留约八千个常用汉字
@@ -29,6 +32,12 @@
 > **关于 CodeMirror（历史组件，现已移除）**：`web/vendor/cm5/*.min.js` 是 jsDelivr 用 Terser 压缩的产物，
 > 压缩过程删掉了原文件顶部的 MIT 版权声明。MIT 要求保留该声明，因此在
 > `licenses/MIT-CodeMirror5.txt` 中补回。
+
+> **关于 HeroUI Styles 的许可证**：它的 `package.json` 写的是 MIT，但包内随附的 LICENSE
+> 是 Apache-2.0（Copyright 2025 NextUI Inc.）。两者冲突时按更严格的 Apache-2.0 履行：
+> 随附许可证全文。包内没有 NOTICE 文件；我们也不修改它的源文件，
+> 与 Reka UI 的状态桥接写在自己的 `webui/src/styles/hero-adapter.css` 里。
+> Vite / Tailwind 构建会剥掉 CSS 注释，所以上面的许可证副本必须保留。
 
 ## 上游项目
 

@@ -46,24 +46,25 @@ const route = useRoute()
 </template>
 
 <style scoped>
+/* HeroUI 的做法：侧栏不另起一块白板，直接坐在页面底色上；
+   选中项是一块浮起的 surface（白底 + 柔和阴影），像分段控件里被选中的那一格 */
 .sidebar {
   width: var(--sidebar-w);
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--c-bg-elevated);
-  border-right: 1px solid var(--c-border);
+  background: var(--background);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 18px 14px;
+  padding: 20px 20px 12px;
 }
 .brand-mark {
-  border-radius: var(--radius);
-  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--c-primary) 55%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 4px 12px -4px color-mix(in oklab, var(--accent) 55%, transparent);
 }
 .brand-text {
   display: flex;
@@ -76,49 +77,58 @@ const route = useRoute()
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.2;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .brand-accent {
-  color: var(--c-primary);
+  color: var(--accent);
 }
 .brand-sub {
   font-size: 11px;
   letter-spacing: 0.06em;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 
 .nav {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 10px 12px;
+  padding: 4px 12px 12px;
 }
 .nav-group {
-  padding: 14px 8px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--c-text-3);
+  padding: 16px 12px 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted);
 }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  height: 38px;
+  padding: 0 12px;
   margin-bottom: 2px;
-  border-radius: var(--radius);
+  border-radius: 12px;
   font-size: 13.5px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 72%, var(--muted));
   text-decoration: none;
-  transition: background-color 0.15s, color 0.15s;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
 }
-.nav-item:hover {
-  background: var(--c-bg-hover);
-  color: var(--c-text-1);
+@media (hover: hover) {
+  .nav-item:hover {
+    background: var(--default);
+    color: var(--foreground);
+  }
 }
 .nav-item.is-active {
-  background: var(--c-primary-soft);
-  color: var(--c-primary);
+  background: var(--surface);
+  color: var(--foreground);
   font-weight: 500;
+  box-shadow: var(--surface-shadow);
+}
+.nav-item.is-active .nav-icon {
+  color: var(--accent);
 }
 .nav-icon {
   flex-shrink: 0;
@@ -129,10 +139,9 @@ const route = useRoute()
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--c-border);
+  padding: 14px 24px 18px;
   font-size: 11.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .foot-version {
   min-width: 0;
@@ -142,7 +151,7 @@ const route = useRoute()
 }
 .foot-link {
   flex-shrink: 0;
-  color: var(--c-primary);
+  color: var(--accent);
   text-decoration: none;
 }
 .foot-link:hover {

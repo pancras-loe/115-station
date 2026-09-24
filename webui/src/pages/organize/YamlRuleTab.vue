@@ -218,7 +218,7 @@ onMounted(read)
   gap: 7px;
   flex-wrap: wrap;
   padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   font-size: 12px;
   line-height: 1.6;
   color: var(--c-text-2);

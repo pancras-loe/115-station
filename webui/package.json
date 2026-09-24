@@ -11,9 +11,11 @@
     "build:mock": "vite build --mode mock --outDir dist-mock"
   },
   "dependencies": {
+    "@heroui/styles": "^3.2.6",
     "@lucide/vue": "^1.47.0",
     "naive-ui": "^2.42.0",
     "pinia": "^3.0.3",
+    "reka-ui": "^2.10.5",
     "vue": "^3.5.22",
     "vue-router": "^4.5.1"
   },

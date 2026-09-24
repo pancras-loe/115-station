@@ -1,0 +1,33 @@
+/* ============================================================
+   Reka UI → HeroUI 的状态桥
+   HeroUI 的 CSS 是照 React Aria 写的，靠 data-entering / data-placement /
+   data-selected 这些属性切状态；Reka 给的是 data-state / data-side。
+   能在组件里直接设属性的（按钮的 data-pending 等）就在组件里设，
+   Reka 自己渲染、我们插不上手的浮层元素才在这里用选择器桥接。
+   ============================================================ */
+
+/* ---- Tooltip ---- */
+.tooltip {
+  z-index: var(--z-index-overlay, 100000);
+  transform-origin: var(--reka-tooltip-content-transform-origin);
+
+  &[data-state='delayed-open'],
+  &[data-state='instant-open'] {
+    @apply animate-in duration-150 ease-smooth fade-in-0 zoom-in-90;
+  }
+  &[data-state='delayed-open'][data-side='top'],
+  &[data-state='instant-open'][data-side='top'] {
+    @apply slide-in-from-bottom-1;
+  }
+  &[data-state='delayed-open'][data-side='bottom'],
+  &[data-state='instant-open'][data-side='bottom'] {
+    @apply slide-in-from-top-1;
+  }
+  &[data-state='closed'] {
+    @apply animate-out duration-100 ease-smooth zoom-out-95 fade-out pointer-events-none;
+  }
+
+  /* HeroUI 默认 break-all，是给英文短提示准备的；中文长句按字换行即可 */
+  word-break: normal;
+  line-height: 1.55;
+}

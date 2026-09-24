@@ -185,7 +185,7 @@ const availableCount = plugins.filter((p) => p.available).length
   flex-direction: column;
   padding: 16px;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-lg);
   background: var(--c-bg-raised);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -207,7 +207,7 @@ const availableCount = plugins.filter((p) => p.available).length
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   display: grid;
   place-items: center;
   background: var(--c-primary-soft);

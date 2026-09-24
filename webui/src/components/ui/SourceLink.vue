@@ -81,7 +81,7 @@ async function copy() {
 .kind {
   flex-shrink: 0;
   padding: 0 6px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   border: 1px solid var(--c-border);
   color: var(--c-text-3);
@@ -103,7 +103,7 @@ async function copy() {
   place-items: center;
   width: 20px;
   height: 20px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   cursor: pointer;
   color: var(--c-text-3);
   transition: background-color 0.15s, color 0.15s;

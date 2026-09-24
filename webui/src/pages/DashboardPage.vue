@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { NAlert, NButton, NSkeleton, NTag, NTooltip } from 'naive-ui'
 import {
   Clapperboard,
   Cpu,
@@ -12,6 +11,11 @@ import {
   Tv,
 } from '@lucide/vue'
 import { dashboardApi } from '@/api'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HSkeleton from '@/components/hero/HSkeleton.vue'
+import HTooltip from '@/components/hero/HTooltip.vue'
 import type { Dashboard } from '@/types/dashboard'
 import StatCard from '@/components/ui/StatCard.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
@@ -131,44 +135,50 @@ const strmSub = computed(() => {
   <div class="dash">
     <!-- ==== 数据来源与动作 ==== -->
     <div class="bar">
-      <div class="bar-src">
-        <span class="bar-label">媒体数量来源</span>
-        <NTooltip>
-          <template #trigger>
-            <NTag size="small" :type="fromEmby ? 'success' : 'default'" :bordered="false">
-              {{ fromEmby ? 'Emby 媒体库' : '本地整理台账' }}
-            </NTag>
-          </template>
-          {{
-            fromEmby
-              ? 'Emby 已接入，电影/剧集数量与媒体库卡片都直接读 Emby，和 Emby 界面上的一致'
-              : '未配置 Emby 或暂时不可达，只能按本地整理台账统计'
-          }}
-        </NTooltip>
-      </div>
+      <HTooltip
+        :content="
+          fromEmby
+            ? 'Emby 已接入，电影/剧集数量与媒体库卡片都直接读 Emby，和 Emby 界面上的一致'
+            : '未配置 Emby 或暂时不可达，只能按本地整理台账统计'
+        "
+        side="bottom"
+      >
+        <span class="bar-src" tabindex="0">
+          <span class="bar-dot" :class="fromEmby ? 'is-emby' : 'is-local'" />
+          <span class="bar-label">数量来自</span>
+          <span class="bar-value">{{ fromEmby ? 'Emby 媒体库' : '本地整理台账' }}</span>
+        </span>
+      </HTooltip>
       <div class="bar-actions">
-        <NButton size="small" quaternary :loading="refreshing" @click="load(true, true)">
-          <template #icon><RefreshCw :size="15" /></template>
-          刷新
-        </NButton>
-        <NButton size="small" quaternary @click="calibrating = true">
-          <template #icon><SlidersHorizontal :size="15" /></template>
-          校准台账
-        </NButton>
+        <HButton size="sm" variant="tertiary" :loading="refreshing" aria-label="刷新" @click="load(true, true)">
+          <template #icon><RefreshCw /></template>
+          <span class="bar-btn-text">刷新</span>
+        </HButton>
+        <HButton size="sm" variant="tertiary" aria-label="校准台账" @click="calibrating = true">
+          <template #icon><SlidersHorizontal /></template>
+          <span class="bar-btn-text">校准台账</span>
+        </HButton>
       </div>
     </div>
 
     <!-- ==== 台账虚高提示 ==== -->
-    <NAlert v-if="driftNotable" type="warning" :bordered="false">
+    <HAlert v-if="driftNotable" status="warning" :title="`台账比 Emby 多出 ${num(drift)} 部`">
       本地整理台账记着 {{ num(localTotal) }} 部，Emby 实际只有 {{ num(media?.total) }} 部，
-      多出的 {{ num(drift) }} 部多半是手工删片、解除媒体库目录关联之后留下的幽灵记录。
-      点「校准台账」按本地 STRM 目录核对一遍即可（只删台账行，不动网盘与 Emby）。
-    </NAlert>
+      多出的多半是手工删片、解除媒体库目录关联之后留下的幽灵记录。
+      按本地 STRM 目录核对一遍即可（只删台账行，不动网盘与 Emby）。
+      <template #actions>
+        <HButton size="sm" variant="primary" @click="calibrating = true">校准台账</HButton>
+      </template>
+    </HAlert>
 
     <!-- ==== 指标行 ==== -->
     <div class="stats">
       <template v-if="loading">
-        <NSkeleton v-for="i in 4" :key="i" height="74px" :sharp="false" />
+        <div v-for="i in 4" :key="i" class="card card--default stat-skel">
+          <HSkeleton width="40%" height="12px" radius="999px" />
+          <HSkeleton width="55%" height="26px" radius="8px" />
+          <HSkeleton width="70%" height="10px" radius="999px" />
+        </div>
       </template>
       <template v-else>
         <StatCard
@@ -211,7 +221,8 @@ const strmSub = computed(() => {
       title="我的媒体库"
       :hint="fromEmby ? '直接读 Emby 媒体库，按库类型计数（一部影视算一条）' : '按本地整理台账的分类聚合'"
     >
-      <div v-if="categories.length" class="cats">
+      <!-- 手机上一行横滑，而不是折成两列一路往下排：媒体库多的时候能少滚好几屏 -->
+      <div v-if="categories.length" class="cats rail">
         <div
           v-for="c in categories"
           :key="c.name"
@@ -222,9 +233,11 @@ const strmSub = computed(() => {
             <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" />
           </div>
           <div class="cat-foot">
-            <span class="cat-name">{{ c.name }}</span>
-            <span v-if="c.label" class="cat-type">{{ c.label }}</span>
-            <NTag size="small" :bordered="false">{{ num(c.count) }}</NTag>
+            <div class="cat-text">
+              <span class="cat-name">{{ c.name }}</span>
+              <span v-if="c.label" class="cat-type">{{ c.label }}</span>
+            </div>
+            <HChip size="sm">{{ num(c.count) }}</HChip>
           </div>
         </div>
       </div>
@@ -286,7 +299,7 @@ const strmSub = computed(() => {
     <!-- ==== 海报墙 + 最近整理 ==== -->
     <div class="grid-2">
       <SectionCard title="最新入库" :hint="fromEmby ? '来自 Emby' : '来自本地整理记录'">
-        <div v-if="wall.length" class="wall">
+        <div v-if="wall.length" class="wall rail">
           <div
             v-for="m in wall"
             :key="m.key"
@@ -328,152 +341,201 @@ const strmSub = computed(() => {
   gap: 16px;
 }
 
+/* ---- 来源与动作 ---- */
 .bar {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 .bar-src {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--surface-shadow);
+  font-size: 12.5px;
+  outline: none;
+}
+.bar-src:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
+}
+.bar-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.bar-dot.is-emby {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+.bar-dot.is-local {
+  background: var(--muted);
 }
 .bar-label {
-  font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
+}
+.bar-value {
+  font-weight: 500;
+  color: var(--foreground);
+  white-space: nowrap;
 }
 .bar-actions {
   margin-left: auto;
   display: flex;
-  gap: 4px;
+  gap: 6px;
 }
 
+/* ---- 栅格 ---- */
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
+}
+.stat-skel {
+  gap: 10px;
+  padding: 20px;
 }
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
 }
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 16px;
 }
 
+/* ---- 存储 / 负载 ---- */
 .big-num {
-  font-size: 27px;
+  font-size: 30px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   line-height: 1.1;
-  color: var(--c-text-1);
+  color: var(--foreground);
   font-variant-numeric: tabular-nums;
 }
 .big-sub {
-  margin-top: 2px;
+  margin-top: 4px;
   font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .mt {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 .meta {
   margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--c-text-3);
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .load {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 .load-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 7px;
-  font-size: 12.5px;
-  color: var(--c-text-2);
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--muted);
 }
 .load-pct {
   margin-left: auto;
   font-weight: 600;
-  color: var(--c-text-1);
+  color: var(--foreground);
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- 媒体库卡片 ---- */
 .cats {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 14px;
-}
-.cat {
-  border-radius: var(--radius);
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
 }
 .collage {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
-  border-radius: var(--radius);
+  border-radius: 16px;
   overflow: hidden;
+  background: var(--surface-secondary);
+}
+/* 拼贴里每张小海报自带圆角，拼起来缝隙处会露出一圈锯齿，统一抹平 */
+.collage :deep(*) {
+  border-radius: 0;
 }
 .cat-foot {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 10px;
 }
-.cat-name {
+.cat-text {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+.cat-name {
+  font-size: 13.5px;
   font-weight: 500;
-  color: var(--c-text-1);
+  color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .cat-type {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--c-text-3);
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
+/* ---- 海报墙 ---- */
 .wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 14px 12px;
+}
+.wall-item > :first-child {
+  border-radius: 12px;
 }
 .wall-title {
   margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--c-text-2);
+  font-size: 12px;
+  color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* ---- 最近整理 ---- */
 .recent {
   display: flex;
   flex-direction: column;
+  margin: -6px -8px;
 }
 .recent-item {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--c-border);
+  gap: 12px;
+  padding: 8px;
+  border-radius: 14px;
+  transition: background-color 150ms ease;
 }
-.recent-item:last-child {
-  border-bottom: none;
+@media (hover: hover) {
+  .recent-item:hover {
+    background: var(--surface-secondary);
+  }
 }
 .recent-poster {
-  width: 34px;
+  width: 36px;
   flex-shrink: 0;
 }
 .recent-body {
@@ -481,27 +543,30 @@ const strmSub = computed(() => {
   min-width: 0;
 }
 .recent-title {
-  font-size: 13px;
-  color: var(--c-text-1);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--foreground);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .recent-year {
-  color: var(--c-text-3);
+  font-weight: 400;
+  color: var(--muted);
 }
 .recent-cat {
   margin-top: 1px;
-  font-size: 11.5px;
-  color: var(--c-text-3);
+  font-size: 12px;
+  color: var(--muted);
 }
 .recent-at {
   flex-shrink: 0;
-  font-size: 11.5px;
-  color: var(--c-text-3);
+  font-size: 12px;
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- 断点 ---- */
 @media (max-width: 1280px) {
   .grid-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -516,8 +581,57 @@ const strmSub = computed(() => {
   }
 }
 @media (max-width: 720px) {
+  .dash {
+    gap: 12px;
+  }
+  .stats {
+    gap: 12px;
+  }
   .grid-3 {
     grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .grid-2 {
+    gap: 12px;
+  }
+  /* 按钮只留图标，给来源胶囊让出宽度 */
+  .bar-btn-text {
+    display: none;
+  }
+  .bar-actions :deep(.button) {
+    width: 36px;
+    padding: 0;
+  }
+  .bar-label {
+    display: none;
+  }
+
+  /* 横滑轨道：左右出血到卡片边缘，滑动时内容从边缘露出来，暗示还能再滑 */
+  .rail {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 16px;
+    margin-inline: -16px;
+    padding-inline: 16px;
+    scrollbar-width: none;
+  }
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
+  .rail > * {
+    scroll-snap-align: start;
+  }
+  .cats.rail {
+    grid-auto-columns: 42%;
+    gap: 12px;
+  }
+  .wall.rail {
+    grid-auto-columns: 28%;
+    gap: 10px;
   }
 }
 </style>

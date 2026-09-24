@@ -459,7 +459,7 @@ defineExpose({ loadCovers })
   left: 8px;
   bottom: 8px;
   padding: 2px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   font-size: 11px;
   color: var(--c-text-inverse);
   background: color-mix(in srgb, var(--c-bg-inverse) 72%, transparent);
@@ -538,7 +538,7 @@ defineExpose({ loadCovers })
 }
 .thumb-img {
   aspect-ratio: 16 / 9;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   overflow: hidden;
   background: var(--c-bg-raised);
 }

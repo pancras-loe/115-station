@@ -438,7 +438,7 @@ watch(show, v => {
 .level {
   margin-bottom: 10px;
   padding: 10px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
 }
 .level-head {

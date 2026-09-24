@@ -34,7 +34,7 @@ defineProps<{ title: string; items: [string, string][]; mono?: boolean }>()
   align-items: center;
   gap: 7px;
   padding: 6px 11px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   font-size: 12.5px;
   color: var(--c-text-2);

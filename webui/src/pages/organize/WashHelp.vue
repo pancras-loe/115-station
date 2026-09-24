@@ -53,7 +53,7 @@ import { WASH_FIELDS, WASH_MODES, WASH_RULES, WASH_STRATEGY_FIELDS } from './cat
 .sample {
   margin: 0;
   padding: 10px 12px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   font-family: var(--font-mono);
   font-size: 11.5px;

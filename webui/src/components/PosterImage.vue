@@ -19,7 +19,7 @@ const failed = ref(false)
 .poster {
   position: relative;
   aspect-ratio: 2 / 3;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   overflow: hidden;
   background: var(--c-bg-hover);
 }

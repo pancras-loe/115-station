@@ -1,10 +1,31 @@
 @import 'tailwindcss';
 
 /* ============================================================
-   设计令牌（明暗双主题）
-   规则：所有颜色只从这里取，组件里不写字面色值——否则暗色模式必漏。
-   暗色不是把亮色反相：背景用低饱和冷灰做层级（base < elevated < raised），
-   主色在暗底上提亮一档，否则 #165DFF 在 #0F1115 上对比度不足。
+   HeroUI v3 的样式层（@heroui/styles，MIT）
+   只要它的 CSS：交互由 Reka UI 提供，两者在 components/hero/ 里拼起来。
+   组件按需引入——全量 CSS 压缩后 400KB+，而我们打的是单文件。
+   用到新组件时在这里加一行 components/xxx.css。
+   ============================================================ */
+@import 'tw-animate-css';
+@import '@heroui/styles/utilities';
+@import '@heroui/styles/variants';
+@import '@heroui/styles/themes/default' layer(theme);
+@import '@heroui/styles/components/button.css' layer(components);
+@import '@heroui/styles/components/spinner.css' layer(components);
+@import '@heroui/styles/components/chip.css' layer(components);
+@import '@heroui/styles/components/alert.css' layer(components);
+@import '@heroui/styles/components/card.css' layer(components);
+@import '@heroui/styles/components/meter.css' layer(components);
+@import '@heroui/styles/components/skeleton.css' layer(components);
+@import '@heroui/styles/components/tooltip.css' layer(components);
+@import './hero-adapter.css';
+
+/* ============================================================
+   设计令牌
+   颜色的唯一来源是 HeroUI 主题变量（--accent / --surface / --muted …，
+   明暗两套由它按 html.dark 切换）。下面的 --c-* 只是别名，
+   让还没迁移的旧组件和 Naive UI 跟着同一套色板走。
+   规则不变：组件里不写字面色值，否则暗色模式必漏。
    ============================================================ */
 @theme {
   --font-sans: 'Inter var', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC',
@@ -13,105 +34,71 @@
 }
 
 :root {
-  /* 品牌色：沿用 Arco 蓝，老用户零认知成本 */
-  --c-primary: #165dff;
-  --c-primary-hover: #3d7bff;
-  --c-primary-active: #0e42d2;
-  --c-primary-soft: #e8f3ff;
-  --c-primary-border: #bedaff;
+  --c-primary: var(--accent);
+  --c-primary-hover: var(--accent-hover);
+  --c-primary-active: color-mix(in oklab, var(--accent) 85%, black);
+  --c-primary-soft: var(--accent-soft);
+  --c-primary-border: color-mix(in oklab, var(--accent) 35%, transparent);
 
-  --c-success: #00b42a;
-  --c-success-soft: #e8ffea;
-  --c-warning: #ff7d00;
-  --c-warning-soft: #fff7e8;
-  --c-danger: #f53f3f;
-  --c-danger-soft: #ffece8;
-  --c-info: #86909c;
+  --c-success: var(--success);
+  --c-success-soft: var(--success-soft);
+  --c-warning: var(--warning);
+  --c-warning-soft: var(--warning-soft);
+  --c-danger: var(--danger);
+  --c-danger-soft: var(--danger-soft);
+  --c-info: var(--muted);
 
   /* 背景层级：页面 → 卡片 → 卡片内凸起 */
-  --c-bg-base: #f5f6f8;
-  --c-bg-elevated: #ffffff;
-  --c-bg-raised: #f7f8fa;
-  --c-bg-hover: #f2f3f5;
-  --c-bg-active: #e8eaed;
-  --c-bg-inverse: #1d2129;
+  --c-bg-base: var(--background);
+  --c-bg-elevated: var(--surface);
+  --c-bg-raised: var(--surface-secondary);
+  --c-bg-hover: var(--default);
+  --c-bg-active: var(--surface-tertiary);
+  --c-bg-inverse: var(--background-inverse);
 
-  --c-border: #e4e6eb;
-  --c-border-strong: #d0d3d9;
+  --c-border: var(--border);
+  --c-border-strong: var(--border-secondary);
 
-  --c-text-1: #1a1d21;
-  --c-text-2: #4a5159;
-  --c-text-3: #8a929c;
-  --c-text-4: #b7bdc6;
-  --c-text-inverse: #ffffff;
+  --c-text-1: var(--foreground);
+  --c-text-2: color-mix(in oklab, var(--foreground) 68%, var(--muted));
+  --c-text-3: var(--muted);
+  --c-text-4: color-mix(in oklab, var(--muted) 55%, var(--surface));
+  --c-text-inverse: var(--background);
 
-  /* 阴影：暗色下阴影不可见，改用边框承担层级，故暗色主题把它们调到近乎透明 */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
-  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
-  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.12);
-  --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  /* 暗色下 HeroUI 把 surface 阴影置空，层级改由底色深浅承担 */
+  --shadow-sm: var(--field-shadow);
+  --shadow-card: var(--surface-shadow);
+  --shadow-md: var(--overlay-shadow);
+  --shadow-lg: var(--overlay-shadow);
 
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* 圆角：--radius 与 HeroUI 同值（0.5rem）。这组不叫 --radius-sm/lg/xl，
+     因为 HeroUI 的 @theme 已占用这些名字、刻度也不同，同名会互相覆盖 */
+  --r-sm: 6px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  /* HeroUI 卡片的圆角（card / alert 用 radius-3xl，封顶 32px） */
+  --r-card: min(32px, var(--radius-3xl));
 
   --sidebar-w: 236px;
   --topbar-h: 60px;
-
-  color-scheme: light;
+  /* 手机底部导航栏高度（不含安全区） */
+  --tabbar-h: 60px;
 }
 
+/* HeroUI 暗色主题里输入框底色与卡片同色（它的表单默认摆在页面底色上），
+   而我们的表单几乎全在卡片里——不改的话暗色下输入框整个隐形。抬一档到 surface-secondary */
 html.dark {
-  --c-primary: #4c8dff;
-  --c-primary-hover: #6ea3ff;
-  --c-primary-active: #2f74f0;
-  --c-primary-soft: #16233d;
-  --c-primary-border: #2a4577;
-
-  --c-success: #3fc35a;
-  --c-success-soft: #12271a;
-  --c-warning: #ff9a3d;
-  --c-warning-soft: #2b1d0d;
-  --c-danger: #ff6b6b;
-  --c-danger-soft: #2e1618;
-  --c-info: #8a929c;
-
-  --c-bg-base: #0f1115;
-  --c-bg-elevated: #171a1f;
-  --c-bg-raised: #1c2027;
-  --c-bg-hover: #212632;
-  --c-bg-active: #2a303c;
-  --c-bg-inverse: #e8eaed;
-
-  --c-border: #262b33;
-  --c-border-strong: #343b45;
-
-  --c-text-1: #e8eaed;
-  --c-text-2: #a8afb8;
-  --c-text-3: #6f7780;
-  --c-text-4: #4d545d;
-  --c-text-inverse: #0f1115;
-
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
-
-  color-scheme: dark;
+  --field-background: var(--surface-secondary);
 }
 
-/* 把令牌暴露成 Tailwind 工具类（bg-surface / text-muted / border-line …） */
+/* 把令牌暴露成 Tailwind 工具类（bg-raised / text-subtle / border-line …）。
+   surface / muted / success / warning / danger 由 HeroUI 的 @theme 提供，这里不重复声明 */
 @theme inline {
   --color-primary: var(--c-primary);
   --color-primary-hover: var(--c-primary-hover);
   --color-primary-soft: var(--c-primary-soft);
-  --color-success: var(--c-success);
-  --color-warning: var(--c-warning);
-  --color-danger: var(--c-danger);
 
   --color-base: var(--c-bg-base);
-  --color-surface: var(--c-bg-elevated);
   --color-raised: var(--c-bg-raised);
   --color-hover: var(--c-bg-hover);
 
@@ -119,7 +106,6 @@ html.dark {
   --color-line-strong: var(--c-border-strong);
 
   --color-fg: var(--c-text-1);
-  --color-muted: var(--c-text-2);
   --color-subtle: var(--c-text-3);
   --color-faint: var(--c-text-4);
 }

@@ -10,6 +10,7 @@ import {
   zhCN,
   dateZhCN,
 } from 'naive-ui'
+import { TooltipProvider } from 'reka-ui'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { buildNaiveOverrides } from '@/theme/naive'
@@ -42,7 +43,10 @@ const naiveTheme = computed(() => (theme.isDark ? darkTheme : null))
         <NNotificationProvider>
           <NMessageProvider :max="4" placement="top">
             <FeedbackBridge />
-            <RouterView />
+            <!-- HeroUI 组件（components/hero/）的提示气泡共用一个延迟计时器 -->
+            <TooltipProvider :delay-duration="400">
+              <RouterView />
+            </TooltipProvider>
           </NMessageProvider>
         </NNotificationProvider>
       </NDialogProvider>

@@ -83,7 +83,7 @@ const emit = defineEmits<{ jump: [number] }>()
   gap: 6px;
   flex-wrap: wrap;
   padding: 5px 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   font-size: 12px;
   color: var(--c-text-2);
   cursor: pointer;
@@ -128,7 +128,7 @@ const emit = defineEmits<{ jump: [number] }>()
 }
 .chip {
   padding: 1px 7px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   font-size: 11px;
   color: var(--c-text-3);

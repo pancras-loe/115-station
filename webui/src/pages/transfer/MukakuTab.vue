@@ -335,7 +335,7 @@ onMounted(load)
 }
 .captcha {
   height: 32px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   cursor: pointer;
 }
 
@@ -380,7 +380,7 @@ onMounted(load)
   height: 78px;
   flex: none;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   background: var(--c-bg-hover);
 }
 .video-body {

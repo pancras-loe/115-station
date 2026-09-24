@@ -64,7 +64,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | ORM / DB | GORM + SQLite（纯 Go 驱动 `glebarez/sqlite`，`CGO_ENABLED=0`） |
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
-| 前端（现役） | Vue 3 + TypeScript + Vite + Naive UI（`webui/`），详见 [webui/README.md](webui/README.md) |
+| 前端（现役） | Vue 3 + TypeScript + Vite（`webui/`），外观走 HeroUI v3 的样式包 `@heroui/styles` + Reka UI（迁移中，未迁的页面仍是 Naive UI），详见 [webui/README.md](webui/README.md) |
 | 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 Emby/Jellyfin |
 
 ---
@@ -175,7 +175,15 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 - 配置读取顺序：**数据库 `Setting` 表优先，环境变量兜底**（如 115 请求间隔）。
 - **前端已重写完成**（见 §8）。改页面一律改 `webui/`；旧前端已删除，历史实现可查 Git 历史。
 - 前端有构建：`cd webui && npm run typecheck && npm run build`，产物是单个 `webui/dist/index.html`（不提交进仓库）。
-- 颜色只能从 `webui/src/styles/main.css` 的设计令牌取，组件里写死色值必然漏暗色模式。
+- 颜色只能从设计令牌取，组件里写死色值必然漏暗色模式。**颜色的唯一来源是 HeroUI 主题变量**
+  （`--accent` / `--surface` / `--muted` / `--foreground` …，明暗由它按 `html.dark` 切换）；
+  `main.css` 里的 `--c-*` 只是给未迁移代码和 Naive UI 用的别名，新代码直接写 HeroUI 变量。
+  圆角用 `--r-sm/lg/xl/card`，**不要**写 `--radius-sm/lg/xl`——那几个名字被 HeroUI 的 `@theme` 占用、刻度也不同。
+- **新写界面用 `webui/src/components/hero/`**（`HButton` / `HChip` / `HAlert` / `HTooltip` …）：
+  HeroUI 的 BEM 类负责外观，Reka UI 负责交互；Reka 的状态属性与 HeroUI 选择器之间的桥在
+  `styles/hero-adapter.css`。要用 HeroUI 新组件时先在 `main.css` 按需 `@import` 它的 CSS（全量 400KB+，我们打单文件）。
+  Naive UI 正在逐页退场（顺序：总览 → 整理记录 → Strm 管理 → 其余页面），迁完一页就别在那页再引 Naive。
+- 手机端断点 ≤720px：底部导航（`layouts/MobileTabBar.vue`）接管导航，内容区底部要给它留 `--tabbar-h`。
 - **API Key / Secret / token 一律用 `SecretInput` 组件**，不要直接写 `<NInput type="password">`——
   浏览器会把本站保存的管理员密码自动填进去（见 `webui/src/utils/autofill.ts`）。
 

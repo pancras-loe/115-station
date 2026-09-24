@@ -3,7 +3,8 @@ defineProps<{ title?: string; hint?: string }>()
 </script>
 
 <template>
-  <section class="section">
+  <!-- HeroUI 的卡片不画描边、标题下不画分隔线：层级只靠底色与柔和阴影 -->
+  <section class="card card--default section">
     <header v-if="title || $slots.extra" class="section-head">
       <div class="section-titles">
         <h2 v-if="title" class="section-title">{{ title }}</h2>
@@ -17,17 +18,14 @@ defineProps<{ title?: string; hint?: string }>()
 
 <style scoped>
 .section {
-  background: var(--c-bg-elevated);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
+  gap: 14px;
+  padding: 20px;
+  min-width: 0;
 }
 .section-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  padding: 15px 18px;
-  border-bottom: 1px solid var(--c-border);
 }
 .section-titles {
   flex: 1;
@@ -35,19 +33,27 @@ defineProps<{ title?: string; hint?: string }>()
 }
 .section-title {
   margin: 0;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 600;
-  color: var(--c-text-1);
+  line-height: 1.4;
+  color: var(--foreground);
 }
 .section-hint {
   margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--c-text-3);
+  font-size: 12.5px;
+  color: var(--muted);
 }
 .section-extra {
   flex-shrink: 0;
 }
 .section-body {
-  padding: 18px;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .section {
+    padding: 16px;
+    gap: 12px;
+  }
 }
 </style>
