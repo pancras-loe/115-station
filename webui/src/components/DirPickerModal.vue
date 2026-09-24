@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NButton, NInput, NInputGroup, NModal, NSpin } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HSkeleton from '@/components/hero/HSkeleton.vue'
 import { ChevronRight, CornerLeftUp, Folder } from '@lucide/vue'
 import { storageApi } from '@/api'
 import type { DirEntry } from '@/api/storage'
@@ -149,39 +152,36 @@ watch(() => props.show, (v) => v && reset())
 </script>
 
 <template>
-  <NModal
-    :show="show"
-    preset="card"
-    :title="TITLES[mode]"
-    style="width: 520px"
-    @update:show="emit('update:show', $event)"
-  >
+  <HModal :show="show" :title="TITLES[mode]" width="520px" @update:show="emit('update:show', $event)">
     <div class="picker">
-      <NInputGroup>
-        <NInput
-          v-model:value="jumpText"
+      <div class="jump">
+        <HInput
+          v-model="jumpText"
+          mono
           :placeholder="mode === '115' ? '输入路径或纯数字 cid 直接跳转' : '输入路径直接跳转'"
-          @keyup.enter="jump"
+          @enter="jump"
         />
-        <NButton @click="jump">跳转</NButton>
-      </NInputGroup>
+        <HButton variant="tertiary" @click="jump">跳转</HButton>
+      </div>
 
       <div class="crumb">
-        <NButton size="tiny" quaternary :disabled="loading" @click="goUp">
-          <template #icon><CornerLeftUp :size="14" /></template>
+        <HButton size="sm" variant="ghost" :disabled="loading" @click="goUp">
+          <template #icon><CornerLeftUp /></template>
           上级
-        </NButton>
+        </HButton>
         <span class="crumb-path">{{ currentLabel }}</span>
       </div>
 
-      <div class="list">
-        <div v-if="loading" class="state"><NSpin size="small" /></div>
+      <div class="list" :aria-busy="loading">
+        <div v-if="loading" class="skel">
+          <HSkeleton v-for="i in 6" :key="i" height="36px" radius="12px" />
+        </div>
         <template v-else>
           <div v-if="note" class="state note">{{ note }}</div>
-          <button v-for="(it, i) in items" :key="i" class="item" @click="enter(it)">
-            <Folder :size="15" class="item-ico" />
+          <button v-for="(it, i) in items" :key="i" type="button" class="item" @click="enter(it)">
+            <Folder :size="16" class="item-ico" />
             <span class="item-name">{{ it.name || it.path }}</span>
-            <ChevronRight :size="14" class="item-arrow" />
+            <ChevronRight :size="15" class="item-arrow" />
           </button>
           <div v-if="!items.length && !note" class="state">该目录下没有子文件夹</div>
         </template>
@@ -189,13 +189,13 @@ watch(() => props.show, (v) => v && reset())
     </div>
 
     <template #footer>
-      <div class="footer">
-        <span class="footer-hint">选择当前目录：{{ currentLabel || '—' }}</span>
-        <NButton @click="emit('update:show', false)">取消</NButton>
-        <NButton type="primary" @click="confirm">选择此目录</NButton>
+      <span class="footer-hint">选择：{{ currentLabel || '—' }}</span>
+      <div class="footer-btns">
+        <HButton variant="tertiary" @click="emit('update:show', false)">取消</HButton>
+        <HButton variant="primary" @click="confirm">选择此目录</HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>
@@ -203,6 +203,10 @@ watch(() => props.show, (v) => v && reset())
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.jump {
+  display: flex;
+  gap: 8px;
 }
 
 .crumb {
@@ -213,17 +217,25 @@ watch(() => props.show, (v) => v && reset())
 .crumb-path {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
-  color: var(--c-text-3);
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  color: var(--muted);
   word-break: break-all;
 }
 
+/* 列表高度跟着视口走：手机上是底部抽屉，固定 320px 会把下面的按钮挤出屏幕 */
 .list {
-  height: 320px;
+  height: min(360px, 48dvh);
   overflow-y: auto;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  background: var(--c-bg-raised);
+  overscroll-behavior: contain;
+  padding: 4px;
+  border-radius: 18px;
+  background: var(--surface-secondary);
+}
+.skel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .item {
@@ -231,25 +243,33 @@ watch(() => props.show, (v) => v && reset())
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
+  min-height: 40px;
   padding: 8px 12px;
+  border-radius: 14px;
   cursor: pointer;
   font-size: 13.5px;
-  color: var(--c-text-2);
-  border-bottom: 1px solid var(--c-border);
-  transition: background-color 0.12s, color 0.12s;
+  color: var(--foreground);
+  transition:
+    background-color 0.12s,
+    transform 0.12s;
 }
-.item:last-child {
-  border-bottom: none;
+@media (hover: hover) {
+  .item:hover {
+    background: var(--surface);
+  }
 }
-.item:hover {
-  background: var(--c-bg-hover);
-  color: var(--c-text-1);
+.item:active {
+  transform: scale(0.99);
+  background: var(--surface);
+}
+.item:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
 }
 .item-ico {
   flex-shrink: 0;
-  color: var(--c-text-4);
+  color: var(--accent);
 }
 .item-name {
   flex: 1;
@@ -260,7 +280,7 @@ watch(() => props.show, (v) => v && reset())
 }
 .item-arrow {
   flex-shrink: 0;
-  color: var(--c-text-4);
+  color: var(--muted);
 }
 
 .state {
@@ -269,26 +289,35 @@ watch(() => props.show, (v) => v && reset())
   padding: 26px 16px;
   text-align: center;
   font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .state.note {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--c-border);
-  opacity: 0.85;
 }
 
-.footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .footer-hint {
-  flex: 1;
+  flex: 1 1 200px;
   min-width: 0;
   font-size: 12px;
-  color: var(--c-text-3);
+  font-family: var(--font-mono);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.footer-btns {
+  display: flex;
+  gap: 8px;
+}
+@media (max-width: 639px) {
+  .footer-hint {
+    flex-basis: 100%;
+  }
+  .footer-btns {
+    width: 100%;
+  }
+  .footer-btns > * {
+    flex: 1;
+  }
 }
 </style>

@@ -9,7 +9,11 @@
  * 3) 示例给两行——信息齐全一行、信息缺失一行，<> 块的省略行为一眼可见。
  */
 import { computed, nextTick, ref } from 'vue'
-import { NButton, NCheckbox, NInput, NPopover, NRadioButton, NRadioGroup, type InputInst } from 'naive-ui'
+import HPopover from '@/components/hero/HPopover.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import {
   RENAME_VARS_SPARSE,
@@ -31,15 +35,15 @@ const props = defineProps<{
 
 const value = defineModel<string>({ required: true })
 
-const inputRef = ref<InputInst>()
+const inputRef = ref<InstanceType<typeof HInput>>()
 /** 上次光标位置，-1 表示还没定位过 → 插到末尾 */
 const caret = ref(-1)
 
 function rememberCaret() {
   // 从 textarea 元素读，不从事件对象读：点到输入框内边距时 event.target
   // 是外层容器，没有 selectionStart，光标会被误判成末尾
-  const el = inputRef.value?.textareaElRef
-  caret.value = el ? el.selectionStart : -1
+  const el = inputRef.value?.el
+  caret.value = el ? (el.selectionStart ?? -1) : -1
 }
 
 const query = ref('')
@@ -78,7 +82,7 @@ function insert(token: string) {
   caret.value = next
   // 面板不关，方便连着插几个；焦点回输入框让用户能直接接着打字
   nextTick(() => {
-    const el = inputRef.value?.textareaElRef
+    const el = inputRef.value?.el
     el?.focus()
     el?.setSelectionRange(next, next)
   })
@@ -93,36 +97,19 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
 <template>
   <FieldRow :label="label" :tip="tip" wide>
     <div class="editor">
-      <NInput
-        ref="inputRef"
-        v-model:value="value"
-        type="textarea"
-        :autosize="{ minRows: 2 }"
-        :status="unknown.length ? 'error' : undefined"
-        spellcheck="false"
-        @focus="rememberCaret"
-        @click="rememberCaret"
-        @keyup="rememberCaret"
-        @input="rememberCaret"
-      />
+      <HInput ref="inputRef" v-model="value" :status="unknown.length ? 'error' : undefined" :input-attrs="{ spellcheck: 'false' }" @focusin="rememberCaret" @click="rememberCaret" @keyup="rememberCaret" @input="rememberCaret" :rows="2" />
 
       <div class="toolbar">
-        <NPopover trigger="click" placement="bottom-start" raw :show-arrow="false">
-          <template #trigger>
-            <NButton size="tiny" secondary type="primary">插入变量</NButton>
-          </template>
+        <HPopover content-class="rename-var-pop">
+          <HButton variant="secondary" size="sm">插入变量</HButton>
+          <template #content>
           <div class="picker">
-            <NInput v-model:value="query" size="small" clearable placeholder="搜索变量名或中文说明" />
+            <HInput v-model="query" clearable placeholder="搜索变量名或中文说明" />
             <div class="picker-opts">
-              <NRadioGroup v-model:value="transform" size="small">
-                <NRadioButton value="raw">原样</NRadioButton>
-                <NRadioButton value="dot">点转空格</NRadioButton>
-                <NRadioButton value="lower">小写</NRadioButton>
-                <NRadioButton value="upper">大写</NRadioButton>
-              </NRadioGroup>
-              <NCheckbox v-model:checked="asBlock" size="small">
+              <HSegmented v-model="transform" size="sm" :options="[{ label: '原样', value: 'raw' }, { label: '点转空格', value: 'dot' }, { label: '小写', value: 'lower' }, { label: '大写', value: 'upper' }]" />
+              <HCheckbox v-model:checked="asBlock">
                 作为可选块插入，取不到值时整段省略
-              </NCheckbox>
+              </HCheckbox>
             </div>
             <div class="picker-list">
               <template v-for="g in groups" :key="g.key">
@@ -136,9 +123,10 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
               <div v-if="!groups.length" class="picker-empty">没有匹配的变量</div>
             </div>
           </div>
-        </NPopover>
+          </template>
+        </HPopover>
 
-        <NButton size="tiny" quaternary :disabled="isDefault" @click="value = fallback">恢复默认</NButton>
+        <HButton variant="ghost" size="sm" :disabled="isDefault" @click="value = fallback">恢复默认</HButton>
       </div>
 
       <p v-if="unknown.length" class="warn">

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NButton, NModal, NTag } from 'naive-ui'
+import HModal from '@/components/hero/HModal.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import { heroTone } from '@/components/hero/tone'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import { useSetting } from '@/composables/useSetting'
@@ -33,12 +36,12 @@ const rulesVisible = ref(false)
 <template>
   <SectionCard title="重命名策略" hint="入库后的目录与文件命名模板">
     <template #extra>
-      <NButton size="small" quaternary @click="rulesVisible = true">规则说明</NButton>
+      <HButton variant="ghost" size="sm" @click="rulesVisible = true">规则说明</HButton>
     </template>
 
     <div v-for="g in GROUPS" :key="g.type" class="group">
       <div class="group-head">
-        <NTag size="small" :bordered="false" :type="g.tagType">{{ g.label }}</NTag>
+        <HChip :color="heroTone(g.tagType)">{{ g.label }}</HChip>
         <span class="path">
           <code>{{ renderRenameExample(model[`${g.type}_folder`]) }}</code>/<code>{{
             renderRenameExample(model[`${g.type}_file`])
@@ -66,19 +69,14 @@ const rulesVisible = ref(false)
     </div>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save()">保存配置</NButton>
-      <NButton @click="reset">重置配置</NButton>
+      <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+      <HButton variant="tertiary" @click="reset">重置配置</HButton>
     </FormActions>
   </SectionCard>
 
-  <NModal
-    v-model:show="rulesVisible"
-    preset="card"
-    title="重命名规则说明"
-    style="width: min(920px, 92vw)"
-  >
+  <HModal v-model:show="rulesVisible" title="重命名规则说明" width="920px">
     <VariablesTab />
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

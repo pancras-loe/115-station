@@ -37,11 +37,16 @@ const props = withDefaults(
 )
 const model = defineModel<V>()
 
-/** Reka 的 Select 值只认字符串；数字值（分页大小）在这里来回转 */
+/**
+ * Reka 的 Select 值只认字符串，而且空串被它保留为「未选择」（选中空串那项会显示成占位符）。
+ * 我们的选项里「不限」常用 '' 表示，所以对内统一编码一遍：数字转字符串，空串换成哨兵。
+ */
+const EMPTY = '__h_empty__'
+const enc = (v: V | undefined) => (v === undefined ? undefined : String(v) === '' ? EMPTY : String(v))
 const inner = computed({
-  get: () => (model.value === undefined ? undefined : String(model.value)),
+  get: () => enc(model.value),
   set: (v) => {
-    const hit = props.options.find((o) => String(o.value) === v)
+    const hit = props.options.find((o) => enc(o.value) === v)
     if (hit) model.value = hit.value
   },
 })
@@ -67,8 +72,8 @@ const inner = computed({
         <SelectViewport class="list-box" data-slot="list-box">
           <SelectItem
             v-for="o in options"
-            :key="String(o.value)"
-            :value="String(o.value)"
+            :key="enc(o.value)"
+            :value="enc(o.value)!"
             :disabled="o.disabled"
             class="list-box-item list-box-item--default"
             data-slot="list-box-item"

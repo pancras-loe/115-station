@@ -82,6 +82,11 @@ watch(
 .h-tabs-scroller::-webkit-scrollbar {
   display: none;
 }
+/* 滑块（TabsIndicator）必须以滚动的列表本身为定位参照：否则它相对外层容器定位，
+   列表一横滑，滑块就飞出视口，把整页撑出横向滚动条（手机上十个页签时必现） */
+.h-tabs-scroller :deep(.tabs__list) {
+  position: relative;
+}
 .h-tab {
   width: auto;
   gap: 6px;

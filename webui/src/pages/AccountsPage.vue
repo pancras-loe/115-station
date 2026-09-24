@@ -84,25 +84,26 @@ async function loadMissingWs() {
   }
 }
 
-function createWs() {
-  dialog.info({
+async function createWs() {
+  const ok = await dialog.confirm({
     title: '一键创建工作目录',
     content: `将在 115 网盘根目录下创建 /StrmStation/{${missingWs.value.join('、')}} 并写入配置。已配置的目录保持不动，同名目录已存在则直接复用。`,
-    positiveText: '创建',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      creatingWs.value = true
-      try {
-        const res = await organizeApi.initWorkspace()
-        message.success(res.message)
-        await loadMissingWs()
-      } catch (e) {
-        toastError(e, '创建失败')
-      } finally {
-        creatingWs.value = false
-      }
-    },
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '创建', value: true, variant: 'primary' },
+    ],
   })
+  if (!ok) return
+  creatingWs.value = true
+  try {
+    const res = await organizeApi.initWorkspace()
+    message.success(res.message)
+    await loadMissingWs()
+  } catch (e) {
+    toastError(e, '创建失败')
+  } finally {
+    creatingWs.value = false
+  }
 }
 
 const DEFAULT_COOKIE_PATH = '/config/115-cookies.txt'

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NInput, type InputInst } from 'naive-ui'
+import HInput from '@/components/hero/HInput.vue'
 import { Eye, EyeOff } from '@lucide/vue'
 import { secretProps } from '@/utils/autofill'
 
 /**
  * 密钥输入框。除了遮罩与「点击查看」，它的职责是**挡掉浏览器凭据自动填充** ——
  * 见 utils/autofill.ts 里对成因的说明。所有 API Key / Secret / token / 第三方
- * 站点密码都必须走这个组件，直接写 `<NInput type="password">` 会重新踩坑。
+ * 站点密码都必须走这个组件，直接写 `<input type="password">` 会重新踩坑。
  *
  * 遮罩**不用 `type="password"`**：浏览器只要看见密码框，点一下就弹「本站已保存的
  * 账号密码」下拉——而这里要填的是第三方密钥，选中哪一条都是错的。autofill.ts 那套
@@ -23,13 +23,13 @@ defineProps<{
   /** 表单字段名，必须全局唯一且不含 user/pass/email 字样，否则仍会被启发式命中 */
   name: string
   placeholder?: string
-  /** 校验失败时置 'error'，与 NInput 的 status 同义 */
+  /** 校验失败时置 'error' */
   status?: 'error' | 'warning'
 }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 
 const revealed = ref(false)
-const input = ref<InputInst | null>(null)
+const input = ref<InstanceType<typeof HInput> | null>(null)
 defineExpose({ focus: () => input.value?.focus() })
 const cssMaskable =
   typeof CSS !== 'undefined' &&
@@ -41,27 +41,22 @@ const masked = computed(() => cssMaskable && !revealed.value)
 </script>
 
 <template>
-  <NInput
+  <HInput
     ref="input"
-    :value="modelValue"
+    :model-value="modelValue"
     :type="type"
     :status="status"
     :class="{ masked }"
     :placeholder="placeholder"
-    :input-props="secretProps(name)"
-    @update:value="emit('update:modelValue', $event)"
+    :input-attrs="secretProps(name)"
+    @update:model-value="emit('update:modelValue', $event)"
   >
     <template #suffix>
-      <component
-        :is="revealed ? EyeOff : Eye"
-        class="eye"
-        :size="15"
-        role="button"
-        :aria-label="revealed ? '隐藏' : '显示'"
-        @click="revealed = !revealed"
-      />
+      <button type="button" class="eye" :aria-label="revealed ? '隐藏' : '显示'" @click="revealed = !revealed">
+        <component :is="revealed ? EyeOff : Eye" :size="15" />
+      </button>
     </template>
-  </NInput>
+  </HInput>
 </template>
 
 <style scoped>
@@ -69,11 +64,16 @@ const masked = computed(() => cssMaskable && !revealed.value)
   -webkit-text-security: disc;
 }
 .eye {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
   cursor: pointer;
-  color: var(--c-text-4);
+  color: var(--muted);
   transition: color 0.15s;
 }
 .eye:hover {
-  color: var(--c-primary);
+  color: var(--accent);
 }
 </style>

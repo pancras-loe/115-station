@@ -10,7 +10,7 @@ const emit = defineEmits<{ jump: [number] }>()
 </script>
 
 <template>
-  <div class="outline">
+  <div class="rule-outline">
     <p v-if="!groups.length" class="empty">{{ emptyText }}</p>
 
     <section v-for="g in groups" :key="`${g.title}-${g.line}`" class="group">
@@ -40,7 +40,8 @@ const emit = defineEmits<{ jump: [number] }>()
 </template>
 
 <style scoped>
-.outline {
+/* 不能叫 .outline：那是 Tailwind 的工具类（outline-style: solid），会画出一圈黑框 */
+.rule-outline {
   display: flex;
   flex-direction: column;
   gap: 14px;

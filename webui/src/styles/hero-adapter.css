@@ -32,6 +32,28 @@
   line-height: 1.55;
 }
 
+/* ---- 文字链接样式的按钮（原 NButton text）：没有底、没有胶囊，只是一段可点的强调色文字 ---- */
+.button.text-btn {
+  height: auto;
+  min-height: 0;
+  width: auto;
+  padding: 0;
+  gap: 4px;
+  --button-bg: transparent;
+  --button-bg-hover: transparent;
+  --button-bg-pressed: transparent;
+  --button-fg: var(--accent);
+  font-weight: 500;
+  vertical-align: baseline;
+
+  &:hover {
+    text-decoration: underline;
+  }
+  &:active {
+    transform: none;
+  }
+}
+
 /* ---- Popover / Select 弹层（Reka 的 PopoverContent / SelectContent，data-state=open|closed） ---- */
 .h-popover {
   z-index: var(--z-index-overlay, 100000);
@@ -56,7 +78,7 @@
   transform-origin: var(--reka-select-content-transform-origin);
   /* HeroUI 用 --trigger-width 撑最小宽度；Reka 给的是自己的变量名 */
   min-width: var(--reka-select-trigger-width);
-  max-height: min(320px, var(--reka-select-content-available-height));
+  max-height: min(320px, var(--reka-select-content-available-height, 320px));
 }
 
 /* Select 的选项：键盘/鼠标高亮 Reka 给 data-highlighted，选中给 data-state=checked */

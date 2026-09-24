@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NAlert, NButton, NInput, NInputNumber, NRadioButton, NRadioGroup, NSwitch } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -136,22 +141,18 @@ async function saveChecked() {
 
 <template>
   <SectionCard title="AI 增强识别" hint="TMDB 识别失败时的兜底">
-    <NAlert class="note" type="info" :bordered="false">
+    <HAlert status="accent" class="note">
       规则识别全部落空时的最后一环：先把原始文件名和所在目录交给大模型，让它说出片名、年份、类型和季集再搜
       TMDB；还搜不中，就把 TMDB 搜到的几个候选交给它挑。每个条目最多调用两次。接口按 OpenAI
       协议标准调用：地址即各家文档里给的 base_url，后面追加 <code>/chat/completions</code>。
       DeepSeek、硅基流动、Ollama、vLLM 等兼容实现都能直接填。
-    </NAlert>
+    </HAlert>
 
     <FieldRow label="启用" tip="关闭后整理流程完全不碰模型接口，下面填好的配置原样留着，随时能开回来。开启时保存会先校验三项必填与接口连通性，通不过不落库。">
-      <NSwitch v-model:value="model.enabled" />
+      <HSwitch v-model="model.enabled" />
     </FieldRow>
     <FieldRow :required="model.enabled" :error="errorOf('url')" label="API 地址" tip="填各家文档给的 base_url：DeepSeek 是 https://api.deepseek.com，OpenAI 是 https://api.openai.com/v1（/v1 属于地址的一部分，这里不会替你猜）。填整条完整路径也认。">
-      <NInput
-        v-model:value="model.url"
-        :status="errorOf('url') ? 'error' : undefined"
-        placeholder="如 https://api.deepseek.com"
-      />
+      <HInput v-model="model.url" :status="errorOf('url') ? 'error' : undefined" placeholder="如 https://api.deepseek.com" />
     </FieldRow>
     <FieldRow :required="model.enabled" :error="errorOf('key')" label="API 密钥" tip="大模型 API 密钥，推荐使用硅基流动等国内平台。本地模型（Ollama / vLLM）不校验密钥，但这里仍需填一个占位串（如 ollama）。">
       <SecretInput
@@ -162,11 +163,7 @@ async function saveChecked() {
       />
     </FieldRow>
     <FieldRow :required="model.enabled" :error="errorOf('model')" label="模型名称" tip="用于识别的模型名称，如 deepseek-flash、Qwen2.5-7B-Instruct 等。">
-      <NInput
-        v-model:value="model.model"
-        :status="errorOf('model') ? 'error' : undefined"
-        placeholder="如 deepseek-flash"
-      />
+      <HInput v-model="model.model" :status="errorOf('model') ? 'error' : undefined" placeholder="如 deepseek-flash" />
     </FieldRow>
 
     <FieldRow
@@ -174,11 +171,7 @@ async function saveChecked() {
       tip="AI 判定的结果比规则识别更容易出错，这里决定它们要不要先经你确认。每条 AI 判定都会打一个 0-100 的分：模型自评的把握度，年份、类型、片名对不上时封顶。整理记录里会标出「AI 识别 / AI 选定 N 分」，悬停可以看打分依据。"
       :hint="CONFIRM_HINT[model.confirm_mode]"
     >
-      <NRadioGroup v-model:value="model.confirm_mode" size="small">
-        <NRadioButton value="off">直接整理</NRadioButton>
-        <NRadioButton value="auto">按分数</NRadioButton>
-        <NRadioButton value="force">一律人工确认</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="model.confirm_mode" size="sm" :options="[{ label: '直接整理', value: 'off' }, { label: '按分数', value: 'auto' }, { label: '一律人工确认', value: 'force' }]" />
     </FieldRow>
     <FieldRow
       v-if="model.confirm_mode === 'auto'"
@@ -186,21 +179,21 @@ async function saveChecked() {
       tip="分数不低于这条线的 AI 判定直接整理，低于的等人工确认。模型从候选里挑、片名又和文件名对不上的，最高只有 75 分，按默认 80 分的线会停下来。"
       hint="默认 80；调低放行更多，调高更保守"
     >
-      <NInputNumber v-model:value="model.min_score" :min="0" :max="100" :step="5" style="width: 140px">
+      <HNumberInput v-model="model.min_score" :min="0" :max="100" :step="5" style="width: 140px">
         <template #suffix>分</template>
-      </NInputNumber>
+      </HNumberInput>
     </FieldRow>
-    <NAlert v-if="model.confirm_mode !== 'off'" class="note" type="default" :bordered="false">
+    <HAlert status="default" v-if="model.confirm_mode !== 'off'" class="note">
       「基础配置 → 人工确认」打开时，所有识别结果本来就都要确认，这里的设置不改变那一点。
       因 AI 判定停下的条目，关掉那个开关后也不会被自动整理接手，仍然等你处理。
-    </NAlert>
+    </HAlert>
 
     <FormActions>
-      <NButton type="primary" :loading="checking || saving" :disabled="testing" @click="saveChecked">
+      <HButton variant="primary" :loading="checking || saving" :disabled="testing" @click="saveChecked">
         保存配置
-      </NButton>
-      <NButton :loading="testing" :disabled="checking || saving" @click="test">测试连接</NButton>
-      <NButton :disabled="checking || saving || testing" @click="reset">重置配置</NButton>
+      </HButton>
+      <HButton variant="tertiary" :loading="testing" :disabled="checking || saving" @click="test">测试连接</HButton>
+      <HButton variant="tertiary" :disabled="checking || saving || testing" @click="reset">重置配置</HButton>
     </FormActions>
     <TestBanner :state="banner" />
   </SectionCard>

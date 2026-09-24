@@ -7,13 +7,14 @@ import { TooltipContent, TooltipPortal, TooltipRoot, TooltipTrigger } from 'reka
  * 触屏上没有 hover：Reka 的 Tooltip 在触屏上不会弹出，
  * 所以别把「只有提示里才有」的关键信息放进来。
  */
-withDefaults(defineProps<{ content?: string; side?: 'top' | 'bottom' | 'left' | 'right' }>(), {
-  side: 'top',
-})
+withDefaults(
+  defineProps<{ content?: string; side?: 'top' | 'bottom' | 'left' | 'right'; disabled?: boolean }>(),
+  { side: 'top' },
+)
 </script>
 
 <template>
-  <TooltipRoot>
+  <TooltipRoot :disabled="disabled">
     <TooltipTrigger as-child><slot /></TooltipTrigger>
     <TooltipPortal>
       <TooltipContent class="tooltip" :side="side" :side-offset="6" :collision-padding="12">

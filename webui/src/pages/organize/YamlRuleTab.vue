@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NButton, NModal, NPopconfirm } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import YamlEditor from '@/components/ui/YamlEditor.vue'
@@ -80,17 +83,17 @@ onMounted(read)
   <SectionCard :title="title" :hint="hint">
     <template #extra>
       <div class="head-actions">
-        <NButton size="small" secondary type="primary" @click="builderVisible = true">
+        <HButton variant="secondary" size="sm" @click="builderVisible = true">
           {{ kind === 'category' ? '添加分类规则' : '添加洗版策略' }}
-        </NButton>
-        <NButton size="small" quaternary @click="helpVisible = true">规则说明</NButton>
+        </HButton>
+        <HButton variant="ghost" size="sm" @click="helpVisible = true">规则说明</HButton>
       </div>
     </template>
 
-    <NAlert class="note" type="info" :bordered="false">{{ note }}</NAlert>
-    <NAlert v-if="kind === 'wash' && !loading && !yaml.trim()" class="note" type="warning" :bordered="false">
+    <HAlert status="accent" class="note">{{ note }}</HAlert>
+    <HAlert status="warning" v-if="kind === 'wash' && !loading && !yaml.trim()" class="note">
       策略为空时不做版本比较或替换。编辑后请保存，保存后立即生效；重启不会恢复默认策略。
-    </NAlert>
+    </HAlert>
 
     <YamlEditor v-if="!loading" ref="editor" v-model="yaml" :rows="26" :markers="issues" />
     <div v-else class="skeleton" />
@@ -130,24 +133,19 @@ onMounted(read)
     </div>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
-      <NButton @click="read">放弃修改</NButton>
-      <NPopconfirm v-if="defaultTemplate" @positive-click="yaml = defaultTemplate">
-        <template #trigger><NButton quaternary>恢复默认模板</NButton></template>
-        当前编辑器里的内容会被默认模板覆盖（不会立刻保存）。
-      </NPopconfirm>
+      <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
+      <HButton variant="tertiary" @click="read">放弃修改</HButton>
+      <HPopconfirm v-if="defaultTemplate" @confirm="yaml = defaultTemplate">
+<HButton variant="ghost">恢复默认模板</HButton>
+<template #content>当前编辑器里的内容会被默认模板覆盖（不会立刻保存）。</template>
+</HPopconfirm>
     </FormActions>
   </SectionCard>
 
-  <NModal
-    v-model:show="helpVisible"
-    preset="card"
-    :title="kind === 'category' ? '分类规则说明' : '洗版规则说明'"
-    style="width: min(920px, 92vw)"
-  >
+  <HModal v-model:show="helpVisible" :title="kind === 'category' ? '分类规则说明' : '洗版规则说明'" width="920px">
     <CategoryHelp v-if="kind === 'category'" />
     <WashHelp v-else />
-  </NModal>
+  </HModal>
 
   <RuleBuilder v-model:show="builderVisible" :kind="kind" :yaml="yaml" @apply="yaml = $event" />
 </template>

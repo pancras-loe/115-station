@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { NAlert, NButton, NRadioButton, NRadioGroup } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -73,28 +75,27 @@ const ROWS = [
 <template>
   <div class="stack">
     <SectionCard title="媒体补全" hint="ffprobe 探测真实画质">
-      <NAlert class="note" type="info" :bordered="false">
+      <HAlert status="accent" class="note">
         文件名缺分辨率 / 编码时（如 <code>蜘蛛侠.2016.mkv</code>），用 ffprobe 读取 115
         直链头部探测真实画质（只拉几 MB，不下载全文件），按下方策略规范命名。
         探测是「事实」、命名是「声明」：默认只在缺失或名实冲突时修改；片名 / 集数 / 年份 /
         来源 / 发布组等原有信息一律保留。
-      </NAlert>
+      </HAlert>
 
       <FieldRow label="媒体补全" tip="文件名缺分辨率 / 编码时自动探测规范命名。开启后新整理的文件生效。">
-        <NRadioGroup v-model:value="model.enrich.enabled">
-          <NRadioButton :value="true">开启</NRadioButton>
-          <NRadioButton :value="false">关闭</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="model.enrich.enabled" :options="[{ label: '开启', value: true }, { label: '关闭', value: false }]" />
       </FieldRow>
 
       <FieldRow v-for="r in ROWS" :key="r.key" :label="r.label" :tip="r.tip">
-        <NRadioGroup v-model:value="model.enrich[r.key]">
-          <NRadioButton v-for="o in r.options" :key="o.v" :value="o.v">{{ o.l }}</NRadioButton>
-        </NRadioGroup>
+        <HSegmented
+          v-model="model.enrich[r.key]"
+          :options="r.options.map((o) => ({ label: o.l, value: o.v }))"
+          :aria-label="r.label"
+        />
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="saveEnrich">保存策略</NButton>
+        <HButton variant="primary" :loading="saving" @click="saveEnrich">保存策略</HButton>
       </FormActions>
     </SectionCard>
   </div>

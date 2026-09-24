@@ -8,15 +8,12 @@
  *   3) 分类规则讲顺序，写在兜底后面等于白写 → 插入点由结构决定（见 ruleEdit）。
  */
 import { computed, ref, watch } from 'vue'
-import {
-  NButton,
-  NInput,
-  NModal,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  type SelectOption,
-} from 'naive-ui'
+import HMultiSelect, { type MultiGroup, type MultiOption } from '@/components/hero/HMultiSelect.vue'
+import HSelect, { type SelectOption } from '@/components/hero/HSelect.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import {
   COUNTRIES,
@@ -49,16 +46,16 @@ const countries = ref<string[]>([])
 const langs = ref<string[]>([])
 const regex = ref('')
 
-const genreOptions = computed<SelectOption[]>(() =>
+const genreOptions = computed<MultiOption<string>[]>(() =>
   (media.value === 'movie' ? MOVIE_GENRES : TV_GENRES).map(([v, l]) => ({ label: `${l}（${v}）`, value: v })),
 )
-const countryOptions: SelectOption[] = COUNTRIES.map(c => ({
-  type: 'group',
+const countryOptions: MultiGroup<string>[] = COUNTRIES.map(c => ({
+  type: 'group' as const,
   key: c.group,
   label: c.group,
   children: c.items.map(([v, l]) => ({ label: `${l}（${v}）`, value: v })),
 }))
-const langOptions: SelectOption[] = LANGUAGES.map(([v, l]) => ({ label: `${l}（${v}）`, value: v }))
+const langOptions: MultiOption<string>[] = LANGUAGES.map(([v, l]) => ({ label: `${l}（${v}）`, value: v }))
 
 interface CategoryPreset {
   label: string
@@ -117,23 +114,23 @@ const washTarget = ref('redundant')
 /** 一级优先级 = 字段 → 多个取值，落到 YAML 时用逗号连起来 */
 const levels = ref<Record<string, string[]>[]>([{}])
 
-const modeOptions: SelectOption[] = WASH_MODES.map(([v, l]) => ({ label: `${v} — ${l}`, value: v }))
-const scopeOptions: SelectOption[] = [
+const modeOptions: SelectOption<string>[] = WASH_MODES.map(([v, l]) => ({ label: `${v} — ${l}`, value: v }))
+const scopeOptions: SelectOption<string>[] = [
   { label: 'all — 同一影片（同一集）跨分辨率比较', value: 'all' },
   { label: 'group — 按分辨率分组各留一个', value: 'group' },
 ]
-const mediaOptions: SelectOption[] = [
+const mediaOptions: SelectOption<string>[] = [
   { label: '不限（电影 + 剧集）', value: '' },
   { label: '仅电影 movie', value: 'movie' },
   { label: '仅剧集 tv', value: 'tv' },
 ]
-const targetOptions: SelectOption[] = [
+const targetOptions: SelectOption<string>[] = [
   { label: 'redundant — 旧版移到冗余目录', value: 'redundant' },
   { label: 'existing — 旧版移到已存在目录', value: 'existing' },
   { label: 'delete — 旧版移入 115 回收站', value: 'delete' },
 ]
 
-const washFieldOptions: Record<string, SelectOption[]> = Object.fromEntries(
+const washFieldOptions: Record<string, SelectOption<string>[]> = Object.fromEntries(
   Object.entries(WASH_VALUE_OPTIONS).map(([k, vs]) => [k, vs.map(v => ({ label: v, value: v }))]),
 )
 
@@ -238,109 +235,74 @@ watch(show, v => {
 </script>
 
 <template>
-  <NModal
-    v-model:show="show"
-    preset="card"
-    :title="kind === 'category' ? '添加分类规则' : '添加洗版策略'"
-    style="width: min(760px, 94vw)"
-  >
+  <HModal v-model:show="show" :title="kind === 'category' ? '添加分类规则' : '添加洗版策略'" width="760px">
     <div class="form">
       <!-- 二级分类 -->
       <template v-if="kind === 'category'">
         <FieldRow label="媒体类型">
-          <NRadioGroup v-model:value="media" size="small">
-            <NRadioButton value="movie">电影</NRadioButton>
-            <NRadioButton value="tv">剧集</NRadioButton>
-          </NRadioGroup>
+          <HSegmented v-model="media" size="sm" :options="[{ label: '电影', value: 'movie' }, { label: '剧集', value: 'tv' }]" />
         </FieldRow>
 
         <FieldRow label="常见配方" tip="点一下填好表单，再按自己的目录名改">
           <div class="presets">
-            <NButton
-              v-for="p in catPresets"
-              :key="p.label"
-              size="tiny"
-              secondary
-              @click="applyCategoryPreset(p)"
-            >
+            <HButton variant="tertiary" size="sm" v-for="p in catPresets" :key="p.label" @click="applyCategoryPreset(p)">
               {{ p.label }}
-            </NButton>
+            </HButton>
           </div>
         </FieldRow>
 
         <FieldRow label="分类名" required tip="即 115 目录名，用 / 可建多级，如 电影/动画电影" wide>
-          <NInput v-model:value="catName" placeholder="电影/动画电影" />
+          <HInput v-model="catName" placeholder="电影/动画电影" />
         </FieldRow>
 
         <FieldRow label="类型" tip="TMDB genre_ids，多选之间是「或」" wide>
-          <NSelect
-            v-model:value="genres"
-            multiple
-            filterable
-            clearable
-            :options="genreOptions"
-            placeholder="不限"
-          />
+          <HMultiSelect v-model="genres" :options="genreOptions" placeholder="不限，可输入搜索" />
         </FieldRow>
 
         <FieldRow label="国家 / 地区" tip="origin_country，多选之间是「或」" wide>
-          <NSelect
-            v-model:value="countries"
-            multiple
-            filterable
-            clearable
-            :options="countryOptions"
-            placeholder="不限"
-          />
+          <HMultiSelect v-model="countries" :options="countryOptions" placeholder="不限，可输入搜索" />
         </FieldRow>
 
         <FieldRow label="语言" tip="original_language，多选之间是「或」" wide>
-          <NSelect
-            v-model:value="langs"
-            multiple
-            filterable
-            clearable
-            :options="langOptions"
-            placeholder="不限"
-          />
+          <HMultiSelect v-model="langs" :options="langOptions" placeholder="不限，可输入搜索" />
         </FieldRow>
 
         <FieldRow label="片名正则" tip="命中片名或原名即归此类，不要求其他条件同时成立" wide>
-          <NInput v-model:value="regex" placeholder="选填，如 ^(哆啦A梦|蜡笔小新)" />
+          <HInput v-model="regex" placeholder="选填，如 ^(哆啦A梦|蜡笔小新)" />
         </FieldRow>
       </template>
 
       <!-- 洗版 -->
       <template v-else>
         <FieldRow label="策略名" required tip="YAML 顶层键，只是给人看的标签" wide>
-          <NInput v-model:value="washName" placeholder="电影洗版策略" />
+          <HInput v-model="washName" placeholder="电影洗版策略" />
         </FieldRow>
 
         <FieldRow label="适用媒体" wide>
-          <NSelect v-model:value="washMedia" :options="mediaOptions" />
+          <HSelect v-model="washMedia" :options="mediaOptions" />
         </FieldRow>
 
         <FieldRow label="限定分类" tip="只对某些分类生效，逗号分隔；可写全路径「电视剧/日番」或只写末级「日番」；留空表示全部" wide>
-          <NInput v-model:value="washCategory" placeholder="选填，如 电影/华语电影" />
+          <HInput v-model="washCategory" placeholder="选填，如 电影/华语电影" />
         </FieldRow>
 
         <FieldRow label="洗版模式" wide>
-          <NSelect v-model:value="washMode" :options="modeOptions" />
+          <HSelect v-model="washMode" :options="modeOptions" />
         </FieldRow>
 
         <FieldRow label="保留范围" wide>
-          <NSelect v-model:value="washScope" :options="scopeOptions" />
+          <HSelect v-model="washScope" :options="scopeOptions" />
         </FieldRow>
 
         <FieldRow label="旧版去向" wide>
-          <NSelect v-model:value="washTarget" :options="targetOptions" />
+          <HSelect v-model="washTarget" :options="targetOptions" />
         </FieldRow>
 
         <FieldRow label="常见配方" tip="点一下填好优先级阶梯，再按自己的口味改">
           <div class="presets">
-            <NButton v-for="p in WASH_PRESETS" :key="p.label" size="tiny" secondary @click="applyWashPreset(p)">
+            <HButton variant="tertiary" size="sm" v-for="p in WASH_PRESETS" :key="p.label" @click="applyWashPreset(p)">
               {{ p.label }}
-            </NButton>
+            </HButton>
           </div>
         </FieldRow>
 
@@ -353,28 +315,24 @@ watch(show, v => {
           <div v-for="(lv, i) in levels" :key="i" class="level">
             <div class="level-head">
               <span class="level-no">第 {{ i + 1 }} 优先</span>
-              <NButton size="tiny" quaternary :disabled="levels.length <= 1" @click="levels.splice(i, 1)">
+              <HButton variant="ghost" size="sm" :disabled="levels.length <= 1" @click="levels.splice(i, 1)">
                 删除
-              </NButton>
+              </HButton>
             </div>
             <div class="level-grid">
               <label v-for="f in WASH_FIELDS" :key="f[0]" class="level-field">
                 <span>{{ f[1].split('（')[0] }}</span>
-                <NSelect
-                  v-model:value="lv[f[0]]"
-                  multiple
-                  filterable
-                  tag
-                  clearable
-                  size="small"
-                  :options="washFieldOptions[f[0]]"
-                  placeholder="不限"
+                <HMultiSelect
+                  v-model="lv[f[0]]"
+                  creatable
+                  :options="washFieldOptions[f[0]] ?? []"
+                  placeholder="不限，可输入自定义值"
                 />
               </label>
             </div>
           </div>
 
-          <NButton size="tiny" dashed @click="levels.push({})">+ 再加一级</NButton>
+          <HButton variant="tertiary" size="sm" @click="levels.push({})">+ 再加一级</HButton>
         </div>
       </template>
 
@@ -393,11 +351,11 @@ watch(show, v => {
 
     <template #footer>
       <div class="footer">
-        <NButton @click="show = false">取消</NButton>
-        <NButton type="primary" :disabled="!canApply" @click="apply">写入规则</NButton>
+        <HButton variant="tertiary" @click="show = false">取消</HButton>
+        <HButton variant="primary" :disabled="!canApply" @click="apply">写入规则</HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

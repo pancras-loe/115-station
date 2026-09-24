@@ -5,7 +5,12 @@
  * 后端量级几十到几百条，一次全拉，筛选在本地做。
  */
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NInput, NPopconfirm, NTag, NTooltip } from 'naive-ui'
+import HTooltip from '@/components/hero/HTooltip.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import { heroTone } from '@/components/hero/tone'
 import { RefreshCw, Search, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -77,29 +82,25 @@ function shortDate(s: string) {
     hint="在待确认里改过指定、或重新整理选了别的条目时自动记下；同名同年的内容以后直接采用"
   >
     <template #extra>
-      <NTooltip>
-        <template #trigger>
-          <NButton size="small" quaternary :loading="loading" @click="reload">
+      <HTooltip>
+<HButton variant="ghost" size="sm" :loading="loading" @click="reload">
             <template #icon><RefreshCw :size="14" /></template>
-          </NButton>
-        </template>
-        刷新
-      </NTooltip>
-      <NPopconfirm @positive-click="void clearAll()">
-        <template #trigger>
-          <NButton size="small" quaternary type="error" :disabled="!rows.length">
+          </HButton>
+<template #content>刷新</template>
+</HTooltip>
+      <HPopconfirm @confirm="void clearAll()" danger :disabled="!rows.length">
+<HButton variant="danger-soft" size="sm" :disabled="!rows.length">
             <template #icon><Trash2 :size="14" /></template>
             清空
-          </NButton>
-        </template>
-        清空全部 {{ rows.length }} 条识别记忆？之后同名内容都按正常流程重新识别。
-      </NPopconfirm>
+          </HButton>
+<template #content>清空全部 {{ rows.length }} 条识别记忆？之后同名内容都按正常流程重新识别。</template>
+</HPopconfirm>
     </template>
 
     <div v-if="rows.length > 8" class="toolbar">
-      <NInput v-model:value="keyword" size="small" clearable placeholder="按原名、片名或 TMDB id 筛选">
+      <HInput v-model="keyword" clearable placeholder="按原名、片名或 TMDB id 筛选">
         <template #prefix><Search :size="14" /></template>
-      </NInput>
+      </HInput>
     </div>
 
     <EmptyState
@@ -120,9 +121,9 @@ function shortDate(s: string) {
         </div>
         <div class="target">
           <span class="arrow">→</span>
-          <NTag size="small" :bordered="false" :type="r.media_type === 'tv' ? 'info' : 'default'">
+          <HChip :color="heroTone(r.media_type === 'tv' ? 'info' : 'default')">
             {{ r.media_type === 'tv' ? '剧集' : '电影' }}
-          </NTag>
+          </HChip>
           <a
             class="title"
             :href="`https://www.themoviedb.org/${r.media_type}/${r.tmdb_id}`"
@@ -137,14 +138,12 @@ function shortDate(s: string) {
           <span :title="`已按这条记忆识别 ${r.hits} 次`">命中 {{ r.hits }}</span>
           <span :title="fullTime(r.updated_at)">{{ shortDate(r.updated_at) }}</span>
         </div>
-        <NPopconfirm @positive-click="void remove(r)">
-          <template #trigger>
-            <NButton size="tiny" quaternary title="删除这条记忆">
+        <HPopconfirm @confirm="void remove(r)">
+<HButton variant="ghost" size="sm" title="删除这条记忆">
               <Trash2 :size="13" />
-            </NButton>
-          </template>
-          删除后，同名内容下次按正常流程识别。
-        </NPopconfirm>
+            </HButton>
+<template #content>删除后，同名内容下次按正常流程识别。</template>
+</HPopconfirm>
       </li>
     </ul>
     <p v-if="rows.length" class="note">

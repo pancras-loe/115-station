@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NAlert, NButton, NInput, NRadioButton, NRadioGroup, NTag } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import { heroTone } from '@/components/hero/tone'
 import { useRouter } from 'vue-router'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -101,10 +106,7 @@ onMounted(load)
       label="整理后自动刮削"
       hint="整理完成后只刮本轮新入库的片目（不扫全库）；是否上传到 115 由下方上传开关独立控制。"
     >
-      <NRadioGroup v-model:value="cfg.auto_after_organize">
-        <NRadioButton :value="true">开启</NRadioButton>
-        <NRadioButton :value="false">关闭</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="cfg.auto_after_organize" :options="[{ label: '开启', value: true }, { label: '关闭', value: false }]" />
     </FieldRow>
 
     <FieldRow
@@ -112,55 +114,45 @@ onMounted(load)
       tip="这里只显示监控上传总开关的当前状态；刮削始终先写入本地媒体库。"
     >
       <div class="upload-status">
-        <NTag :type="monitor.model.value.enabled ? 'success' : 'default'" :bordered="false">
+        <HChip :color="heroTone(monitor.model.value.enabled ? 'success' : 'default')">
           {{ monitor.model.value.enabled ? '已允许上传' : '已禁止上传（默认）' }}
-        </NTag>
-        <NButton
-          text
-          type="primary"
-          @click="router.push({ name: 'upload-download', query: { tab: 'upload' } })"
-        >
+        </HChip>
+        <HButton variant="ghost" class="text-btn" @click="router.push({ name: 'upload-download', query: { tab: 'upload' } })">
           前往上传开关配置
-        </NButton>
+        </HButton>
       </div>
     </FieldRow>
 
-    <NAlert class="note" type="info" :bordered="false">
+    <HAlert status="accent" class="note">
       按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录；仅在允许上传时由「监控上传」回传 115
       —— 替代「Emby 刮削到本地」。Emby 侧建议把元数据读取器设为「仅 NFO」，以本站数据为准。
       电影生成与视频同名的 NFO（口径与 Emby 自己刮削一致），剧集生成 tvshow.nfo、整季海报与逐集同名
       NFO；NFO 内含 fileinfo/streamdetails
       轨道信息（ffprobe 探测的多音轨 / 内嵌字幕），播放器无需探测 strm 远端即可显示音轨字幕。
-    </NAlert>
+    </HAlert>
 
     <FieldRow
       label="本地媒体库根目录"
       tip="统一位置配置；片目目录 = 根目录 + 台账相对路径。"
     >
-      <NInput :value="media.model.value.local_path || '未配置'" readonly />
-      <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+      <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
+      <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
         前往「账号与媒体库」修改
-      </NButton>
+      </HButton>
     </FieldRow>
 
     <FieldRow v-for="s in SWITCHES" :key="s.key" :label="s.label">
-      <NRadioGroup v-model:value="cfg[s.key]">
-        <NRadioButton :value="true">{{ s.on }}</NRadioButton>
-        <NRadioButton :value="false">{{ s.off }}</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="cfg[s.key]" :options="[{ label: s.on, value: true }, { label: s.off, value: false }]" />
     </FieldRow>
 
     <FieldRow label="覆盖模式">
-      <NRadioGroup v-model:value="cfg.force">
-        <NRadioButton :value="false">只补缺失</NRadioButton>
-        <NRadioButton :value="true">强制覆盖</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="cfg.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
     </FieldRow>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
-      <NButton type="primary" ghost :loading="starting" @click="run">开始刮削</NButton>
-      <NButton @click="stop">停止</NButton>
+      <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
+      <HButton variant="secondary" :loading="starting" @click="run">开始刮削</HButton>
+      <HButton variant="tertiary" @click="stop">停止</HButton>
     </FormActions>
   </SectionCard>
 </template>

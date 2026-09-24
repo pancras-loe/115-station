@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NButton, NInput, NInputGroup } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
 import { FolderOpen } from '@lucide/vue'
 import DirPickerModal from './DirPickerModal.vue'
 import { storageApi } from '@/api'
@@ -90,19 +91,39 @@ defineExpose({ ensureCid })
 
 <template>
   <div>
-    <NInputGroup>
-      <NInput
-        :value="text"
+    <div class="pick-row">
+      <HInput
+        :model-value="text"
         :placeholder="placeholder || '选择或填写 cid'"
         :loading="resolving"
-        @update:value="onInput"
+        @update:model-value="onInput"
       />
-      <NButton @click="pickerShow = true">
-        <template #icon><FolderOpen :size="15" /></template>
-        选择目录
-      </NButton>
-    </NInputGroup>
+      <HButton variant="tertiary" class="pick-btn" aria-label="选择目录" @click="pickerShow = true">
+        <template #icon><FolderOpen /></template>
+        <span class="pick-label">选择目录</span>
+      </HButton>
+    </div>
 
     <DirPickerModal v-model:show="pickerShow" mode="115" @pick="onPick" />
   </div>
 </template>
+
+<style scoped>
+/* 输入框 + 旁边一颗胶囊按钮（HeroUI 不做「按钮焊在输入框上」的组合），手机上按钮只留图标 */
+.pick-row {
+  display: flex;
+  gap: 8px;
+}
+.pick-btn {
+  flex: none;
+}
+@media (max-width: 720px) {
+  .pick-label {
+    display: none;
+  }
+  .pick-btn {
+    width: 40px;
+    padding: 0;
+  }
+}
+</style>

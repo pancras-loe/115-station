@@ -1,5 +1,3 @@
-import { h } from 'vue'
-import { NButton, NSpace } from 'naive-ui'
 import { useFeedback } from './useFeedback'
 
 /**
@@ -15,7 +13,7 @@ export const UNSAVED_NOTE = '直接开始将按修改前的配置运行；要用
  * 表单改了没保存就点开始，任务会静默按旧配置跑完——文件搬完了才发现。
  * 所以 dirty 时统一拦一道，三个出口：保存并开始 / 直接开始 / 取消。
  *
- * 用 dialog 而不是按钮上原有的 NPopconfirm：气泡只有确定/取消两个位置，
+ * 用确认框而不是按钮上原有的确认气泡：气泡只有确定/取消两个位置，
  * 塞不下第三个出口。调用方在 dirty 时应当跳过 popconfirm，避免连弹两次。
  *
  * @param note 一句话说清「直接开始」的后果，别写成一段——没人读
@@ -26,29 +24,18 @@ export async function confirmUnsaved(
   note: string,
   save: () => Promise<boolean | void>,
 ): Promise<boolean> {
-  const { dialog } = useFeedback()
-
-  const choice = await new Promise<'save' | 'skip' | 'cancel'>((resolve) => {
-    // 三个按钮都走 destroy()，统一在 onAfterLeave 里回收，避免点遮罩/Esc 关掉后 Promise 悬着
-    let picked: 'save' | 'skip' | 'cancel' = 'cancel'
-    const d = dialog.warning({
-      title: '有未保存的配置',
-      content: note,
-      onAfterLeave: () => resolve(picked),
-      action: () =>
-        h(NSpace, { size: 8 }, () => [
-          h(NButton, { size: 'small', onClick: () => ((picked = 'cancel'), d.destroy()) }, () => '取消'),
-          h(NButton, { size: 'small', onClick: () => ((picked = 'skip'), d.destroy()) }, () => '直接开始'),
-          h(
-            NButton,
-            { size: 'small', type: 'primary', onClick: () => ((picked = 'save'), d.destroy()) },
-            () => '保存并开始',
-          ),
-        ]),
-    })
+  const choice = await useFeedback().dialog.confirm<'save' | 'skip'>({
+    title: '有未保存的配置',
+    content: note,
+    tone: 'warning',
+    // 点遮罩 / Esc / 关闭按钮都按「取消」处理（confirm 返回 null）
+    actions: [
+      { label: '直接开始', value: 'skip', variant: 'tertiary' },
+      { label: '保存并开始', value: 'save', variant: 'primary' },
+    ],
   })
 
-  if (choice === 'cancel') return false
+  if (choice === null) return false
   if (choice === 'save') return (await save()) !== false
   return true
 }

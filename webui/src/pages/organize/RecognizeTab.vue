@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { NButton, NCheckbox, NDynamicTags, NInput, NInputNumber, NModal, NSelect, NTag } from 'naive-ui'
+import HTagsInput from '@/components/hero/HTagsInput.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HSelect from '@/components/hero/HSelect.vue'
+import { heroTone } from '@/components/hero/tone'
 import { Plus, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -82,7 +90,7 @@ const helpVisible = ref(false)
 <template>
   <SectionCard title="识别规则" hint="文件名送去识别之前的预处理与过滤">
     <template #extra>
-      <NButton size="small" quaternary @click="helpVisible = true">功能介绍</NButton>
+      <HButton variant="ghost" size="sm" @click="helpVisible = true">功能介绍</HButton>
     </template>
 
     <FieldRow
@@ -93,47 +101,31 @@ const helpVisible = ref(false)
       <div v-if="model.replace_rules.length" class="rules">
         <div v-for="(r, i) in model.replace_rules" :key="i" class="rule">
           <span class="idx">{{ i + 1 }}</span>
-          <NSelect
-            :value="r.regex ? 'regex' : 'text'"
-            :options="MODES"
-            size="small"
-            class="mode"
-            @update:value="(v: string) => (r.regex = v === 'regex')"
-          />
-          <NInput
-            v-model:value="r.from"
-            size="small"
-            :placeholder="r.regex ? '正则，如 【[^】]*】' : '原文本'"
-          />
+          <HSelect :model-value="r.regex ? 'regex' : 'text'" :options="MODES" class="mode" @update:model-value="(v?: string) => (r.regex = v === 'regex')" />
+          <HInput v-model="r.from" :placeholder="r.regex ? '正则，如 【[^】]*】' : '原文本'" />
           <span class="arrow">→</span>
-          <NInput v-model:value="r.to" size="small" placeholder="替换为（留空 = 删掉）" />
+          <HInput v-model="r.to" placeholder="替换为（留空 = 删掉）" />
           <div class="ops">
-            <NButton size="tiny" quaternary :disabled="i === 0" title="上移" @click="moveRule(i, -1)">
+            <HButton variant="ghost" size="sm" :disabled="i === 0" title="上移" @click="moveRule(i, -1)">
               ↑
-            </NButton>
-            <NButton
-              size="tiny"
-              quaternary
-              :disabled="i === model.replace_rules.length - 1"
-              title="下移"
-              @click="moveRule(i, 1)"
-            >
+            </HButton>
+            <HButton variant="ghost" size="sm" :disabled="i === model.replace_rules.length - 1" title="下移" @click="moveRule(i, 1)">
               ↓
-            </NButton>
-            <NButton size="tiny" quaternary title="删除" @click="removeRule(i)">
+            </HButton>
+            <HButton variant="ghost" size="sm" title="删除" @click="removeRule(i)">
               <Trash2 :size="13" />
-            </NButton>
+            </HButton>
           </div>
         </div>
       </div>
       <div v-else class="empty">还没有规则。点「常用规则」挑几条现成的，或者「添加规则」自己写一条。</div>
 
       <div class="rule-actions">
-        <NButton size="small" dashed @click="openPresets()">常用规则</NButton>
-        <NButton size="small" dashed @click="addRule()">
+        <HButton variant="tertiary" size="sm" dashed @click="openPresets()">常用规则</HButton>
+        <HButton variant="tertiary" size="sm" dashed @click="addRule()">
           <template #icon><Plus :size="14" /></template>
           添加规则
-        </NButton>
+        </HButton>
       </div>
 
       <div v-if="preview.invalid.length" class="warn">
@@ -146,12 +138,12 @@ const helpVisible = ref(false)
     </FieldRow>
 
     <FieldRow label="效果预览" tip="只是本地试算，不会动网盘里的任何文件。" wide>
-      <NInput v-model:value="sample" size="small" placeholder="粘一个真实文件名试试" />
+      <HInput v-model="sample" placeholder="粘一个真实文件名试试" />
       <div class="preview">
         <div v-if="!model.replace_rules.length" class="preview-idle">没有规则，文件名原样送去识别。</div>
         <template v-else>
           <div class="preview-line">
-            <NTag size="small" :bordered="false">结果</NTag>
+            <HChip>结果</HChip>
             <code :class="{ changed: preview.result !== sample }">{{ preview.result || '（空）' }}</code>
           </div>
           <div v-if="!preview.hits.length" class="preview-idle">这个名字一条规则都没命中。</div>
@@ -172,7 +164,7 @@ const helpVisible = ref(false)
       tip="默认只认「文件名末尾 -GROUP」；把组名填进来，名字里任何位置出现都算命中。用于 {resource_team} 变量和洗版规则。"
       hint="回车添加一个，如 WiKi、FRDS"
     >
-      <NDynamicTags v-model:value="model.release_groups" size="small" />
+      <HTagsInput v-model="model.release_groups" placeholder="WiKi 回车添加" />
     </FieldRow>
 
     <FieldRow
@@ -181,46 +173,35 @@ const helpVisible = ref(false)
       hint="0 = 不限制；常见取值 50~200 MB"
     >
       <div class="minsize">
-        <NInputNumber v-model:value="model.min_size" :min="0" :step="10" style="width: 160px">
+        <HNumberInput v-model="model.min_size" :min="0" :step="10" style="width: 160px">
           <template #suffix>MB</template>
-        </NInputNumber>
-        <NButton
-          v-for="q in [0, 50, 100, 200]"
-          :key="q"
-          size="tiny"
-          :type="model.min_size === q ? 'primary' : 'default'"
-          quaternary
-          @click="model.min_size = q"
-        >
+        </HNumberInput>
+        <HButton v-for="q in [0, 50, 100, 200]" :key="q" size="sm" :variant="model.min_size === q ? 'primary' : 'ghost'" @click="model.min_size = q">
           {{ q === 0 ? '不限制' : `${q}MB` }}
-        </NButton>
+        </HButton>
       </div>
     </FieldRow>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save()">保存配置</NButton>
-      <NButton @click="reset">重置配置</NButton>
+      <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+      <HButton variant="tertiary" @click="reset">重置配置</HButton>
     </FormActions>
   </SectionCard>
 
   <RecognizeMemoryCard class="memory-card" />
 
-  <NModal v-model:show="presetVisible" preset="card" title="常用规则" style="width: min(660px, 92vw)">
+  <HModal v-model:show="presetVisible" title="常用规则" width="660px">
     <div class="presets">
       <label v-for="p in RULE_PRESETS" :key="p.key" class="preset">
-        <NCheckbox
-          :checked="picked.includes(p.key)"
-          :disabled="existingFroms.has(p.rule.from)"
-          @update:checked="
+        <HCheckbox :checked="picked.includes(p.key)" :disabled="existingFroms.has(p.rule.from)" @update:checked="
             (v: boolean) => (picked = v ? [...picked, p.key] : picked.filter((k) => k !== p.key))
-          "
-        />
+          " />
         <div class="preset-body">
           <div class="preset-title">
             {{ p.label }}
-            <NTag size="tiny" :bordered="false" :type="p.rule.regex ? 'info' : 'default'">
+            <HChip :color="heroTone(p.rule.regex ? 'info' : 'default')">
               {{ p.rule.regex ? '正则' : '文本' }}
-            </NTag>
+            </HChip>
             <span v-if="existingFroms.has(p.rule.from)" class="preset-added">已添加</span>
           </div>
           <div class="preset-desc">{{ p.desc }}</div>
@@ -230,20 +211,15 @@ const helpVisible = ref(false)
     </div>
     <template #footer>
       <div class="modal-actions">
-        <NButton size="small" @click="presetVisible = false">取消</NButton>
-        <NButton size="small" type="primary" @click="applyPresets()">添加所选</NButton>
+        <HButton variant="tertiary" size="sm" @click="presetVisible = false">取消</HButton>
+        <HButton variant="primary" size="sm" @click="applyPresets()">添加所选</HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 
-  <NModal
-    v-model:show="helpVisible"
-    preset="card"
-    title="识别规则是怎么回事"
-    style="width: min(860px, 92vw)"
-  >
+  <HModal v-model:show="helpVisible" title="识别规则是怎么回事" width="860px">
     <RecognizeHelp />
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { NAlert, NButton, NPopconfirm, NSwitch } from 'naive-ui'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -225,19 +228,19 @@ async function runOrganize() {
   <div class="stack">
     <TaskStatusBar />
 
-    <NAlert v-if="tmdbReady === false" type="warning" :bordered="false" title="整理前需要配置 TMDB">
+    <HAlert status="warning" v-if="tmdbReady === false" title="整理前需要配置 TMDB">
       尚未填写 TMDB API 密钥，手动及自动触发的整理均无法识别影视。填写并测试连接后再开始整理。
-      <div class="alert-action"><NButton size="small" @click="configureTmdb">去配置</NButton></div>
-    </NAlert>
-    <NAlert v-else-if="tmdbError" type="error" :bordered="false">
+      <div class="alert-action"><HButton variant="tertiary" size="sm" @click="configureTmdb">去配置</HButton></div>
+    </HAlert>
+    <HAlert status="danger" v-else-if="tmdbError">
       {{ tmdbError }}
-      <div class="alert-action"><NButton size="small" :loading="checkingTmdb" @click="checkTmdb">重新检查</NButton></div>
-    </NAlert>
+      <div class="alert-action"><HButton variant="tertiary" size="sm" :loading="checkingTmdb" @click="checkTmdb">重新检查</HButton></div>
+    </HAlert>
 
     <SectionCard title="基础配置" hint="整理引擎的工作目录与定时">
-      <NAlert class="note" type="warning" :bordered="false">
+      <HAlert status="warning" class="note">
         自动整理前必须先创建好二级分类策略，并完成一次全量同步。
-      </NAlert>
+      </HAlert>
 
       <FieldRow v-for="d in DIRS" :key="d.key" :label="d.label" :tip="d.tip">
         <Cid115Input
@@ -252,7 +255,7 @@ async function runOrganize() {
         tip="打开后整理识别完就停下：条目原地留在待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
       >
         <div class="switch-row">
-          <NSwitch v-model:value="model.manual_confirm" />
+          <HSwitch v-model="model.manual_confirm" />
           <span class="switch-hint">
             {{
               model.manual_confirm
@@ -270,7 +273,7 @@ async function runOrganize() {
         <CronField v-model="cron" placeholder="*/10 8-23 * * *" />
       </FieldRow>
 
-      <NAlert class="note-top" type="info" :bordered="false" title="自动整理的六种触发方式">
+      <HAlert status="accent" class="note-top" title="自动整理的六种触发方式">
         <p class="al-p">
           不管哪种触发，跑的都是同一条流水线：识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 →
           写 STRM / 下字幕封面 → 刮削 → 刷新 Emby。区别只在<strong>什么时候开始</strong>和<strong>扫哪个目录</strong>。
@@ -301,29 +304,20 @@ async function runOrganize() {
           增量同步收尾。整理、增量、全量共用一把任务锁，同一时刻只跑一个；cron 命中时撞上别的任务
           不会整轮丢掉，会在之后每分钟重试直到补上。
         </p>
-      </NAlert>
+      </HAlert>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="saveAll">保存配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="saveAll">保存配置</HButton>
         <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
-        <NButton v-if="tmdbReady === false" type="warning" @click="configureTmdb">配置 TMDB 后开始整理</NButton>
-        <NButton v-else-if="tmdbReady === null || checkingTmdb" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</NButton>
-        <NPopconfirm v-else-if="!dirty" @positive-click="void runOrganize()">
-          <template #trigger>
-            <NButton type="error" ghost :disabled="busy" :loading="running">开始整理</NButton>
-          </template>
-          {{ runHint }}
-        </NPopconfirm>
-        <NButton
-          v-else
-          type="error"
-          ghost
-          :disabled="busy"
-          :loading="running"
-          @click="void runOrganize()"
-        >
+        <HButton variant="primary" v-if="tmdbReady === false" @click="configureTmdb">配置 TMDB 后开始整理</HButton>
+        <HButton variant="tertiary" v-else-if="tmdbReady === null || checkingTmdb" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</HButton>
+        <HPopconfirm v-else-if="!dirty" @confirm="void runOrganize()" danger :disabled="busy">
+<HButton variant="danger-soft" :disabled="busy" :loading="running">开始整理</HButton>
+<template #content>{{ runHint }}</template>
+</HPopconfirm>
+        <HButton variant="danger-soft" v-else :disabled="busy" :loading="running" @click="void runOrganize()">
           开始整理
-        </NButton>
+        </HButton>
       </FormActions>
     </SectionCard>
   </div>
