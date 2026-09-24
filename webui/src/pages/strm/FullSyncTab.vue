@@ -1,16 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import {
-  NAlert,
-  NButton,
-  NDynamicTags,
-  NInput,
-  NPopconfirm,
-  NRadioButton,
-  NModal,
-  NRadioGroup,
-  NSwitch,
-} from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
+import HTagsInput from '@/components/hero/HTagsInput.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -185,13 +182,18 @@ async function runFull() {
 const busy = computed(() => running.value || task.status.running)
 
 const helpVisible = ref(false)
+
+const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
+  { label: '标准模式（默认）', value: 'normal' },
+  { label: '快速模式', value: 'fast' },
+]
 </script>
 
 <template>
   <div class="tab-body">
     <SectionCard title="全量同步" hint="115 媒体库目录 → 本地 STRM 文件">
       <template #extra>
-        <NButton size="small" quaternary @click="helpVisible = true">功能介绍</NButton>
+        <HButton size="sm" variant="ghost" @click="helpVisible = true">功能介绍</HButton>
       </template>
 
       <FieldRow
@@ -199,14 +201,11 @@ const helpVisible = ref(false)
         tip="标准模式逐个目录遍历，兼容性最好；快速模式一次性取回整棵目录树与文件表，请求数少两个数量级。"
       >
         <template v-if="fastAvailable">
-          <NRadioGroup v-model:value="cfg.mode">
-            <NRadioButton value="normal">标准模式（默认）</NRadioButton>
-            <NRadioButton value="fast">快速模式</NRadioButton>
-          </NRadioGroup>
-          <NAlert v-if="fullMode === 'fast'" class="mode-note" type="warning" :bordered="false">
+          <HSegmented v-model="cfg.mode" :options="MODE_OPTIONS" aria-label="同步模式" />
+          <HAlert v-if="fullMode === 'fast'" class="mode-note" status="warning">
             媒体库文件数超过 20 万时，建议先用标准模式完整跑通一次，确认无异常后再切快速模式。
             快速模式依赖 115 客户端端点，若接口变动会自动降级为标准模式。
-          </NAlert>
+          </HAlert>
         </template>
         <span v-else class="mode-locked">标准模式{{ fastReason ? `（${fastReason}）` : '' }}</span>
       </FieldRow>
@@ -215,38 +214,38 @@ const helpVisible = ref(false)
         label="115 媒体库目录"
         tip="统一位置配置；全量同步、增量同步、整理入库与洗版判定共同使用。"
       >
-        <NInput :value="cfg.cid_path || cfg.cid || '未配置'" readonly />
+        <HInput :model-value="cfg.cid_path || cfg.cid || '未配置'" readonly />
       </FieldRow>
 
       <FieldRow
         label="本地媒体库根目录"
         tip="统一位置配置；STRM、附属文件与影视刮削共同使用。"
       >
-        <NInput :value="cfg.local_path || '未配置'" readonly />
+        <HInput :model-value="cfg.local_path || '未配置'" readonly mono />
       </FieldRow>
 
-      <NAlert class="location-note" type="info" :bordered="false">
+      <HAlert class="location-note" status="accent">
         媒体库位置已统一到「账号与媒体库」页面配置。
-        <NButton text type="primary" @click="router.push({ name: 'accounts' })">前往配置</NButton>
-      </NAlert>
+        <button type="button" class="text-link" @click="router.push({ name: 'accounts' })">前往配置 →</button>
+      </HAlert>
 
       <FieldRow label="视频文件后缀" tip="匹配这些后缀的文件视为视频，生成 STRM。">
-        <NDynamicTags v-model:value="cfg.video_ext" size="small" />
+        <HTagsInput v-model="cfg.video_ext" placeholder=".mkv 回车添加" />
       </FieldRow>
 
       <FieldRow label="媒体图片后缀" tip="匹配这些后缀的图片下载到本地（poster 等 Emby 刮削用）。">
-        <NDynamicTags v-model:value="cfg.image_ext" size="small" />
+        <HTagsInput v-model="cfg.image_ext" placeholder=".jpg 回车添加" />
       </FieldRow>
 
       <FieldRow label="数据文件后缀" tip="匹配这些后缀的数据文件下载到本地（.nfo 始终包含）。">
-        <NDynamicTags v-model:value="cfg.data_ext" size="small" />
+        <HTagsInput v-model="cfg.data_ext" placeholder=".nfo 回车添加" />
       </FieldRow>
 
       <FieldRow
         label="失效 STRM 检测"
         tip="每次全量同步结束时，标出「本地还有 STRM、网盘上源文件已被删除」的条目。只标记不删除，清理要你在下方确认。关掉它，下面的定时全量也一并停跑（定时全量的用途就是刷新这个标记）。注意：缩减上面的后缀配置也会让原先同步过的文件被判为失效。"
       >
-        <NSwitch v-model:value="cfg.detect_orphans" />
+        <HSwitch v-model="cfg.detect_orphans" aria-label="失效 STRM 检测" />
       </FieldRow>
 
       <!-- 定时全量只服务于失效检测：检测关着时整库扫描白跑一趟（115 风控敏感），
@@ -256,7 +255,7 @@ const helpVisible = ref(false)
           label="定时全量同步"
           tip="按 cron 定期跑一次全量同步来刷新失效标记。生活事件有窗口，网页版批量删除、停机期间的删除增量同步都收不到，只有整库扫描才查得出来。"
         >
-          <NSwitch v-model:value="cfg.cron_enabled" />
+          <HSwitch v-model="cfg.cron_enabled" aria-label="定时全量同步" />
         </FieldRow>
 
         <FieldRow
@@ -272,30 +271,21 @@ const helpVisible = ref(false)
         label="全量后刷新 Emby"
         tip="全量同步结束时通知 Emby 扫描入库。全量给出的范围是整个媒体库根，等于把根下面每个媒体库都整库扫一遍，万级库很慢，所以默认关着。增量同步不受这个开关影响——它只刷本轮真正变动的那个目录，删除条目也靠它通知。"
       >
-        <NSwitch v-model:value="cfg.refresh_emby" />
+        <HSwitch v-model="cfg.refresh_emby" aria-label="全量后刷新 Emby" />
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="full.saving.value" @click="saveFull">保存配置</NButton>
+        <HButton variant="primary" :loading="full.saving.value" @click="saveFull">保存配置</HButton>
         <!-- 配置改过没保存时由 runFull 里的确认框接管（那个框里也带着同一句话），
              这里再弹一次 popconfirm 就成了连点两下 -->
-        <NPopconfirm v-if="!full.dirty.value" @positive-click="void runFull()">
-          <template #trigger>
-            <NButton type="primary" ghost :disabled="busy" :loading="running">开始全量同步</NButton>
-          </template>
-          {{ runHint }}
-        </NPopconfirm>
-        <NButton
-          v-else
-          type="primary"
-          ghost
-          :disabled="busy"
-          :loading="running"
-          @click="void runFull()"
-        >
+        <HPopconfirm v-if="!full.dirty.value" confirm-text="开始" :disabled="busy" @confirm="void runFull()">
+          <HButton variant="secondary" :disabled="busy" :loading="running">开始全量同步</HButton>
+          <template #content>{{ runHint }}</template>
+        </HPopconfirm>
+        <HButton v-else variant="secondary" :disabled="busy" :loading="running" @click="void runFull()">
           开始全量同步
-        </NButton>
-        <NButton :disabled="busy" @click="resetFullOptions">重置同步选项</NButton>
+        </HButton>
+        <HButton variant="tertiary" :disabled="busy" @click="resetFullOptions">重置同步选项</HButton>
       </FormActions>
     </SectionCard>
 
@@ -307,15 +297,15 @@ const helpVisible = ref(false)
       hint="本地还有文件，网盘上的源文件已不存在"
     >
       <template v-if="orphan && orphan.total > 0">
-        <NAlert v-if="orphanRatioHigh" class="note" type="error" :bordered="false">
+        <HAlert v-if="orphanRatioHigh" class="note" status="danger">
           失效条目占台账总数的 {{ (orphan.ratio * 100).toFixed(1) }}%（{{ orphan.total }} /
           {{ orphan.ledger_total }}），比例异常偏高。这通常意味着上次扫描没取全，或者同步的不是平时那个媒体库
           —— 清理前请先重跑一次全量同步确认。
-        </NAlert>
-        <NAlert v-else class="note" type="warning" :bordered="false">
+        </HAlert>
+        <HAlert v-else class="note" status="warning">
           共 {{ orphan.total }} 个（台账 {{ orphan.ledger_total }} 条）。清理会删除这些本地文件与对应台账记录，
           并顺带删掉因此变空的目录。网盘不受影响。
-        </NAlert>
+        </HAlert>
 
         <div class="orphan-list">
           <div v-for="it in orphan.sample" :key="it.rel_path" class="orphan-row">
@@ -329,33 +319,33 @@ const helpVisible = ref(false)
         </div>
 
         <FormActions>
-          <NPopconfirm @positive-click="void cleanOrphans()">
-            <template #trigger>
-              <NButton type="error" ghost :disabled="busy" :loading="orphanCleaning">
-                清理全部 {{ orphan.total }} 个失效 STRM
-              </NButton>
+          <HPopconfirm danger confirm-text="清理" :disabled="busy" @confirm="void cleanOrphans()">
+            <HButton variant="danger-soft" :disabled="busy" :loading="orphanCleaning">
+              清理全部 {{ orphan.total }} 个失效 STRM
+            </HButton>
+            <template #content>
+              确定删除这 {{ orphan.total }} 个本地文件？此操作不可撤销（网盘不受影响）。
             </template>
-            确定删除这 {{ orphan.total }} 个本地文件？此操作不可撤销（网盘不受影响）。
-          </NPopconfirm>
-          <NButton :disabled="busy" @click="loadOrphans">刷新</NButton>
+          </HPopconfirm>
+          <HButton variant="tertiary" :disabled="busy" @click="loadOrphans">刷新</HButton>
         </FormActions>
       </template>
 
       <template v-else>
-        <NAlert class="note" type="success" :bordered="false">
+        <HAlert class="note" status="success">
           当前没有检测到失效条目。标记在每次全量同步结束时刷新。
-        </NAlert>
+        </HAlert>
         <FormActions>
-          <NButton :disabled="busy" @click="loadOrphans">刷新检测结果</NButton>
+          <HButton variant="tertiary" :disabled="busy" @click="loadOrphans">刷新检测结果</HButton>
         </FormActions>
       </template>
     </SectionCard>
 
     <!-- 弹窗必须留在这个根元素里：本页整体被 SyncPage 的 <Transition> 包着，
          多个根节点会让 Transition 找不到唯一子元素，整页渲染成空白 -->
-    <NModal v-model:show="helpVisible" preset="card" title="全量同步是怎么回事" style="width: min(860px, 92vw)">
+    <HModal v-model:show="helpVisible" title="全量同步是怎么回事" width="860px">
       <FullHelp />
-    </NModal>
+    </HModal>
   </div>
 </template>
 
@@ -376,15 +366,27 @@ const helpVisible = ref(false)
 }
 .mode-locked {
   font-size: 13px;
-  color: var(--c-text-3);
+  color: var(--muted);
+}
+.text-link {
+  border: 0;
+  padding: 0;
+  margin-left: 4px;
+  background: none;
+  font: inherit;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+}
+.text-link:hover {
+  text-decoration: underline;
 }
 .orphan-list {
   max-height: 260px;
   overflow-y: auto;
-  padding: 8px 11px;
-  border-radius: var(--radius);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: var(--surface-secondary);
   font-size: 12px;
   line-height: 1.9;
 }
@@ -396,20 +398,32 @@ const helpVisible = ref(false)
 .orphan-kind {
   flex: none;
   width: 34px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .orphan-path {
   flex: 1;
   overflow-wrap: anywhere;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .orphan-meta {
   flex: none;
-  color: var(--c-text-3);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .orphan-more {
   margin-top: 4px;
-  color: var(--c-text-3);
+  color: var(--muted);
+}
+/* 手机：路径独占一行，大小与时间折到下一行 */
+@media (max-width: 720px) {
+  .orphan-row {
+    flex-wrap: wrap;
+  }
+  .orphan-path {
+    flex-basis: calc(100% - 42px);
+  }
+  .orphan-meta {
+    padding-left: 42px;
+  }
 }
 </style>

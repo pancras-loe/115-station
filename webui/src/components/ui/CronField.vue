@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NInput } from 'naive-ui'
+import HInput from '@/components/hero/HInput.vue'
 import { syncApi } from '@/api'
 
 const props = defineProps<{ modelValue: string; placeholder?: string }>()
@@ -34,10 +34,11 @@ watch(
 
 <template>
   <div>
-    <NInput
-      :value="modelValue"
+    <HInput
+      mono
+      :model-value="modelValue"
       :placeholder="placeholder || '0 8 * * *'"
-      @update:value="emit('update:modelValue', $event)"
+      @update:model-value="emit('update:modelValue', $event)"
     />
     <div class="preview">
       <span v-if="error" class="err">{{ error }}</span>
@@ -51,24 +52,24 @@ watch(
 
 <style scoped>
 .preview {
-  margin-top: 5px;
-  font-size: 11.5px;
-  color: var(--c-text-3);
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
   line-height: 1.7;
 }
 .t {
   font-variant-numeric: tabular-nums;
-  color: var(--c-text-2);
+  color: var(--foreground);
 }
 .t + .t::before {
   content: '·';
   margin: 0 6px;
-  color: var(--c-text-4);
+  color: var(--muted);
 }
 .err {
-  color: var(--c-danger);
+  color: var(--danger);
 }
 .dim {
-  color: var(--c-text-4);
+  color: var(--muted);
 }
 </style>

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
-import { NAlert } from 'naive-ui'
 import { Check, X } from '@lucide/vue'
 import { useTaskStore } from '@/stores/task'
 
@@ -11,14 +10,14 @@ onUnmounted(() => task.stop())
 </script>
 
 <template>
-  <NAlert v-if="task.status.running" class="bar" type="info" :bordered="false">
+  <div v-if="task.status.running" class="bar" role="status">
     <div class="line">
       <span class="pulse" />
       <strong>{{ task.status.task || '任务' }}</strong>
       <span class="dim">正在执行（已运行 {{ task.status.elapsed || '-' }}）</span>
     </div>
     <div v-if="task.status.progress" class="progress">{{ task.status.progress }}</div>
-  </NAlert>
+  </div>
 
   <div v-else-if="task.status.recent?.length" class="recent">
     <span class="recent-label">最近任务</span>
@@ -33,7 +32,10 @@ onUnmounted(() => task.stop())
 
 <style scoped>
 .bar {
-  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
 }
 .line {
   display: flex;
@@ -42,18 +44,21 @@ onUnmounted(() => task.stop())
   font-size: 13px;
 }
 .dim {
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
 }
 .progress {
   margin-top: 4px;
+  padding-left: 15px;
   font-size: 12px;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
+  word-break: break-all;
 }
 .pulse {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--c-primary);
+  flex: none;
+  background: var(--accent);
   animation: pulse 1.4s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -71,12 +76,11 @@ onUnmounted(() => task.stop())
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 16px;
-  margin-bottom: 14px;
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .recent-label {
-  color: var(--c-text-4);
+  font-weight: 500;
 }
 .recent-item {
   display: inline-flex;
@@ -84,9 +88,9 @@ onUnmounted(() => task.stop())
   gap: 4px;
 }
 .ok {
-  color: var(--c-success);
+  color: var(--success);
 }
 .err {
-  color: var(--c-danger);
+  color: var(--danger);
 }
 </style>

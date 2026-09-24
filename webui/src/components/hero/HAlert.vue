@@ -28,6 +28,31 @@ const icon = computed(
 </template>
 
 <style scoped>
+/* HeroUI 的 alert 默认是白底加阴影（给页面底色上用的）；我们的提示多半摆在白卡片里，
+   换成对应状态的淡色底、去掉阴影，不然在卡片上几乎看不出来 */
+.alert {
+  box-shadow: none;
+  border-radius: 18px;
+}
+.alert--default {
+  background: var(--surface-secondary);
+}
+.alert--accent {
+  background: var(--accent-soft);
+}
+.alert--success {
+  background: var(--success-soft);
+}
+.alert--warning {
+  background: var(--warning-soft);
+}
+.alert--danger {
+  background: var(--danger-soft);
+}
+.alert__description {
+  color: color-mix(in oklab, var(--foreground) 78%, var(--muted));
+  line-height: 1.7;
+}
 .h-alert-actions {
   display: flex;
   flex-wrap: wrap;

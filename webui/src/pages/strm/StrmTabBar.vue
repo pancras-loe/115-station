@@ -1,8 +1,20 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue'
 import type { StrmTab } from './tabs'
 
 defineProps<{ tabs: StrmTab[] }>()
 const active = defineModel<string>({ required: true })
+
+// 手机上整条横滑，切换后把选中项滚进视野（从地址栏 ?tab= 直接进来时也一样）
+const bar = ref<HTMLElement | null>(null)
+watch(
+  active,
+  async () => {
+    await nextTick()
+    bar.value?.querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  },
+  { immediate: true },
+)
 </script>
 
 <!--
@@ -11,7 +23,7 @@ const active = defineModel<string>({ required: true })
   （改设置、跑整库、跑增量），一眼能看出自己点进去会发生什么。
 -->
 <template>
-  <nav class="tabbar" role="tablist">
+  <nav ref="bar" class="tabbar" role="tablist">
     <button
       v-for="t in tabs"
       :key="t.key"
@@ -31,14 +43,18 @@ const active = defineModel<string>({ required: true })
 </template>
 
 <style scoped>
+/* HeroUI 分段控件的放大版：灰底槽 + 选中格浮起白底，每格多一个图标和一句说明 */
 .tabbar {
   display: flex;
-  gap: 8px;
-  padding: 6px;
-  border-radius: var(--r-lg);
-  background: var(--c-bg-elevated);
-  border: 1px solid var(--c-border);
-  box-shadow: var(--shadow-card);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 24px;
+  background: var(--default);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabbar::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
@@ -47,48 +63,54 @@ const active = defineModel<string>({ required: true })
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 13px;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 20px;
   background: transparent;
-  color: var(--c-text-2);
+  color: var(--muted);
   font: inherit;
   text-align: left;
   cursor: pointer;
   transition:
-    background 0.15s,
-    border-color 0.15s,
-    color 0.15s;
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
 }
-.tab:hover:not(.active) {
-  background: var(--c-bg-hover);
+@media (hover: hover) {
+  .tab:hover:not(.active) {
+    color: var(--foreground);
+  }
+}
+.tab:active {
+  transform: scale(0.98);
+}
+.tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 .tab.active {
-  background: var(--c-primary-soft);
-  border-color: var(--c-primary-border);
-  color: var(--c-primary);
+  background: var(--segment);
+  box-shadow: var(--surface-shadow);
+  color: var(--foreground);
 }
 
 .tab-icon {
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
-  color: var(--c-text-3);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--surface) 60%, transparent);
+  color: var(--muted);
   transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
+    background-color 150ms ease,
+    color 150ms ease;
 }
 .tab.active .tab-icon {
-  background: var(--c-primary);
-  border-color: var(--c-primary);
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
 }
 
 .tab-text {
@@ -101,28 +123,33 @@ const active = defineModel<string>({ required: true })
   font-size: 13.5px;
   font-weight: 600;
   line-height: 1.3;
+  white-space: nowrap;
 }
 .tab-hint {
   font-size: 11.5px;
+  font-weight: 400;
   line-height: 1.4;
-  color: var(--c-text-3);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 窄屏：说明文字先让位，再让整条横向滚动——三个页签挤成两行比滚动更难点 */
-@media (max-width: 820px) {
+/* 窄屏：说明文字先让位；再窄就整条横向滚动——四个页签挤成两行比滚动更难点 */
+@media (max-width: 960px) {
   .tab-hint {
     display: none;
   }
 }
-@media (max-width: 560px) {
-  .tabbar {
-    overflow-x: auto;
-  }
+@media (max-width: 720px) {
   .tab {
     flex: none;
+    padding: 6px 14px 6px 6px;
+    gap: 8px;
+  }
+  .tab-icon {
+    width: 28px;
+    height: 28px;
   }
 }
 </style>

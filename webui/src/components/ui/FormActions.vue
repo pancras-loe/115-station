@@ -13,9 +13,9 @@
 .actions {
   display: flex;
   gap: 16px;
-  margin-top: 6px;
-  padding-top: 14px;
-  border-top: 1px solid var(--c-border);
+  margin-top: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--separator);
 }
 .actions-gutter {
   width: 168px;
@@ -27,9 +27,16 @@
   gap: 8px;
 }
 
+/* 手机：按钮等分整行，拇指好点；三个以上自动折行 */
 @media (max-width: 720px) {
   .actions-gutter {
     display: none;
+  }
+  .actions-body {
+    width: 100%;
+  }
+  .actions-body > :deep(*) {
+    flex: 1 1 auto;
   }
 }
 </style>

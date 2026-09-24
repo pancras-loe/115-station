@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NTooltip } from 'naive-ui'
+import HTooltip from '@/components/hero/HTooltip.vue'
 import { Check, Copy } from '@lucide/vue'
 
 defineProps<{ value: string; tone?: 'primary' | 'success' }>()
@@ -31,15 +31,12 @@ async function copy(text: string) {
 <template>
   <div class="box" :class="tone">
     <code :id="'copybox-' + value.length">{{ value }}</code>
-    <NTooltip>
-      <template #trigger>
-        <button class="copy" :aria-label="copied ? '已复制' : '复制'" @click="copy(value)">
-          <Check v-if="copied" :size="14" />
-          <Copy v-else :size="14" />
-        </button>
-      </template>
-      {{ copied ? '已复制' : '复制' }}
-    </NTooltip>
+    <HTooltip :content="copied ? '已复制' : '复制'">
+      <button class="copy" :aria-label="copied ? '已复制' : '复制'" @click="copy(value)">
+        <Check v-if="copied" :size="14" />
+        <Copy v-else :size="14" />
+      </button>
+    </HTooltip>
   </div>
 </template>
 
@@ -48,25 +45,25 @@ async function copy(text: string) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
+  padding: 9px 10px 9px 14px;
+  border-radius: 14px;
+  background: var(--default);
 }
 .box code {
   flex: 1;
   min-width: 0;
+  padding-top: 2px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   word-break: break-all;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .box.primary code {
-  color: var(--c-primary);
+  color: var(--accent-soft-foreground);
 }
 .box.success code {
-  color: var(--c-success);
+  color: var(--success-soft-foreground);
 }
 
 .copy {
@@ -74,15 +71,20 @@ async function copy(text: string) {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r-sm);
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
   cursor: pointer;
-  color: var(--c-text-3);
-  transition: background-color 0.15s, color 0.15s;
+  color: var(--muted);
+  transition:
+    background-color 0.15s,
+    color 0.15s;
 }
 .copy:hover {
-  background: var(--c-bg-hover);
-  color: var(--c-text-1);
+  background: var(--surface);
+  color: var(--foreground);
+}
+.copy:focus-visible {
+  box-shadow: 0 0 0 2px var(--focus);
 }
 </style>

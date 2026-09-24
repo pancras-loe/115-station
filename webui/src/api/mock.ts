@@ -184,7 +184,80 @@ const records: OrganizeRecord[] = [
   },
 ]
 
-const ROUTES: Record<string, unknown> = {
+/** 配置项（/config/setting?key=…）：后端存的是 JSON 字符串，原样模拟 */
+const SETTINGS: Record<string, unknown> = {
+  strm: { domain: 'http://192.168.1.10:6086', format: 'pick_code_name', keep_ext: 'true', exist: 'overwrite' },
+  full: {
+    cid: '2894561234',
+    cid_path: '/媒体库',
+    local_path: '/media',
+    video_ext: ['mp4', 'mkv', 'ts', 'iso'],
+    image_ext: ['jpg', 'png'],
+    data_ext: ['ass', 'srt'],
+    mode: 'fast',
+    detect_orphans: true,
+    refresh_emby: false,
+    cron_enabled: true,
+    cron: '0 4 * * *',
+  },
+  incr: { cron: '*/30 * * * *', interval_sec: 30 },
+  deepdel: { enabled: true, prune_pan_dirs: true, notify: false },
+}
+
+type Route = unknown | ((q: URLSearchParams) => unknown)
+
+const ROUTES: Record<string, Route> = {
+  '/config/setting': (q: URLSearchParams) => {
+    const v = SETTINGS[q.get('key') ?? '']
+    return v === undefined ? {} : { value: JSON.stringify(v) }
+  },
+  '/sync/status': {
+    running: true,
+    task: '全量同步',
+    elapsed: '1m24s',
+    progress: '已扫描 3,120 / 约 18,400 个文件 · 当前：/媒体库/剧集/欧美剧集',
+  },
+  '/sync/cron-preview': { next: ['09-25 04:00', '09-26 04:00', '09-27 04:00'] },
+  '/sync/capabilities': { fast_available: true, reason: '' },
+  '/sync/orphans': {
+    enabled: true,
+    total: 26,
+    ledger_total: 41_209,
+    ratio: 0.0006,
+    sample_limit: 50,
+    sample: [
+      { rel_path: '电影/科幻电影/星际穿越 (2014)/星际穿越 (2014) - 2160p.strm', kind: 'video', size: 96, marked_at: '09-23 04:12' },
+      { rel_path: '电影/科幻电影/星际穿越 (2014)/poster.jpg', kind: 'asset', size: 412_000, marked_at: '09-23 04:12' },
+      { rel_path: '剧集/国产剧集/漫长的季节 (2023)/Season 01/漫长的季节 S01E03.strm', kind: 'video', size: 102, marked_at: '09-23 04:12' },
+    ],
+  },
+  '/sync/incr-status': {
+    life_gate: { ok: true, message: '生活事件已开启', checked_at: '09-24 09:10' },
+    endpoint: '主通道（life_list）',
+    cursor: {},
+    last_round: {
+      at: '09-24 09:41:30',
+      summary: {
+        round: 1873, events_total: 4, events_fresh: 4, events_pending: 0, relevant: 2, structural: 0, deleted: 0,
+        moved: 1, dirs: 1, videos: 2, strm_created: 2, strm_existing: 0, assets_total: 3, assets_downloaded: 3,
+        assets_skipped: 0, assets_failed: 0, ignored: 2, elapsed: '1.8s', dirs_shallow: 1, dirs_deep: 0,
+        list_calls: 2, consumed: true, not_consumed: '',
+      },
+    },
+    pending_events: 0,
+    path_cache: 312,
+    interval_sec: 30,
+    task_lock: { busy: true, holder: 'full', describe: '全量同步（已运行 84 秒）', running_sec: 84, waiting: ['自动整理'], waited_sec: 12 },
+    stall: { rounds: 0, reason: '' },
+  },
+  '/sync/deep-delete/records': {
+    data: [
+      { id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, created_at: '09-23 21:04', message: '' },
+      { id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, created_at: '09-22 18:40', message: '剧/季目录缺少台账布局证据，已拦截' },
+    ],
+    total: 2, page: 1, size: 20,
+  },
+
   '/organize/records': { data: records, total: 86, page: 1, size: 20 },
   '/organize/records/stats': {
     data: { all: 86, awaiting: 2, problem: 7, success: 61, exists: 16, unrecognized: 4, failed: 3 },
@@ -206,11 +279,13 @@ export function installMockApi() {
   const real = window.fetch.bind(window)
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    const path = url.replace(/^.*\/api/, '').split('?')[0]
+    const [path, query = ''] = url.replace(/^.*\/api/, '').split('?')
     if (path in ROUTES) {
       // 留一点延迟，好让骨架屏/加载态在演示里真的出现
       await new Promise((r) => setTimeout(r, 180))
-      return new Response(JSON.stringify(ROUTES[path]), {
+      const route = ROUTES[path]
+      const body = typeof route === 'function' ? route(new URLSearchParams(query)) : route
+      return new Response(JSON.stringify(body), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })

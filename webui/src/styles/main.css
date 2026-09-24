@@ -29,6 +29,10 @@
 @import '@heroui/styles/components/search-field.css' layer(components);
 @import '@heroui/styles/components/input.css' layer(components);
 @import '@heroui/styles/components/pagination.css' layer(components);
+@import '@heroui/styles/components/switch.css' layer(components);
+@import '@heroui/styles/components/input-group.css' layer(components);
+@import '@heroui/styles/components/number-field.css' layer(components);
+@import '@heroui/styles/components/tag.css' layer(components);
 @import '@heroui/styles/components/modal.css' layer(components);
 @import './hero-adapter.css';
 

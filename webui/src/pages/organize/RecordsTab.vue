@@ -685,8 +685,6 @@ async function clearAll() {
 }
 .banner {
   margin-bottom: 14px;
-  background: var(--warning-soft);
-  box-shadow: none;
 }
 
 .filters {

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NButton, NInput, NRadioButton, NRadioGroup } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -15,6 +17,19 @@ const { model, saving, save, reset } = useSetting('strm', {
   keep_ext: 'true',
   exist: 'overwrite',
 })
+
+const FORMAT_OPTIONS = [
+  { label: 'pick_code_name', value: 'pick_code_name' },
+  { label: 'pick_code', value: 'pick_code' },
+]
+const YES_NO = [
+  { label: '是', value: 'true' },
+  { label: '否', value: 'false' },
+]
+const EXIST_OPTIONS = [
+  { label: '覆盖', value: 'overwrite' },
+  { label: '跳过', value: 'skip' },
+]
 
 const example = computed(() => {
   const domain = model.value.domain.replace(/\/+$/, '')
@@ -36,37 +51,28 @@ const example = computed(() => {
       required
       tip="STRM 内直链的域名，需指向 302 代理端口（http://NAS_IP:6086）。播放时反代会按客户端实际访问地址自动改写，此项为兜底值。"
     >
-      <NInput v-model:value="model.domain" placeholder="http://172.17.0.1:6086" />
+      <HInput v-model="model.domain" type="url" mono placeholder="http://172.17.0.1:6086" />
     </FieldRow>
 
     <FieldRow
       label="STRM 直连格式"
       tip="pick_code_name = 直链带原文件名（播放器显示友好）；pick_code = 仅文件 ID（最短）。"
     >
-      <NRadioGroup v-model:value="model.format">
-        <NRadioButton value="pick_code_name">pick_code_name</NRadioButton>
-        <NRadioButton value="pick_code">pick_code</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="model.format" :options="FORMAT_OPTIONS" aria-label="STRM 直连格式" />
     </FieldRow>
 
     <FieldRow
       label="保留文件后缀"
       tip="是 = 直链 ID 段带 .mkv 等后缀（播放器据 URL 识别容器格式）；否 = 纯 ID。"
     >
-      <NRadioGroup v-model:value="model.keep_ext">
-        <NRadioButton value="true">是</NRadioButton>
-        <NRadioButton value="false">否</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="model.keep_ext" :options="YES_NO" aria-label="保留文件后缀" />
     </FieldRow>
 
     <FieldRow
       label="本地已存在时"
       tip="本地已有同名 STRM：覆盖 = 重新生成（推荐）；跳过 = 只生成一次。"
     >
-      <NRadioGroup v-model:value="model.exist">
-        <NRadioButton value="overwrite">覆盖</NRadioButton>
-        <NRadioButton value="skip">跳过</NRadioButton>
-      </NRadioGroup>
+      <HSegmented v-model="model.exist" :options="EXIST_OPTIONS" aria-label="本地已存在时" />
     </FieldRow>
 
     <FieldRow
@@ -79,8 +85,8 @@ const example = computed(() => {
     </FieldRow>
 
     <FormActions>
-      <NButton type="primary" :loading="saving" @click="save()">保存配置</NButton>
-      <NButton @click="reset">重置配置</NButton>
+      <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+      <HButton variant="tertiary" @click="reset">重置配置</HButton>
     </FormActions>
   </SectionCard>
 </template>

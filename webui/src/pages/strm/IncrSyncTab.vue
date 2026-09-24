@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NAlert, NButton, NInputNumber, NModal, NPopconfirm, NTag } from 'naive-ui'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import { RouterLink } from 'vue-router'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -151,63 +156,56 @@ const helpVisible = ref(false)
   <div class="tab-body">
     <SectionCard title="增量同步" hint="独立轮询，只管网盘端的外部变更">
       <template #extra>
-        <NButton size="small" quaternary @click="helpVisible = true">功能介绍</NButton>
+        <HButton size="sm" variant="ghost" @click="helpVisible = true">功能介绍</HButton>
       </template>
 
-      <NAlert class="note" type="warning" :bordered="false">
+      <HAlert class="note" status="warning">
         增量同步前需开启 115 生活 APP 中的「最近」（生活事件必须开启），且必须先执行一次全量同步。
-      </NAlert>
+      </HAlert>
 
       <FieldRow
         label="增量同步间隔"
         tip="每隔这么久拉一次 115 生活事件，把网盘端的变化落到本地 STRM。一轮通常只发 1~2 个请求，没有新事件时完全静默，所以跑得勤的代价很低：30 秒一轮意味着手机上传的片子最多半分钟就能进媒体库。"
         hint="0 = 关闭独立轮询；最小 15 秒，低于 15 按 15 处理"
       >
-        <NInputNumber v-model:value="interval" :min="0" :step="15" style="width: 160px">
+        <HNumberInput v-model="interval" :min="0" :step="15" aria-label="增量同步间隔">
           <template #suffix>秒</template>
-        </NInputNumber>
+        </HNumberInput>
       </FieldRow>
 
-      <NAlert v-if="pollingOff" class="note-top" type="warning" :bordered="false" title="独立轮询已关闭">
+      <HAlert v-if="pollingOff" class="note-top" status="warning" title="独立轮询已关闭">
         增量现在没有自己的时间表了：只有「自动整理」的 cron 命中时，才会在整理跑完后顺带执行一次。
         手机上传、网页端的删除与改名要等到下一次整理才会反映到本地；
         <strong>那条 cron 留空的话，增量就完全不会自动执行</strong>，只能靠本页的「开始增量同步」手点。
         <div class="note-act">
           <RouterLink class="jump" to="/organize">去看自动整理的 cron →</RouterLink>
         </div>
-      </NAlert>
+      </HAlert>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="void saveInterval()">保存配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="void saveInterval()">保存配置</HButton>
         <!-- 改过没保存时走 runIncremental 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
-        <NPopconfirm v-if="!dirty" @positive-click="void runIncremental()">
-          <template #trigger>
-            <NButton type="primary" ghost :disabled="busy" :loading="running">开始增量同步</NButton>
-          </template>
-          {{ runHint }}
-        </NPopconfirm>
-        <NButton
-          v-else
-          type="primary"
-          ghost
-          :disabled="busy"
-          :loading="running"
-          @click="void runIncremental()"
-        >
+        <HPopconfirm v-if="!dirty" confirm-text="开始" :disabled="busy" @confirm="void runIncremental()">
+          <HButton variant="secondary" :disabled="busy" :loading="running">开始增量同步</HButton>
+          <template #content>{{ runHint }}</template>
+        </HPopconfirm>
+        <HButton v-else variant="secondary" :disabled="busy" :loading="running" @click="void runIncremental()">
           开始增量同步
-        </NButton>
-        <NButton :disabled="busy" @click="void resetInterval()">重置配置</NButton>
+        </HButton>
+        <HButton variant="tertiary" :disabled="busy" @click="void resetInterval()">重置配置</HButton>
       </FormActions>
     </SectionCard>
 
     <SectionCard title="事件流状态" hint="「为什么没同步」先看这里">
       <template v-if="status">
         <FieldRow label="事件开关" tip="115 客户端里的「生活」事件记录。关掉之后接口会一直返回空，增量就此静默空转。">
-          <NTag :type="status.life_gate.ok ? 'success' : 'warning'" size="small" round>
-            {{ status.life_gate.ok ? '正常' : '异常' }}
-          </NTag>
+          <span class="st-line">
+            <HChip :color="status.life_gate.ok ? 'success' : 'warning'">
+              {{ status.life_gate.ok ? '正常' : '异常' }}
+            </HChip>
           <span class="st-note">{{ status.life_gate.message }}</span>
           <span v-if="status.life_gate.checked_at" class="st-dim">（{{ status.life_gate.checked_at }} 检查）</span>
+          </span>
         </FieldRow>
 
         <FieldRow label="当前通道" tip="主通道更快但更容易被 115 限流；连续被拒会自动切到备用通道 24 小时。">
@@ -222,12 +220,14 @@ const helpVisible = ref(false)
           label="当前任务"
           tip="整理、增量、全量、洗版、深删都排这一条队。「手动点整理提示有任务在跑」「转存完迟迟不入库」看的就是这里。"
         >
-          <NTag :type="status.task_lock.busy ? 'warning' : 'success'" size="small" round>
-            {{ status.task_lock.busy ? '占用中' : '空闲' }}
-          </NTag>
+          <span class="st-line">
+            <HChip :color="status.task_lock.busy ? 'warning' : 'success'">
+              {{ status.task_lock.busy ? '占用中' : '空闲' }}
+            </HChip>
           <span class="st-note">{{ status.task_lock.describe }}</span>
           <span v-if="status.task_lock.waiting?.length" class="st-warn">
             · {{ status.task_lock.waiting.join('、') }} 在排队（已等 {{ status.task_lock.waited_sec }} 秒）
+          </span>
           </span>
         </FieldRow>
 
@@ -271,8 +271,8 @@ const helpVisible = ref(false)
         </FieldRow>
 
         <FormActions>
-          <NButton :loading="probing" @click="void probe()">测试事件流</NButton>
-          <NButton quaternary @click="void loadStatus()">刷新状态</NButton>
+          <HButton variant="tertiary" :loading="probing" @click="void probe()">测试事件流</HButton>
+          <HButton variant="ghost" @click="void loadStatus()">刷新状态</HButton>
         </FormActions>
 
         <div v-if="probeEvents" class="probe">
@@ -294,9 +294,9 @@ const helpVisible = ref(false)
 
     <!-- 弹窗必须留在这个根元素里：本页整体被 SyncPage 的 <Transition> 包着，
          多个根节点会让 Transition 找不到唯一子元素，整页渲染成空白 -->
-    <NModal v-model:show="helpVisible" preset="card" title="增量同步是怎么回事" style="width: min(860px, 92vw)">
+    <HModal v-model:show="helpVisible" title="增量同步是怎么回事" width="860px">
       <IncrHelp />
-    </NModal>
+    </HModal>
   </div>
 </template>
 
@@ -309,28 +309,35 @@ const helpVisible = ref(false)
 .note {
   margin-bottom: 10px;
 }
+.st-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
 .st-note {
   font-size: 13px;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .st-dim {
   font-size: 12px;
-  color: var(--c-text-3);
+  color: var(--muted);
   margin-left: 6px;
 }
 .st-warn {
   font-size: 13px;
-  color: var(--c-warning, #d97706);
+  color: var(--warning-soft-foreground);
 }
 .st-err {
   font-size: 12px;
-  color: var(--c-danger);
+  color: var(--danger);
   margin-left: 6px;
 }
 .probe {
-  margin-top: 12px;
-  border-top: 1px solid var(--c-border, rgba(128, 128, 128, 0.2));
-  padding-top: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: var(--surface-secondary);
 }
 .probe-row {
   display: flex;
@@ -343,12 +350,13 @@ const helpVisible = ref(false)
   opacity: 0.5;
 }
 .probe-at {
-  color: var(--c-text-3);
+  color: var(--muted);
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .probe-kind,
 .probe-type {
-  color: var(--c-text-3);
+  color: var(--muted);
   flex-shrink: 0;
 }
 .probe-name {
@@ -358,7 +366,7 @@ const helpVisible = ref(false)
 }
 .probe-skip {
   margin-left: auto;
-  color: var(--c-text-4);
+  color: var(--muted);
   flex-shrink: 0;
 }
 .probe-tip {
@@ -371,7 +379,8 @@ const helpVisible = ref(false)
 
 .jump {
   font-size: 13px;
-  color: var(--c-primary);
+  font-weight: 500;
+  color: var(--accent);
   text-decoration: none;
 }
 .jump:hover {
@@ -380,5 +389,16 @@ const helpVisible = ref(false)
 
 .note-act {
   margin-top: 8px;
+}
+/* 手机：事件探针一行放不下时间 + 类型 + 名字，名字折到下一行 */
+@media (max-width: 720px) {
+  .probe-row {
+    flex-wrap: wrap;
+  }
+  .probe-name {
+    flex-basis: 100%;
+    white-space: normal;
+    word-break: break-all;
+  }
 }
 </style>

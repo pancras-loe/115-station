@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { NTooltip } from 'naive-ui'
-import { CircleHelp } from '@lucide/vue'
+import HHelpTip from '@/components/hero/HHelpTip.vue'
 
 defineProps<{
   label?: string
-  /** 问号气泡里的解释文案；旧版 .help-tip 的等价物 */
+  /** 问号气泡里的解释文案；旧版 .help-tip 的等价物。触屏上点问号也能看（见 HHelpTip） */
   tip?: string
   /** 控件下方的常驻说明，和 tip 的区别是不需要 hover */
   hint?: string
@@ -21,12 +20,9 @@ defineProps<{
     <div class="row-label">
       <span v-if="required" class="req">*</span>
       <span>{{ label }}</span>
-      <NTooltip v-if="tip" :style="{ maxWidth: '280px' }">
-        <template #trigger><CircleHelp class="tip-icon" :size="14" /></template>
-        {{ tip }}
-      </NTooltip>
+      <HHelpTip v-if="tip" :text="tip" />
     </div>
-    <div class="row-control" :class="{ wide }">
+    <div class="row-control field-row-control" :class="{ wide }">
       <slot />
       <div v-if="error" class="row-error">{{ error }}</div>
       <div v-else-if="hint" class="row-hint">{{ hint }}</div>
@@ -39,7 +35,7 @@ defineProps<{
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  padding: 9px 0;
+  padding: 8px 0;
 }
 
 /* 标签左对齐固定列。旧版是右对齐——那是早期 Ant/Arco 的做法，
@@ -50,23 +46,15 @@ defineProps<{
   gap: 5px;
   width: 168px;
   flex-shrink: 0;
-  padding-top: 8px;
+  min-height: 36px;
   font-size: 13.5px;
-  color: var(--c-text-2);
+  font-weight: 500;
+  color: color-mix(in oklab, var(--foreground) 80%, var(--muted));
   line-height: 1.4;
 }
 .req {
-  color: var(--c-danger);
+  color: var(--danger);
   font-weight: 600;
-}
-.tip-icon {
-  color: var(--c-text-4);
-  cursor: help;
-  flex-shrink: 0;
-  transition: color 0.15s;
-}
-.tip-icon:hover {
-  color: var(--c-primary);
 }
 
 .row-control {
@@ -74,22 +62,29 @@ defineProps<{
   min-width: 0;
   max-width: 480px;
 }
+/* 控件高 36px、标签列按 36px 垂直居中；纯文字的值（状态页）没有控件高度，
+   补上半行的上边距才和标签对得齐。不用 flex 居中：那会把还没迁移的 Naive 开关、单选组拉满整行 */
+.row-control > :slotted(:is(span, strong):first-child) {
+  display: inline-block;
+  padding-top: 8px;
+}
 .row-control.wide {
   max-width: none;
 }
 .row-hint {
-  margin-top: 5px;
-  font-size: 11.5px;
+  margin-top: 6px;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 .row-error {
-  margin-top: 5px;
-  font-size: 11.5px;
+  margin-top: 6px;
+  font-size: 12px;
   line-height: 1.6;
-  color: var(--c-danger);
+  color: var(--danger);
 }
 
+/* 手机：标签在上、控件在下，控件占满整行 */
 @media (max-width: 720px) {
   .row {
     flex-direction: column;
@@ -98,11 +93,28 @@ defineProps<{
   }
   .row-label {
     width: auto;
-    padding-top: 0;
+    min-height: 0;
   }
   .row-control {
     max-width: none;
     width: 100%;
+  }
+  .row-control > :slotted(:is(span, strong):first-child) {
+    padding-top: 0;
+  }
+}
+</style>
+
+<!-- 开关只有 20px 高：撑到控件行高再垂直居中，和左边标签对齐。
+     HSwitch 的根元素是子组件的根，scoped 的 :slotted() 选不中它，只能用全局规则 + 独有类名 -->
+<style>
+.field-row-control > .switch:first-child {
+  min-height: 36px;
+  justify-content: center;
+}
+@media (max-width: 720px) {
+  .field-row-control > .switch:first-child {
+    min-height: 0;
   }
 }
 </style>
