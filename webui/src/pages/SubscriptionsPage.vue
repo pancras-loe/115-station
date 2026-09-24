@@ -1,18 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import {
-  NButton,
-  NCheckbox,
-  NInput,
-  NInputNumber,
-  NModal,
-  NPopconfirm,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NSwitch,
-  NTag,
-} from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
+import { heroTone } from '@/components/hero/tone'
 import { Pencil, Play, Plus, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -200,34 +198,24 @@ onMounted(load)
   <SectionCard title="订阅管理" hint="TG 频道关键词订阅 / 命中通知 / 自动转存">
     <template #extra>
       <div class="tools">
-        <NSelect
-          v-model:value="filterType"
-          size="small"
-          class="sel"
-          :options="[
+        <HSelect v-model="filterType" class="sel" :options="[
             { label: '全部类型', value: '' },
             { label: 'TG 群', value: 'source' },
             { label: '关键词订阅', value: 'item' },
-          ]"
-        />
-        <NSelect
-          v-model:value="filterStatus"
-          size="small"
-          class="sel"
-          :options="[
+          ]" />
+        <HSelect v-model="filterStatus" class="sel" :options="[
             { label: '全部状态', value: '' },
             { label: '启用', value: 'on' },
             { label: '停用', value: 'off' },
-          ]"
-        />
-        <NButton size="small" :loading="running" @click="runNow">
+          ]" />
+        <HButton variant="tertiary" size="sm" :loading="running" @click="runNow">
           <template #icon><Play :size="14" /></template>
           立即抓取
-        </NButton>
-        <NButton size="small" type="primary" @click="openAdd">
+        </HButton>
+        <HButton variant="primary" size="sm" @click="openAdd">
           <template #icon><Plus :size="14" /></template>
           新增
-        </NButton>
+        </HButton>
       </div>
     </template>
 
@@ -239,9 +227,9 @@ onMounted(load)
 
     <div v-else class="list">
       <div v-for="r in rows" :key="`${r.kind}-${r.id}`" class="row" :class="{ off: !r.enabled }">
-        <NTag size="small" :bordered="false" :type="r.kind === 'source' ? 'info' : 'warning'">
+        <HChip :color="heroTone(r.kind === 'source' ? 'info' : 'warning')">
           {{ r.kind === 'source' ? 'TG 群' : '关键词' }}
-        </NTag>
+        </HChip>
 
         <div class="body">
           <div class="name">{{ r.main }}</div>
@@ -250,76 +238,61 @@ onMounted(load)
           </div>
         </div>
 
-        <NSwitch size="small" :value="r.enabled" @update:value="toggle(r, $event)" />
+        <HSwitch :model-value="r.enabled" @update:model-value="toggle(r, $event)" />
 
-        <NButton size="tiny" quaternary @click="openEdit(r)">
+        <HButton variant="ghost" size="sm" @click="openEdit(r)">
           <template #icon><Pencil :size="13" /></template>
-        </NButton>
+        </HButton>
 
-        <NPopconfirm @positive-click="void remove(r)">
-          <template #trigger>
-            <NButton size="tiny" quaternary type="error">
+        <HPopconfirm @confirm="void remove(r)" danger>
+<HButton variant="danger-soft" size="sm">
               <template #icon><Trash2 :size="13" /></template>
-            </NButton>
-          </template>
-          确定删除「{{ r.main }}」？
-        </NPopconfirm>
+            </HButton>
+<template #content>确定删除「{{ r.main }}」？</template>
+</HPopconfirm>
       </div>
     </div>
 
-    <NModal
-      v-model:show="editShow"
-      preset="card"
-      :title="(editId > 0 ? '编辑' : '新增') + (editKind === 'source' ? ' TG 群' : '关键词订阅')"
-      style="width: 520px"
-    >
+    <HModal v-model:show="editShow" :title="(editId > 0 ? '编辑' : '新增') + (editKind === 'source' ? ' TG 群' : '关键词订阅')" width="520px">
       <FieldRow label="类型" required>
         <!-- 编辑态锁类型：改类型等于换实体 -->
-        <NRadioGroup v-model:value="editKind" :disabled="editId > 0">
-          <NRadioButton value="item">关键词订阅</NRadioButton>
-          <NRadioButton value="source">TG 群</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="editKind" :disabled="editId > 0" :options="[{ label: '关键词订阅', value: 'item' }, { label: 'TG 群', value: 'source' }]" />
       </FieldRow>
 
       <template v-if="editKind === 'item'">
         <FieldRow label="关键词" required>
-          <NInput v-model:value="editItem.keyword" placeholder="片名" />
+          <HInput v-model="editItem.keyword" placeholder="片名" />
         </FieldRow>
         <FieldRow label="指定频道" hint="留空使用全部 TG 群；多个频道每行一个">
-          <NInput
-            v-model:value="editItem.channels"
-            type="textarea"
-            :rows="2"
-            placeholder="@channel1&#10;@channel2"
-          />
+          <HInput v-model="editItem.channels" placeholder="@channel1&#10;@channel2" :rows="2" />
         </FieldRow>
         <FieldRow label="自动转存">
-          <NCheckbox v-model:checked="editItem.auto">命中后自动转存 / 离线</NCheckbox>
+          <HCheckbox v-model:checked="editItem.auto">命中后自动转存 / 离线</HCheckbox>
         </FieldRow>
       </template>
 
       <template v-else>
         <FieldRow label="订阅名称" required>
-          <NInput v-model:value="editSource.name" placeholder="请输入订阅名称" />
+          <HInput v-model="editSource.name" placeholder="请输入订阅名称" />
         </FieldRow>
         <FieldRow label="订阅地址" required>
-          <NInput v-model:value="editSource.url" placeholder="频道链接 https://t.me/xxx" />
+          <HInput v-model="editSource.url" placeholder="频道链接 https://t.me/xxx" />
         </FieldRow>
         <FieldRow label="优先级" hint="越大越优先，默认 10">
-          <NInputNumber v-model:value="editSource.priority" :min="0" style="width: 140px" />
+          <HNumberInput v-model="editSource.priority" :min="0" style="width: 140px" />
         </FieldRow>
         <FieldRow label="备注">
-          <NInput v-model:value="editSource.note" />
+          <HInput v-model="editSource.note" />
         </FieldRow>
       </template>
 
       <template #footer>
         <div class="modal-foot">
-          <NButton @click="editShow = false">取消</NButton>
-          <NButton type="primary" @click="saveEdit">保存</NButton>
+          <HButton variant="tertiary" @click="editShow = false">取消</HButton>
+          <HButton variant="primary" @click="saveEdit">保存</HButton>
         </div>
       </template>
-    </NModal>
+    </HModal>
   </SectionCard>
 </template>
 

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NButton, NInput, NInputGroup, NModal, NSpin } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { ArrowLeft, Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
@@ -180,14 +183,10 @@ onMounted(load)
         label="站点地址"
         tip="不太灵影视（bt0 系）镜像地址，默认 https://web5.mukaku.com，某域名失效时换 web1-web4。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="baseUrl"
-            placeholder="不太灵影视站点地址"
-            :input-props="plainProps('mk-base-url')"
-          />
-          <NButton type="primary" :loading="savingBase" @click="saveBase">保存</NButton>
-        </NInputGroup>
+        <div class="h-field-row">
+          <HInput v-model="baseUrl" placeholder="不太灵影视站点地址" :input-attrs="plainProps('mk-base-url')" />
+          <HButton variant="primary" :loading="savingBase" @click="saveBase">保存</HButton>
+        </div>
       </FieldRow>
 
       <FieldRow
@@ -195,14 +194,10 @@ onMounted(load)
         tip="资源仅 VIP 可见。浏览器登录后 F12 → Application → Local Storage → 复制 token 粘贴到这里。也可用下方验证码登录自动获取。搜索功能无需 token。"
       >
         <div class="token-row">
-          <NInputGroup>
-            <NInput
-              v-model:value="token"
-              :placeholder="hasToken ? '已保存（粘贴新值可覆盖）' : '粘贴浏览器 localStorage 里的 token'"
-              :input-props="plainProps('mk-vip-token')"
-            />
-            <NButton type="primary" @click="saveToken">保存</NButton>
-          </NInputGroup>
+          <div class="h-field-row">
+            <HInput v-model="token" :placeholder="hasToken ? '已保存（粘贴新值可覆盖）' : '粘贴浏览器 localStorage 里的 token'" :input-attrs="plainProps('mk-vip-token')" />
+            <HButton variant="primary" @click="saveToken">保存</HButton>
+          </div>
           <LoginBadge :on="hasToken" :sub="hasToken ? tokenAt : '资源需 VIP'" />
         </div>
       </FieldRow>
@@ -212,20 +207,9 @@ onMounted(load)
         tip="填写站内账号密码，点「获取验证码」输入图中字符后登录，token 自动保存。验证码有时效，过期就点图片刷新。"
       >
         <div class="login-row">
-          <NInput
-            v-model:value="login.username"
-            placeholder="用户名 / 邮箱"
-            class="w150"
-            :input-props="plainProps('mk-account')"
-          />
+          <HInput v-model="login.username" placeholder="用户名 / 邮箱" class="w150" :input-attrs="plainProps('mk-account')" />
           <div class="w130"><SecretInput v-model="login.password" name="mk-secret" placeholder="密码" /></div>
-          <NInput
-            v-model:value="login.code"
-            placeholder="验证码"
-            class="w90"
-            :input-props="plainProps('mk-captcha-code')"
-            @keyup.enter="doLogin"
-          />
+          <HInput v-model="login.code" placeholder="验证码" class="w90" :input-attrs="plainProps('mk-captcha-code')" @enter="doLogin" />
           <img
             v-if="captcha.img"
             :src="captcha.img"
@@ -234,8 +218,8 @@ onMounted(load)
             title="点击刷新"
             @click="refreshCaptcha"
           />
-          <NButton @click="refreshCaptcha">获取验证码</NButton>
-          <NButton type="primary" :loading="logging" @click="doLogin">登录</NButton>
+          <HButton variant="tertiary" @click="refreshCaptcha">获取验证码</HButton>
+          <HButton variant="primary" :loading="logging" @click="doLogin">登录</HButton>
         </div>
       </FieldRow>
 
@@ -243,17 +227,13 @@ onMounted(load)
         label="搜索影视"
         tip="先经 TMDB 匹配条目，选定后用规范标题搜站内影片；再点影片查看资源列表。磁力 / ed2k 自动提交离线下载，115 分享自动转存，其他网盘打开原链。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="query"
-            placeholder="影视名称（中英文均可）或 TMDB ID"
-            @keyup.enter="startSearch"
-          />
-          <NButton type="primary" @click="startSearch">
+        <div class="h-field-row">
+          <HInput v-model="query" placeholder="影视名称（中英文均可）或 TMDB ID" @enter="startSearch" />
+          <HButton variant="primary" @click="startSearch">
             <template #icon><Search :size="15" /></template>
             搜索
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
     </SectionCard>
 
@@ -265,9 +245,9 @@ onMounted(load)
       @skip="searchSite(query.trim())"
     />
 
-    <NModal v-model:show="listShow" preset="card" :title="listTitle" style="width: 720px">
+    <HModal v-model:show="listShow" :title="listTitle" width="720px">
       <div class="list">
-        <div v-if="loading" class="state"><NSpin size="small" /><span>读取中…</span></div>
+        <div v-if="loading" class="state"><HSpinner size="sm" /><span>读取中…</span></div>
         <p v-else-if="error" class="state err">{{ error }}</p>
 
         <template v-else-if="stage === 'videos'">
@@ -283,10 +263,10 @@ onMounted(load)
 
         <template v-else>
           <div class="back">
-            <NButton text type="primary" size="small" @click="searchSite(query.trim())">
+            <HButton variant="ghost" size="sm" class="text-btn" @click="searchSite(query.trim())">
               <template #icon><ArrowLeft :size="14" /></template>
               返回影片列表
-            </NButton>
+            </HButton>
             <span class="count">共 {{ resources.length }} 条资源</span>
           </div>
           <ResourceRow
@@ -299,7 +279,7 @@ onMounted(load)
           />
         </template>
       </div>
-    </NModal>
+    </HModal>
   </div>
 </template>
 

@@ -1,15 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import {
-  NAlert,
-  NButton,
-  NInput,
-  NRadioButton,
-  NRadioGroup,
-  NTabPane,
-  NTabs,
-} from 'naive-ui'
+import HTabs from '@/components/hero/HTabs.vue'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
@@ -156,8 +152,9 @@ async function submit() {
 </script>
 
 <template>
-  <NTabs v-model:value="tab" type="line" animated>
-    <NTabPane name="download" tab="转存下载">
+  <div class="h-tabs-page">
+<HTabs v-model="tab" :items="[{ value: 'download', label: '转存下载' }, { value: 'upload', label: '监控上传' }]" />
+<template v-if="tab === 'download'">
       <div class="stack">
         <SectionCard title="转存目录">
           <FieldRow
@@ -167,7 +164,7 @@ async function submit() {
             <Cid115Input ref="shareInput" v-model="shareCid" placeholder="转存 / 离线下载的目标目录" />
           </FieldRow>
           <FormActions>
-            <NButton type="primary" :loading="share.saving.value" @click="saveShare">保存目录</NButton>
+            <HButton variant="primary" :loading="share.saving.value" @click="saveShare">保存目录</HButton>
           </FormActions>
         </SectionCard>
 
@@ -179,12 +176,8 @@ async function submit() {
             hint="115 分享链接需提取码：填在右侧输入框，或直接附在链接后（?password=xxxx / 空格加提取码均可）。"
           >
             <div class="link-row">
-              <NInput
-                v-model:value="link"
-                placeholder="粘贴磁力 / ed2k / 115 分享链接"
-                @keyup.enter="submit"
-              />
-              <NInput v-model:value="code" placeholder="提取码" class="code" />
+              <HInput v-model="link" placeholder="粘贴磁力 / ed2k / 115 分享链接" @enter="submit" />
+              <HInput v-model="code" placeholder="提取码" class="code" />
             </div>
           </FieldRow>
 
@@ -192,54 +185,47 @@ async function submit() {
             label="转存后整理"
             tip="开启后转存 / 下载完成自动识别入库并生成 STRM（识别 → 分类 → 重命名 → 同步全流程）。"
           >
-            <NRadioGroup v-model:value="organize">
-              <NRadioButton :value="true">开启</NRadioButton>
-              <NRadioButton :value="false">关闭</NRadioButton>
-            </NRadioGroup>
+            <HSegmented v-model="organize" :options="[{ label: '开启', value: true }, { label: '关闭', value: false }]" />
           </FieldRow>
 
           <FormActions>
-            <NButton type="primary" :loading="submitting" @click="submit">开始转存</NButton>
+            <HButton variant="primary" :loading="submitting" @click="submit">开始转存</HButton>
           </FormActions>
         </SectionCard>
       </div>
-    </NTabPane>
-
-    <NTabPane name="upload" tab="监控上传">
+</template>
+<template v-if="tab === 'upload'">
       <SectionCard title="监控上传" hint="默认禁止，显式开启后才向 115 写入">
-        <NAlert class="note" type="warning" :bordered="false">
+        <HAlert status="warning" class="note">
           上传属于 115 风控敏感操作，默认关闭。开启后会监控统一配置的本地媒体库根目录，
           自动检测本站或 Emby 新产生的标准图片（poster / fanart / banner / seasonXX-poster 等）与
           NFO（tvshow / movie / season / 每集同名 .nfo），按相对路径上传到 115 对应目录。
-        </NAlert>
+        </HAlert>
 
         <FieldRow
           label="允许上传到 115"
           tip="总开关。关闭时，定时监控、刮削结束回传和兜底回传都不会上传任何文件。"
         >
-          <NRadioGroup v-model:value="monitor.model.value.enabled">
-            <NRadioButton :value="true">允许</NRadioButton>
-            <NRadioButton :value="false">禁止（推荐）</NRadioButton>
-          </NRadioGroup>
+          <HSegmented v-model="monitor.model.value.enabled" :options="[{ label: '允许', value: true }, { label: '禁止（推荐）', value: false }]" />
         </FieldRow>
 
         <FieldRow
           label="本地媒体库根目录"
           tip="与全量同步、增量同步、整理和影视刮削共用同一位置；目标固定为 115 媒体库。"
         >
-          <NInput :value="media.model.value.local_path || '未配置'" readonly />
-          <NButton class="location-link" text type="primary" @click="router.push({ name: 'accounts' })">
+          <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
+          <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
             前往「账号与媒体库」修改
-          </NButton>
+          </HButton>
         </FieldRow>
 
         <FormActions>
-          <NButton type="primary" :loading="monitor.saving.value" @click="monitor.save()">保存配置</NButton>
-          <NButton @click="monitor.reset">重置配置</NButton>
+          <HButton variant="primary" :loading="monitor.saving.value" @click="monitor.save()">保存配置</HButton>
+          <HButton variant="tertiary" @click="monitor.reset">重置配置</HButton>
         </FormActions>
       </SectionCard>
-    </NTabPane>
-  </NTabs>
+</template>
+</div>
 </template>
 
 <style scoped>

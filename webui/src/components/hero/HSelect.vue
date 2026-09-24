@@ -35,14 +35,14 @@ const props = withDefaults(
   }>(),
   { variant: 'secondary' },
 )
-const model = defineModel<V>()
+const model = defineModel<V | null>()
 
 /**
  * Reka 的 Select 值只认字符串，而且空串被它保留为「未选择」（选中空串那项会显示成占位符）。
  * 我们的选项里「不限」常用 '' 表示，所以对内统一编码一遍：数字转字符串，空串换成哨兵。
  */
 const EMPTY = '__h_empty__'
-const enc = (v: V | undefined) => (v === undefined ? undefined : String(v) === '' ? EMPTY : String(v))
+const enc = (v: V | null | undefined) => (v === undefined || v === null ? undefined : String(v) === '' ? EMPTY : String(v))
 const inner = computed({
   get: () => enc(model.value),
   set: (v) => {

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { NButton, NInput, NPopconfirm, NSwitch } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
 import { RefreshCw, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import { systemApi } from '@/api'
@@ -85,24 +88,22 @@ onUnmounted(stopTimer)
   <SectionCard title="任务日志" :hint="`共 ${filtered.length} 行`">
     <template #extra>
       <div class="tools">
-        <NInput v-model:value="keyword" size="small" placeholder="过滤关键字" clearable class="filter" />
+        <HInput v-model="keyword" placeholder="过滤关键字" clearable class="filter" />
         <label class="auto">
-          <NSwitch v-model:value="autoRefresh" size="small" />
+          <HSwitch v-model="autoRefresh" />
           <span>自动刷新</span>
         </label>
-        <NButton size="small" :loading="loading" @click="load(true)">
+        <HButton variant="tertiary" size="sm" :loading="loading" @click="load(true)">
           <template #icon><RefreshCw :size="14" /></template>
           刷新
-        </NButton>
-        <NPopconfirm @positive-click="void clear()">
-          <template #trigger>
-            <NButton size="small" type="error" ghost>
+        </HButton>
+        <HPopconfirm @confirm="void clear()" danger>
+<HButton variant="danger-soft" size="sm">
               <template #icon><Trash2 :size="14" /></template>
               清空
-            </NButton>
-          </template>
-          确定清空任务日志？清空后不可恢复（新日志会继续正常写入）。
-        </NPopconfirm>
+            </HButton>
+<template #content>确定清空任务日志？清空后不可恢复（新日志会继续正常写入）。</template>
+</HPopconfirm>
       </div>
     </template>
 
@@ -138,9 +139,8 @@ onUnmounted(stopTimer)
   min-height: 320px;
   overflow: auto;
   padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--c-bg-raised);
-  border: 1px solid var(--c-border);
+  border-radius: 16px;
+  background: var(--surface-secondary);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.75;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NTabPane, NTabs } from 'naive-ui'
+import HTabs from '@/components/hero/HTabs.vue'
 import GuanyingTab from './transfer/GuanyingTab.vue'
 import PansouTab from './transfer/PansouTab.vue'
 import MukakuTab from './transfer/MukakuTab.vue'
@@ -7,13 +7,21 @@ import Re0Tab from './transfer/Re0Tab.vue'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('gy')
+
+const TABS = [
+  { value: 'gy', label: '观影' },
+  { value: 'pansou', label: '盘搜' },
+  { value: 'mukaku', label: '不太灵影视' },
+  { value: 're0', label: 'RE0' },
+]
 </script>
 
 <template>
-  <NTabs v-model:value="tab" type="line" animated>
-    <NTabPane name="gy" tab="观影" display-directive="if"><GuanyingTab /></NTabPane>
-    <NTabPane name="pansou" tab="盘搜" display-directive="if"><PansouTab /></NTabPane>
-    <NTabPane name="mukaku" tab="不太灵影视" display-directive="if"><MukakuTab /></NTabPane>
-    <NTabPane name="re0" tab="RE0" display-directive="if"><Re0Tab /></NTabPane>
-  </NTabs>
+  <div class="h-tabs-page">
+    <HTabs v-model="tab" :items="TABS" />
+    <GuanyingTab v-if="tab === 'gy'" />
+    <PansouTab v-else-if="tab === 'pansou'" />
+    <MukakuTab v-else-if="tab === 'mukaku'" />
+    <Re0Tab v-else-if="tab === 're0'" />
+  </div>
 </template>

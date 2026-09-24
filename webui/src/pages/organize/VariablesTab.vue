@@ -21,7 +21,7 @@ const SYNTAX = [
     <section class="block">
       <h3 class="block-title">模板语法</h3>
       <div class="chips">
-        <div v-for="s in SYNTAX" :key="s.code" class="chip">
+        <div v-for="s in SYNTAX" :key="s.code" class="var-chip">
           <code>{{ s.code }}</code>
           <span>{{ s.desc }}</span>
         </div>
@@ -35,7 +35,7 @@ const SYNTAX = [
     <section v-for="g in RENAME_VAR_GROUPS" :key="g.key" class="block">
       <h3 class="block-title">{{ g.title }}</h3>
       <div class="chips">
-        <div v-for="v in g.vars" :key="v.token" class="chip">
+        <div v-for="v in g.vars" :key="v.token" class="var-chip">
           <code>{{ v.token }}</code>
           <span>{{ v.label }}</span>
           <em v-if="v.example">{{ v.example }}</em>
@@ -67,7 +67,7 @@ const SYNTAX = [
   flex-wrap: wrap;
   gap: 8px;
 }
-.chip {
+.var-chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -78,21 +78,21 @@ const SYNTAX = [
   color: var(--c-text-2);
   transition: background-color 0.15s;
 }
-.chip:hover {
+.var-chip:hover {
   background: var(--c-primary-soft);
 }
-.chip code {
+.var-chip code {
   font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 600;
   color: var(--c-primary);
 }
-.chip em {
+.var-chip em {
   font-style: normal;
   font-size: 11px;
   color: var(--c-text-4);
 }
-.chip .flag {
+.var-chip .flag {
   font-style: normal;
   font-size: 10.5px;
   padding: 1px 5px;

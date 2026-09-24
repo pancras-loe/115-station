@@ -101,7 +101,7 @@ const helpVisible = ref(false)
       <div v-if="model.replace_rules.length" class="rules">
         <div v-for="(r, i) in model.replace_rules" :key="i" class="rule">
           <span class="idx">{{ i + 1 }}</span>
-          <HSelect :model-value="r.regex ? 'regex' : 'text'" :options="MODES" class="mode" @update:model-value="(v?: string) => (r.regex = v === 'regex')" />
+          <HSelect :model-value="r.regex ? 'regex' : 'text'" :options="MODES" class="mode" @update:model-value="(v?: string | null) => (r.regex = v === 'regex')" />
           <HInput v-model="r.from" :placeholder="r.regex ? '正则，如 【[^】]*】' : '原文本'" />
           <span class="arrow">→</span>
           <HInput v-model="r.to" placeholder="替换为（留空 = 删掉）" />

@@ -1,12 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import {
-  NButton,
-  NModal,
-  NRadioButton,
-  NRadioGroup,
-  NTag,
-} from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import { heroTone } from '@/components/hero/tone'
 import { CalendarCheck, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -111,13 +109,13 @@ const availableCount = plugins.filter((p) => p.available).length
 <template>
   <SectionCard title="插件扩展" :hint="`共 ${plugins.length} 个插件 · ${availableCount} 个可用`">
     <div class="grid">
-      <div v-for="p in plugins" :key="p.key" class="card" :class="{ off: !p.available }">
+      <div v-for="p in plugins" :key="p.key" class="plugin" :class="{ off: !p.available }">
         <div class="head">
           <div class="ico"><component :is="p.icon" :size="17" :stroke-width="1.8" /></div>
           <div class="name">{{ p.name }}</div>
-          <NTag size="small" :bordered="false" :type="p.available ? 'success' : 'default'">
+          <HChip :color="heroTone(p.available ? 'success' : 'default')">
             {{ p.available ? '可用' : '规划中' }}
-          </NTag>
+          </HChip>
         </div>
 
         <p class="desc">{{ p.desc }}</p>
@@ -125,35 +123,25 @@ const availableCount = plugins.filter((p) => p.available).length
         <TestBanner :state="results[p.key]" />
 
         <div class="foot">
-          <NButton size="small" :disabled="!p.available" @click="p.onConfig()">
+          <HButton variant="tertiary" size="sm" :disabled="!p.available" @click="p.onConfig()">
             <template #icon><Settings2 :size="14" /></template>
             配置规则
-          </NButton>
-          <NButton
-            size="small"
-            type="primary"
-            ghost
-            :disabled="!p.available"
-            :loading="busy[p.key]"
-            @click="p.onRun()"
-          >
+          </HButton>
+          <HButton variant="secondary" size="sm" :disabled="!p.available" :loading="busy[p.key]" @click="p.onRun()">
             <template #icon><Play :size="14" /></template>
             {{ p.runLabel }}
-          </NButton>
+          </HButton>
         </div>
       </div>
     </div>
 
     <!-- 115 签到配置 -->
-    <NModal v-model:show="ckShow" preset="card" title="115 每日签到" style="width: 480px">
+    <HModal v-model:show="ckShow" title="115 每日签到" width="480px">
       <FieldRow
         label="自动签到"
         tip="开启后每天自动签到领积分（连续签到有加成，积分可在 115 App 积分中心使用）。"
       >
-        <NRadioGroup v-model:value="ckForm.enabled">
-          <NRadioButton :value="true">开启</NRadioButton>
-          <NRadioButton :value="false">关闭</NRadioButton>
-        </NRadioGroup>
+        <HSegmented v-model="ckForm.enabled" :options="[{ label: '开启', value: true }, { label: '关闭', value: false }]" />
       </FieldRow>
       <FieldRow
         label="执行计划"
@@ -163,11 +151,11 @@ const availableCount = plugins.filter((p) => p.available).length
       </FieldRow>
       <template #footer>
         <div class="foot-right">
-          <NButton @click="ckShow = false">取消</NButton>
-          <NButton type="primary" :loading="ckSaving" @click="ckSave">保存</NButton>
+          <HButton variant="tertiary" @click="ckShow = false">取消</HButton>
+          <HButton variant="primary" :loading="ckSaving" @click="ckSave">保存</HButton>
         </div>
       </template>
-    </NModal>
+    </HModal>
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
   </SectionCard>
@@ -180,20 +168,20 @@ const availableCount = plugins.filter((p) => p.available).length
   gap: 14px;
 }
 
-.card {
+.plugin {
   display: flex;
   flex-direction: column;
-  padding: 16px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-lg);
-  background: var(--c-bg-raised);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  padding: 18px;
+  border-radius: 20px;
+  background: var(--surface-secondary);
+  transition: background-color 0.15s;
 }
-.card:not(.off):hover {
-  border-color: var(--c-border-strong);
-  box-shadow: var(--shadow-sm);
+@media (hover: hover) {
+  .plugin:not(.off):hover {
+    background: color-mix(in oklab, var(--surface-secondary) 70%, var(--surface-tertiary));
+  }
 }
-.card.off {
+.plugin.off {
   opacity: 0.6;
 }
 
@@ -207,22 +195,22 @@ const availableCount = plugins.filter((p) => p.available).length
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: var(--r-sm);
+  border-radius: 999px;
   display: grid;
   place-items: center;
-  background: var(--c-primary-soft);
-  color: var(--c-primary);
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
 }
-.card.off .ico {
-  background: var(--c-bg-hover);
-  color: var(--c-text-4);
+.plugin.off .ico {
+  background: var(--default);
+  color: var(--muted);
 }
 .name {
   flex: 1;
   min-width: 0;
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 
 .desc {
@@ -230,7 +218,7 @@ const availableCount = plugins.filter((p) => p.available).length
   margin: 0 0 12px;
   font-size: 12.5px;
   line-height: 1.7;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 
 .foot {

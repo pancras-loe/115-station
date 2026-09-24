@@ -130,7 +130,7 @@ defineExpose({ focusLine })
       <pre ref="scroller" class="hl" aria-hidden="true"><code v-html="html" /></pre>
       <textarea
         ref="ta"
-        class="input"
+        class="ye-input"
         spellcheck="false"
         autocapitalize="off"
         autocomplete="off"
@@ -194,7 +194,7 @@ defineExpose({ focusLine })
 
 /* 高亮层与输入层必须字体、行高、内边距完全一致，否则字符会错位 */
 .hl,
-.input {
+.ye-input {
   margin: 0;
   padding: 10px 12px;
   font: inherit;
@@ -212,7 +212,7 @@ defineExpose({ focusLine })
   color: var(--c-text-1);
 }
 
-.input {
+.ye-input {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -225,7 +225,7 @@ defineExpose({ focusLine })
   caret-color: var(--c-text-1);
   outline: none;
 }
-.input::selection {
+.ye-input::selection {
   background: color-mix(in srgb, var(--c-primary) 30%, transparent);
 }
 

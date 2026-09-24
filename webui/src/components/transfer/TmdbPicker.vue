@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NButton, NModal, NSpin, NTag } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HModal from '@/components/hero/HModal.vue'
+import { heroTone } from '@/components/hero/tone'
 import { Clapperboard, Star } from '@lucide/vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
@@ -42,15 +46,9 @@ watch(() => props.show, (v) => v && search())
 </script>
 
 <template>
-  <NModal
-    :show="show"
-    preset="card"
-    :title="`选择影视${items.length ? `（${items.length} 个结果）` : ''}`"
-    style="width: 640px"
-    @update:show="emit('update:show', $event)"
-  >
+  <HModal :show="show" :title="`选择影视${items.length ? `（${items.length} 个结果）` : ''}`" width="640px" @update:show="emit('update:show', $event)">
     <div class="body">
-      <div v-if="loading" class="state"><NSpin size="small" /><span>TMDB 匹配中…</span></div>
+      <div v-if="loading" class="state"><HSpinner size="sm" /><span>TMDB 匹配中…</span></div>
 
       <template v-else>
         <p v-if="hint" class="hint">{{ hint }}</p>
@@ -72,9 +70,9 @@ watch(() => props.show, (v) => v && search())
 
           <div class="cand-body">
             <div class="cand-head">
-              <NTag size="small" :bordered="false" :type="it.media_type === 'tv' ? 'info' : 'warning'">
+              <HChip :color="heroTone(it.media_type === 'tv' ? 'info' : 'warning')">
                 {{ it.media_type === 'tv' ? '剧集' : '电影' }}
-              </NTag>
+              </HChip>
               <b class="cand-title">{{ it.title }}</b>
               <span class="cand-year">{{ it.year }}</span>
               <span v-if="it.vote" class="cand-vote"><Star :size="12" />{{ it.vote.toFixed(1) }}</span>
@@ -87,13 +85,13 @@ watch(() => props.show, (v) => v && search())
 
     <template #footer>
       <div class="foot">
-        <NButton text type="primary" @click="emit('skip'), emit('update:show', false)">
+        <HButton variant="ghost" class="text-btn" @click="emit('skip'), emit('update:show', false)">
           {{ skipLabel || '跳过 TMDB，直接用关键词搜索' }}
-        </NButton>
-        <NButton @click="emit('update:show', false)">关闭</NButton>
+        </HButton>
+        <HButton variant="tertiary" @click="emit('update:show', false)">关闭</HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

@@ -1,23 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import {
-  NButton,
-  NColorPicker,
-  NImage,
-  NImageGroup,
-  NInput,
-  NInputNumber,
-  NModal,
-  NPopconfirm,
-  NRadioButton,
-  NRadioGroup,
-  NSelect,
-  NSlider,
-  NSpin,
-  NSwitch,
-  NTabPane,
-  NTabs,
-} from 'naive-ui'
+import HColorInput from '@/components/hero/HColorInput.vue'
+import HSlider from '@/components/hero/HSlider.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HPopconfirm from '@/components/hero/HPopconfirm.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
+import HSelect from '@/components/hero/HSelect.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
 import { ImageUp, RefreshCw } from '@lucide/vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
@@ -226,10 +220,10 @@ defineExpose({ loadCovers })
 </script>
 
 <template>
-  <NModal v-model:show="show" preset="card" title="媒体库海报" class="cg-modal" :style="{ width: '920px', maxWidth: '96vw' }">
-    <NTabs v-model:value="tab" type="line" animated>
-      <!-- ============ 样式 ============ -->
-      <NTabPane name="style" tab="封面样式">
+  <HModal v-model:show="show" title="媒体库海报" class="cg-modal" width="920px">
+    <div class="h-tabs-page">
+<HTabs v-model="tab" :items="[{ value: 'style', label: '封面样式' }, { value: 'title', label: '标题与范围' }, { value: 'run', label: '生成与定时' }, { value: 'gallery', label: '已生成', count: covers.length }]" />
+<template v-if="tab === 'style'">
         <!-- 预览固定在左边、样式列表在右边独立滚动：之前列表排在预览下方，
              往下翻着挑样式时预览已经滚出视野，选完还得再翻回去看效果。 -->
         <div class="pane pane-style">
@@ -237,56 +231,44 @@ defineExpose({ loadCovers })
             <div class="stage">
               <img v-if="stageSrc" :src="stageSrc" alt="封面预览" />
               <div v-else-if="liveErr" class="stage-msg err">{{ liveErr }}</div>
-              <div v-if="stageBusy" class="stage-mask"><NSpin size="small" /></div>
+              <div v-if="stageBusy" class="stage-mask"><HSpinner size="sm" /></div>
               <span class="stage-tag">
                 <template v-if="liveOn">真实海报{{ liveLib ? ` · ${liveLib}` : '' }}</template>
                 <template v-else>示意海报</template>
               </span>
             </div>
             <div class="stage-bar">
-              <NButton size="small" :type="liveOn ? 'primary' : 'default'" :secondary="liveOn" @click="toggleLive">
+              <HButton size="sm" :variant="liveOn ? 'secondary' : 'tertiary'" @click="toggleLive">
                 <template #icon><ImageUp :size="14" /></template>
                 {{ liveOn ? '切回示意图' : '用真实海报预览' }}
-              </NButton>
-              <NSelect
-                v-if="liveOn && liveLibs.length"
-                v-model:value="liveLib"
-                size="small"
-                class="lib-select"
-                :options="liveLibs.map((x) => ({ label: x, value: x }))"
-              />
-              <NButton v-if="liveOn" size="small" quaternary :loading="liveLoading" @click="loadLive">
+              </HButton>
+              <HSelect v-if="liveOn && liveLibs.length" v-model="liveLib" class="lib-select" :options="liveLibs.map((x) => ({ label: x, value: x }))" />
+              <HButton variant="ghost" size="sm" v-if="liveOn" :loading="liveLoading" @click="loadLive">
                 <template #icon><RefreshCw :size="14" /></template>
-              </NButton>
+              </HButton>
               <span class="bar-hint">预览不保存、不推送 Emby</span>
             </div>
 
             <div v-if="showBackground || showBlur" class="knobs">
               <div v-if="showBackground" class="knob">
                 <div class="knob-label">强调色取色</div>
-                <NSelect v-model:value="form.background" size="small" :options="BACKGROUNDS" />
+                <HSelect v-model="form.background" :options="BACKGROUNDS" />
               </div>
               <div v-if="showBackground" class="knob">
                 <div class="knob-label">
                   强调色浓度 <span class="knob-val">{{ Math.round(form.color_ratio * 100) }}%</span>
                 </div>
-                <NSlider v-model:value="form.color_ratio" :min="0" :max="1" :step="0.01" :tooltip="false" />
+                <HSlider v-model="form.color_ratio" :min="0" :max="1" :step="0.01" aria-label="取色比例" />
               </div>
               <div v-if="showBackground && form.background === 'custom'" class="knob">
                 <div class="knob-label">自定义颜色</div>
-                <NColorPicker
-                  v-model:value="form.custom_color"
-                  size="small"
-                  :modes="['hex']"
-                  :show-alpha="false"
-                  :swatches="SWATCHES"
-                />
+                <HColorInput v-model="form.custom_color" :swatches="SWATCHES" />
               </div>
               <div v-if="showBlur" class="knob">
                 <div class="knob-label">
                   遮罩浓度 <span class="knob-val">{{ form.blur }}</span>
                 </div>
-                <NSlider v-model:value="form.blur" :min="0" :max="95" :step="1" :tooltip="false" />
+                <HSlider v-model="form.blur" :min="0" :max="95" :step="1" aria-label="遮罩浓度" />
                 <div class="knob-hint">越大海报越暗、标题越清楚</div>
               </div>
             </div>
@@ -310,94 +292,81 @@ defineExpose({ loadCovers })
             </button>
           </div>
         </div>
-      </NTabPane>
-
-      <!-- ============ 标题与范围 ============ -->
-      <NTabPane name="title" tab="标题与范围">
+</template>
+<template v-if="tab === 'title'">
         <div class="pane">
           <FieldRow label="标题映射" wide hint="每行：媒体库名=中文标题|英文副标题。没写的库用库名，英文按库名自动推断。">
-            <NInput
-              v-model:value="form.titles"
-              type="textarea"
-              :rows="6"
-              placeholder="电影=电影|MOVIES&#10;华语剧集=国产剧|CHINESE DRAMA"
-            />
+            <HInput v-model="form.titles" placeholder="电影=电影|MOVIES&#10;华语剧集=国产剧|CHINESE DRAMA" :rows="6" />
           </FieldRow>
           <FieldRow label="仅生成这些库" wide hint="一行一个；留空表示全部媒体库。">
-            <NInput v-model:value="form.include" type="textarea" :rows="3" />
+            <HInput v-model="form.include" :rows="3" />
           </FieldRow>
           <FieldRow label="排除这些库" wide hint="一行一个 Emby 库名；未配置 Emby 时填写本地分类名。">
-            <NInput v-model:value="form.blacklist" type="textarea" :rows="3" />
+            <HInput v-model="form.blacklist" :rows="3" />
           </FieldRow>
           <p v-if="liveLibs.length" class="muted libs">当前会生成：{{ liveLibs.join('、') }}</p>
         </div>
-      </NTabPane>
-
-      <!-- ============ 生成与定时 ============ -->
-      <NTabPane name="run" tab="生成与定时">
+</template>
+<template v-if="tab === 'run'">
         <div class="pane">
           <FieldRow label="启用定时生成" tip="关闭后仍可在插件卡片上手动生成。">
-            <NSwitch v-model:value="form.enabled" />
+            <HSwitch v-model="form.enabled" />
           </FieldRow>
           <FieldRow label="执行计划" tip="例：0 0 * * * = 每天 0 点。到点重新生成全部封面并推送 Emby。">
             <CronField v-model="form.cron" placeholder="0 0 * * *" />
           </FieldRow>
           <FieldRow label="海报选取策略">
-            <NSelect v-model:value="form.strategy" :options="STRATEGIES" />
+            <HSelect v-model="form.strategy" :options="STRATEGIES" />
           </FieldRow>
           <FieldRow label="取图数量" tip="每个媒体库按选取策略取 1–12 张海报；A 用前 3 张，B/C 用前 4 张，D 用首张，E 用前 5 张。">
-            <NInputNumber v-model:value="form.poster_count" :min="1" :max="12" />
+            <HNumberInput v-model="form.poster_count" :min="1" :max="12" />
           </FieldRow>
           <FieldRow label="输出分辨率">
-            <NRadioGroup v-model:value="form.resolution" size="small">
-              <NRadioButton value="480p">480p</NRadioButton>
-              <NRadioButton value="720p">720p</NRadioButton>
-              <NRadioButton value="1080p">1080p</NRadioButton>
-            </NRadioGroup>
+            <HSegmented v-model="form.resolution" size="sm" :options="[{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }]" />
           </FieldRow>
         </div>
-      </NTabPane>
-
-      <!-- ============ 已生成 ============ -->
-      <NTabPane name="gallery" :tab="`已生成${covers.length ? ` (${covers.length})` : ''}`">
+</template>
+<template v-if="tab === 'gallery'">
         <div class="pane">
           <div class="gallery-head">
-            <span class="muted">本地缓存的最近一次生成结果，点击可放大。</span>
-            <NButton size="small" quaternary @click="loadCovers">
+            <span class="muted">本地缓存的最近一次生成结果，点击在新标签打开原图。</span>
+            <HButton variant="ghost" size="sm" @click="loadCovers">
               <template #icon><RefreshCw :size="14" /></template>
               刷新
-            </NButton>
-            <NPopconfirm @positive-click="clean">
-              <template #trigger><NButton size="small" type="error" ghost :disabled="!covers.length">清理缓存</NButton></template>
-              只删除本地生成缓存，不会删除 Emby 当前海报。继续？
-            </NPopconfirm>
+            </HButton>
+            <HPopconfirm @confirm="clean" danger :disabled="!covers.length">
+<HButton variant="danger-soft" size="sm" :disabled="!covers.length">清理缓存</HButton>
+<template #content>只删除本地生成缓存，不会删除 Emby 当前海报。继续？</template>
+</HPopconfirm>
           </div>
-          <NImageGroup v-if="covers.length">
+          <!-- 点缩略图在新标签打开原图（替代 NImage 的灯箱预览：手机上新标签页能双指缩放，比灯箱顺手） -->
+          <template v-if="covers.length">
             <div class="gallery">
               <figure v-for="c in covers" :key="c.name" class="cover">
-                <NImage
-                  :src="`${pluginsApi.coverPreviewUrl(c.name)}&s=${coverStamp}`"
-                  :alt="c.name"
-                  lazy
-                  object-fit="cover"
-                  class="cover-img"
-                />
+                <a :href="`${pluginsApi.coverPreviewUrl(c.name)}&s=${coverStamp}`" target="_blank" rel="noopener">
+                  <img
+                    :src="`${pluginsApi.coverPreviewUrl(c.name)}&s=${coverStamp}`"
+                    :alt="c.name"
+                    loading="lazy"
+                    class="cover-img"
+                  />
+                </a>
                 <figcaption>{{ c.name }}<span>{{ c.time }}</span></figcaption>
               </figure>
             </div>
-          </NImageGroup>
+          </template>
           <p v-else class="muted empty">还没有生成过封面，保存配置后在插件卡片上点「立即生成」。</p>
         </div>
-      </NTabPane>
-    </NTabs>
+</template>
+</div>
 
     <template #footer>
       <div class="foot">
-        <NButton @click="show = false">取消</NButton>
-        <NButton type="primary" :loading="saving" @click="save">保存</NButton>
+        <HButton variant="tertiary" @click="show = false">取消</HButton>
+        <HButton variant="primary" :loading="saving" @click="save">保存</HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>
@@ -424,6 +393,8 @@ defineExpose({ loadCovers })
 .stage {
   position: relative;
   aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 12px;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--c-bg-raised);
@@ -538,6 +509,8 @@ defineExpose({ loadCovers })
 }
 .thumb-img {
   aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 12px;
   border-radius: var(--r-sm);
   overflow: hidden;
   background: var(--c-bg-raised);
@@ -603,6 +576,8 @@ defineExpose({ loadCovers })
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 12px;
 }
 .cover-img :deep(img) {
   width: 100%;

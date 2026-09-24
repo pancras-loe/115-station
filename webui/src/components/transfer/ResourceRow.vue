@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { NTag } from 'naive-ui'
+import HChip from '@/components/hero/HChip.vue'
+import { heroTone } from '@/components/hero/tone'
 import { ChevronRight, ExternalLink } from '@lucide/vue'
 
 export type RowAction = 'transfer' | 'offline' | 'open'
@@ -46,7 +47,7 @@ async function click() {
 
 <template>
   <button class="row" @click="click">
-    <NTag v-if="tag" size="small" :bordered="false" :type="tagType || 'default'">{{ tag }}</NTag>
+    <HChip :color="heroTone(tagType || 'default')" v-if="tag">{{ tag }}</HChip>
 
     <div class="main">
       <div class="title" :title="title">{{ title }}</div>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NInput, NInputGroup, NModal, NSpin } from 'naive-ui'
+import HButton from '@/components/hero/HButton.vue'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
@@ -169,11 +172,7 @@ onMounted(load)
         label="站点地址"
         tip="观影常更换域名。搜索失败时到站点首页看最新地址，改这里后保存并重新登录。"
       >
-        <NInput
-          v-model:value="form.base_url"
-          placeholder="观影站点地址"
-          :input-props="plainProps('gy-base-url')"
-        />
+        <HInput v-model="form.base_url" placeholder="观影站点地址" :input-attrs="plainProps('gy-base-url')" />
       </FieldRow>
 
       <FieldRow
@@ -181,40 +180,32 @@ onMounted(load)
         tip="观影站内账号（搜索 / 详情需登录）。登录即测试账号有效性；服务端自动通过站点反爬验证并保持登录态，会话失效后自动重登。"
       >
         <div class="auth-row">
-          <NInputGroup>
-            <NInput
-              v-model:value="form.username"
-              placeholder="用户名 / 邮箱"
-              :input-props="plainProps('gy-account')"
-            />
+          <div class="h-field-row">
+            <HInput v-model="form.username" placeholder="用户名 / 邮箱" :input-attrs="plainProps('gy-account')" />
             <SecretInput v-model="form.password" name="gy-secret" placeholder="密码" />
-            <NButton :type="loggedIn ? 'warning' : 'primary'" :loading="authing" @click="auth">
+            <HButton :variant="loggedIn ? 'tertiary' : 'primary'" :loading="authing" @click="auth">
               {{ loggedIn ? '退出登录' : '登录' }}
-            </NButton>
-          </NInputGroup>
+            </HButton>
+          </div>
           <LoginBadge :on="loggedIn" :sub="loggedIn ? form.username : ''" />
         </div>
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
       </FormActions>
 
       <FieldRow
         label="搜索影视"
         tip="先经 TMDB 匹配条目（支持直接填 TMDB ID），选定影片后到观影搜种子，磁力一键提交 115 离线下载。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="query"
-            placeholder="影视名称（中英文均可）或 TMDB ID"
-            @keyup.enter="startSearch"
-          />
-          <NButton type="primary" @click="startSearch">
+        <div class="h-field-row">
+          <HInput v-model="query" placeholder="影视名称（中英文均可）或 TMDB ID" @enter="startSearch" />
+          <HButton variant="primary" @click="startSearch">
             <template #icon><Search :size="15" /></template>
             搜索
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
     </SectionCard>
 
@@ -226,9 +217,9 @@ onMounted(load)
       @skip="searchSite(query.trim())"
     />
 
-    <NModal v-model:show="listShow" preset="card" :title="listTitle" style="width: 760px">
+    <HModal v-model:show="listShow" :title="listTitle" width="760px">
       <div class="list">
-        <div v-if="loading" class="state"><NSpin size="small" /><span>搜索观影种子中…</span></div>
+        <div v-if="loading" class="state"><HSpinner size="sm" /><span>搜索观影种子中…</span></div>
         <p v-else-if="error" class="state err">{{ error }}</p>
 
         <template v-else>
@@ -272,7 +263,7 @@ onMounted(load)
           />
         </template>
       </div>
-    </NModal>
+    </HModal>
   </div>
 </template>
 

@@ -96,7 +96,7 @@ onMounted(read)
     </HAlert>
 
     <YamlEditor v-if="!loading" ref="editor" v-model="yaml" :rows="26" :markers="issues" />
-    <div v-else class="skeleton" />
+    <div v-else class="yr-skeleton" />
 
     <div v-if="!loading" class="assist">
       <section class="panel">
@@ -159,7 +159,7 @@ onMounted(read)
 .note {
   margin-bottom: 12px;
 }
-.skeleton {
+.yr-skeleton {
   height: 460px;
   border-radius: var(--radius);
   background: var(--c-bg-raised);

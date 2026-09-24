@@ -7,7 +7,7 @@ defineProps<{ title: string; items: [string, string][]; mono?: boolean }>()
   <section class="block">
     <h3 class="block-title">{{ title }}</h3>
     <div class="chips">
-      <div v-for="it in items" :key="it[0]" class="chip">
+      <div v-for="it in items" :key="it[0]" class="ref-chip">
         <code :class="{ plain: !mono }">{{ it[0] }}</code>
         <span>{{ it[1] }}</span>
       </div>
@@ -29,7 +29,7 @@ defineProps<{ title: string; items: [string, string][]; mono?: boolean }>()
   flex-wrap: wrap;
   gap: 8px;
 }
-.chip {
+.ref-chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -40,16 +40,16 @@ defineProps<{ title: string; items: [string, string][]; mono?: boolean }>()
   color: var(--c-text-2);
   transition: background-color 0.15s;
 }
-.chip:hover {
+.ref-chip:hover {
   background: var(--c-primary-soft);
 }
-.chip code {
+.ref-chip code {
   font-family: var(--font-mono);
   font-size: 11.5px;
   font-weight: 600;
   color: var(--c-primary);
 }
-.chip code.plain {
+.ref-chip code.plain {
   font-family: inherit;
 }
 </style>

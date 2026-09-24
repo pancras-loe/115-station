@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { NButton, NInput, NInputGroup, NModal, NSpin } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -134,28 +137,24 @@ onMounted(load)
         label="站点地址"
         tip="盘搜（开源项目 PanSou）聚合搜索实例地址，默认 https://pansou.app。自建实例可改为此处，保存即生效。"
       >
-        <NInputGroup>
-          <NInput v-model:value="baseUrl" placeholder="PanSou 实例地址" />
-          <NButton type="primary" :loading="saving" @click="save">保存</NButton>
-          <NButton @click="reset">重置</NButton>
-        </NInputGroup>
+        <div class="h-field-row">
+          <HInput v-model="baseUrl" placeholder="PanSou 实例地址" />
+          <HButton variant="primary" :loading="saving" @click="save">保存</HButton>
+          <HButton variant="tertiary" @click="reset">重置</HButton>
+        </div>
       </FieldRow>
 
       <FieldRow
         label="搜索网盘资源"
         tip="先经 TMDB 匹配条目，选定后用规范标题聚合搜索全网网盘分享。115 分享点击自动转存；磁力 / ed2k 点击提交离线下载；其他网盘点击打开原链手动转存。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="query"
-            placeholder="影视名称（中英文均可）或 TMDB ID"
-            @keyup.enter="startSearch"
-          />
-          <NButton type="primary" @click="startSearch">
+        <div class="h-field-row">
+          <HInput v-model="query" placeholder="影视名称（中英文均可）或 TMDB ID" @enter="startSearch" />
+          <HButton variant="primary" @click="startSearch">
             <template #icon><Search :size="15" /></template>
             搜索
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
     </SectionCard>
 
@@ -167,10 +166,10 @@ onMounted(load)
       @skip="searchSite(query.trim())"
     />
 
-    <NModal v-model:show="listShow" preset="card" :title="listTitle" style="width: 720px">
+    <HModal v-model:show="listShow" :title="listTitle" width="720px">
       <div class="list">
         <div v-if="loading" class="state">
-          <NSpin size="small" /><span>多源并发搜索中，约需数秒…</span>
+          <HSpinner size="sm" /><span>多源并发搜索中，约需数秒…</span>
         </div>
         <p v-else-if="error" class="state err">{{ error }}</p>
 
@@ -203,7 +202,7 @@ onMounted(load)
           />
         </template>
       </div>
-    </NModal>
+    </HModal>
   </div>
 </template>
 

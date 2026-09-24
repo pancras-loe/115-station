@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { NAlert, NButton, NModal, NSpin, NTag } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HAlert from '@/components/hero/HAlert.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { dashboardApi } from '@/api'
 import type { CalibrateResult } from '@/types/dashboard'
 import { num } from '@/utils/format'
@@ -59,22 +63,16 @@ watch(
 </script>
 
 <template>
-  <NModal
-    :show="show"
-    preset="card"
-    title="媒体库台账校准"
-    style="width: 640px"
-    @update:show="emit('update:show', $event)"
-  >
+  <HModal :show="show" title="媒体库台账校准" width="640px" @update:show="emit('update:show', $event)">
     <div class="body">
       <p class="intro">
         以<b>本地 STRM 目录</b>为准核对整理台账：标题目录已经不在本地的，说明这部片早就不在库里，
         台账行留着只会让总览面板越数越多。校准只删台账行，不动网盘、不动 Emby、不动 STRM 文件。
       </p>
 
-      <div v-if="loading && !result" class="center"><NSpin size="small" /></div>
+      <div v-if="loading && !result" class="center"><HSpinner size="sm" /></div>
 
-      <NAlert v-else-if="failed" type="error" :bordered="false">{{ failed }}</NAlert>
+      <HAlert status="danger" v-else-if="failed">{{ failed }}</HAlert>
 
       <template v-else-if="result">
         <div class="stats">
@@ -98,9 +96,9 @@ watch(
         <div v-if="result.libraries.length" class="block">
           <div class="block-title">本地实际部数（数的是标题目录，季目录不重复计）</div>
           <div class="libs">
-            <NTag v-for="l in result.libraries" :key="l.name" size="small" :bordered="false">
+            <HChip v-for="l in result.libraries" :key="l.name">
               {{ l.name }} · {{ num(l.count) }}
-            </NTag>
+            </HChip>
           </div>
         </div>
 
@@ -115,34 +113,29 @@ watch(
           </ul>
         </div>
 
-        <NAlert v-if="result.applied" type="success" :bordered="false">
+        <HAlert status="success" v-if="result.applied">
           已清除 {{ num(result.removed) }} 条失效台账，总览面板的数字会在下次刷新后对上。
-        </NAlert>
-        <NAlert v-else-if="result.stale === 0" type="success" :bordered="false">
+        </HAlert>
+        <HAlert status="success" v-else-if="result.stale === 0">
           台账与本地目录一致，没有需要清理的条目。
-        </NAlert>
-        <NAlert v-if="!result.applied && result.skipped > 0" type="info" :bordered="false">
+        </HAlert>
+        <HAlert status="accent" v-if="!result.applied && result.skipped > 0">
           有 {{ num(result.skipped) }} 条台账没有记录落点（早期版本写的记录），无法核对，一律保留。
-        </NAlert>
+        </HAlert>
       </template>
     </div>
 
     <template #footer>
       <div class="footer">
-        <NButton quaternary :disabled="loading" @click="emit('update:show', false)">
+        <HButton variant="ghost" :disabled="loading" @click="emit('update:show', false)">
           {{ result?.applied ? '完成' : '取消' }}
-        </NButton>
-        <NButton
-          v-if="result && !result.applied && result.stale > 0"
-          type="warning"
-          :loading="loading"
-          @click="apply"
-        >
+        </HButton>
+        <HButton variant="primary" v-if="result && !result.applied && result.stale > 0" :loading="loading" @click="apply">
           清除 {{ num(result.stale) }} 条失效台账
-        </NButton>
+        </HButton>
       </div>
     </template>
-  </NModal>
+  </HModal>
 </template>
 
 <style scoped>

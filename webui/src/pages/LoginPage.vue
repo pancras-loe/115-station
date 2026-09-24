@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NForm, NFormItem, NInput } from 'naive-ui'
-import { KeyRound, UserRound } from '@lucide/vue'
+import HButton from '@/components/hero/HButton.vue'
+import HInput from '@/components/hero/HInput.vue'
+import { Eye, EyeOff, KeyRound, UserRound } from '@lucide/vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuthStore } from '@/stores/auth'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -16,6 +17,7 @@ const { message } = useFeedback()
 const username = ref('')
 const password = ref('')
 const submitting = ref(false)
+const showPwd = ref(false)
 
 // 账号来源是容器环境变量 AUTH_USER / AUTH_PASSWORD（未配置时首启生成随机密码，
 // 见容器日志）。网页注册功能已移除，所以「未初始化」只能给配置指引，不能给注册入口。
@@ -60,45 +62,41 @@ async function submit() {
         </p>
       </div>
 
-      <NForm class="form" @submit.prevent="submit">
-        <NFormItem label="账号" :show-feedback="false">
-          <NInput
-            v-model:value="username"
+      <!-- 登录页是全站唯一「要」浏览器自动填充的地方：name / autocomplete 按标准写，
+           密码框用真正的 type=password（其余页面的密钥框刻意避开它，见 SecretInput） -->
+      <form class="form" @submit.prevent="submit">
+        <label class="field">
+          <span class="field-label">账号</span>
+          <HInput
+            v-model="username"
             placeholder="请输入账号"
-            autocomplete="username"
-            size="large"
-            :input-props="{ name: 'username' }"
+            :input-attrs="{ name: 'username', autocomplete: 'username' }"
           >
             <template #prefix><UserRound :size="16" /></template>
-          </NInput>
-        </NFormItem>
+          </HInput>
+        </label>
 
-        <NFormItem label="密码" :show-feedback="false">
-          <NInput
-            v-model:value="password"
-            type="password"
-            show-password-on="click"
+        <label class="field">
+          <span class="field-label">密码</span>
+          <HInput
+            v-model="password"
+            :type="showPwd ? 'text' : 'password'"
             placeholder="请输入密码"
-            autocomplete="current-password"
-            size="large"
-            :input-props="{ name: 'password' }"
-            @keyup.enter="submit"
+            :input-attrs="{ name: 'password', autocomplete: 'current-password' }"
           >
             <template #prefix><KeyRound :size="16" /></template>
-          </NInput>
-        </NFormItem>
+            <template #suffix>
+              <button type="button" class="eye" :aria-label="showPwd ? '隐藏密码' : '显示密码'" @click="showPwd = !showPwd">
+                <component :is="showPwd ? EyeOff : Eye" :size="16" />
+              </button>
+            </template>
+          </HInput>
+        </label>
 
-        <NButton
-          type="primary"
-          size="large"
-          block
-          attr-type="submit"
-          :loading="submitting"
-          class="submit"
-        >
+        <HButton variant="primary" size="lg" full-width type="submit" :loading="submitting" class="submit">
           登录
-        </NButton>
-      </NForm>
+        </HButton>
+      </form>
     </div>
   </div>
 </template>
@@ -118,8 +116,8 @@ async function submit() {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(60rem 30rem at 15% -10%, color-mix(in srgb, var(--c-primary) 16%, transparent), transparent 70%),
-    radial-gradient(50rem 28rem at 95% 110%, color-mix(in srgb, var(--c-primary) 12%, transparent), transparent 70%);
+    radial-gradient(60rem 30rem at 15% -10%, color-mix(in oklab, var(--accent) 16%, transparent), transparent 70%),
+    radial-gradient(50rem 28rem at 95% 110%, color-mix(in oklab, var(--accent) 12%, transparent), transparent 70%);
   pointer-events: none;
 }
 
@@ -134,10 +132,9 @@ async function submit() {
   width: 100%;
   max-width: 400px;
   padding: 36px 32px 32px;
-  background: var(--c-bg-elevated);
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow-lg);
+  background: var(--surface);
+  border-radius: var(--r-card);
+  box-shadow: var(--overlay-shadow);
 }
 
 .brand {
@@ -148,38 +145,37 @@ async function submit() {
 }
 .brand-mark {
   border-radius: 15px;
-  box-shadow: 0 10px 24px -8px color-mix(in srgb, var(--c-primary) 60%, transparent);
+  box-shadow: 0 10px 24px -8px color-mix(in oklab, var(--accent) 60%, transparent);
   margin-bottom: 14px;
 }
 .brand-name {
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.03em;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .brand-name span {
-  color: var(--c-primary);
+  color: var(--accent);
 }
 .brand-sub {
   margin-top: 5px;
   font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
 
 .notice {
   margin-bottom: 20px;
   padding: 12px 14px;
-  border-radius: var(--radius);
-  background: var(--c-warning-soft);
-  border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent);
+  border-radius: 16px;
+  background: var(--warning-soft);
   font-size: 12.5px;
   line-height: 1.6;
-  color: var(--c-text-2);
+  color: color-mix(in oklab, var(--foreground) 75%, var(--muted));
 }
 .notice strong {
   display: block;
   margin-bottom: 4px;
-  color: var(--c-text-1);
+  color: var(--foreground);
 }
 .notice p {
   margin: 0;
@@ -189,13 +185,49 @@ async function submit() {
   font-size: 11.5px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: color-mix(in srgb, var(--c-warning) 16%, transparent);
+  background: color-mix(in oklab, var(--warning) 16%, transparent);
 }
 
-.form :deep(.n-form-item) {
-  margin-bottom: 16px;
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: color-mix(in oklab, var(--foreground) 80%, var(--muted));
+}
+.form :deep(.input-group) {
+  min-height: 44px;
+}
+.eye {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.eye:hover {
+  color: var(--accent);
 }
 .submit {
   margin-top: 8px;
+}
+/* 手机：卡片贴满宽度，少一圈留白 */
+@media (max-width: 480px) {
+  .auth {
+    padding: 16px;
+  }
+  .auth-card {
+    padding: 28px 20px 24px;
+  }
 }
 </style>

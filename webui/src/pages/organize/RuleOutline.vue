@@ -28,10 +28,10 @@ const emit = defineEmits<{ jump: [number] }>()
           @click="emit('jump', it.line)"
         >
           <span class="label">{{ it.label }}</span>
-          <span v-for="t in it.tags" :key="t" class="tag">{{ t }}</span>
-          <span v-if="it.muted" class="tag warn">不会生效</span>
-          <span v-for="c in it.chips" :key="c" class="chip">{{ c }}</span>
-          <span v-if="!it.chips.length && !it.tags.length" class="chip plain">无条件，匹配一切</span>
+          <span v-for="t in it.tags" :key="t" class="ro-tag">{{ t }}</span>
+          <span v-if="it.muted" class="ro-tag warn">不会生效</span>
+          <span v-for="c in it.chips" :key="c" class="ro-chip">{{ c }}</span>
+          <span v-if="!it.chips.length && !it.tags.length" class="ro-chip plain">无条件，匹配一切</span>
         </li>
         <li v-if="!g.items.length" class="item plain">（这一段还没有规则）</li>
       </ol>
@@ -116,25 +116,25 @@ const emit = defineEmits<{ jump: [number] }>()
 .label {
   font-weight: 600;
 }
-.tag {
+.ro-tag {
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--c-bg-hover);
   font-size: 10.5px;
   color: var(--c-text-3);
 }
-.tag.warn {
+.ro-tag.warn {
   background: color-mix(in srgb, var(--c-warning) 18%, transparent);
   color: var(--c-warning);
 }
-.chip {
+.ro-chip {
   padding: 1px 7px;
   border-radius: var(--r-sm);
   background: var(--c-bg-raised);
   font-size: 11px;
   color: var(--c-text-3);
 }
-.chip.plain {
+.ro-chip.plain {
   background: transparent;
   color: var(--c-text-4);
 }

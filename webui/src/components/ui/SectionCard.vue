@@ -24,11 +24,14 @@ defineProps<{ title?: string; hint?: string }>()
 }
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
-  gap: 12px;
+  gap: 8px 12px;
 }
+/* 标题至少留 10em：右侧按钮多（日志页的过滤框 + 开关 + 两个按钮）时整组换到下一行，
+   而不是把标题挤成一字一行 */
 .section-titles {
-  flex: 1;
+  flex: 1 1 10em;
   min-width: 0;
 }
 .section-title {
@@ -45,6 +48,7 @@ defineProps<{ title?: string; hint?: string }>()
 }
 .section-extra {
   flex-shrink: 0;
+  max-width: 100%;
 }
 .section-body {
   min-width: 0;

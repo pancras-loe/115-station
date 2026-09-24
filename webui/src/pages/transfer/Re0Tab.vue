@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { NButton, NInput, NInputGroup, NModal, NSpin, NTag } from 'naive-ui'
+import HSpinner from '@/components/hero/HSpinner.vue'
+import HButton from '@/components/hero/HButton.vue'
+import HChip from '@/components/hero/HChip.vue'
+import HInput from '@/components/hero/HInput.vue'
+import HModal from '@/components/hero/HModal.vue'
 import { Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
@@ -150,18 +154,8 @@ onMounted(load)
         tip="RE0 官方 OpenAPI。需先在 re0.me「个人面板 → OPENAPI → 我的应用」创建应用并等站方审核通过，再把 client_id 和应用 Secret 填到这里。"
       >
         <div class="app-row">
-          <NInput
-            v-model:value="form.base_url"
-            placeholder="站点地址"
-            class="w180"
-            :input-props="plainProps('re0-base-url')"
-          />
-          <NInput
-            v-model:value="form.client_id"
-            placeholder="client_id（app_xxx）"
-            class="w200"
-            :input-props="plainProps('re0-client-id')"
-          />
+          <HInput v-model="form.base_url" placeholder="站点地址" class="w180" :input-attrs="plainProps('re0-base-url')" />
+          <HInput v-model="form.client_id" placeholder="client_id（app_xxx）" class="w200" :input-attrs="plainProps('re0-client-id')" />
           <div class="w200">
             <SecretInput v-model="form.client_secret" name="re0-client-secret" placeholder="应用 Secret" />
           </div>
@@ -173,38 +167,34 @@ onMounted(load)
         tip="保存应用信息后点「授权」，跳转 RE0 官方授权页确认一次。授权后以你的身份查询 / 解锁资源（消耗站内积分），Token 自动续期。解锁的 115 分享会自动转存到接收目录。"
       >
         <div class="auth-row">
-          <NButton type="primary" @click="authorize">授权 RE0 账号</NButton>
-          <NButton :loading="checking" @click="check">检查状态</NButton>
+          <HButton variant="primary" @click="authorize">授权 RE0 账号</HButton>
+          <HButton variant="tertiary" :loading="checking" @click="check">检查状态</HButton>
           <LoginBadge :on="authorized" />
         </div>
       </FieldRow>
 
       <FormActions>
-        <NButton type="primary" :loading="saving" @click="save">保存配置</NButton>
+        <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
       </FormActions>
 
       <FieldRow
         label="搜索站内资源"
         tip="先经 TMDB 匹配条目（也支持直接输入 TMDB ID），再查 RE0 站内资源：显示网盘类型、分辨率、大小与解锁积分。已解锁资源不重复扣积分。"
       >
-        <NInputGroup>
-          <NInput
-            v-model:value="query"
-            placeholder="影视名称（中英文均可）或 TMDB ID"
-            @keyup.enter="search"
-          />
-          <NButton type="primary" @click="search">
+        <div class="h-field-row">
+          <HInput v-model="query" placeholder="影视名称（中英文均可）或 TMDB ID" @enter="search" />
+          <HButton variant="primary" @click="search">
             <template #icon><Search :size="15" /></template>
             搜索
-          </NButton>
-        </NInputGroup>
+          </HButton>
+        </div>
       </FieldRow>
     </SectionCard>
 
-    <NModal v-model:show="listShow" preset="card" title="RE0 资源" style="width: 760px">
+    <HModal v-model:show="listShow" title="RE0 资源" width="760px">
       <div class="list">
         <div v-if="loading" class="state">
-          <NSpin size="small" /><span>TMDB 匹配并查询 RE0 站内资源…</span>
+          <HSpinner size="sm" /><span>TMDB 匹配并查询 RE0 站内资源…</span>
         </div>
         <p v-else-if="error" class="state err">{{ error }}</p>
 
@@ -213,7 +203,7 @@ onMounted(load)
 
           <section v-for="it in items" :key="`${it.media_type}-${it.id}`" class="group">
             <header class="group-head">
-              <NTag size="small" :bordered="false">{{ MEDIA_LABEL[it.media_type] || it.media_type }}</NTag>
+              <HChip>{{ MEDIA_LABEL[it.media_type] || it.media_type }}</HChip>
               <strong>{{ it.title }}</strong>
               <span v-if="it.year" class="dim">{{ it.year }}</span>
               <span v-if="it.vote" class="dim">★ {{ it.vote }}</span>
@@ -223,7 +213,7 @@ onMounted(load)
             <p v-else-if="!it.resources?.length" class="dim small">站内暂无资源</p>
 
             <div v-for="r in it.resources || []" v-else :key="r.slug" class="res">
-              <NTag v-if="r.pan_type" size="small" :bordered="false">{{ r.pan_type }}</NTag>
+              <HChip v-if="r.pan_type">{{ r.pan_type }}</HChip>
               <span class="res-title">{{ r.title || r.slug }}</span>
               <span v-if="r.video_resolution?.length" class="dim small">
                 {{ r.video_resolution.join(' / ') }}
@@ -241,20 +231,15 @@ onMounted(load)
                 >
                   {{ unlockState[keyOf(it, r)].text }}
                 </span>
-                <NButton
-                  v-else
-                  size="tiny"
-                  type="primary"
-                  @click="unlock(it, r)"
-                >
+                <HButton variant="primary" size="sm" v-else @click="unlock(it, r)">
                   {{ r.is_unlocked ? '获取链接' : '解锁并转存' }}
-                </NButton>
+                </HButton>
               </span>
             </div>
           </section>
         </template>
       </div>
-    </NModal>
+    </HModal>
   </div>
 </template>
 
