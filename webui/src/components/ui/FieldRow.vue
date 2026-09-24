@@ -63,7 +63,7 @@ defineProps<{
   max-width: 480px;
 }
 /* 控件高 36px、标签列按 36px 垂直居中；纯文字的值（状态页）没有控件高度，
-   补上半行的上边距才和标签对得齐。不用 flex 居中：那会把还没迁移的 Naive 开关、单选组拉满整行 */
+   补上半行的上边距才和标签对得齐。不用 flex 居中：那会把分段选择、开关这类行内控件拉满整行 */
 .row-control > :slotted(:is(span, strong):first-child) {
   display: inline-block;
   padding-top: 8px;

@@ -198,7 +198,7 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
   color: var(--c-text-4);
 }
 
-/* 弹层用 raw 模式，样式完全自管 —— naive 的 popover 内边距塞不下搜索框 + 分组列表 */
+/* 底色、圆角、阴影由外层 HPopover 给；这里只管尺寸和内边距 */
 .picker {
   display: flex;
   flex-direction: column;
@@ -206,10 +206,6 @@ const isDefault = computed(() => value.value.trim() === props.fallback)
   width: 380px;
   max-width: calc(100vw - 24px);
   padding: 10px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius);
-  background: var(--c-bg-elevated);
-  box-shadow: var(--shadow-card);
 }
 .picker-opts {
   display: flex;

@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NDrawer, NDropdown } from 'naive-ui'
-import { h } from 'vue'
 import { LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
 import AppSidebar from './AppSidebar.vue'
 import MobileTabBar from './MobileTabBar.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
+import HDrawer from '@/components/hero/HDrawer.vue'
+import HDropdown from '@/components/hero/HDropdown.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
@@ -34,7 +34,7 @@ const desc = computed(() => (route.meta.desc as string) ?? '')
 // 移动端：切页后自动收起抽屉
 watch(() => route.fullPath, () => (drawerOpen.value = false))
 
-const accountOptions = [{ label: '退出登录', key: 'logout', icon: () => h(LogOut, { size: 15 }) }]
+const accountOptions = [{ label: '退出登录', key: 'logout', icon: LogOut, danger: true }]
 
 function onAccount(key: string) {
   if (key === 'logout') {
@@ -50,9 +50,9 @@ function onAccount(key: string) {
     <AppSidebar class="sidebar-desktop" :version="version" />
 
     <!-- 移动端抽屉 -->
-    <NDrawer v-model:show="drawerOpen" :width="236" placement="left">
+    <HDrawer v-model:show="drawerOpen" width="252px" title="导航菜单">
       <AppSidebar :version="version" @navigate="drawerOpen = false" />
-    </NDrawer>
+    </HDrawer>
 
     <div class="main">
       <header class="topbar">
@@ -74,12 +74,12 @@ function onAccount(key: string) {
 
           <ThemeToggle />
 
-          <NDropdown trigger="click" :options="accountOptions" @select="onAccount">
+          <HDropdown :options="accountOptions" @select="onAccount">
             <HButton variant="ghost" class="account-btn" :aria-label="auth.username || '账号'">
               <template #icon><UserRound :size="17" /></template>
               <span class="account-name">{{ auth.username || '账号' }}</span>
             </HButton>
-          </NDropdown>
+          </HDropdown>
         </div>
       </header>
 

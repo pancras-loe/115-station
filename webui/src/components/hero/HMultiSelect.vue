@@ -18,7 +18,7 @@ import { Check, ChevronDown, X } from '@lucide/vue'
 /**
  * 多选 + 搜索（替代 NSelect multiple filterable）：Reka 的 Combobox 负责键盘与浮层，
  * 外观是 HeroUI 的 select 触发器 + list-box 选项。已选的值以 tag 形式排在输入框前面，点 × 移除。
- * 选项可以分组（{ type: 'group', label, children }），和原来 Naive 的写法一致。
+ * 选项可以分组（{ type: 'group', label, children }）。
  */
 export interface MultiOption<T> {
   label: string

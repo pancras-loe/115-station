@@ -64,7 +64,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | ORM / DB | GORM + SQLite（纯 Go 驱动 `glebarez/sqlite`，`CGO_ENABLED=0`） |
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
-| 前端（现役） | Vue 3 + TypeScript + Vite（`webui/`），外观走 HeroUI v3 的样式包 `@heroui/styles` + Reka UI（迁移中，未迁的页面仍是 Naive UI），详见 [webui/README.md](webui/README.md) |
+| 前端（现役） | Vue 3 + TypeScript + Vite（`webui/`），外观走 HeroUI v3 的样式包 `@heroui/styles`，交互走 Reka UI，详见 [webui/README.md](webui/README.md) |
 | 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 Emby/Jellyfin |
 
 ---
@@ -78,7 +78,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 │   ├── api/                    # 全部业务逻辑（~33k 行，41 个测试文件）
 │   ├── config/                 # 环境变量配置、配置文件读写、TLS 自签证书
 │   └── model/                  # GORM 实体与建表/默认数据初始化
-├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + Naive UI）
+├── webui/                      # 管理后台前端·现役（Vue3 + TS + Vite + HeroUI 样式 + Reka UI）
 ├── wiki/index.html             # 完整版使用 Wiki（单文件）
 ├── .github/workflows/docker.yml# CI：测试门禁 → 多架构镜像构建
 ├── Dockerfile                  # 多阶段交叉编译 → alpine + ffmpeg
@@ -177,14 +177,18 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 - 前端有构建：`cd webui && npm run typecheck && npm run build`，产物是单个 `webui/dist/index.html`（不提交进仓库）。
 - 颜色只能从设计令牌取，组件里写死色值必然漏暗色模式。**颜色的唯一来源是 HeroUI 主题变量**
   （`--accent` / `--surface` / `--muted` / `--foreground` …，明暗由它按 `html.dark` 切换）；
-  `main.css` 里的 `--c-*` 只是给未迁移代码和 Naive UI 用的别名，新代码直接写 HeroUI 变量。
+  `main.css` 里的 `--c-*` 只是给老样式用的别名，新代码直接写 HeroUI 变量。
   圆角用 `--r-sm/lg/xl/card`，**不要**写 `--radius-sm/lg/xl`——那几个名字被 HeroUI 的 `@theme` 占用、刻度也不同。
-- **新写界面用 `webui/src/components/hero/`**（`HButton` / `HChip` / `HAlert` / `HTooltip` …）：
+- **界面一律用 `webui/src/components/hero/`**（`HButton` / `HInput` / `HSelect` / `HModal` / `HTabs` …）：
   HeroUI 的 BEM 类负责外观，Reka UI 负责交互；Reka 的状态属性与 HeroUI 选择器之间的桥在
   `styles/hero-adapter.css`。要用 HeroUI 新组件时先在 `main.css` 按需 `@import` 它的 CSS（全量 400KB+，我们打单文件）。
-  Naive UI 正在逐页退场（顺序：总览 → 整理记录 → Strm 管理 → 其余页面），迁完一页就别在那页再引 Naive。
+  Naive UI 已于 2026-09 整体移除，**不要再加回来**。弹提示 / 确认框走 `useFeedback()`（`message.*` / `dialog.confirm`）。
+  浮层（Popover / Select / Modal 等）在 Portal 里，外面还包着 Reka 的定位 wrapper，调用方的 scoped 样式选不中面板本身——
+  面板样式写在 hero 组件的非 scoped 块里，或用全局类名。页面私有类名别和 HeroUI 块名（`.card` / `.chip` / `.tag` / `.input` …）
+  或 Tailwind 工具类（`.outline`）同名。
+  模板里用到的组件必须 import：vue-tsc 对未导入的组件**不报错**，只会原样渲染成自定义元素（整块内容铺在页面上）。
 - 手机端断点 ≤720px：底部导航（`layouts/MobileTabBar.vue`）接管导航，内容区底部要给它留 `--tabbar-h`。
-- **API Key / Secret / token 一律用 `SecretInput` 组件**，不要直接写 `<NInput type="password">`——
+- **API Key / Secret / token 一律用 `SecretInput` 组件**，不要直接写 `<input type="password">`——
   浏览器会把本站保存的管理员密码自动填进去（见 `webui/src/utils/autofill.ts`）。
 
 ---
@@ -371,9 +375,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 
 ## 8. 前端（`webui/`）
 
-`web/` 的原生实现已被 `webui/`（Vue 3 + TypeScript + Vite + Naive UI）**整体替换**，
+`web/` 的原生实现已被 `webui/`（Vue 3 + TypeScript + Vite）**整体替换**，
 动因是原生版本没有暗色模式、228 个内联 `onclick` 导致无法安全重构，且视觉停留在早期
-企业后台风格。13 个页面全部迁移完成。
+企业后台风格。13 个页面全部迁移完成。2026-09 组件层从 Naive UI 换成 HeroUI v3 样式 + Reka UI，
+并补齐手机端（≤720px 底部导航、弹窗变底部抽屉、表单单列）。
 
 ### 运行与构建
 

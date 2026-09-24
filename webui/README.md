@@ -1,14 +1,13 @@
 # webui —— 115-Station 新版管理后台前端
 
 Vue 3 + TypeScript + Vite 重写版，已整体替换旧版原生实现。
-外观正从 Naive UI 迁到 HeroUI v3 的样式（`@heroui/styles` + Reka UI），按页进行。
+外观是 HeroUI v3 的样式（`@heroui/styles`），交互由 Reka UI 提供；2026-09 从 Naive UI 整体迁过来，Naive 已移除。
 
 ## 为什么是这套选型
 
 | 选择 | 理由 |
 |---|---|
 | **Vue 3** 而非 React | 后台是 12 页、28 页签的重表单应用，`v-model` 相比受控组件能省掉大量样板 |
-| **Naive UI** | TS 优先；暗色主题是一等公民（`darkTheme` + `n-config-provider`），不是补丁；自带 Tree / DataTable / Form / Modal，115 目录选择器直接用 Tree |
 | **HeroUI v3 样式 + Reka UI** | HeroUI 只有 React 版，但它的外观全在不依赖 React 的 `@heroui/styles`（BEM 类 + Tailwind v4）里；交互（键盘、焦点、浮层定位）交给 Reka UI（Radix 的 Vue 版）。两者在 `components/hero/` 拼成我们自己的组件 |
 | **Tailwind v4** | 只做布局工具层。组件样式一律走 `<style scoped>` + 设计令牌，不用工具类堆组件 |
 | **单文件打包** | 见下方「单文件打包」 |
@@ -47,13 +46,12 @@ cd webui && npm run typecheck && npm run build
 src/
 ├── api/            # 按后端模块分的接口封装 + client.ts（超时/重试/401）
 ├── components/     # 跨页面复用组件；ui/ 下是业务原子件，hero/ 下是 HeroUI 样式 + Reka 交互的基础组件
-├── composables/    # useFeedback（把 Naive 的 message/dialog 暴露给非组件代码）
+├── composables/    # useFeedback（全站轻提示 / 确认框，组件内外都能调）
 ├── layouts/        # AppLayout（侧栏 + 顶栏）、navItems（导航与图标）
 ├── pages/          # 每个路由一个页面组件
 ├── router/         # 路由表；路径沿用旧版，不要改
 ├── stores/         # Pinia：auth、theme
 ├── styles/main.css # 按需引入 HeroUI 组件 CSS + 令牌别名；hero-adapter.css 是 Reka→HeroUI 的状态桥
-├── theme/naive.ts  # 从 CSS 变量现读，生成 Naive 主题覆盖
 ├── types/          # 与后端 JSON 一一对应的类型
 └── utils/          # 格式化、媒体 URL 拼装
 ```
@@ -63,15 +61,17 @@ src/
 ### 1. 颜色只从设计令牌取
 
 颜色的唯一来源是 HeroUI 主题变量（`--accent`、`--surface`、`--muted`…，明暗两套由它按
-`html.dark` 切换）。`main.css` 的 `--c-*` 只是别名，给还没迁移的组件和 Naive 用；新代码直接写 HeroUI 变量。
+`html.dark` 切换）。`main.css` 的 `--c-*` 只是别名，老样式里还大量在用；新代码直接写 HeroUI 变量。
 组件里写死 `#fff`、`#1D2129` 这类字面值，暗色模式必然漏。
 
 圆角用 `--r-sm` / `--r-lg` / `--r-xl` / `--r-card`。`--radius-sm/lg/xl` 被 HeroUI 的 `@theme` 占用且刻度不同，别用。
 
-`theme/naive.ts` 用 `getComputedStyle` 现读这些变量来生成 Naive 的 theme-overrides，
-所以令牌只有一份。HeroUI 的变量是 `oklch()` / `color-mix()`，Naive 算 hover 色时不认，
-`naive.ts` 会先让浏览器在 1×1 画布上求值成 rgba 再交给它。不要在 `naive.ts` 里再抄一份色值 —— 两处维护必然漂移，
-表现为「页面暗了但弹窗还是白的」这种最难排查的样式 bug。
+Tailwind 的颜色名别和字号刻度撞名（`base` / `xs` / `sm` / `lg` …）：`--color-base` 会让 `text-base`
+同时输出 color，HeroUI 的输入框靠 `text-base` 设字号，字色就被刷成了页面底色。
+
+页面私有的类名别和 HeroUI 的组件块名撞（`.card` / `.chip` / `.tag` / `.input` / `.skeleton` / `.button` …），
+也别和 Tailwind 工具类撞（`.outline` 会画出一圈黑框）：那些都是全局类，同名的私有样式会被叠上它们的外观。
+加个页面前缀就好（`.plugin`、`.ro-chip`）。
 
 ### 2. 路由路径不能改
 

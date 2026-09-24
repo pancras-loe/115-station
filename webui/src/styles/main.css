@@ -25,6 +25,7 @@
 @import '@heroui/styles/components/list-box.css' layer(components);
 @import '@heroui/styles/components/list-box-item.css' layer(components);
 @import '@heroui/styles/components/popover.css' layer(components);
+@import '@heroui/styles/components/menu-item.css' layer(components);
 @import '@heroui/styles/components/checkbox.css' layer(components);
 @import '@heroui/styles/components/search-field.css' layer(components);
 @import '@heroui/styles/components/input.css' layer(components);
@@ -40,7 +41,7 @@
    设计令牌
    颜色的唯一来源是 HeroUI 主题变量（--accent / --surface / --muted …，
    明暗两套由它按 html.dark 切换）。下面的 --c-* 只是别名，
-   让还没迁移的旧组件和 Naive UI 跟着同一套色板走。
+   让老样式（页面里大量的 var(--c-text-3) 之类）跟着同一套色板走。
    规则不变：组件里不写字面色值，否则暗色模式必漏。
    ============================================================ */
 @theme {
