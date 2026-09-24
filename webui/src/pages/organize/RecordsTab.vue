@@ -10,7 +10,6 @@ import {
   PencilLine,
   RefreshCw,
   RotateCcw,
-  Search,
   Trash2,
 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'

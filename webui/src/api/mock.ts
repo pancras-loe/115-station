@@ -5,7 +5,7 @@
  * 用途：本地没有 Go 后端 / 没有 115 账号时预览界面与配色。
  */
 import type { Dashboard } from '@/types/dashboard'
-import type { OrganizeRecord } from '@/api/organize'
+import type { OrganizeRecord, OrganizeRecordFile } from '@/api/organize'
 
 const TITLES: [string, string, string][] = [
   ['沙丘 2', '2024', '科幻电影'],
@@ -94,8 +94,8 @@ const baseRecord = {
   scrape_msg: '',
   manual_tmdb: false,
   redo_count: 0,
-  file_list: [],
-} as const
+  file_list: [] as OrganizeRecordFile[],
+}
 const records: OrganizeRecord[] = [
   {
     ...baseRecord,
