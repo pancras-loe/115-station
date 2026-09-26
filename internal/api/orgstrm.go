@@ -456,6 +456,11 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	if rec.LinkID == 0 {
 		rec.LinkID = dlLinkMatch(model.DB, rec)
 	}
+	// 队列里跑的整理（手动 / 定时 / 转存触发 / 重新整理 / 确认）记下任务 id；
+	// 写回原记录时同样覆盖，语义是「最近一次处理它的任务」
+	if id, _ := currentJob(); id != 0 {
+		rec.JobID = id
+	}
 	var err error
 	if ref := s.reuse; ref != nil {
 		s.reuse = nil

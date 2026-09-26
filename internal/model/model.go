@@ -291,6 +291,10 @@ type OrganizeRecord struct {
 	// LinkID 这批内容是从哪条离线/分享链接下来的（DownloadLink.ID，0 = 认不出来源）。
 	// 一条链接可以对应多条记录（合集分享、散文件逐集），所以挂在记录这一侧
 	LinkID uint `json:"link_id" gorm:"index"`
+	// JobID 最近一次处理这条记录的队列任务（TaskJob.ID，0 = 不是队列里跑出来的，或早于这个字段的老记录）。
+	// 重新整理 / 确认入库写回原记录时覆盖成新任务：任务中心与记录页据此互相跳转。
+	// 老记录没法回填 —— BatchID 是秒级时间戳，同一秒可能有几个任务，对不准
+	JobID uint `json:"job_id" gorm:"index"`
 
 	ManualTmdb bool      `json:"manual_tmdb"` // 用户手动指定过 TMDB 条目
 	RedoCount  int       `json:"redo_count"`

@@ -294,6 +294,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/organize/records/:id/redo", h.RedoOrganizeRecord)
 		// 任务队列
 		protected.GET("/tasks", h.ListTaskJobs)
+		protected.GET("/tasks/history", h.ListTaskHistory)
 		protected.GET("/tasks/:id", h.GetTaskJob)
 		protected.POST("/tasks/:id/cancel", h.CancelTaskJob)
 		protected.POST("/tasks/:id/retry", h.RetryTaskJob)

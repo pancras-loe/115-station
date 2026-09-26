@@ -543,14 +543,16 @@ func (h *Handler) ListTaskJobs(c *gin.Context) {
 	})
 }
 
-// GetTaskJob GET /tasks/:id
+// GetTaskJob GET /tasks/:id → 任务本身 + 涉及的整理记录（最多 50 条）+ 参数摘要（任务中心详情）
 func (h *Handler) GetTaskJob(c *gin.Context) {
 	var job model.TaskJob
 	if h.DB.First(&job, c.Param("id")).Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": toJobDTO(job, queuedJobs(h.DB))})
+	d := taskJobDetail{taskJobDTO: toJobDTO(job, queuedJobs(h.DB)), Summary: jobParamsSummary(decodeJobParams(&job))}
+	d.Records, d.RecordTotal = jobRecords(h.DB, &job)
+	c.JSON(http.StatusOK, gin.H{"data": d})
 }
 
 // CancelTaskJob POST /tasks/:id/cancel：排队中的直接取消；运行中的请求停止（做完手上这条再退）

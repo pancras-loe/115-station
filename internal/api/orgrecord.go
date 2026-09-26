@@ -47,7 +47,7 @@ func (h *Handler) recordDTO(r model.OrganizeRecord) orgRecordDTO {
 	return toRecordDTO(r, recordLinks(h.DB, []model.OrganizeRecord{r}))
 }
 
-// ListOrganizeRecords GET /organize/records?status=&type=&q=&page=&size=
+// ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&page=&size=
 func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	q := h.DB.Model(&model.OrganizeRecord{})
 	if st := strings.TrimSpace(c.Query("status")); st != "" && st != "all" {
@@ -63,6 +63,14 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	}
 	if mt := strings.TrimSpace(c.Query("type")); mt == "movie" || mt == "tv" {
 		q = q.Where("media_type = ?", mt)
+	}
+	// 任务中心「查看这次任务涉及的记录」跳过来时带 job_id
+	if jid, _ := strconv.Atoi(c.Query("job_id")); jid > 0 {
+		var job model.TaskJob
+		if h.DB.First(&job, jid).Error != nil {
+			job.ID = uint(jid) // 任务已被清理：仍可按 job_id 列查
+		}
+		q = jobRecordsScope(q, &job)
 	}
 	if kw := strings.TrimSpace(c.Query("q")); kw != "" {
 		if id, err := strconv.Atoi(kw); err == nil && id > 0 {
@@ -346,6 +354,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	rec.StrmCreated = strmTotal
 	rec.ManualTmdb = true
 	rec.RedoCount++
+	if id, _ := currentJob(); id != 0 {
+		rec.JobID = id // 重新整理不经过 orgSink.note，自己记
+	}
 	if err := h.DB.Save(rec).Error; err != nil {
 		return fmt.Errorf("整理已完成但记录更新失败: %w", err)
 	}

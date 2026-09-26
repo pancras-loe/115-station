@@ -238,16 +238,16 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 		}
 		if msg != "" {
 			sink.reuse = nil
-			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(map[string]interface{}{
+			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(withJobID(map[string]interface{}{
 				"status": "failed", "stage": "confirm", "message": msg,
-			})
+			}))
 			log.Printf("[整理] ✗ 人工确认《%s》失败: %s", rec.Source, msg)
 		} else if sink.reuse != nil {
 			// 流水线一条记录都没写（理论上不会）：别让它一直停在待确认
 			sink.reuse = nil
-			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(map[string]interface{}{
+			h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(withJobID(map[string]interface{}{
 				"status": "failed", "stage": "confirm", "message": "确认后没有产生任何整理结果，请查看实时日志",
-			})
+			}))
 		}
 		var fresh model.OrganizeRecord
 		if h.DB.First(&fresh, rec.ID).Error == nil {
@@ -374,9 +374,9 @@ func (h *Handler) ignoreAwaiting(rec *model.OrganizeRecord) (string, error) {
 		}
 		msg = "已人工忽略，已移到 冗余/" + holdingDir
 	}
-	h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(map[string]interface{}{
+	h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(withJobID(map[string]interface{}{
 		"status": "unrecognized", "stage": "confirm", "message": msg,
-	})
+	}))
 	log.Printf("[整理] ○ 人工忽略《%s》：%s", rec.Source, msg)
 	return msg, nil
 }
