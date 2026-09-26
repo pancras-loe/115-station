@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Ban,
@@ -160,6 +160,11 @@ function onSizeChange(n: number) {
 }
 
 onMounted(reload)
+// 按钮的禁用条件里有 task.status.running，本页必须自己挂一条轮询：
+// 此前只有「基础配置」页签的 TaskStatusBar 在轮询，切到本页签它被卸载、轮询停掉，
+// 状态冻结在切换那一刻——恰逢任务在跑就全页按钮卡灰，只能刷新网页才恢复
+onMounted(task.start)
+onUnmounted(task.stop)
 
 function humanSize(n?: number) {
   if (!n) return ''
@@ -313,7 +318,8 @@ async function doPick(pick: TmdbCandidate) {
     await reload()
   } catch (e) {
     toastError(e, confirming ? '入库失败' : '重新整理失败')
-    if (confirming) await reload()
+    // 重新整理失败同样要刷新：只弹一下提示，用户容易以为「没执行」
+    await reload()
   } finally {
     acting.value = 0
     task.poll()
