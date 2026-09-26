@@ -31,11 +31,11 @@ import { organizeApi, resourcesApi } from '@/api'
 import type { OrganizeRecord } from '@/api/organize'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
-import { useTaskStore } from '@/stores/task'
+import { useQueueStore } from '@/stores/queue'
 import { recordStats, refreshRecordStats } from './recordStats'
 
 const { message } = useFeedback()
-const task = useTaskStore()
+const queue = useQueueStore()
 const route = useRoute()
 
 const rows = ref<OrganizeRecord[]>([])
@@ -160,11 +160,11 @@ function onSizeChange(n: number) {
 }
 
 onMounted(reload)
-// 按钮的禁用条件里有 task.status.running，本页必须自己挂一条轮询：
-// 此前只有「基础配置」页签的 TaskStatusBar 在轮询，切到本页签它被卸载、轮询停掉，
-// 状态冻结在切换那一刻——恰逢任务在跑就全页按钮卡灰，只能刷新网页才恢复
-onMounted(task.start)
-onUnmounted(task.stop)
+// 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
+const offFinished = queue.onFinished((j) => {
+  if (j.kind === 'redo' || j.kind === 'confirm') void reload()
+})
+onUnmounted(offFinished)
 
 function humanSize(n?: number) {
   if (!n) return ''
@@ -218,7 +218,13 @@ function toggleFiles(id: number) {
   expanded.value = s
 }
 
-const busy = computed(() => acting.value !== 0 || batching.value || task.status.running)
+// 不再因为「后台有任务在跑」禁用按钮：点了就是入队，由任务队列排队执行
+const busy = computed(() => acting.value !== 0 || batching.value)
+
+/** 这条记录是否已在任务队列里（排队中 / 执行中） */
+function queuedJob(r: OrganizeRecord) {
+  return queue.recordJob(r.id)
+}
 
 // ---- 待确认：勾选与批量确认 ----
 const selected = ref(new Set<number>())
@@ -244,18 +250,15 @@ async function confirmSelected() {
   const ids = [...selected.value]
   if (!ids.length) return
   batching.value = true
-  message.info(`正在确认 ${ids.length} 项并入库…`)
-  task.poll()
   try {
     const d = await organizeApi.confirmRecords(ids)
-    message.success(d.message || '确认完成')
+    message.success(d.message)
     selected.value = new Set()
-    await reload()
+    await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '批量确认失败')
   } finally {
     batching.value = false
-    task.poll()
   }
 }
 
@@ -264,18 +267,14 @@ const acting = ref(0)
 
 async function confirmOne(r: OrganizeRecord) {
   acting.value = r.id
-  message.info(`正在按《${r.title}》入库…`)
-  task.poll()
   try {
     const d = await organizeApi.confirmRecord(r.id)
-    message.success(d.message || '已入库')
-    await reload()
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '确认失败')
-    await reload() // 失败的会被后端改成「失败」，刷新好让用户看到原因
   } finally {
     acting.value = 0
-    task.poll()
   }
 }
 
@@ -308,21 +307,17 @@ async function doPick(pick: TmdbCandidate) {
   pickShow.value = false
   acting.value = target.id
   const confirming = target.status === 'awaiting'
-  message.info(confirming ? `正在按《${pick.title}》入库…` : `正在按《${pick.title}》重新整理…`)
-  task.poll()
+  const label = pick.year ? `${pick.title} (${pick.year})` : pick.title
   try {
     const d = confirming
-      ? await organizeApi.confirmRecord(target.id, { tmdbId: pick.id, mediaType: pick.media_type })
-      : await organizeApi.redoRecord(target.id, pick.id, pick.media_type)
-    message.success(d.message || (confirming ? '已入库' : '重新整理完成'))
-    await reload()
+      ? await organizeApi.confirmRecord(target.id, { tmdbId: pick.id, mediaType: pick.media_type, label })
+      : await organizeApi.redoRecord(target.id, pick.id, pick.media_type, label)
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
-    toastError(e, confirming ? '入库失败' : '重新整理失败')
-    // 重新整理失败同样要刷新：只弹一下提示，用户容易以为「没执行」
-    await reload()
+    toastError(e, confirming ? '提交入库失败' : '提交重新整理失败')
   } finally {
     acting.value = 0
-    task.poll()
   }
 }
 
@@ -495,6 +490,8 @@ async function clearAll() {
                 <HChip :color="chipColor(STATUS_META[r.status]?.type)">
                   {{ STATUS_META[r.status]?.text ?? r.status }}
                 </HChip>
+                <HChip v-if="queuedJob(r)?.status === 'running'" color="accent">执行中</HChip>
+                <HChip v-else-if="queuedJob(r)" :title="queuedJob(r)?.title">排队中 · 第 {{ queuedJob(r)?.position }} 位</HChip>
                 <b v-if="r.title" class="title">{{ r.title }}</b>
                 <b v-else class="title untitled">未识别</b>
                 <span v-if="r.year" class="dim">{{ r.year }}</span>
@@ -586,7 +583,7 @@ async function clearAll() {
                 <HButton
                   size="sm"
                   variant="primary"
-                  :disabled="!r.tmdb_id || busy"
+                  :disabled="!r.tmdb_id || busy || !!queuedJob(r)"
                   :loading="acting === r.id"
                   :title="r.tmdb_id ? undefined : '没有识别结果，请先「重新指定」'"
                   @click="confirmOne(r)"
@@ -594,7 +591,7 @@ async function clearAll() {
                   <template #icon><Check /></template>
                   确认入库
                 </HButton>
-                <HButton size="sm" variant="tertiary" :disabled="busy" @click="openPick(r)">
+                <HButton size="sm" variant="tertiary" :disabled="busy || queuedJob(r)?.status === 'running'" @click="openPick(r)">
                   <template #icon><PencilLine /></template>
                   重新指定
                 </HButton>
@@ -614,7 +611,7 @@ async function clearAll() {
                   v-if="r.file_list?.length"
                   size="sm"
                   variant="tertiary"
-                  :disabled="busy"
+                  :disabled="busy || queuedJob(r)?.status === 'running'"
                   :loading="acting === r.id"
                   :title="`指定正确的 TMDB 条目，把这 ${r.file_list.length} 个文件从当前位置改名并搬到正确目录`"
                   @click="openPick(r)"
@@ -628,10 +625,10 @@ async function clearAll() {
                   v-if="r.file_list?.length"
                   danger
                   confirm-text="深度删除"
-                  :disabled="busy"
+                  :disabled="busy || !!queuedJob(r)"
                   @confirm="deepDeleteRecord(r)"
                 >
-                  <HButton size="sm" variant="danger-soft" :disabled="busy">
+                  <HButton size="sm" variant="danger-soft" :disabled="busy || !!queuedJob(r)">
                     <template #icon><Trash2 /></template>
                     深度删除
                   </HButton>

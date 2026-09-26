@@ -294,6 +294,8 @@ func (h *Handler) runIncrPollTick() {
 	if _, err := h.executeIncrementalSync(p); err != nil {
 		log.Printf("[轮询] 增量同步失败: %v", err)
 	}
+	// 任务队列据此判断增量是不是被饿着了（见 taskqueue.go waitIncrWindow）
+	markIncrRun()
 }
 
 // runScheduledFullSync 单轮定时全量同步。defer 解锁 + recover 的理由同 runScheduledTick。
@@ -419,6 +421,7 @@ func (h *Handler) pruneSyncEvents() {
 	}
 	pruneEventSuppress()
 	pruneOrganizeRecords()
+	pruneTaskJobs()
 	pruneDownloadLinks()
 	pruneDeepDeleteRecords()
 }

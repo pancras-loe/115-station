@@ -141,20 +141,23 @@ export const recordStats = () =>
  * 确认入库：按识别结果（或改指定的条目）走完后半条流水线。
  * 和整理互斥，一部剧上百集时耗时按分钟计
  */
-export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: string }) =>
-  http.post<{ message?: string; data: OrganizeRecord }>(
+/** 入队接口的回复（202）：任务 id、排第几、预计多久后跑完 */
+export interface QueuedReply {
+  message: string
+  job_id: number
+  position: number
+  eta_sec: number
+}
+
+/** 确认入库 → 入任务队列立即返回。label 是选中条目的「片名 (年份)」，只用于任务标题 */
+export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: string; label?: string }) =>
+  http.post<QueuedReply>(
     `/organize/records/${id}/confirm`,
-    pick ? { tmdb_id: pick.tmdbId, media_type: pick.mediaType } : {},
-    { timeoutMs: 30 * 60_000 },
+    pick ? { tmdb_id: pick.tmdbId, media_type: pick.mediaType, label: pick.label } : {},
   )
 
 /** 批量按识别结果入库；没识别出来的由后端跳过 */
-export const confirmRecords = (ids: number[]) =>
-  http.post<{ message?: string; success: number; total: number }>(
-    '/organize/records/confirm',
-    { ids },
-    { timeoutMs: 60 * 60_000 },
-  )
+export const confirmRecords = (ids: number[]) => http.post<QueuedReply>('/organize/records/confirm', { ids })
 
 /** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */
 export const ignoreRecord = (id: number) =>
@@ -180,12 +183,9 @@ export const deepDeleteRecord = (id: number) =>
   }>(`/organize/records/${id}/deep-delete`, {}, { timeoutMs: 10 * 60_000 })
 
 /** 重新整理会动网盘与本地文件，和整理/同步互斥，耗时按分钟计 */
-export const redoRecord = (id: number, tmdbId: number, mediaType: string) =>
-  http.post<{ message?: string; data: OrganizeRecord }>(
-    `/organize/records/${id}/redo`,
-    { tmdb_id: tmdbId, media_type: mediaType },
-    { timeoutMs: 30 * 60_000 },
-  )
+/** 重新整理 → 入任务队列立即返回 */
+export const redoRecord = (id: number, tmdbId: number, mediaType: string, label?: string) =>
+  http.post<QueuedReply>(`/organize/records/${id}/redo`, { tmdb_id: tmdbId, media_type: mediaType, label })
 
 // ---- 识别记忆（人工改指定过的「片名 + 年份 → 条目」）----
 

@@ -95,6 +95,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
 | **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
+| **任务队列** | `taskqueue.go` `taskjobs.go` `taskprogress.go` | 手动的重新整理 / 确认入库**入队立即返回（202）**，常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue` + `stores/queue.ts`。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
@@ -297,7 +298,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       `task_lock` 与 `stall`。
     - `writeStrm` 返回 `wrote bool`：跳过已存在 / 内容一致的重写**不算新增**。混着算的话，
       任何一次重复遍历都会报成满屏「新增视频 N 个」并连带触发 Emby 刷新。
-    - 测试：`synclock_test.go`（锁与让路）、`walkctl_test.go`（深度上限与中断）、
+    - **任务队列的 worker 也是这把锁的使用者**（`taskqueue.go`）：它排队时登记等待，增量照常让路；
+      反过来每跑完一个任务，若增量已超过两个周期没跑，worker 放锁且不登记，等增量跑完一轮再继续
+      （`waitIncrWindow`，时间戳由 `runIncrPollTick` 的 `markIncrRun` 打）。否则一批几十条的重新整理会把增量整段饿死。
+      新增手动入口优先做成入队（`enqueueJob` + `queuedReply`），别再在 HTTP 请求里 `Acquire` 同步跑。
+    - 测试：`synclock_test.go`（锁与让路）、`taskqueue_test.go`（入队去重、顺序、结果、取消、重启中断、让路窗口）、`walkctl_test.go`（深度上限与中断）、
       `incr_scope_test.go`（永久跳过不阻塞消费、浅/深遍历选型、让路不消费）、`strmwrite_test.go`。
 
 13. **洗版：判定逐文件、执行必须整批**（`wash.go`、`organize.go` 的 `processDir`）：

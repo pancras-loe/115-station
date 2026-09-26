@@ -102,6 +102,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 启动离线任务监视器（完成即触发整理；失败告警——磁力不是百分百成功）
 	StartOfflineTaskMonitor(h)
 
+	// 任务队列 worker（重新整理 / 确认入库入队后由它串行执行）
+	StartTaskWorker(h)
+
 	// 媒体卷宽松权限（存量补 chmod，异步）
 	h.RelaxedMediaPerms()
 
@@ -304,6 +307,12 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/organize/records/:id/ignore", h.IgnoreOrganizeRecord)
 		protected.GET("/organize/records/:id", h.GetOrganizeRecord)
 		protected.POST("/organize/records/:id/redo", h.RedoOrganizeRecord)
+		// 任务队列
+		protected.GET("/tasks", h.ListTaskJobs)
+		protected.GET("/tasks/:id", h.GetTaskJob)
+		protected.POST("/tasks/:id/cancel", h.CancelTaskJob)
+		protected.POST("/tasks/:id/retry", h.RetryTaskJob)
+		protected.POST("/tasks/clear", h.ClearTaskJobs)
 		protected.DELETE("/organize/records/:id", h.DeleteOrganizeRecord)
 		// 深度删除：删这条记录整理出来的网盘源文件（进回收站），与上面「只删记录」两回事
 		protected.POST("/organize/records/:id/deep-delete", h.DeepDeleteOrganizeRecord)

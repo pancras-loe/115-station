@@ -292,6 +292,30 @@ type OrganizeRecord struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+// TaskJob 任务队列里的一个任务（重新整理 / 确认入库 …）。
+// 手动操作不再在 HTTP 请求里抢锁同步跑完，而是入队立即返回，由常驻 worker 串行执行；
+// 这张表同时是任务历史。设计见 docs/115-station-notes/TASK-QUEUE-PLAN.md
+type TaskJob struct {
+	ID    uint   `json:"id" gorm:"primaryKey"`
+	Kind  string `json:"kind" gorm:"index;size:16"` // redo / confirm
+	Title string `json:"title" gorm:"size:255"`
+	// Params 执行参数 JSON（record_id、tmdb_id …）
+	Params string `json:"-" gorm:"type:text"`
+	// DedupeKey 同键的排队任务只保留一条（如 record:123：同一条记录改了几次指定，以最后一次为准）
+	DedupeKey string `json:"-" gorm:"index;size:64"`
+	// Priority 0 = 手动，1 = 后台；排队中按 Priority, ID 取，运行中的任务不抢占
+	Priority int    `json:"priority" gorm:"index"`
+	Status   string `json:"status" gorm:"index;size:16"` // queued / running / success / failed / canceled / interrupted
+	Source   string `json:"source" gorm:"size:16"`       // web / wecom / cron / offline
+	// Progress 结束时的进度快照 JSON；运行中以内存为准
+	Progress   string     `json:"-" gorm:"type:text"`
+	Message    string     `json:"message" gorm:"size:500"`
+	Result     string     `json:"-" gorm:"type:text"`
+	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
+	StartedAt  *time.Time `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+}
+
 // RecognizeMemory 识别记忆：人工指定过的「片名 + 年份 → TMDB 条目」。
 // 只在人给出结论时写（待确认里改指定 / 重新整理选了条目），自动识别的结果不写 ——
 // 自动结果下次照样能搜出来，写进来只会把一次误识别固化下去
@@ -365,6 +389,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&PathCache{},
 		&DeepDeleteRecord{},
 		&RecognizeMemory{},
+		&TaskJob{},
 	); err != nil {
 		return nil, err
 	}

@@ -145,50 +145,6 @@ func pruneOrganizeRecords() {
 	}
 }
 
-// RedoOrganizeRecord POST /organize/records/:id/redo
-// body: {"tmdb_id":123,"media_type":"movie|tv"}
-func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
-	var req struct {
-		TmdbID    int    `json:"tmdb_id"`
-		MediaType string `json:"media_type"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.TmdbID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请指定正确的 TMDB 条目"})
-		return
-	}
-	if req.MediaType != "movie" && req.MediaType != "tv" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "media_type 只能是 movie 或 tv"})
-		return
-	}
-	var rec model.OrganizeRecord
-	if h.DB.First(&rec, c.Param("id")).Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
-		return
-	}
-	if rec.Status == orgStatusAwaiting {
-		// 待确认的文件还在待整理里原地没动，走确认入库（完整流水线），
-		// 重新整理是给「已经整理过、位置不对」的条目用的
-		c.JSON(http.StatusBadRequest, gin.H{"error": "待确认的条目请用「确认入库 / 重新指定」"})
-		return
-	}
-
-	// 与整理/同步互斥：重整理同样要动网盘与本地文件
-	if !taskMu.Acquire("重新整理", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-	beginTask("重新整理")
-	defer endTask()
-
-	if err := h.redoOrganize(&rec, req.TmdbID, req.MediaType); err != nil {
-		failTask(err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "重新整理完成", "data": h.recordDTO(rec)})
-}
-
 // redoOrganize 原地重整理：按记录里的 fid 把文件改名 + 搬到指定 TMDB 条目对应的目录，
 // 清掉旧的本地产物，重新落 STRM 并刮削。就地更新 rec
 func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType string) error {
@@ -205,6 +161,8 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	if err != nil {
 		return err
 	}
+	// 进度分六步报给队列面板：此前重新整理全程不报进度，用户只能看着按钮转
+	setJobProgress("拉取 TMDB 条目", 0, redoSteps, fmt.Sprintf("%s/%d", mediaType, tmdbID))
 	media, err := tc.getByTmdbID(tmdbID, mediaType == "tv")
 	if err != nil {
 		return fmt.Errorf("拉取 TMDB 条目失败: %w", err)
@@ -262,6 +220,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 
 	// ---- 2) 原地改名 + 搬移（原地刷新时整段跳过）----
 	rootCid := rec.TargetCid
+	setJobProgress("改名与搬移", 1, redoSteps, rootRel)
 	if !inPlace {
 		// 只改名不换目录的重整理（换了模板、补回了原名里的画质）同样不该搬动：
 		// 把文件移动到它已经在的目录对 115 没有保证，失败还会让整次重整理作废
@@ -272,6 +231,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	}
 
 	// ---- 3) 回滚旧产出：落点变了的才删，没变的留着让 commit 覆盖 ----
+	setJobProgress("清理旧的本地产物", 2, redoSteps, "")
 	keep := map[string]string{}
 	for rel, gfs := range groups {
 		for _, f := range gfs {
@@ -308,7 +268,10 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	strmTotal, videoTotal := 0, 0
 	var newFiles []orgRecordFile
 	var totalSize int64
+	committed := 0
 	for rel, gfs := range groups {
+		committed++
+		setJobProgress("写 STRM 与附属", 3, redoSteps, fmt.Sprintf("%s（%d/%d）", rel, committed, len(groups)))
 		var vs, as []remoteFile
 		for _, f := range gfs {
 			rf := remoteFile{Fid: f.Fid, Name: f.Name, PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}
@@ -353,10 +316,13 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 		// 当初的源目录，多半在冗余里躺着
 		pruner.mark(rec.SourceFid, strings.TrimSuffix(rec.Source, "/"))
 	}
+	setJobProgress("清理空目录", 4, redoSteps, "")
 	pruner.flush()
 
+	setJobProgress("刮削与刷新媒体库", 5, redoSteps, rootRel)
 	sink.flushScrape()
 	sink.flushRefresh()
+	setJobProgress("", redoSteps, redoSteps, "")
 
 	// ---- 6) 更新记录 + 修正 MediaLibrary ----
 	recordMedia(media, category, plan.sampleVideoPath())
@@ -388,6 +354,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	}
 	return nil
 }
+
+// redoSteps 重新整理报给队列面板的总步数（拉条目 / 改名搬移 / 清旧产物 / 落盘 / 清空目录 / 刮削刷新）
+const redoSteps = 6
 
 // orDash 空值显示为破折号（日志里空串会让人以为是漏打了）
 func orDash(s string) string {

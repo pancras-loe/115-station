@@ -164,101 +164,6 @@ type confirmPick struct {
 	MediaType string `json:"media_type"`
 }
 
-// ConfirmOrganizeRecord POST /organize/records/:id/confirm
-// body 可空（按识别结果入库），或 {"tmdb_id":123,"media_type":"movie|tv"} 改指定
-func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
-	var pick confirmPick
-	_ = c.ShouldBindJSON(&pick)
-	var p *confirmPick
-	if pick.TmdbID > 0 {
-		if pick.MediaType != "movie" && pick.MediaType != "tv" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "media_type 只能是 movie 或 tv"})
-			return
-		}
-		p = &pick
-	}
-	var rec model.OrganizeRecord
-	if h.DB.First(&rec, c.Param("id")).Error != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
-		return
-	}
-	if rec.Status != orgStatusAwaiting {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "这条记录不在待确认状态（已处理过的请用「重新整理」）"})
-		return
-	}
-	if p == nil && rec.TmdbID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条没有识别出来，请先搜索并指定 TMDB 条目"})
-		return
-	}
-	if !taskMu.Acquire("确认整理", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-	beginTask("确认整理")
-	defer endTask()
-
-	out, err := h.confirmAwaiting([]model.OrganizeRecord{rec}, p)
-	if err != nil {
-		failTask(err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	r := out[0]
-	if r.Status != "success" {
-		c.JSON(http.StatusBadGateway, gin.H{"error": orDash(r.Message), "data": h.recordDTO(r)})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("《%s》已入库", r.Title), "data": h.recordDTO(r)})
-}
-
-// ConfirmOrganizeRecords POST /organize/records/confirm  body: {"ids":[1,2,3]}
-// 批量按识别结果入库。没识别出来的（没有 tmdb_id）跳过，不算失败
-func (h *Handler) ConfirmOrganizeRecords(c *gin.Context) {
-	var req struct {
-		IDs []uint `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要确认的记录"})
-		return
-	}
-	var recs []model.OrganizeRecord
-	h.DB.Where("id IN ? AND status = ? AND tmdb_id > 0", req.IDs, orgStatusAwaiting).
-		Order("created_at ASC, id ASC").Find(&recs)
-	if len(recs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "所选记录里没有可直接确认的条目（未识别的要先指定 TMDB 条目）"})
-		return
-	}
-	if !taskMu.Acquire("批量确认整理", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-	beginTask("批量确认整理")
-	defer endTask()
-
-	out, err := h.confirmAwaiting(recs, nil)
-	if err != nil {
-		failTask(err)
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
-	}
-	ok := 0
-	for _, r := range out {
-		if r.Status == "success" {
-			ok++
-		}
-	}
-	msg := fmt.Sprintf("已确认 %d 条：入库 %d", len(out), ok)
-	if n := len(out) - ok; n > 0 {
-		msg += fmt.Sprintf("，另有 %d 条已存在或失败（见记录）", n)
-	}
-	if skipped := len(req.IDs) - len(recs); skipped > 0 {
-		msg += fmt.Sprintf("；%d 条未识别或已处理，已跳过", skipped)
-	}
-	c.JSON(http.StatusOK, gin.H{"message": msg, "success": ok, "total": len(out)})
-}
-
 // confirmAwaiting 按确认结果把一批待确认条目走完后半条流水线。
 // pick 非空 = 用户改指定（只用于单条）。返回每条记录处理后的最新状态
 func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick) ([]model.OrganizeRecord, error) {
@@ -287,8 +192,14 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 
 	out := make([]model.OrganizeRecord, 0, len(recs))
 	for i := range recs {
+		// 用户在队列里点了停止：做完上一条就收工，已完成的照常生效（刮削 / 刷新在循环后统一冲刷）
+		if jobStopRequested() {
+			log.Printf("[整理] ○ 批量确认已按要求停止：完成 %d/%d", i, len(recs))
+			break
+		}
 		rec := recs[i]
 		SetTaskProgress(fmt.Sprintf("确认整理 %d/%d：%s", i+1, len(recs), truncateStr(rec.Source, 40)))
+		setJobProgress("确认入库", i, len(recs), truncateStr(rec.Source, 60))
 		tmdbID, mediaType := rec.TmdbID, rec.MediaType
 		if pick != nil {
 			tmdbID, mediaType = pick.TmdbID, pick.MediaType
@@ -345,6 +256,7 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 			out = append(out, rec)
 		}
 	}
+	setJobProgress("刮削与刷新媒体库", len(out), len(recs), "")
 	pruner.flush()
 	sink.flushScrape()
 	sink.flushRefresh()

@@ -84,6 +84,10 @@ func ShutdownWorkers() {
 	default:
 		close(stopCh)
 	}
+	// 队列里正在跑的批量任务做完手上这条就收工；来不及收尾的下次启动标成「中断」
+	if id, _ := currentJob(); id != 0 {
+		requestJobStop(id)
+	}
 	FlushMediaNotif()
 }
 
@@ -102,8 +106,14 @@ var (
 	taskProgress string // 当前阶段/进度描述（如 "整理 3/12：xxx"），前端轮询展示
 )
 
-// SetTaskProgress 更新任务进度描述（任务进行中由各执行器调用）
+// SetTaskProgress 更新任务进度描述（任务进行中由各执行器调用）。
+// 队列里的任务在跑时，同一句话也写进它的结构化进度（当前条目），已有调用点不用改
 func SetTaskProgress(text string) {
+	setTaskProgressText(text)
+	setJobLabel(text)
+}
+
+func setTaskProgressText(text string) {
 	taskStateMu.Lock()
 	taskProgress = text
 	taskStateMu.Unlock()

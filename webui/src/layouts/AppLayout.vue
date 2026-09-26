@@ -9,6 +9,7 @@ import HTooltip from '@/components/hero/HTooltip.vue'
 import HDrawer from '@/components/hero/HDrawer.vue'
 import HDropdown from '@/components/hero/HDropdown.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import TaskQueuePanel from '@/components/TaskQueuePanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import { systemApi } from '@/api'
 
@@ -66,6 +67,8 @@ function onAccount(key: string) {
         </div>
 
         <div class="actions">
+          <TaskQueuePanel />
+
           <HTooltip content="实时日志" side="bottom">
             <HButton variant="ghost" icon-only aria-label="实时日志" @click="router.push({ name: 'logs' })">
               <ScrollText :size="18" />
