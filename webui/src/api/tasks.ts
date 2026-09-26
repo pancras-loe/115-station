@@ -20,9 +20,13 @@ export interface QueuedReply {
 
 export interface TaskJob {
   id: number
-  /** background = 还不进队列的后台任务（定时整理 / 转存触发 …）跑完留下的历史 */
-  kind: 'redo' | 'confirm' | 'ignore' | 'deepdel' | 'organize' | 'full' | 'incr' | 'background' | string
+  /**
+   * transfer = 转存 / 离线下载完成后的自动整理；background = 不进队列的后台任务
+   * （目前只剩 Emby 事件触发的深度删除）跑完留下的历史
+   */
+  kind: 'redo' | 'confirm' | 'ignore' | 'deepdel' | 'organize' | 'full' | 'incr' | 'transfer' | 'background' | string
   title: string
+  /** 0 = 手动，1 = 后台（定时 / 转存触发）；排队中手动的排在前面 */
   priority: number
   status: TaskJobStatus
   source: string

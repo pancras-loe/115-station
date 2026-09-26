@@ -20,6 +20,7 @@ func init() {
 	jobExecutors["incr"] = execIncrJob
 	jobExecutors["ignore"] = execIgnoreJob
 	jobExecutors["deepdel"] = execDeepDelJob
+	jobExecutors["transfer"] = execTransferJob
 }
 
 // organizeJobResult 手动整理的结构化结果：前端据此在有待确认条目时跳到记录页
@@ -62,6 +63,21 @@ func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	res, msg := summarizeOrganize(details)
 	out := jobOutcome{Message: msg, Result: res}
+	if decodeJobParams(job).Scheduled {
+		// 定时整理：独立增量轮询关着时在这里串一轮增量（逃生门下的老行为）；
+		// 开着的话它每 30 秒自己跑，这里再跑纯属重复请求 115
+		fresh := 0
+		if h.loadIncrInterval() <= 0 {
+			sum, ierr := h.executeIncrementalSync(h.incrParamsFromConfig())
+			if ierr != nil {
+				return jobOutcome{}, fmt.Errorf("整理完成（%s），增量同步失败: %w", msg, ierr)
+			}
+			fresh = sum.EventsFresh
+			markIncrRun()
+		}
+		// 空转：没有任何条目、增量也没有新事件
+		out.Idle = len(details) == 0 && fresh == 0
+	}
 	if jobStopRequested() {
 		out.Canceled = true
 		out.Message = "已按要求停止；" + msg
@@ -160,4 +176,14 @@ func execDeepDelJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, err
 	}
 	return jobOutcome{Message: msg}, nil
+}
+
+// execTransferJob 转存 / 离线下载完成后的「整理转存目录 + 增量收尾」
+func execTransferJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+	organized, sum, err := h.runTransferOrganize()
+	if err != nil {
+		return jobOutcome{}, err
+	}
+	msg := fmt.Sprintf("整理 %d 个条目；增量新增 STRM %d、附属 %d", organized, sum.StrmCreated, sum.AssetsDownloaded)
+	return jobOutcome{Message: msg, Idle: organized == 0 && sum.StrmCreated+sum.AssetsDownloaded == 0}, nil
 }

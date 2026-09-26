@@ -61,27 +61,26 @@ func TestIncrCronAndIntervalCoexist(t *testing.T) {
 	}
 }
 
-// 整理的 cron 命中时锁被占用 → 置位待补，而不是直接放弃这一轮。
-//
-// 改造前是 TryLock 失败直接 return。增量提频到 30 秒之后，整理的 cron
-// 撞上一轮正在遍历大目录的增量是常态，一错过就要等下一个 cron 周期
-func TestOrganizeCatchUpOnMissedSlot(t *testing.T) {
+// 整理的 cron 命中时不再抢锁，只入任务队列：锁被占着也不会「错过」这一轮，
+// 连续命中（或用户又手动点了整理）只排一个任务
+func TestScheduledOrganizeEnqueues(t *testing.T) {
 	h := newCfgHandler(t, "poll_missed.db")
-	organizeMissed.Store(false)
-	t.Cleanup(func() { organizeMissed.Store(false) })
-
-	// 测试里不真等 90 秒
-	defer func(d time.Duration) { organizeAcquireWait = d }(organizeAcquireWait)
-	organizeAcquireWait = 10 * time.Millisecond
-
 	if !taskMu.TryLock("测试占用") {
 		t.Fatal("锁应当是空闲的")
 	}
-	h.runScheduledTick() // 锁被别人占着，等不到就该置位待补
+	h.runScheduledTick() // 锁被别人占着：照样入队，不阻塞调度器
+	h.runScheduledTick()
 	taskMu.Unlock()
 
-	if !organizeMissed.Load() {
-		t.Fatal("锁被占用时应置位待补")
+	q := queuedJobs(model.DB)
+	if len(q) != 1 || q[0].Kind != "organize" || q[0].Priority != jobPriorityBackground || !decodeJobParams(&q[0]).Scheduled {
+		t.Fatalf("应只排一个后台优先级的定时整理：%+v", q)
+	}
+	// 手动整理并进同一个任务，并按手动的优先级排
+	j, _ := enqueueJob(model.DB, jobSpec{Kind: "organize", Title: "手动整理", DedupeKey: "organize",
+		Source: "web", Priority: jobPriorityManual})
+	if j.ID != q[0].ID || j.Priority != jobPriorityManual || j.Source != "web" {
+		t.Fatalf("手动整理应并进排队中的定时整理并提到手动优先级：%+v", j)
 	}
 }
 

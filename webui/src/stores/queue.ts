@@ -60,11 +60,14 @@ export const useQueueStore = defineStore('queue', () => {
   }
 
   function notify(j: TaskJob) {
+    for (const fn of listeners) fn(j)
+    // 后台任务（定时整理 / 转存触发）跑完不弹提示：10 分钟一轮，开着页面就一直弹；
+    // 结果在任务队列面板里看。本页提交过的、或被手动操作并进来的（优先级 0）照常提示
+    if (j.priority !== 0 && !tracked.has(j.id)) return
     const { message } = useFeedback()
     if (j.status === 'success') message.success(`✓ ${j.title}${j.message ? `：${j.message}` : ''}`)
     else if (j.status === 'canceled') message.warning(`已停止：${j.title}${j.message ? `（${j.message}）` : ''}`)
     else message.error(`✗ ${j.title}：${j.message || '失败'}`)
-    for (const fn of listeners) fn(j)
   }
 
   function schedule() {
@@ -110,6 +113,15 @@ export const useQueueStore = defineStore('queue', () => {
   /** 某类任务是否在队列里（排队中 / 执行中）：同类按钮据此显示「已在队列」 */
   function activeOf(kind: string) {
     return active.value.find((j) => j.kind === kind)
+  }
+
+  /**
+   * 同类任务里「再点也没用」的那个：正在跑的，或排着的手动任务。
+   * 排着的**后台**任务（定时整理 / 定时全量）不算 —— 这时再点一次会把它并成手动任务、
+   * 提到手动优先级（排到别的后台任务前面），所以按钮要保持可点
+   */
+  function activeManualOf(kind: string) {
+    return active.value.find((j) => j.kind === kind && (j.status === 'running' || j.priority === 0))
   }
 
   /** 某条整理记录是否在队列里（排队中 / 执行中），记录页行上据此显示状态 */
@@ -166,6 +178,7 @@ export const useQueueStore = defineStore('queue', () => {
     onFinished,
     recordJob,
     activeOf,
+    activeManualOf,
     cancel,
     retry,
     clearFinished,

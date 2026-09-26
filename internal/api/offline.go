@@ -20,7 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"115-station/internal/model"
+
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // offlineSubmitCore 提交离线下载任务核心（/offline/add 与影巢磁力转存共用）。
@@ -175,23 +178,20 @@ func classifyLink(raw string) string {
 	}
 }
 
-// triggerOrganizeAndSync 转存后自动「整理+增量同步」（整理优先，增量收尾）。
-// 返回是否真正执行（false = 因互斥锁被其他任务占用而跳过）
-func (h *Handler) triggerOrganizeAndSync() bool {
-	time.Sleep(3 * time.Second)
+// triggerOrganizeAndSync 转存后自动「整理+增量同步」→ 入任务队列（后台优先级）。
+//
+// 此前在这里等 90 秒拿锁，等不到就放弃这一次，只能指望守望者 5 分钟后再来 ——
+// 「转存完几个小时都不入库」的一半原因。现在入队就不会丢：转存、离线完成、守望者
+// 几路同时触发时 DedupeKey=transfer 合并成一个，正在跑的那个跑完再接着跑新来的
+func (h *Handler) triggerOrganizeAndSync() (model.TaskJob, error) {
+	return enqueueJob(h.DB, jobSpec{Kind: "transfer", Title: "自动整理+增量（转存触发）", DedupeKey: "transfer",
+		Source: "auto", Priority: jobPriorityBackground})
+}
 
-	// 等锁而不是抢一次就走：转存后的整理是用户最在意的一条链路，
-	// 而增量轮询 30 秒一轮，一抢不到就返回的话，长遍历期间它几乎永远抢不到。
-	// Acquire 会登记让路请求，正在遍历的增量看到有人排队就提前收工
-	if !taskMu.Acquire("自动整理+增量（转存触发）", organizeAcquireWait) {
-		// 等满了还没轮到：说明真有长任务在跑。记一行说明被谁挡住了，
-		// 改造前这里完全静默，用户只看到「转存完几个小时都没动静」
-		logBusy("转存后自动整理", "整理")
-		return false
-	}
-	defer taskMu.Unlock()
-	beginTask("自动整理+增量（转存触发）")
-	defer endTask()
+// runTransferOrganize 整理转存目录（没配就扫待整理）再跑一轮增量。调用方（队列 worker）持有 taskMu。
+// 返回整理处理了几个条目与增量的结果
+func (h *Handler) runTransferOrganize() (int, *incrSummary, error) {
+	time.Sleep(3 * time.Second) // 沉淀：115 刚转存 / 刚下完时目录列表偶尔还没刷出来
 
 	start := time.Now()
 
@@ -236,18 +236,15 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 	p := h.incrParamsFromConfig()
 	sum, err := h.executeIncrementalSync(p)
 	if err != nil {
-		log.Printf("[上传] ✗ 自动增量同步失败: %v", err)
-		return true
+		return organized, nil, fmt.Errorf("整理了 %d 个条目，自动增量同步失败: %w", organized, err)
 	}
+	markIncrRun()
 	// 空转（STRM/附属都是 0）静默，只有真的生成了内容才记录
-	if organized == 0 && sum.StrmCreated+sum.AssetsDownloaded == 0 {
-		markTaskIdle()
-	}
 	if sum.StrmCreated+sum.AssetsDownloaded > 0 {
 		log.Printf("[上传] ✅ 自动整理+增量完成，耗时 %s · STRM %d，附属 %d",
 			time.Since(start).Truncate(time.Second), sum.StrmCreated, sum.AssetsDownloaded)
 	}
-	return true
+	return organized, sum, nil
 }
 
 // ==================== 离线任务「归属」标记 ====================
@@ -377,75 +374,94 @@ func offlineMineMatch(h *Handler, marks map[string]int64, key, name string) bool
 	return false
 }
 
-// StartTransferWatcher 转存目录守望者：每分钟检查转存目录，发现内容且
-// 无任务运行时触发「自动整理+增量」。磁力/离线下载完成时间不可控，
-// 提交 60 秒后的触发器常在下载完成前跑掉，定时任务又要等下一轮 cron——
-// 守望者保证下载完成后约 1 分钟内被接管。5 分钟冷却防止整理失败时死循环
+// StartTransferWatcher 转存目录守望者：每分钟检查转存目录，发现内容就把「自动整理+增量」入队。
+// 磁力/离线下载完成时间不可控，提交 60 秒后的触发器常在下载完成前跑掉，定时任务又要等下一轮 cron——
+// 守望者保证下载完成后约 1 分钟内被接管。
+//
+// 改成入队之后，「抢不到锁就冷却」那一套没有了：队列里已有转存整理（排队或执行中）就不再列目录，
+// 等它跑完。它跑完后目录仍有未处理的内容 = 一轮失败，冷却 5 分钟再试；
+// 连续 3 次失败暂停 30 分钟，防止整理反复报错时无限重试刷日志
 func StartTransferWatcher(h *Handler) {
 	go func() {
-		lastTrigger := time.Time{}
-		failCount := 0 // 整理后目录仍未清空的连续次数
-		pauseUntil := time.Time{}
+		w := &transferWatch{}
 		for {
 			select {
 			case <-stopCh:
 				return
 			case <-time.After(60 * time.Second):
 			}
-			if time.Now().Before(pauseUntil) {
-				continue // 熔断暂停中
-			}
-			if time.Since(lastTrigger) < 5*time.Minute {
-				continue
-			}
-			cid := h.shareFolderCid()
-			if cid == "" {
-				continue
-			}
-			ops, err := h.newPan115Ops()
-			if err != nil {
-				continue
-			}
-			entries, _, err := ops.listEntries(cid, 0)
-			if err != nil || countUnheld(entries) == 0 {
-				continue // 只剩等人工确认的条目也算「没活」，否则每 5 分钟空跑一轮再被熔断
-			}
-			// 有内容：触发整理（内部自带互斥、与媒体库重叠校验、3 秒沉淀）。
-			// 发现本身不记日志——整理引擎会输出目录扫描结果，避免重复两行
-			ran := h.triggerOrganizeAndSync()
-			// 成功清空后冷却只要 60 秒（连续多个下载先后完成时快速接续）：
-			// 闸门是 since(lastTrigger)≥5min，把锚点拨回 4 分钟前即再等 60 秒
-			//（此前写成 +4min，实际冷却 9 分钟，快速接续从未生效）
-			lastTrigger = time.Now().Add(-4 * time.Minute)
-			if !ran {
-				// 被别的任务挡住不是失败，不该罚满 5 分钟冷却（上一行已经
-				// 把锚点拨回 4 分钟前 = 60 秒后重来）。改造前这里写的是
-				// lastTrigger = now，一次没抢到就再等 5 分钟，撞上一轮长遍历时
-				// 期望等待是**小时级**的 —— 「转存完几个小时都不入库」就是这么来的
-				continue
-			}
-			// 整理后复查：目录清空 = 成功；仍有条目 = 一轮失败。
-			// 连续 3 次失败（如整理反复报错/内容无法处理）后暂停 30 分钟，
-			// 避免每 5 分钟无限重试刷日志
-			remaining, _, rerr := ops.listEntries(cid, 0)
-			switch {
-			case rerr != nil:
-				// 查询失败≠未清空：不计失败次数（此前三次瞬时抖动就误触 30 分钟熔断）
-				log.Printf("[守望] ○ 复查转存目录失败（不计失败次数）: %v", rerr)
-			case countUnheld(remaining) == 0:
-				failCount = 0
-			default:
-				lastTrigger = time.Now() // 失败：恢复 5 分钟冷却
-				failCount++
-				log.Printf("[守望] ○ 整理后转存目录仍有内容（第 %d 次未清空）", failCount)
-				if failCount >= 3 {
-					pauseUntil = time.Now().Add(30 * time.Minute)
-					log.Printf("[守望] ⚠ 连续 %d 次未能清空转存目录，暂停守望 30 分钟（请查看整理日志定位失败原因）", failCount)
-					failCount = 0
-				}
-			}
+			w.tick(h)
 		}
 	}()
+}
+
+// transferWatch 守望者的状态（抽出来单测）
+type transferWatch struct {
+	lastJob    uint      // 上一次入队的转存整理任务
+	failCount  int       // 它跑完后目录仍未清空的连续次数
+	retryAfter time.Time // 失败后的冷却
+	pauseUntil time.Time // 连续失败的熔断
+}
+
+// transferJobActive 队列里有没有排队中 / 执行中的转存整理
+func transferJobActive(db *gorm.DB) bool {
+	var n int64
+	db.Model(&model.TaskJob{}).Where("kind = ? AND status IN ?", "transfer", []string{jobQueued, jobRunning}).Count(&n)
+	return n > 0
+}
+
+func (w *transferWatch) tick(h *Handler) {
+	now := time.Now()
+	if now.Before(w.pauseUntil) || now.Before(w.retryAfter) || transferJobActive(h.DB) {
+		return // 熔断 / 冷却中，或上一个还没跑完
+	}
+	cid := h.shareFolderCid()
+	if cid == "" {
+		return
+	}
+	ops, err := h.newPan115Ops()
+	if err != nil {
+		return
+	}
+	entries, _, err := ops.listEntries(cid, 0)
+	if err != nil {
+		if w.lastJob != 0 {
+			// 复查失败≠未清空：不计失败次数（此前三次瞬时抖动就误触 30 分钟熔断）
+			log.Printf("[守望] ○ 复查转存目录失败（不计失败次数）: %v", err)
+		}
+		return
+	}
+	// 只剩等人工确认的条目也算「没活」，否则每轮空跑一次再被熔断
+	w.decide(h, countUnheld(entries), now)
+}
+
+// decide 看完目录之后怎么办（纯状态机，不碰网盘）
+func (w *transferWatch) decide(h *Handler, pending int, now time.Time) {
+	if w.lastJob != 0 {
+		// 上一个转存整理已经跑完：目录清空 = 成功；仍有条目 = 一轮失败
+		w.lastJob = 0
+		if pending == 0 {
+			w.failCount = 0
+			return
+		}
+		w.failCount++
+		log.Printf("[守望] ○ 整理后转存目录仍有内容（第 %d 次未清空）", w.failCount)
+		if w.failCount >= 3 {
+			w.pauseUntil = now.Add(30 * time.Minute)
+			log.Printf("[守望] ⚠ 连续 %d 次未能清空转存目录，暂停守望 30 分钟（请查看整理日志定位失败原因）", w.failCount)
+			w.failCount = 0
+			return
+		}
+		w.retryAfter = now.Add(5 * time.Minute)
+		return
+	}
+	if pending == 0 {
+		return
+	}
+	// 有内容：入队（发现本身不记日志——整理引擎会输出目录扫描结果，避免重复两行）
+	if job, err := h.triggerOrganizeAndSync(); err == nil {
+		w.lastJob = job.ID
+	}
 }
 
 // StartOfflineTaskMonitor 离线任务监视器：30 秒轮询 115 离线任务列表。

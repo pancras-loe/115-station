@@ -153,6 +153,7 @@ const background = computed(() => {
 
             <p v-else-if="j.status === 'queued'" class="qp-sub">
               第 {{ j.position }} 位
+              <span v-if="j.priority !== 0" class="qp-dim"> · 后台任务，手动提交的会排在它前面</span>
               <span v-if="(j.eta_sec ?? 0) >= 60"> · 预计约 {{ Math.round((j.eta_sec ?? 0) / 60) }} 分钟内跑完</span>
               <span v-if="j.position === 1 && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
             </p>

@@ -95,7 +95,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
 | **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
-| **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` | **所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**，常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（还不进队列的后台任务在 `endTask` 时补一行 `kind=background`，空转轮次 `markTaskIdle` 不留；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue` + `stores/queue.ts`。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
+| **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` | **所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**；**后台任务**（定时整理 / 定时全量 / 转存与离线完成触发的 `transfer` / 转存守望者）也只入队，优先级 1（排队中手动优先，运行中不抢占），同类去重（`organize` / `full` / `transfer`），空转轮次（`jobOutcome.Idle`）跑完删行、同因重复失败只留最新一条。常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（仍不进队列的只剩增量轮询与 Emby 事件深删，后者在 `endTask` 时补一行 `kind=background`；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue` + `stores/queue.ts`。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
@@ -285,7 +285,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       `pending`，下一轮原样重来（STRM upsert、删除幂等）。
     - 增量轮询用 `TryLockPolite`：**有人在排队就主动不抢**。少了这道礼让，30 秒一轮的增量会在
       整理刚放开锁的瞬间又抢回去，让路白做。
-    - 抢不到锁的日志/报错一律走 `busyErr()` / `logBusy()`，必须说清**被谁占着、占了多久**。
+    - 抢不到锁的状态必须说清**被谁占着、占了多久**：`taskMu.Describe()` / `Holder()`，队列面板与 `/tasks` 的 `lock` 字段据此显示「正在等谁」。
+      原来的 `busyErr()` / `logBusy()` / `manualAcquireWait` / `organizeAcquireWait` 随入队改造删除 —— 手动与后台入口都不再在请求里等锁。
     - **回退目录遍历分浅深**（`fallbackTarget`）：文件级事件只列父目录**这一层**（文件就在那一层），
       目录级事件才递归，且递归目标取**目录自己的 file_id**，不是父目录 cid。改造前一律深遍历父目录，
       于是「往 影视/剧集 丢了个文件」或「给分类目录改个名」都等于整个分类重扫，每列一次目录还要等 1 秒节流。
@@ -302,7 +303,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       反过来每跑完一个任务，若增量已超过两个周期没跑，worker 放锁且不登记，等增量跑完一轮再继续
       （`waitIncrWindow`，时间戳由 `runIncrPollTick` 的 `markIncrRun` 打）。否则一批几十条的重新整理会把增量整段饿死。
       **新增手动入口一律做成入队**（`enqueueJob` + `queuedReply`，执行器注册进 `jobExecutors`），别再在 HTTP 请求里 `Acquire` 同步跑。
-      后台触发（定时整理 / 转存触发 / 定时全量 / Emby 深删）仍直接抢锁，并入队列是阶段 4。
+      后台触发（定时整理、定时全量、转存 / 离线完成、转存守望者）同样入队；**只有增量轮询（`TryLockPolite`）与 Emby 事件深删（`deepdelemby.go` 自带重试）仍直接拿锁**。
+      此前的 `organizeMissed` 每分钟补跑、转存触发「等 90 秒拿不到就放弃」、守望者「抢不到锁冷却 5 分钟」三套补救逻辑已删除：入队之后不存在错过。
     - 测试：`synclock_test.go`（锁与让路）、`taskqueue_test.go`（入队去重、顺序、结果、取消、重启中断、让路窗口）、`walkctl_test.go`（深度上限与中断）、
       `incr_scope_test.go`（永久跳过不阻塞消费、浅/深遍历选型、让路不消费）、`strmwrite_test.go`。
 
@@ -363,7 +365,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改总览面板 | `internal/api/dashboard.go`（数据）+ `webui/src/pages/DashboardPage.vue`（界面）。**Emby 计数别再改回不带 `IncludeItemTypes`**，见 §6.11；台账校准在 `internal/api/medialib.go` + `webui/src/components/dashboard/CalibrateModal.vue` |
 | 改整理记录页 | `webui/src/pages/organize/RecordsTab.vue` + `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`；`mode=confirm` 时用于待确认条目改指定）。筛选栏角标与页签角标共用 `recordStats.ts`。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
-| 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12），整理抢不到锁会先登记让路、等一段，仍抢不到才置位 `organizeMissed` 每分钟补跑。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
+| 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12）；整理与全量的 cron 命中时**只入任务队列**（`runScheduledTick` / `runScheduledFullSync`，后台优先级、各自去重），由 worker 排队执行，不存在「错过」。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
 | 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改工作目录配置 | `internal/api/workspace.go`：媒体库 / 转存 / 待整理 / 已存在 / 冗余五个目录分存在 `full` / `share` / `org-basic` 三个 setting 里，`SaveSetting` 保存这三个 key 时经 `guardWorkspaceSetting` 校验互不包含（只查改动过的槽位、每目录至多一次祖先链请求，cid 未变零请求）；「账号与媒体库」页的一键创建走 `InitWorkspaceDirs`，在网盘根建 `/StrmStation/{转存,待整理,已存在,冗余}`，只补未配置的。测试 `workspace_test.go` |
@@ -375,7 +377,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
 | 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量、**当前任务锁**、**重放检测**），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
 | 「一直在轮询 / 反复扫同样的目录」 | 日志按轮次号 `[同步#N]` 对比相邻两轮：内容一样就是重放。看「本轮账单」那行的结尾（消费了没有、为什么没消费）与「回退遍历 N 个目录 ← 哪条事件带来的」清单。机制见 §6.12，代码在 `incrtrace.go` |
-| 「整理/转存半天不动」 | 顶栏「任务队列」面板（排第几、在等谁、后台任务在跑什么），或 `GET /tasks`；`GET /sync/incr-status` 的 `task_lock`：谁占着、占了多久、谁在排队。日志里 `[定时] ○ 整理未开始：…` / `[整理] ○ 转存后自动整理未开始：…` 会写明被谁挡住。机制见 §6.12 |
+| 「整理/转存半天不动」 | 顶栏「任务队列」面板（排第几、在等谁、后台任务在跑什么），或 `GET /tasks`；`GET /sync/incr-status` 的 `task_lock`：谁占着、占了多久、谁在排队。定时整理与转存触发的整理都在队列里，排着就是在等锁（面板上写明在等谁）；守望者因连续未清空而熔断时日志有 `[守望] ⚠ 连续 N 次未能清空转存目录`。机制见 §6.12 |
 
 ---
 

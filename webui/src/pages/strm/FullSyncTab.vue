@@ -168,7 +168,7 @@ const offFinished = queue.onFinished((j) => {
 onUnmounted(offFinished)
 
 /** 队列里已有全量（排队或执行中）：再点也只是合并成同一个任务 */
-const busy = computed(() => running.value || !!queue.activeOf('full'))
+const busy = computed(() => running.value || !!queue.activeManualOf('full'))
 
 const helpVisible = ref(false)
 

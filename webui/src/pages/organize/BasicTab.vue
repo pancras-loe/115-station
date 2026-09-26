@@ -86,8 +86,8 @@ watch(
 )
 
 const running = ref(false)
-/** 已有整理在队列里（排队或执行中）时按钮置灰：再点也只是合并成同一个任务 */
-const queuedOrganize = computed(() => queue.activeOf('organize'))
+/** 已有整理在跑、或手动整理已在排队时按钮置灰（排着的定时整理不算：再点会把它提到手动优先级） */
+const queuedOrganize = computed(() => queue.activeManualOf('organize'))
 const busy = computed(() => running.value || !!queuedOrganize.value)
 
 // 本页提交的整理跑完：有待确认的条目就带用户去确认（此前是同步等待整理结果再跳）

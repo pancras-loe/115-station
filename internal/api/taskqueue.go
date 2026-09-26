@@ -68,6 +68,8 @@ type jobParams struct {
 	MediaType string `json:"media_type,omitempty"`
 	// Sync 全量 / 手动增量的同步参数
 	Sync *syncJobParams `json:"sync,omitempty"`
+	// Scheduled 定时整理（cron 触发）：独立增量轮询关着时顺带跑一轮增量（逃生门下的老行为）
+	Scheduled bool `json:"scheduled,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
@@ -101,6 +103,9 @@ type jobOutcome struct {
 	Message  string
 	Canceled bool // 用户中途停止（已完成的部分照常生效）
 	Result   any  // 给前端的结构化结果（如整理后有几项待确认），落 TaskJob.Result
+	// Idle 这一轮什么都没干（定时整理 10 分钟一轮、多数空转）：跑完直接删行，不进历史。
+	// 失败的不算空转，照样留下原因
+	Idle bool
 }
 
 // jobKindBackground 后台任务（定时整理、转存触发 …）跑完留下的历史行。
@@ -184,9 +189,14 @@ func enqueueJob(db *gorm.DB, spec jobSpec) (model.TaskJob, error) {
 	var job model.TaskJob
 	if spec.DedupeKey != "" &&
 		db.Where("dedupe_key = ? AND kind = ? AND status = ?", spec.DedupeKey, spec.Kind, jobQueued).First(&job).Error == nil {
+		if spec.Priority > job.Priority {
+			// 排着一个手动整理、定时整理又命中了：手动的那个已经涵盖，原样保留（标题、参数都不动）
+			return job, nil
+		}
 		job.Kind, job.Title, job.Params = spec.Kind, spec.Title, string(params)
 		if spec.Priority < job.Priority {
-			job.Priority = spec.Priority
+			// 排着一个定时整理、用户又手动点了整理：合并成一个，按手动的优先级排
+			job.Priority, job.Source = spec.Priority, spec.Source
 		}
 		if err := db.Save(&job).Error; err != nil {
 			return job, err
@@ -358,8 +368,20 @@ func (h *Handler) runJob(job *model.TaskJob) {
 			upd["result"] = string(b)
 		}
 	}
-	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Updates(upd)
 	defer fireJobHooks(h.DB, job.ID)
+	if out.Idle && status == jobSuccess {
+		// 空转的后台轮次不留行：否则 10 分钟一条「什么都没干」把面板和历史刷满
+		h.DB.Delete(&model.TaskJob{}, job.ID)
+		vlog("[队列] ○ 空转，不留记录：%s", job.Title)
+		return
+	}
+	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Updates(upd)
+	if status == jobFailed && job.Priority == jobPriorityBackground {
+		// 后台任务同一个原因反复失败（没配待整理目录、115 掉线 …）只留最新一条，
+		// 否则定时整理每 10 分钟添一行一模一样的失败
+		h.DB.Where("id <> ? AND kind = ? AND title = ? AND status = ? AND message = ?",
+			job.ID, job.Kind, job.Title, jobFailed, upd["message"]).Delete(&model.TaskJob{})
+	}
 	elapsed := finished.Sub(started).Truncate(time.Second)
 	switch status {
 	case jobSuccess:

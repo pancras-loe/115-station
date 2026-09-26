@@ -20,10 +20,11 @@ package api
 // 全量整库扫描请求量大（115 风控敏感），所以它只在用户开了失效 STRM 检测时
 // 才有意义：检测关着的时候定时全量纯属白跑一趟，前后端都直接当没开。
 //
-// 三条线共用 taskMu（见 synclock.go）。整理抢不到锁时会登记让路请求：
+// 三条线共用 taskMu（见 synclock.go）。整理与全量的 cron 命中时**只入任务队列**
+// （taskqueue.go，后台优先级、各自去重），由 worker 排队执行：它等锁时登记让路，
 // 正在跑的增量遍历看到有人排队就提前收工，没消费完的事件下一轮原样重来。
-// 还抢不到就置位 organizeMissed，每分钟继续补 —— 增量提频到 30 秒之后，
-// 整理的 cron 撞上一轮正在遍历大目录的增量是常态。
+// 此前是「等 90 秒拿不到锁就置位 organizeMissed、每分钟补跑」，入队后不存在错过。
+// 增量轮询不进队列：30 秒一轮，进队列只会刷屏。
 
 import (
 	"115-station/internal/model"
@@ -32,7 +33,6 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -216,13 +216,7 @@ func StartSyncScheduler(h *Handler) {
 				continue
 			}
 
-			cron := h.loadIncrCron()
-			if cron == "" {
-				organizeMissed.Store(false) // 调度被清空，别留着一个永远待补的标记
-				continue
-			}
-			// 错过即补：上一次命中时锁被占用的话，这里每分钟继续尝试直到补上
-			if CronMatch(cron, now) || organizeMissed.Load() {
+			if cron := h.loadIncrCron(); cron != "" && CronMatch(cron, now) {
 				h.runScheduledTick()
 			}
 		}
@@ -230,13 +224,6 @@ func StartSyncScheduler(h *Handler) {
 	h.startIncrPoller()
 	log.Println("[调度] 调度器已启动（cron 触发 自动整理 / 全量同步）")
 }
-
-// organizeMissed 整理的 cron 命中时锁被占用 → 置位，之后每分钟继续尝试补跑。
-//
-// 改造前这里是 TryLock 失败直接 return。增量提频到 30 秒之后，
-// 整理的 cron 撞上一轮正在遍历大目录的增量是常态，一错过就要等下一个
-// cron 周期（默认配置下 10 分钟）
-var organizeMissed atomic.Bool
 
 // startIncrPoller 增量独立轮询。
 //
@@ -298,7 +285,7 @@ func (h *Handler) runIncrPollTick() {
 	markIncrRun()
 }
 
-// runScheduledFullSync 单轮定时全量同步。defer 解锁 + recover 的理由同 runScheduledTick。
+// runScheduledFullSync 定时全量同步 → 入任务队列（后台优先级，DedupeKey=full）。
 // 只标记失效 STRM 不删除——定时任务没人盯着，误判一次就是真丢文件，
 // 清理仍然只能由用户在 Strm 管理页确认后触发
 func (h *Handler) runScheduledFullSync() {
@@ -307,93 +294,24 @@ func (h *Handler) runScheduledFullSync() {
 		log.Printf("[定时] ○ 全量同步已开启定时，但未配置媒体库 cid，本轮跳过")
 		return
 	}
-	if !taskMu.Acquire("定时全量同步", organizeAcquireWait) {
-		logBusy("全量同步", "定时")
-		return
+	if _, err := enqueueJob(h.DB, jobSpec{Kind: "full", Title: "定时全量同步", DedupeKey: "full",
+		Source: "cron", Priority: jobPriorityBackground, Params: jobParams{Sync: &syncJobParams{
+			Cid: p.Cid, LocalPath: p.LocalPath, VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt, Mode: p.Mode,
+		}}}); err != nil {
+		log.Printf("[定时] ✗ 定时全量同步入队失败: %v", err)
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[定时] ✗ 全量同步 panic 已恢复: %v", r)
-		}
-		endTask()
-		taskMu.Unlock()
-	}()
-	beginTask("定时全量同步")
-
-	sum, err := h.executeFullSync(p)
-	if err != nil {
-		log.Printf("[定时] ✗ 全量同步失败: %v", err)
-		return
-	}
-	log.Printf("[定时] ✅ 全量同步完成（%s）：视频 %d，生成 STRM %d，附属下载 %d，失效 STRM %d 个待清理",
-		sum.Elapsed, sum.Total, sum.Created, sum.AssetsDownloaded, sum.Orphans)
 }
 
-// runScheduledTick 单轮定时任务（独立函数保证 defer 在本轮结束即执行——
-// defer 写在 for-select 循环体会累积到 goroutine 退出，锁被永久持有）。
-// defer 解锁 + recover：中途 panic（解析外部数据的路径是高发区）也不会
-// 永久抱死互斥锁——此前非 defer 的 Unlock 在 panic 时被跳过，之后所有
-// 同步入口都报"任务正在进行中"直到重启
+// runScheduledTick 定时整理 → 入任务队列（后台优先级，DedupeKey=organize，与手动整理合并）。
+//
+// 此前在这里等 90 秒拿锁，等不到就置位 organizeMissed、每分钟补跑一次。入队之后
+// 不会再「错过」：锁被占着就在队列里等，同一时刻最多排一个整理，手动点的整理并进同一个任务。
+// 执行体见 taskjobsync.go 的 execOrganizeJob（Scheduled：独立增量轮询关着时顺带跑一轮增量；
+// 空转的轮次跑完不留记录）
 func (h *Handler) runScheduledTick() {
-	// 先登记让路再等：正在跑的增量遍历看到有人排队会就地收工。
-	// 等不到才置位「错过即补」，每分钟继续尝试，不再等下一个 cron 周期
-	if !taskMu.Acquire("定时整理", organizeAcquireWait) {
-		if organizeMissed.CompareAndSwap(false, true) {
-			logBusy("整理", "定时")
-			log.Printf("[定时] ○ 整理稍后补跑（每分钟重试一次，不等下一个 cron 周期）")
-		}
-		return
-	}
-	organizeMissed.Store(false)
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[定时] ✗ 任务 panic 已恢复: %v", r)
-		}
-		endTask()
-		taskMu.Unlock()
-	}()
-	beginTask("定时整理+增量")
-	start := time.Now()
-	// 1) 自动整理：识别 → 搬移 → 写 STRM → 刮削 → 刷 Emby 一条龙跑完
-	orgSteps, _, orgErr := h.executeOrganize()
-	if orgErr != nil {
-		log.Printf("[定时] ○ 整理跳过: %v", orgErr)
-	} else {
-		for _, st := range orgSteps {
-			if st["status"] == "失败" {
-				msg, _ := st["message"].(string)
-				log.Printf("[定时] ✗ 整理失败: %v", msg)
-			}
-		}
-	}
-	// 2) 增量同步：只在独立轮询关掉时才在这里串一次（逃生门下的老行为）。
-	// 轮询开着的话它每 30 秒就跑一轮，这里再跑纯属重复请求 115
-	var sum *incrSummary
-	if h.loadIncrInterval() <= 0 {
-		p := h.incrParamsFromConfig()
-		var err error
-		sum, err = h.executeIncrementalSync(p)
-		if err != nil {
-			log.Printf("[定时] 增量同步失败: %v", err)
-		}
-	}
-	// 空转判定：无整理产出且增量无新事件 → 整轮只留一行（此前每轮 ~10 行噪音）
-	idle := orgErr == nil
-	for _, st := range orgSteps {
-		if st["status"] == "失败" {
-			idle = false
-		}
-	}
-	if sum != nil && sum.EventsFresh > 0 {
-		idle = false
-	}
-	// 空转轮次完全静默（每 10 分钟一 tick，静默才不刷屏）；
-	// 只有真的处理了内容才输出摘要
-	// 增量那半边的明细由它自己按轮次号打账单（见 incrtrace.go），这里不复述
-	if !idle {
-		log.Printf("[定时] ✅ 定时任务完成，耗时 %.2f 秒", time.Since(start).Seconds())
-	} else {
-		markTaskIdle() // 任务历史里也不留这一轮（10 分钟一次，多数空转）
+	if _, err := enqueueJob(h.DB, jobSpec{Kind: "organize", Title: "定时整理", DedupeKey: "organize",
+		Source: "cron", Priority: jobPriorityBackground, Params: jobParams{Scheduled: true}}); err != nil {
+		log.Printf("[定时] ✗ 定时整理入队失败: %v", err)
 	}
 }
 

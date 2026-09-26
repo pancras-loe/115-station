@@ -139,7 +139,7 @@ onMounted(async () => {
 })
 
 /** 队列里已有手动增量（排队或执行中）：再点也只是合并成同一个任务 */
-const busy = computed(() => running.value || !!queue.activeOf('incr'))
+const busy = computed(() => running.value || !!queue.activeManualOf('incr'))
 
 /** 间隔填 0（或清空）= 关掉独立轮询，增量此时没有自己的时间表 */
 const pollingOff = computed(() => (interval.value ?? 0) <= 0)

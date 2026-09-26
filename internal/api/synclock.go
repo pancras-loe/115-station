@@ -2,7 +2,6 @@ package api
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -45,17 +44,6 @@ func newSyncLock() *syncLock { return &syncLock{sem: make(chan struct{}, 1)} }
 
 // taskMu 全局任务互斥锁
 var taskMu = newSyncLock()
-
-// 做成变量只为让测试不必真等，生产行为不变
-var (
-	// manualAcquireWait 用户手动点按钮时最多等多久。
-	// 登记让路后正在跑的增量遍历会提前收工，通常几秒内就能拿到；
-	// 等不到才报错，报错里会写明在等谁
-	manualAcquireWait = 20 * time.Second
-	// organizeAcquireWait 整理（定时 / 转存触发 / 离线完成触发）最多等多久。
-	// 比手动长：整理是后台任务，宁可多等一会儿也不该被增量饿死
-	organizeAcquireWait = 90 * time.Second
-)
 
 func (l *syncLock) take(owner string) {
 	l.mu.Lock()
@@ -185,19 +173,4 @@ func (l *syncLock) YieldRequested() (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("%s（已等 %s）", strings.Join(waiters, "、"), waited.Truncate(time.Second)), true
-}
-
-// busyErr 抢不到锁时给用户看的话。带上占用方与已运行时长——
-// 光说「任务正在进行中」用户只能干等，不知道在等什么、要等多久
-func busyErr() string {
-	msg := "任务正在进行中：" + taskMu.Describe()
-	if waiters, waited := taskMu.Waiters(); len(waiters) > 0 {
-		msg += fmt.Sprintf("，另有 %d 个任务在排队（已等 %s）", len(waiters), waited.Truncate(time.Second))
-	}
-	return msg + "。稍后再试即可"
-}
-
-// logBusy 后台任务抢不到锁时的统一日志。溯源要的就是「被谁挡住了」
-func logBusy(who, scope string) {
-	log.Printf("[%s] ○ %s未开始：%s", scope, who, taskMu.Describe())
 }
