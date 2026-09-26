@@ -116,6 +116,7 @@ type tmdbDetail struct {
 	OriginCountry []string
 	Names         []string       // 别名 + 各语言译名
 	Seasons       map[int]string // 季号 → 该季首播日期（仅剧集）
+	SeasonEps     map[int]int    // 季号 → 该季集数（仅剧集；全剧连续编号换算用，见 absepisode.go）
 }
 
 var (
@@ -166,12 +167,13 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 		Seasons []struct {
 			SeasonNumber int    `json:"season_number"`
 			AirDate      string `json:"air_date"`
+			EpisodeCount int    `json:"episode_count"`
 		} `json:"seasons"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
-	d := &tmdbDetail{OriginCountry: raw.OriginCountry, Seasons: map[int]string{}}
+	d := &tmdbDetail{OriginCountry: raw.OriginCountry, Seasons: map[int]string{}, SeasonEps: map[int]int{}}
 	for _, t := range raw.AlternativeTitles.Titles {
 		d.Names = append(d.Names, t.Title)
 	}
@@ -183,6 +185,7 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 	}
 	for _, s := range raw.Seasons {
 		d.Seasons[s.SeasonNumber] = s.AirDate
+		d.SeasonEps[s.SeasonNumber] = s.EpisodeCount
 	}
 	tmdbDetailMu.Lock()
 	if len(tmdbDetailCache) > 2000 {

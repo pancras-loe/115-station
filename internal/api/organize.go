@@ -295,12 +295,6 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 	return movedFiles
 }
 
-// renameBeforeMove 在源目录中先重命名文件（带画质信息），再移动到目标。
-// 全目录的重命名（视频+字幕）合并为一次 batch_rename 调用：
-// 逐个调用时每个文件过一遍 API 限流，24 集仅等待就要 70+ 秒。
-//
-// 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
-// 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来
 // applySeasonHint 文件名只有集号（季号是缺省的 1）时，改用目录名上明写的季号：
 // 「庆余年 第二季/01.mp4」「The.Boys.Season.4/E01.mkv」不能被当成第一季
 func applySeasonHint(p, hint *ParsedName) {
@@ -312,15 +306,24 @@ func applySeasonHint(p, hint *ParsedName) {
 	}
 }
 
-// main 是整个条目识别时的解析结果，每一集的季号按 parseVideoInDir 的顺序补
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, rules []ReplaceRule, main *ParsedName, onLog func(string)) map[string]string {
+// renameBeforeMove 在源目录中先重命名文件（带画质信息），再移动到目标。
+// 全目录的重命名（视频+字幕）合并为一次 batch_rename 调用：
+// 逐个调用时每个文件过一遍 API 限流，24 集仅等待就要 70+ 秒。
+//
+// 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
+// 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来。
+// eps 是调用方已经算好的每集季集（episodeParses + 连续编号换算），这里不再各自重新解析
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, eps map[string]*ParsedName, onLog func(string)) map[string]string {
 	// 计算单个视频的新名（保持原命名规则）
 	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
 	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
 	mediaCopy := *media
 	mediaCopy.Title = sanitizeName(mediaCopy.Title)
 	videoNewName := func(vf remoteFile) (string, bool) {
-		p := parseVideoInDir(vf, rules, main)
+		p := eps[vf.Fid]
+		if p == nil {
+			p = parseVideoInDir(vf, nil, nil)
+		}
 		var file string
 		if mediaCopy.MediaType == "movie" {
 			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
@@ -1689,13 +1692,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		return results
 	}
 
-	// 识别第一个视频（取最大的文件作为主视频）
-	mainVideo := videoFiles[0]
-	for _, v := range videoFiles {
-		if v.Size > mainVideo.Size {
-			mainVideo = v
-		}
-	}
+	// 识别用的样本视频：剧集目录取带集号里最大的，其余取最大的（见 pickMainVideo）
+	mainVideo := pickMainVideo(videoFiles, replaceRules)
 
 	// 去重方式：不再查本地台账，TMDB 识别后直接查网盘目标目录的 SHA1（checkByCloudSHA1）。
 	// 好处：永远准确（查的是网盘实时状态），无本地缓存过期问题。
@@ -1814,6 +1812,23 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		holdingDir = sourceHoldingDir(dir.Name, parsed.Title)
 	}
 
+	// 每一集的季集解析只算这一次：洗版判定、改名、落点都读它。
+	// 剧集先过一遍全剧连续编号换算（S07E166 → S07E22，判定极保守，见 absepisode.go）
+	eps := episodeParses(videoFiles, replaceRules, parsed)
+	if media.MediaType == "tv" {
+		remapAbsEpisodesTmdb(tc, media, eps, onLog)
+	}
+	// 标题目录与兜底落点。模板对季号 0 不插季目录，newPath 只有「标题/文件」两段，
+	// 此前照样把 parts[1]（文件名）当季目录名建了出来，所以剧集要三段以上才取季目录
+	parts := strings.Split(newPath, "/")
+	rootRel := libSubPath(categoryDir(media.MediaType, category), parts[0])
+	fallbackRel := rootRel // 电影同标题目录；剧集为主视频的季目录
+	if media.MediaType == "tv" && len(parts) >= 3 {
+		fallbackRel = rootRel + "/" + parts[1]
+	}
+	// 洗版要按「这一集将要落到哪个目录」查库内版本，和真正搬过去的目录必须是同一个
+	vplace := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, nil, eps, nil)
+
 	// 洗版**判定**必须逐文件做（主视频重复或画质不佳，不代表同目录的新增集也该拒收），
 	// 但**执行**一律攒到判完再发。逐集各发一次 115 写请求要过 3 秒写间隔：
 	// 153 集的动漫光让位 + 移「已存在」就是十几分钟，这段时间整理一直占着 taskMu，
@@ -1833,9 +1848,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1})
 	}
 	for _, vf := range videoFiles {
-		vp := parseVideoInDir(vf, replaceRules, parsed)
-		vpath := buildNewNameWithTemplate(media, vp, vf.Name)
-		vdir := libSubPath(categoryDir(media.MediaType, category), pathDir(vpath))
+		vdir := vplace.relOf[vf.Fid]
 		plan := washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), onLog)
 		if st != nil {
 			plan = decideWash(media, vf.Name, vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), onLog)
@@ -1905,12 +1918,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	}
 	files = remaining
 
-	_ = targetDir // 目标目录在下方按新结构创建（根目录 + 季目录）
+	_ = targetDir // 目标目录在下方按新结构创建（标题目录 + 各季目录）
 
 	// 按文件分类移动（规范结构）：
-	//   视频 + 字幕 → 季目录（电影为根目录）；NFO + 标准封面图 → 剧集根目录；垃圾 → 冗余
-	parts := strings.Split(newPath, "/")
-	rootRel := libSubPath(categoryDir(media.MediaType, category), parts[0])
+	//   视频 + 字幕 → 各自的季目录（电影为标题目录，见 placeEntryFiles）；NFO + 标准封面图 → 标题目录；垃圾 → 冗余
 	onLog(fmt.Sprintf("▣ 目标目录就绪: %s", rootRel))
 	rootCid, err := ops.ensurePath(cfg.Library, rootRel)
 	if err != nil {
@@ -1918,19 +1929,6 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建目录失败: " + err.Error()})
 		failMedia("failed", "move", "创建目标目录失败: "+err.Error(), media, category, rootRel)
 		return results
-	}
-	mediaCid := rootCid
-	mediaRel := rootRel                             // 视频与字幕的实际落点（电影同标题目录，剧集到季目录）
-	if media.MediaType == "tv" && len(parts) >= 2 { // Season XX 层
-		onLog(fmt.Sprintf("▣ 季目录就绪: %s/%s", rootRel, parts[1]))
-		mediaRel = rootRel + "/" + parts[1]
-		mediaCid, err = ops.ensurePath(cfg.Library, rootRel+"/"+parts[1])
-		if err != nil {
-			onLog(fmt.Sprintf("✗ %s/ - 创建季目录失败: %v", dir.Name, err))
-			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建季目录失败: " + err.Error()})
-			failMedia("failed", "move", "创建季目录失败: "+err.Error(), media, category, rootRel)
-			return results
-		}
 	}
 
 	var mediaFids, metaFids, junkFids []string
@@ -2012,32 +2010,71 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	for _, vf := range videoFiles {
 		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
 	}
-	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, replaceRules, parsed, onLog) {
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, eps, onLog) {
 		finalNames[fid] = n
 	}
 
-	// 视频/字幕 → 季目录（电影为根目录）
-	if len(mediaFids) > 0 {
-		onLog(fmt.Sprintf("▣ 移动 %d 个视频/字幕 → %s（cid=%s）", len(mediaFids), mediaRel, mediaCid))
-		if err := ops.moveFiles(mediaCid, mediaFids); err != nil {
-			onLog(fmt.Sprintf("✗ %s/ - 移动文件失败: %v", dir.Name, err))
-			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "移动文件失败: " + err.Error()})
-			failMedia("failed", "move", "移动文件到媒体库失败: "+err.Error(), media, category, rootRel)
+	// 视频/字幕 → 各自的季目录（电影为标题目录）。落点要在补全改名之后算：字幕按同名视频认主人
+	var subFiles []remoteFile
+	for _, f := range files {
+		if classifyFile(f.Name) == FileTypeSubtitle {
+			subFiles = append(subFiles, f)
+		}
+	}
+	place := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, subFiles, eps, enrichRenames)
+	groups := map[string][]string{} // 库内相对目录 → fid
+	for _, fid := range mediaFids {
+		rel, ok := place.relOf[fid]
+		if !ok {
+			rel = fallbackRel
+		}
+		groups[rel] = append(groups[rel], fid)
+	}
+	relCid := map[string]string{rootRel: rootCid}
+	for _, rel := range place.dirs {
+		if len(groups[rel]) == 0 {
+			continue
+		}
+		if _, ok := relCid[rel]; ok {
+			continue
+		}
+		onLog(fmt.Sprintf("▣ 季目录就绪: %s", rel))
+		cid, err := ops.ensurePath(cfg.Library, rel)
+		if err != nil {
+			onLog(fmt.Sprintf("✗ %s/ - 创建季目录失败: %v（目标=%q）", dir.Name, err, rel))
+			results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "创建季目录失败: " + err.Error()})
+			failMedia("failed", "move", "创建季目录失败: "+err.Error(), media, category, rootRel)
 			return results
 		}
+		relCid[rel] = cid
 	}
-	// 封面/NFO → 剧集根目录
+	// 一季一次 move。中途失败时前面几季已经搬走：已搬的照常落盘，没搬的留在原处，
+	// 整条记为失败、点「重新整理」补齐 —— 与批量改名半途失败的处理一致（已成功的按新名落盘）
+	var movedRels []string
+	var moveErr error
+	for _, rel := range place.dirs {
+		fids := groups[rel]
+		if len(fids) == 0 {
+			continue
+		}
+		onLog(fmt.Sprintf("▣ 移动 %d 个视频/字幕 → %s（cid=%s）", len(fids), rel, relCid[rel]))
+		if err := ops.moveFiles(relCid[rel], fids); err != nil {
+			moveErr = err
+			break
+		}
+		movedRels = append(movedRels, rel)
+	}
+	if moveErr != nil && len(movedRels) == 0 {
+		onLog(fmt.Sprintf("✗ %s/ - 移动文件失败: %v", dir.Name, moveErr))
+		results = append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: "移动文件失败: " + moveErr.Error()})
+		failMedia("failed", "move", "移动文件到媒体库失败: "+moveErr.Error(), media, category, rootRel)
+		return results
+	}
+	// 封面/NFO → 标题目录
 	if len(metaFids) > 0 {
 		onLog(fmt.Sprintf("▣ 移动 %d 个 NFO/封面 → %s（cid=%s）", len(metaFids), rootRel, rootCid))
-	}
-	if len(metaFids) > 0 && mediaCid != rootCid {
 		if err := ops.moveFiles(rootCid, metaFids); err != nil {
-			onLog(fmt.Sprintf("○ %s/ - 封面/NFO 移动到根目录失败（留在季目录）: %v", dir.Name, err))
-		}
-	} else if len(metaFids) > 0 {
-		// 电影：全部进根目录
-		if err := ops.moveFiles(rootCid, metaFids); err != nil {
-			onLog(fmt.Sprintf("○ %s/ - 封面/NFO 移动失败: %v", dir.Name, err))
+			onLog(fmt.Sprintf("○ %s/ - 封面/NFO 移动失败（留在源目录）: %v", dir.Name, err))
 		}
 	}
 
@@ -2091,8 +2128,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		return f.Name
 	}
 	movedFids := map[string]bool{}
-	for _, fid := range mediaFids {
-		movedFids[fid] = true
+	for _, rel := range movedRels {
+		for _, fid := range groups[rel] {
+			movedFids[fid] = true
+		}
 	}
 	for _, fid := range metaFids {
 		movedFids[fid] = true
@@ -2116,10 +2155,48 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			strmAssets = append(strmAssets, f)
 		}
 	}
-	strmCreated, assetsDL := ctx.sink.commit(ops, media, rootRel, mediaRel, strmVideos, strmAssets)
-	onLog(fmt.Sprintf("✓ %s/ - 落盘完成：STRM %d 个、附属 %d 个 → %s",
-		dir.Name, strmCreated, assetsDL,
-		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(mediaRel)))))
+	// 按季分组落盘：commit 只认一个视频目录（NFO / 封面它自己放到标题目录）
+	strmCreated, assetsDL := 0, 0
+	for i, rel := range movedRels {
+		var vs, as []remoteFile
+		for _, f := range strmVideos {
+			if place.relOf[f.Fid] == rel {
+				vs = append(vs, f)
+			}
+		}
+		for _, f := range strmAssets {
+			// 标题级附属（NFO / 封面）只跟第一组落一次；字幕跟自己所在的季
+			if r, ok := place.relOf[f.Fid]; (ok && r == rel) || (!ok && i == 0) {
+				as = append(as, f)
+			}
+		}
+		sc, dl := ctx.sink.commit(ops, media, rootRel, rel, vs, as)
+		strmCreated += sc
+		assetsDL += dl
+	}
+	landedAt := filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(rootRel)))
+	if len(movedRels) == 1 {
+		landedAt = filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(movedRels[0])))
+	} else {
+		landedAt += fmt.Sprintf("（%d 个季目录）", len(movedRels))
+	}
+	onLog(fmt.Sprintf("✓ %s/ - 落盘完成：STRM %d 个、附属 %d 个 → %s", dir.Name, strmCreated, assetsDL, landedAt))
+
+	if moveErr != nil {
+		// 搬到一半失败：已搬的几季照常落盘（上面），没搬的留在原处，整条记失败让用户重新整理补齐
+		msg := fmt.Sprintf("只搬进了 %d/%d 个季目录，其余留在原处（%v），请点「重新整理」补齐", len(movedRels), len(place.dirs), moveErr)
+		onLog(fmt.Sprintf("✗ %s/ - %s", dir.Name, msg))
+		ctx.sink.note(&model.OrganizeRecord{
+			Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
+			Status: "failed", Stage: "move", Message: msg,
+			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+			MediaType: media.MediaType, PosterPath: media.PosterPath,
+			Category: category, TargetDir: rootRel, TargetCid: rootCid,
+			Files: marshalRecordFiles(recFiles), VideoCount: len(strmVideos),
+			TotalSize: sumSizes(strmVideos), StrmCreated: strmCreated,
+		})
+		return append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: msg})
+	}
 
 	// 记录到数据库
 	recordMedia(media, category, targetDir+"/"+pathBase(newPath))
@@ -2149,7 +2226,13 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			movedBytes += f.Size
 		}
 	}
-	notifyMediaStoredFull(media, category, videoFiles, mainVideo.Name, movedCount, movedBytes)
+	// 集数区间按改名后的名字算：原名可能是全剧连续编号（S07E166），换算只体现在新名上
+	notifyVideos := make([]remoteFile, len(videoFiles))
+	for i, vf := range videoFiles {
+		vf.Name = nameOf(vf)
+		notifyVideos[i] = vf
+	}
+	notifyMediaStoredFull(media, category, notifyVideos, mainVideo.Name, movedCount, movedBytes)
 
 	// 生成结果
 	for _, vf := range videoFiles {
@@ -3090,6 +3173,11 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 		return rng, ""
 	}
 	season := eps[0].season
+	for _, e := range eps {
+		if e.season != season {
+			return rng, "" // 多季合集：缺集只能逐季算，混在一起比就全错了
+		}
+	}
 	total := 0
 	if tc, err := loadTmdbClient(); err == nil {
 		total = tc.SeasonEpisodeCount(media.TmdbID, season)

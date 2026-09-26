@@ -34,6 +34,10 @@ ok   | Baby.Walkure.Everyday.EP08.1080p.MAX.WEB-DL.DDP2.0.H.264-MagicStar.mkv | 
 ok   | 某剧.第01集.1080p.mkv | 某剧 | - | 1 | 1 | 1 | - |
 ok   | [Sakurato] Hamidashi Creative! [01v2][AVC-8bit 1080p AAC][CHT].mp4 | Hamidashi Creative! | - | 1 | 1 | 1 | - |
 ok   | [Sub] Some Anime [05][1080p].mkv | Some Anime | - | 1 | 5 | 1 | - |
+ok   | 成长的烦恼.Growing.Pains.S01-S07.1985-1991.野老相声.Bilibili.WEB-DL.2160p.DVD.Ai-Enhanced.AVC.AAC.2.0-LGNB@oSpecialCN | 成长的烦恼 Growing Pains | 1985 | 0 | 0 | 1 | - | 季范围是全季合集、不是第 1 季；年份区间取开播年
+ok   | 成长的烦恼.Growing.Pains.S07E166.1991.野老相声.Bilibili.WEB-DL.2160p.DVD.Ai-Enhanced.AVC.AAC.2.0-LGNB@oSpecialCN-告别.mkv | 成长的烦恼 Growing Pains | 1991 | 7 | 166 | 1 | - | 集号是全剧连续编号，换算在识别之后（absEpisode）
+ok   | 老友记.第1-10季.1994-2004.1080p.mkv | 老友记 | 1994 | 0 | 0 | 1 | - | 中文季范围
+ok   | Friends.S01-S10.Complete.1080p.BluRay | Friends | - | 0 | 0 | 1 | - |
 
 # ---------- TMDB id 标签 ----------
 ok   | The.Matrix.1999.[tmdbid=603].mkv | The Matrix | 1999 | 0 | 0 | 0 | 603 | Emby 写法

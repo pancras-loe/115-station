@@ -208,7 +208,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
-	plan, err := planRedoLayout(media, category, files, rec.Source, loadReplaceRules())
+	plan, err := planRedoLayoutWith(media, category, files, rec.Source, loadReplaceRules(), func(eps map[string]*ParsedName) {
+		remapAbsEpisodesTmdb(tc, media, eps, func(m string) { log.Printf("[整理] %s", m) })
+	})
 	if err != nil {
 		return err
 	}
@@ -472,11 +474,28 @@ func redoEntryHint(srcName string, rules []ReplaceRule) *ParsedName {
 // 不碰网盘也不碰本地磁盘，便于单测覆盖——重整理最容易出错的就是这段路径推导。
 // rules 是识别规则里的替换规则（只作用于没改过名的原始文件名，见 redoParseVideo）
 func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule) (*redoLayout, error) {
+	return planRedoLayoutWith(media, category, files, srcName, rules, nil)
+}
+
+// planRedoLayoutWith 同上，remap 在各集解析完、算路径之前调用一次（全剧连续编号换算，
+// 和正常整理同一个时机，见 absepisode.go）。只对从没改过名的原始文件名有意义：
+// 改过名的新名里已经是换算后的季内集号，再换一次也不会通过判定
+func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule,
+	remap func(map[string]*ParsedName)) (*redoLayout, error) {
 	out := &redoLayout{renames: map[string]string{}, groups: map[string][]orgRecordFile{}}
 	newBaseOf := map[string]string{} // 视频旧基名 → 新基名（字幕跟随用）
 	videos := 0
 	origOf := recordOrigNames(files, srcName)
 	entryHint := redoEntryHint(srcName, rules)
+	parses := map[string]*ParsedName{}
+	for _, f := range files {
+		if f.Kind == "video" {
+			parses[f.Fid] = redoParseVideo(f, rules, entryHint)
+		}
+	}
+	if remap != nil && media.MediaType == "tv" {
+		remap(parses)
+	}
 	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
 	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
 	taken := map[string]string{}
@@ -488,7 +507,7 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, sr
 		// 季集按**当前**文件名解析（它已经是规范名），但模板里的资源变量
 		// 要拿**原始**文件名算：画质/编码只存在于原名里，上一次重命名没能
 		// 认出来的（粘连写法、模板没带这些字段）就永远回不来了
-		parsed := redoParseVideo(f, rules, entryHint)
+		parsed := parses[f.Fid]
 		newPath := buildNewNameWithTemplate(media, parsed, origOf[f.Fid])
 		if newPath == "" {
 			continue

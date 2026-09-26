@@ -329,6 +329,28 @@ func (tc *TmdbClient) SeasonEpisodeCount(tvID, season int) int {
 	return len(out.Episodes)
 }
 
+// SeasonEpisodeNumbers 某季在 TMDB 上实际的集号。多数剧是 1..N，但海贼王这类
+// 季内集号延续上季（第 21 季从 892 编起），连续编号换算前要拿它排除（absepisode.go）
+func (tc *TmdbClient) SeasonEpisodeNumbers(tvID, season int) (map[int]bool, error) {
+	body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Episodes []struct {
+			EpisodeNumber int `json:"episode_number"`
+		} `json:"episodes"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	nums := make(map[int]bool, len(out.Episodes))
+	for _, e := range out.Episodes {
+		nums[e.EpisodeNumber] = true
+	}
+	return nums, nil
+}
+
 // ==================== 文件名解析 ====================
 
 // ParsedName 从文件名解析出的信息
@@ -433,6 +455,15 @@ func parseFileName(filename string) *ParsedName {
 		}
 	}
 
+	// 季范围（S01-S07 / 第1-7季）是全季合集的标志，不是「第 1 季」：此前被 reSeasonOnly
+	// 认成明写的 S01，整包的季号提示全成了 1（2026-09《成长的烦恼》7 季全进 Season 1）。
+	// 记下是剧集、截片名，再把这一段等长抹掉，免得后面的季号 / 集号正则从里面抠出数字来
+	if loc := reSeasonRange.FindStringIndex(name); loc != nil {
+		result.IsTV = true
+		mark(loc[0])
+		name = name[:loc[0]] + strings.Repeat(" ", loc[1]-loc[0]) + name[loc[1]:]
+	}
+
 	if loc := reSeasonEpisode.FindStringSubmatchIndex(name); loc != nil {
 		result.Season, _ = strconv.Atoi(name[loc[2]:loc[3]])
 		result.Episode, _ = strconv.Atoi(name[loc[4]:loc[5]])
@@ -507,6 +538,8 @@ func applyNameTag(p *ParsedName, t nameTag) {
 const cnDigits = `零〇一二两三四五六七八九十百`
 
 var (
+	// 季范围：S01-S07 / S01-07 / 第1-7季 / 第一至七季（MoviePilot 记作 begin_season / end_season）
+	reSeasonRange = regexp.MustCompile(`(?i)(?:(?:^|[\s._\-\[])S\d{1,2}\s*[-~～]\s*S?\d{1,2}(?:$|[\s._\-\]])|第\s*(?:[0-9]{1,2}|[` + cnDigits + `]{1,3})\s*(?:季\s*)?[-~～至到]\s*(?:第\s*)?(?:[0-9]{1,2}|[` + cnDigits + `]{1,3})\s*季)`)
 	// 第二季 / 第2季（可以和片名粘在一起：庆余年第二季）
 	reCnSeason = regexp.MustCompile(`第\s*([0-9]{1,2}|[` + cnDigits + `]{1,3})\s*季`)
 	// Season 2 / Season.02
@@ -766,8 +799,13 @@ func pickYear(name string) (string, int) {
 		cut = m[0]
 	}
 	best := hit{pos: -1}
-	for _, h := range hits {
+	for i, h := range hits {
 		if y, _ := strconv.Atoi(h.year); y > maxYear {
+			continue
+		}
+		// 年份区间「1985-1991」的后一个是完结年：剧集按首播年搜，取前一个。
+		// 只认短横线紧挨着（reYear 的前导分隔符里只有它像区间）：「2049.2017」那种点分的仍是片名 + 年份
+		if i > 0 && h.pos == hits[i-1].pos+5 && name[h.pos-1] == '-' {
 			continue
 		}
 		if h.pos < cut {
