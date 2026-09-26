@@ -32,9 +32,11 @@ func settingValueCompat(key string) string {
 			return v
 		}
 	}
-	if model.DB != nil {
+	// 先取一份句柄再判空：通知常在脱离调用方的 goroutine 里发（如 noteWashReplace），
+	// 判空与使用之间 model.DB 可能被换掉（测试清理时还原成 nil），两次读全局变量会空指针
+	if db := model.DB; db != nil {
 		var s model.Setting
-		if err := model.DB.Where("key = ?", key).First(&s).Error; err == nil {
+		if err := db.Where("key = ?", key).First(&s).Error; err == nil {
 			return s.Value
 		}
 	}
