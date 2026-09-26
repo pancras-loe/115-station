@@ -56,6 +56,34 @@ func TestDeepDelEventOnlyDeletesMatchedRows(t *testing.T) {
 	}
 }
 
+// 整剧删除时神医 deep.delete 先删完并清了台账，原生 library.deleted 随后到达：
+// 前缀下已无台账，应静默跳过，不能报「台账缺少剧/季目录证据」的拦截通知（2026-09-23 现场）
+func TestDeepDelSeriesDuplicateEventNotRejected(t *testing.T) {
+	root := deepDelTestTree(t, "影视/keep")
+	series := "影视/剧集/仁心俱乐部.2025.{tmdbid=276548}"
+	h := eventTestHandler(t, root, []model.SyncedFile{
+		{FileID: "e1", RelPath: series + "/Season 1/e1.strm", Kind: "video"},
+		{FileID: "e2", RelPath: series + "/Season 1/e2.strm", Kind: "video"},
+	})
+	calls := 0
+	execute := func(rows []model.SyncedFile, _ string) (deepDelResult, error) {
+		calls++
+		for _, r := range rows {
+			h.DB.Delete(&model.SyncedFile{}, r.ID)
+		}
+		return deepDelResult{}, nil
+	}
+	payload := eventPayload(root, series)
+	payload["Item"].(map[string]interface{})["Type"] = "Series"
+	h.processDeepDelEvent(payload, true, execute, func() bool { return true })
+	h.processDeepDelEvent(payload, false, execute, func() bool { return true })
+	var rejected int64
+	h.DB.Model(&model.DeepDeleteRecord{}).Where("status = ?", "rejected").Count(&rejected)
+	if calls != 1 || rejected != 0 {
+		t.Fatalf("执行=%d 拦截=%d", calls, rejected)
+	}
+}
+
 func TestDeepDelEventPrefixPickcodeAndOrphan(t *testing.T) {
 	root := deepDelTestTree(t, "影视/剧集/B/S01/keep.strm")
 	past := time.Now()

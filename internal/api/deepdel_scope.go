@@ -57,6 +57,13 @@ func (h *Handler) checkDeepDelScope(kind string, rels []string) error {
 		if err := h.DB.Where(`rel_path LIKE ? ESCAPE '\'`, likeEscape(series)+"/%").Find(&rows).Error; err != nil {
 			return err
 		}
+		// 前缀下台账一行都没有：这个前缀什么也展开不出来，不存在扩大删除的风险。
+		// 常见于神医 deep.delete 与原生 library.deleted 成对到达，前者已删完并清了台账，
+		// 后者再来时若当成「缺证据」拦下，就会对一次成功的删除报一条误导性的拦截通知。
+		// 放行后由 deepDelEventRows 以「未命中同步台账」静默跳过
+		if len(rows) == 0 {
+			continue
+		}
 		_, _, tmdb := parseTitleDir(path.Base(series))
 		evidence, videos := tmdb > 0, 0
 		for _, row := range rows {
