@@ -99,6 +99,8 @@ export interface OrganizeRecord {
   /** 暂存条目的「片名 (年份)」 */
   pending_label?: string
   redo_count: number
+  /** 最近一次处理它的队列任务；0 = 不是队列里跑出来的，或早于这个字段的老记录 */
+  job_id?: number
   created_at: string
   file_list: OrganizeRecordFile[]
   /** 来源链接；不是离线 / 分享提交进来的（手动丢进待整理等）没有 */
@@ -117,6 +119,8 @@ export const listRecords = (params: {
   status?: string
   type?: string
   q?: string
+  /** 只看某个任务涉及的记录（任务中心跳过来） */
+  job_id?: number
   page?: number
   size?: number
 }) => http.get<OrganizeRecordPage>('/organize/records', { params })

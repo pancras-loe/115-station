@@ -1,5 +1,6 @@
 import {
   LayoutDashboard,
+  ListChecks,
   UserRoundCog,
   RefreshCcw,
   Wand2,
@@ -27,6 +28,8 @@ export interface NavItem {
  */
 export const navItems: NavItem[] = [
   { name: 'dashboard', label: '总览面板', icon: LayoutDashboard, group: '概览' },
+  // 图标与顶栏的任务弹层入口一致
+  { name: 'tasks', label: '任务中心', icon: ListChecks },
 
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },

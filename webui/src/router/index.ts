@@ -23,6 +23,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '总览面板', desc: '容量 / STRM / 整理 / 任务总览', icon: 'dashboard' },
       },
       {
+        path: 'tasks',
+        name: 'tasks',
+        component: () => import('@/pages/TasksPage.vue'),
+        meta: { title: '任务中心', desc: '任务队列与历史 / 整理记录', icon: 'tasks' },
+      },
+      {
         path: 'subscriptions',
         name: 'tgsub',
         // 订阅管理暂未开放，保留旧地址以兼容收藏，统一回到首页。

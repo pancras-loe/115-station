@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ListChecks, RotateCcw, X } from '@lucide/vue'
+import { useRouter } from 'vue-router'
+import { ChevronRight, ListChecks, RotateCcw, X } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HPopover from '@/components/hero/HPopover.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import { useQueueStore } from '@/stores/queue'
 import type { TaskJob } from '@/api/tasks'
+import { JOB_STATUS, dur, elapsed, pct, retryable } from '@/utils/jobStatus'
 
 /**
  * 顶栏的任务队列入口：图标 + 角标（执行中 + 排队数），点开看执行中 / 排队中 / 最近结束。
+ * 只管「现在怎么样」；完整历史、筛选、详情与「清理已结束」在任务中心（/tasks）。
  * 轮询在这里启停 —— 顶栏常驻，所以整站只有这一条队列轮询，不依赖某个页面挂着。
  */
 const queue = useQueueStore()
+const router = useRouter()
 const open = ref(false)
 
 onMounted(() => queue.start())
@@ -23,14 +27,7 @@ const runningJobs = computed(() => queue.jobs.filter((j) => j.status === 'runnin
 const queuedJobs = computed(() => queue.jobs.filter((j) => j.status === 'queued'))
 const doneJobs = computed(() => queue.finished.slice(0, 20))
 
-const STATUS: Record<string, { text: string; color: 'default' | 'accent' | 'success' | 'warning' | 'danger' }> = {
-  running: { text: '执行中', color: 'accent' },
-  queued: { text: '排队中', color: 'default' },
-  success: { text: '完成', color: 'success' },
-  failed: { text: '失败', color: 'danger' },
-  canceled: { text: '已取消', color: 'warning' },
-  interrupted: { text: '中断', color: 'danger' },
-}
+const STATUS = JOB_STATUS
 
 /** 排在第一位、而锁被别的任务占着：说清楚在等谁（多半是定时整理或增量同步） */
 const waitingFor = computed(() => {
@@ -38,33 +35,15 @@ const waitingFor = computed(() => {
   return `${queue.lock.holder}（已运行 ${dur(queue.lock.held_sec ?? 0)}）`
 })
 
-function dur(sec: number) {
-  if (sec < 60) return `${Math.max(0, Math.round(sec))} 秒`
-  const m = Math.floor(sec / 60)
-  if (m < 60) return `${m} 分 ${Math.round(sec % 60)} 秒`
-  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
-}
-
-function elapsed(j: TaskJob) {
-  if (!j.started_at) return ''
-  const end = j.finished_at ? new Date(j.finished_at).getTime() : Date.now()
-  return dur((end - new Date(j.started_at).getTime()) / 1000)
-}
-
-function pct(j: TaskJob) {
-  const p = j.progress
-  if (!p || !p.total) return 0
-  return Math.min(100, Math.round((p.done / p.total) * 100))
-}
-
 /** 可不可以取消 / 停止以后端为准：单条任务执行中不能停（中途打断会留下搬了一半的中间态） */
 function stoppable(j: TaskJob) {
   return !!j.stoppable
 }
 
-/** 后台任务（定时整理等）不在队列里执行，没法在这里重试，等它下一轮自动跑 */
-function retryable(j: TaskJob) {
-  return j.kind !== 'background' && (j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled')
+/** 进任务中心；带 id 时直接打开那条任务的详情 */
+function openCenter(id?: number) {
+  open.value = false
+  void router.push({ name: 'tasks', query: id ? { job: String(id) } : {} })
 }
 
 /**
@@ -93,8 +72,9 @@ const background = computed(() => {
         <div class="qp-head">
           <b>任务队列</b>
           <span class="qp-dim">执行中 {{ queue.running }} · 排队 {{ queue.queued }}</span>
-          <HButton v-if="doneJobs.length" size="sm" variant="ghost" class="qp-clear" @click="queue.clearFinished()">
-            清理已结束
+          <HButton size="sm" variant="ghost" class="qp-clear" @click="openCenter()">
+            查看全部
+            <ChevronRight :size="14" />
           </HButton>
         </div>
 
@@ -116,7 +96,9 @@ const background = computed(() => {
           <li v-for="j in [...runningJobs, ...queuedJobs, ...doneJobs]" :key="j.id" class="qp-item">
             <div class="qp-row">
               <HChip :color="STATUS[j.status]?.color ?? 'default'">{{ STATUS[j.status]?.text ?? j.status }}</HChip>
-              <span class="qp-title" :title="j.title">{{ j.title }}</span>
+              <button type="button" class="qp-title qp-link" :title="`${j.title}（查看详情）`" @click="openCenter(j.id)">
+                {{ j.title }}
+              </button>
               <HButton
                 v-if="stoppable(j)"
                 size="sm"
@@ -250,6 +232,18 @@ const background = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.qp-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.qp-link:hover {
+  color: var(--accent);
 }
 .qp-sub {
   margin: 4px 0 0;
