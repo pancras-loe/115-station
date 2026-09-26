@@ -149,6 +149,19 @@ onMounted(load)
       <HSegmented v-model="cfg.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
     </FieldRow>
 
+    <!-- 用户反馈过「未识别的文件手动刮削没用」：刮削只认已入库的片目，这里把范围说清楚，并给出正确入口 -->
+    <HAlert status="warning" class="note" title="「开始刮削」只处理已入库的片目">
+      按本地媒体库里的片目逐个刮削，且只认标题目录名里带 <code>[tmdb=编号]</code> 的片目
+      （重命名规则的目录模板不含这个标签时，库里的条目也刮不到）。
+      未识别、整理失败的文件还在网盘的待整理 / 冗余目录里，本地没有 STRM，这里刮不到它们 ——
+      请到「整理记录」对它们「重新整理」并指定 TMDB 条目，入库时会自动刮削。
+      <template #actions>
+        <HButton variant="tertiary" size="sm" @click="router.push({ query: { tab: 'records', status: 'problem' } })">
+          去处理未识别 / 失败的条目
+        </HButton>
+      </template>
+    </HAlert>
+
     <FormActions>
       <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
       <HButton variant="secondary" :loading="starting" @click="run">开始刮削</HButton>

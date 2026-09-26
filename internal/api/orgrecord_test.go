@@ -30,7 +30,7 @@ func TestPlanRedoLayoutTV(t *testing.T) {
 		{Fid: "j1", Name: "说明.txt", Kind: "junk"},
 	}
 
-	plan, err := planRedoLayout(media, "剧集/国产剧", files, "")
+	plan, err := planRedoLayout(media, "剧集/国产剧", files, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestPlanRedoLayoutMovie(t *testing.T) {
 	media := &TmdbMedia{TmdbID: 123, Title: "测试电影", Year: "2024", MediaType: "movie"}
 	files := []orgRecordFile{{Fid: "v1", Name: "Test.Movie.2024.2160p.mkv", Kind: "video"}}
 
-	plan, err := planRedoLayout(media, "电影/动作", files, "")
+	plan, err := planRedoLayout(media, "电影/动作", files, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestPlanRedoLayoutNoVideo(t *testing.T) {
 	media := &TmdbMedia{TmdbID: 1, Title: "X", Year: "2024", MediaType: "movie"}
 	files := []orgRecordFile{{Fid: "n1", Name: "movie.nfo", Kind: "meta"}}
 
-	if _, err := planRedoLayout(media, "电影/动作", files, ""); err == nil {
+	if _, err := planRedoLayout(media, "电影/动作", files, "", nil); err == nil {
 		t.Fatal("没有视频文件时应报错")
 	}
 }
@@ -163,5 +163,77 @@ func TestIsInPlaceRedo(t *testing.T) {
 	r.TargetDir = ""
 	if isInPlaceRedo(r, "", nil) {
 		t.Error("缺 TargetDir 时不该走原地刷新")
+	}
+}
+
+// 未识别的剧集重新整理：文件名是原始的，要和正常整理同一套解析 ——
+// 子目录上的季号、条目目录名上的季号、替换规则都要生效；认不出集号时两集撞名，动网盘之前就拦下
+func TestPlanRedoLayoutRawNames(t *testing.T) {
+	useDefaultRenameTpl(t)
+	media := &TmdbMedia{TmdbID: 789, Title: "某剧", Year: "2024", MediaType: "tv"}
+	seasonOf := func(plan *redoLayout, fid string) string {
+		for rel, gfs := range plan.groups {
+			for _, f := range gfs {
+				if f.Fid == fid {
+					return rel[strings.LastIndex(rel, "/")+1:]
+				}
+			}
+		}
+		return ""
+	}
+
+	// 各季都叫 E01.mkv，季号只在子目录上（此前两集都算成 S01E01，改名撞车）
+	bySubdir := []orgRecordFile{
+		{Fid: "a", Name: "E01.mkv", Kind: "video", Dir: "某剧/Season 1"},
+		{Fid: "b", Name: "E01.mkv", Kind: "video", Dir: "某剧/Season 2"},
+	}
+	plan, err := planRedoLayout(media, "剧集", bySubdir, "某剧/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seasonOf(plan, "a") != "Season 01" || seasonOf(plan, "b") != "Season 02" {
+		t.Fatalf("季号应取自子目录：a=%s b=%s", seasonOf(plan, "a"), seasonOf(plan, "b"))
+	}
+
+	// 老记录没有 Dir：条目目录名上的季号兜底
+	byEntry := []orgRecordFile{
+		{Fid: "a", Name: "E01.mkv", Kind: "video"},
+		{Fid: "b", Name: "E02.mkv", Kind: "video"},
+	}
+	plan, err = planRedoLayout(media, "剧集", byEntry, "某剧.S03/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seasonOf(plan, "a") != "Season 03" || seasonOf(plan, "b") != "Season 03" {
+		t.Fatalf("季号应取自条目目录名：a=%s b=%s", seasonOf(plan, "a"), seasonOf(plan, "b"))
+	}
+
+	// 认不出集号：两集会撞名，必须在动网盘之前报错并点名是哪两个文件
+	raw := []orgRecordFile{
+		{Fid: "a", Name: "某剧 上篇.mkv", Kind: "video"},
+		{Fid: "b", Name: "某剧 下篇.mkv", Kind: "video"},
+	}
+	_, err = planRedoLayout(media, "剧集", raw, "某剧/", nil)
+	if err == nil || !strings.Contains(err.Error(), "某剧 上篇.mkv") || !strings.Contains(err.Error(), "替换规则") {
+		t.Fatalf("撞名应报错并给出处理办法：%v", err)
+	}
+	// 配上替换规则就能认出集号
+	rules := []ReplaceRule{{From: "上篇", To: "E01"}, {From: "下篇", To: "E02"}}
+	plan, err = planRedoLayout(media, "剧集", raw, "某剧/", rules)
+	if err != nil {
+		t.Fatalf("替换规则应当生效：%v", err)
+	}
+	if plan.renames["a"] == plan.renames["b"] || plan.renames["a"] == "" {
+		t.Fatalf("替换后两集应各有各的名字：%v", plan.renames)
+	}
+
+	// 整理改过名的文件（有 Orig）照旧按规范名解析，替换规则不去碰它
+	renamed := []orgRecordFile{{Fid: "a", Name: "某剧 - S02E05.mkv", Orig: "raw.mkv", Kind: "video"}}
+	plan, err = planRedoLayout(media, "剧集", renamed, "某剧/", []ReplaceRule{{From: "S02", To: "S09"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seasonOf(plan, "a") != "Season 02" {
+		t.Fatalf("改过名的文件不该再套替换规则：%s", seasonOf(plan, "a"))
 	}
 }

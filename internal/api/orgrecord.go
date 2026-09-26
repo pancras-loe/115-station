@@ -200,7 +200,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
-	plan, err := planRedoLayout(media, category, files, rec.Source)
+	plan, err := planRedoLayout(media, category, files, rec.Source, loadReplaceRules())
 	if err != nil {
 		return err
 	}
@@ -435,13 +435,40 @@ func recordOrigNames(files []orgRecordFile, srcName string) map[string]string {
 	return out
 }
 
+// redoParseVideo 重新整理时某个视频的季集解析。
+//
+//   - 整理改过名的（有 Orig）：当前名是模板生成的规范名，季集写得明明白白，直接解析；
+//   - 从没改过名的（未识别 / 失败 / 老记录）：文件名还是原始的，要和正常整理**同一套**
+//     —— 替换规则 → 所在子目录的季号 → 条目目录上的季号（parseVideoInDir）。
+//     此前这里只有 parseFileName(f.Name)：替换规则不生效、Season 2/E01.mkv 当成第 1 季，
+//     几集算出同一个新名字，重新整理在 115 改名那一步失败 —— 用户看到的就是「未识别的改了不执行」
+func redoParseVideo(f orgRecordFile, rules []ReplaceRule, entryHint *ParsedName) *ParsedName {
+	if f.Orig != "" {
+		return parseFileName(f.Name)
+	}
+	return parseVideoInDir(remoteFile{Name: f.Name, Path: f.Dir}, rules, entryHint)
+}
+
+// redoEntryHint 目录记录的条目名（Source 以 / 结尾）上明写的季号，如「某剧.S02/」；散文件记录没有
+func redoEntryHint(srcName string, rules []ReplaceRule) *ParsedName {
+	if !strings.HasSuffix(srcName, "/") {
+		return nil
+	}
+	return seasonHintFromPath(strings.TrimSuffix(srcName, "/"), rules)
+}
+
 // planRedoLayout 纯计算：给定 TMDB 条目与记录里的文件清单，算出重整理的目标布局。
-// 不碰网盘也不碰本地磁盘，便于单测覆盖——重整理最容易出错的就是这段路径推导
-func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, srcName string) (*redoLayout, error) {
+// 不碰网盘也不碰本地磁盘，便于单测覆盖——重整理最容易出错的就是这段路径推导。
+// rules 是识别规则里的替换规则（只作用于没改过名的原始文件名，见 redoParseVideo）
+func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule) (*redoLayout, error) {
 	out := &redoLayout{renames: map[string]string{}, groups: map[string][]orgRecordFile{}}
 	newBaseOf := map[string]string{} // 视频旧基名 → 新基名（字幕跟随用）
 	videos := 0
 	origOf := recordOrigNames(files, srcName)
+	entryHint := redoEntryHint(srcName, rules)
+	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
+	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
+	taken := map[string]string{}
 
 	for _, f := range files {
 		if f.Kind != "video" {
@@ -450,7 +477,7 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, sr
 		// 季集按**当前**文件名解析（它已经是规范名），但模板里的资源变量
 		// 要拿**原始**文件名算：画质/编码只存在于原名里，上一次重命名没能
 		// 认出来的（粘连写法、模板没带这些字段）就永远回不来了
-		parsed := parseFileName(f.Name)
+		parsed := redoParseVideo(f, rules, entryHint)
 		newPath := buildNewNameWithTemplate(media, parsed, origOf[f.Fid])
 		if newPath == "" {
 			continue
@@ -467,6 +494,14 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, sr
 		nf := f
 		nf.Name = newName
 		mediaRel := libSubPath(base, pathDir(newPath))
+		if media.MediaType == "tv" {
+			key := mediaRel + "/" + newName
+			if prev, dup := taken[key]; dup {
+				return nil, fmt.Errorf("「%s」和「%s」会被改成同一个文件名「%s」，多半是文件名里认不出季号或集号。"+
+					"请到「识别规则」加一条替换规则把集号写清楚（如把「第01话」替换成「E01」），再重新整理", prev, f.Name, newName)
+			}
+			taken[key] = f.Name
+		}
 		out.groups[mediaRel] = append(out.groups[mediaRel], nf)
 		videos++
 	}

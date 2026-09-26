@@ -87,7 +87,7 @@ func TestPlanRedoLayoutUsesOriginalName(t *testing.T) {
 
 	withOrig := []orgRecordFile{{Fid: "v1", Kind: "video",
 		Name: "游戏王.S01E153.mkv", Orig: "Yu-Gi-Oh!DuelMonsters-S01E153(DVD960x720AVCAAC).mkv"}}
-	plan, err := planRedoLayout(media, "动漫番剧", withOrig, "")
+	plan, err := planRedoLayout(media, "动漫番剧", withOrig, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestPlanRedoLayoutUsesOriginalName(t *testing.T) {
 	// 老记录没有 Orig：单视频记录还能从 rec.Source 捞回原名
 	legacy := []orgRecordFile{{Fid: "v1", Kind: "video", Name: "游戏王.S01E153.mkv"}}
 	plan, err = planRedoLayout(media, "动漫番剧", legacy,
-		"Yu-Gi-Oh!DuelMonsters-S01E153(DVD960x720AVCAAC).mkv")
+		"Yu-Gi-Oh!DuelMonsters-S01E153(DVD960x720AVCAAC).mkv", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestPlanRedoLayoutUsesOriginalName(t *testing.T) {
 	}
 
 	// 目录整理的 Source 是目录名，不能当文件名用
-	plan, err = planRedoLayout(media, "动漫番剧", legacy, "Yu-Gi-Oh! Duel Monsters (DVD AVC AAC)/")
+	plan, err = planRedoLayout(media, "动漫番剧", legacy, "Yu-Gi-Oh! Duel Monsters (DVD AVC AAC)/", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

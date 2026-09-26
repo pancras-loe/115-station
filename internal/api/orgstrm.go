@@ -367,7 +367,11 @@ type orgRecordFile struct {
 	// Orig 重命名之前的原始文件名，与 Name 相同时不存。
 	// 「重新整理」的模板变量（画质、编码、发布组）只能从原名里解析 ——
 	// 拿改过的名字再 parse 一遍，上一次没写进文件名的信息就永远回不来了
-	Orig     string `json:"orig,omitempty"`
+	Orig string `json:"orig,omitempty"`
+	// Dir 文件当初在条目里的所在目录（如「某剧/Season 2」）。未识别的剧集常见各季都叫 E01.mkv，
+	// 季号只写在子目录上 —— 不记下来，重新整理时几季的第 1 集会算出同一个名字。
+	// 散文件与老记录为空
+	Dir      string `json:"dir,omitempty"`
 	Kind     string `json:"kind"` // video / subtitle / meta / junk
 	PickCode string `json:"pickcode,omitempty"`
 	Size     int64  `json:"size,omitempty"`

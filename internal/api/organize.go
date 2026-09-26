@@ -1616,7 +1616,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 				}
 			}
 			out = append(out, orgRecordFile{
-				Fid: f.Fid, Name: n, Orig: recordOrig(f.Name, n), Kind: recordFileKind(n),
+				Fid: f.Fid, Name: n, Orig: recordOrig(f.Name, n), Dir: f.Path, Kind: recordFileKind(n),
 				PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
 			})
 		}
