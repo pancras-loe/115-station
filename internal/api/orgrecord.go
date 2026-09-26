@@ -156,6 +156,30 @@ func pruneOrganizeRecords() {
 	}
 }
 
+// dropClaimedFiles 去掉已经出现在更新的整理记录里的文件（newer 是那些记录的 Files 原文），
+// 返回留下的与被接手的文件名。纯函数，便于单测
+func dropClaimedFiles(files []orgRecordFile, newer []string) ([]orgRecordFile, []string) {
+	taken := map[string]bool{}
+	for _, raw := range newer {
+		for _, f := range unmarshalRecordFiles(raw) {
+			taken[f.Fid] = true
+		}
+	}
+	if len(taken) == 0 {
+		return files, nil
+	}
+	kept := make([]orgRecordFile, 0, len(files))
+	var claimed []string
+	for _, f := range files {
+		if taken[f.Fid] {
+			claimed = append(claimed, f.Name)
+			continue
+		}
+		kept = append(kept, f)
+	}
+	return kept, claimed
+}
+
 // redoOrganize 原地重整理：按记录里的 fid 把文件改名 + 搬到指定 TMDB 条目对应的目录，
 // 清掉旧的本地产物，重新落 STRM 并刮削。就地更新 rec
 func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType string) error {
@@ -163,6 +187,19 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	files := unmarshalRecordFiles(rec.Files)
 	if len(files) == 0 {
 		return fmt.Errorf("这条记录没有登记任何文件，无法重新整理（只能删除记录）")
+	}
+	// 记录里的文件后来被用户挪走、又被别的整理接手了（现场：把合集里的两部电影版移到
+	// 待整理单独入库），这条旧记录并不知道。照单全收的话，重新整理会把它们搬回剧集目录，
+	// 还会按 fid 删掉它们在电影库里刚生成的 STRM —— 谁最近处理过这个文件就归谁
+	var newer []string
+	h.DB.Model(&model.OrganizeRecord{}).Where("id > ?", rec.ID).Pluck("files", &newer)
+	files, claimed := dropClaimedFiles(files, newer)
+	if len(claimed) > 0 {
+		log.Printf("[整理] ○ %d 个文件已由之后的整理接手，不再算在这条记录里:", len(claimed))
+		logList("[整理]     - %s", claimed)
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("这条记录里的文件都已由之后的整理接手，没有需要重新整理的内容（可以删除这条记录）")
 	}
 	cfg, err := h.loadOrgConfig()
 	if err != nil {
@@ -496,6 +533,10 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 	if remap != nil && media.MediaType == "tv" {
 		remap(parses)
 	}
+	// 带集号的剧集条目里没有集号的视频（剧场版 / 特别篇）进特别篇目录、保持原名，
+	// 与正常整理的 placeEntryFiles 同一口径。此前它们照剧集模板改名，几部都算出
+	// 「片名.画质.mkv」这同一个名字，整次重新整理被重名拦下（现场：成长的烦恼的两部电影版）
+	specials := media.MediaType == "tv" && hasEpisodes(parses)
 	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
 	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
 	taken := map[string]string{}
@@ -515,6 +556,12 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 		base := categoryDir(media.MediaType, category)
 		if out.rootRel == "" {
 			out.rootRel = libSubPath(base, strings.SplitN(newPath, "/", 2)[0])
+		}
+		if specials && parsed.Episode == 0 {
+			rel := specialsRel(media, base, out.rootRel, parsed, f.Name)
+			out.groups[rel] = append(out.groups[rel], f)
+			videos++
+			continue
 		}
 		newName := pathBase(newPath)
 		if newName != "" && newName != f.Name {

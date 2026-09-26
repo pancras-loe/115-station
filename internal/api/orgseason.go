@@ -54,6 +54,29 @@ func pickMainVideo(videos []remoteFile, rules []ReplaceRule) remoteFile {
 	return largest(videos)
 }
 
+// specialsRel 剧集里没有集号的视频（剧场版 / 特别篇）落到哪：模板有季变量就渲染第 0 季，
+// 没有的话第 0 季渲染不出目录、路径甚至会退到分类根上 —— 只接受落在标题目录**下面**的结果，
+// 其余一律 标题目录/Specials（Emby 认这个名字）。正常整理与重新整理共用
+func specialsRel(media *TmdbMedia, base, rootRel string, p *ParsedName, name string) string {
+	sp := *p
+	sp.Season, sp.Episode = 0, 1
+	rel := libSubPath(base, pathDir(buildNewNameWithTemplate(media, &sp, name)))
+	if !strings.HasPrefix(rel, rootRel+"/") {
+		rel = rootRel + "/Specials"
+	}
+	return rel
+}
+
+// hasEpisodes 这批解析里有没有带集号的（只有带集号的剧集条目，没集号的才算特别篇）
+func hasEpisodes(eps map[string]*ParsedName) bool {
+	for _, p := range eps {
+		if p != nil && p.Season > 0 && p.Episode > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // orgPlacement 条目内视频 / 字幕的落点
 type orgPlacement struct {
 	relOf map[string]string // fid → 库内相对目录（含分类前缀）
@@ -88,14 +111,7 @@ func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, vi
 			if p.Season > 0 && p.Episode > 0 {
 				rel = libSubPath(base, pathDir(buildNewNameWithTemplate(media, p, v.Name)))
 			} else {
-				sp := *p
-				sp.Season, sp.Episode = 0, 1
-				// 模板没安排季目录时第 0 季渲染不出目录，路径甚至可能退到分类根上：
-				// 只接受落在标题目录**下面**的结果，其余一律 标题目录/Specials（Emby 认这个名字）
-				rel = libSubPath(base, pathDir(buildNewNameWithTemplate(media, &sp, v.Name)))
-				if !strings.HasPrefix(rel, rootRel+"/") {
-					rel = rootRel + "/Specials"
-				}
+				rel = specialsRel(media, base, rootRel, p, v.Name)
 			}
 		}
 		pl.relOf[v.Fid] = rel
