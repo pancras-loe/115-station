@@ -1416,6 +1416,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		onLog("⚠ 扫描根覆盖到媒体库/已存在/冗余目录，这些子树内的条目将被跳过（防误整理库内容）")
 	}
 
+	done := 0
 	for i, entry := range topEntries {
 		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
 		if jobStopRequested() {
@@ -1425,8 +1426,12 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
 		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
 		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
+		done = i + 1
 		time.Sleep(300 * time.Millisecond)
 	}
+	// 循环里只在「开始处理第 i 条」时报 i，最后一条做完没人补：
+	// 不补的话任务收尾落库的进度永远停在「整理 0/1」这种半截数字
+	setJobProgress("", done, progressKeep, "")
 	ctx.pruner.flush()
 	SetTaskProgress("")
 
@@ -2835,6 +2840,7 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 	}
 
 	onLog(fmt.Sprintf("▶ 转存目录发现 %d 个条目，开始整理...", len(topEntries)))
+	done := 0
 	for i, entry := range topEntries {
 		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
 		if jobStopRequested() {
@@ -2844,8 +2850,12 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
 		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
 		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
+		done = i + 1
 		time.Sleep(300 * time.Millisecond)
 	}
+	// 循环里只在「开始处理第 i 条」时报 i，最后一条做完没人补：
+	// 不补的话任务收尾落库的进度永远停在「整理 0/1」这种半截数字
+	setJobProgress("", done, progressKeep, "")
 	ctx.pruner.flush()
 	SetTaskProgress("")
 	return results, successCount

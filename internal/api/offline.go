@@ -232,7 +232,8 @@ func (h *Handler) runTransferOrganize() (int, *incrSummary, error) {
 		}
 	}
 
-	// 增量同步
+	// 增量同步：切到自己的阶段、清掉整理的计数，否则任务详情会把增量耗的时间都算在「整理 1/1」头上
+	setJobProgress("增量同步", 0, 0, "")
 	p := h.incrParamsFromConfig()
 	sum, err := h.executeIncrementalSync(p)
 	if err != nil {

@@ -68,6 +68,7 @@ func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		// 开着的话它每 30 秒自己跑，这里再跑纯属重复请求 115
 		fresh := 0
 		if h.loadIncrInterval() <= 0 {
+			setJobProgress("增量同步", 0, 0, "")
 			sum, ierr := h.executeIncrementalSync(h.incrParamsFromConfig())
 			if ierr != nil {
 				return jobOutcome{}, fmt.Errorf("整理完成（%s），增量同步失败: %w", msg, ierr)
