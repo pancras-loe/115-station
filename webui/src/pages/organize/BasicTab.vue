@@ -97,7 +97,7 @@ const offFinished = queue.onFinished((j) => {
   const awaiting = Number(j.result?.awaiting ?? 0)
   if (awaiting > 0) {
     message.info(`识别完成，${awaiting} 项等待人工确认`, { duration: 6000 })
-    void router.push({ query: { tab: 'records', status: 'awaiting' } })
+    void router.push({ name: 'tasks', query: { tab: 'records', status: 'awaiting' } })
   }
 })
 onUnmounted(offFinished)

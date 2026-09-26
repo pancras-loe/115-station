@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed } from 'vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import BasicTab from './organize/BasicTab.vue'
-import RecordsTab from './organize/RecordsTab.vue'
 import ScrapeTab from './organize/ScrapeTab.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
@@ -12,15 +11,13 @@ import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
 import { useTabQuery } from '@/composables/useTabQuery'
-import { recordStats, refreshRecordStats } from './organize/recordStats'
 
 const tab = useTabQuery('basic')
-// 开着人工确认时，待确认的条目要在哪个页签都看得见，不然只能靠用户自己想起来去翻记录
-onMounted(refreshRecordStats)
+// 整理记录已搬到任务中心（/tasks?tab=records）：这一页只剩配置。
+// 旧地址 /organize?tab=records 由路由重定向过去，见 router/index.ts
 
 const tabs = computed(() => [
   { value: 'basic', label: '基础配置' },
-  { value: 'records', label: '整理记录', count: recordStats.value.awaiting || 0, countTone: 'warning' as const },
   { value: 'scrape', label: '影视刮削' },
   { value: 'recognize', label: '识别规则' },
   { value: 'ai', label: 'AI 增强识别' },
@@ -38,7 +35,6 @@ const tabs = computed(() => [
     <!-- 页签内容按需挂载：没选中的页签不渲染、不发请求（与原 NTabPane 的 display-directive="if" 一致） -->
     <div class="panel">
       <BasicTab v-if="tab === 'basic'" />
-      <RecordsTab v-else-if="tab === 'records'" />
       <ScrapeTab v-else-if="tab === 'scrape'" />
       <RecognizeTab v-else-if="tab === 'recognize'" />
       <AiTab v-else-if="tab === 'ai'" />

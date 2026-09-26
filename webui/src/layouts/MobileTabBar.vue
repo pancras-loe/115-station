@@ -3,16 +3,19 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { Ellipsis } from '@lucide/vue'
 import { navItems } from './navItems'
+import { recordStats } from '@/stores/recordStats'
 
 /**
  * 手机底部导航：放最常用的四个入口，其余收进「更多」（打开侧栏抽屉）。
  * 抽屉菜单要伸手够左上角，单手握持时底栏才是拇指够得着的地方。
  */
-const TAB_NAMES = ['dashboard', 'sync', 'organize', 'media-transfer']
+// 任务中心占了原来 Strm 管理的位置：手机上最常做的是看进度、确认待确认的条目，
+// Strm 管理基本是配置和偶尔一次全量，收进「更多」
+const TAB_NAMES = ['dashboard', 'tasks', 'organize', 'media-transfer']
 /** 底栏上的标签只有四五个字宽，用短名 */
 const SHORT: Record<string, string> = {
   dashboard: '总览',
-  sync: 'Strm',
+  tasks: '任务',
   organize: '整理',
   'media-transfer': '转存',
 }
@@ -25,6 +28,7 @@ const tabs = computed(() =>
 )
 /** 当前页不在底栏四项里时，「更多」亮起，告诉用户自己在哪 */
 const inMore = computed(() => !TAB_NAMES.includes(route.name as string))
+const awaiting = computed(() => recordStats.value.awaiting || 0)
 </script>
 
 <template>
@@ -36,7 +40,10 @@ const inMore = computed(() => !TAB_NAMES.includes(route.name as string))
       class="tab"
       :class="{ 'is-active': route.name === t.name }"
     >
-      <span class="tab-icon"><component :is="t.icon" :size="20" :stroke-width="1.9" /></span>
+      <span class="tab-icon">
+        <component :is="t.icon" :size="20" :stroke-width="1.9" />
+        <span v-if="t.name === 'tasks' && awaiting" class="tab-dot" :aria-label="`${awaiting} 项待确认`" />
+      </span>
       <span class="tab-label">{{ SHORT[t.name] ?? t.label }}</span>
     </RouterLink>
     <button type="button" class="tab" :class="{ 'is-active': inMore }" @click="emit('more')">
@@ -87,6 +94,19 @@ const inMore = computed(() => !TAB_NAMES.includes(route.name as string))
   transition:
     background-color 150ms ease,
     transform 150ms ease;
+}
+.tab-icon {
+  position: relative;
+}
+.tab-dot {
+  position: absolute;
+  top: 3px;
+  right: 11px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 .tab:active .tab-icon {
   transform: scale(0.92);

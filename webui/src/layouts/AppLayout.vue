@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { LogOut, Menu, ScrollText, UserRound } from '@lucide/vue'
 import AppSidebar from './AppSidebar.vue'
@@ -11,6 +11,8 @@ import HDropdown from '@/components/hero/HDropdown.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import TaskQueuePanel from '@/components/TaskQueuePanel.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useQueueStore } from '@/stores/queue'
+import { refreshRecordStats } from '@/stores/recordStats'
 import { systemApi } from '@/api'
 
 const route = useRoute()
@@ -18,6 +20,15 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const drawerOpen = ref(false)
+
+// 侧栏 / 底栏「任务中心」上的待确认角标：进站拉一次，产生或处理整理记录的任务跑完再拉。
+// 定时整理也是队列任务，所以后台识别出新的待确认条目同样能刷到
+const queue = useQueueStore()
+onMounted(refreshRecordStats)
+const offFinished = queue.onFinished((j) => {
+  if (['organize', 'transfer', 'redo', 'confirm', 'ignore', 'deepdel'].includes(j.kind)) void refreshRecordStats()
+})
+onUnmounted(offFinished)
 const version = ref('')
 
 onMounted(async () => {

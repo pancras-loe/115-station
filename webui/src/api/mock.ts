@@ -94,6 +94,7 @@ const baseRecord = {
   scrape_msg: '',
   manual_tmdb: false,
   redo_count: 0,
+  job_id: 11,
   file_list: [] as OrganizeRecordFile[],
 }
 const records: OrganizeRecord[] = [
@@ -234,6 +235,41 @@ const ROUTES: Record<string, Route> = {
         created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
       },
     ],
+  },
+  '/tasks/history': {
+    total: 3,
+    counts: { all: 3, success: 2, failed: 1, canceled: 0, interrupted: 0 },
+    data: [
+      {
+        id: 11, kind: 'organize', title: '定时整理', priority: 1, status: 'success', source: 'cron',
+        message: '整理 5 项：成功 3，已存在 1，待确认 1', result: { success: 3, exists: 1, failed: 0, awaiting: 1 },
+        created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
+      },
+      {
+        id: 10, kind: 'redo', title: '重新整理《漫长的季节》→ 漫长的季节 (2023)', priority: 0, status: 'failed', source: 'web',
+        message: '剧集两集算出同一个新名字：E01.mkv 与 Season 2/E01.mkv，请加替换规则', record_ids: [2],
+        created_at: '2026-09-26T09:30:00+08:00', started_at: '2026-09-26T09:30:01+08:00', finished_at: '2026-09-26T09:30:09+08:00',
+      },
+      {
+        id: 9, kind: 'full', title: '全量同步', priority: 0, status: 'success', source: 'wecom', message: '新增 STRM 42 个',
+        result: { mode_used: 'fast', scan_complete: true, orphans: 3 },
+        created_at: '2026-09-26T04:00:00+08:00', started_at: '2026-09-26T04:00:01+08:00', finished_at: '2026-09-26T04:12:40+08:00',
+      },
+    ],
+  },
+  '/tasks/11': {
+    data: {
+      id: 11, kind: 'organize', title: '定时整理', priority: 1, status: 'success', source: 'cron',
+      message: '整理 5 项：成功 3，已存在 1，待确认 1', result: { success: 3, exists: 1, failed: 0, awaiting: 1 },
+      created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
+      progress: { phase: '落盘', done: 5, total: 5, label: '沙丘 2 (2024)' },
+      params_summary: ['定时触发'],
+      record_total: 2,
+      records: [
+        { id: 1, source: 'Dune.Part.Two.2024.2160p.mkv', status: 'awaiting', title: '沙丘 2', year: '2024', media_type: 'movie', tmdb_id: 693134 },
+        { id: 2, source: 'Long.Season.S01/', status: 'success', title: '漫长的季节', year: '2023', media_type: 'tv', tmdb_id: 1 },
+      ],
+    },
   },
   '/sync/cron-preview': { next: ['09-25 04:00', '09-26 04:00', '09-27 04:00'] },
   '/sync/capabilities': { fast_available: true, reason: '' },

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Ban,
   Check,
@@ -11,6 +11,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  X,
 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import HAlert from '@/components/hero/HAlert.vue'
@@ -32,11 +33,16 @@ import type { OrganizeRecord } from '@/api/organize'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
-import { recordStats, refreshRecordStats } from './recordStats'
+import { recordStats, refreshRecordStats } from '@/stores/recordStats'
+import { fullTime, relTime } from '@/utils/time'
+
+/** 行上的「任务 #N」：交给任务中心打开那条任务的详情 */
+const emit = defineEmits<{ openJob: [id: number] }>()
 
 const { message } = useFeedback()
 const queue = useQueueStore()
 const route = useRoute()
+const router = useRouter()
 
 const rows = ref<OrganizeRecord[]>([])
 const total = ref(0)
@@ -47,6 +53,11 @@ const status = ref((route.query.status as string) || 'all')
 const mediaType = ref('all')
 const keyword = ref('')
 const loading = ref(false)
+/** 任务详情里「在整理记录中查看」跳过来时带 ?job_id=：只看这个任务涉及的记录 */
+const jobFilter = computed(() => {
+  const n = Number(route.query.job_id)
+  return Number.isInteger(n) && n > 0 ? n : 0
+})
 
 type TagType = 'success' | 'warning' | 'error' | 'info' | 'default'
 
@@ -118,6 +129,7 @@ async function load() {
       status: status.value,
       type: mediaType.value === 'all' ? '' : mediaType.value,
       q: keyword.value.trim(),
+      job_id: jobFilter.value || undefined,
       page: page.value,
       size: size.value,
     })
@@ -161,6 +173,12 @@ function onSizeChange(n: number) {
 }
 
 onMounted(reload)
+watch(jobFilter, refilter)
+
+function clearJobFilter() {
+  const { job_id: _jobId, ...rest } = route.query
+  void router.replace({ query: rest })
+}
 // 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
 const offFinished = queue.onFinished((j) => {
   if (['redo', 'confirm', 'ignore', 'deepdel', 'organize', 'transfer'].includes(j.kind)) void reload()
@@ -177,27 +195,6 @@ function humanSize(n?: number) {
     i++
   }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
-}
-
-function fullTime(s: string) {
-  if (!s) return ''
-  const d = new Date(s)
-  if (Number.isNaN(d.getTime())) return s
-  return d.toLocaleString('zh-CN', { hour12: false })
-}
-
-/** 列表里用相对时间，精确时间放在悬浮提示里 */
-function relTime(s: string) {
-  const d = new Date(s)
-  if (Number.isNaN(d.getTime())) return s
-  const diff = (Date.now() - d.getTime()) / 1000
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
-  if (diff < 2 * 86400) return `昨天 ${hm}`
-  const md = `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')}`
-  return d.getFullYear() === new Date().getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md}`
 }
 
 /** 成功记录的消息就是「→ 入库目录」，与上面那行重复；待确认的原因已经在 plan 那行 */
@@ -424,6 +421,14 @@ async function clearAll() {
         @update:model-value="pickStatus"
       />
 
+      <div v-if="jobFilter" class="job-filter">
+        <span>只看任务 #{{ jobFilter }} 涉及的记录</span>
+        <button type="button" class="job-link" @click="emit('openJob', jobFilter)">任务详情</button>
+        <HButton size="sm" variant="ghost" icon-only aria-label="取消任务筛选" @click="clearJobFilter">
+          <X :size="14" />
+        </HButton>
+      </div>
+
       <div class="toolbar">
         <div class="type">
           <HSelect v-model="mediaType" :options="TYPE_OPTIONS" aria-label="媒体类型" @update:model-value="refilter" />
@@ -591,6 +596,15 @@ async function clearAll() {
                 <span v-if="r.total_size">{{ humanSize(r.total_size) }}</span>
                 <span v-if="r.redo_count">重做 {{ r.redo_count }} 次</span>
                 <span v-if="r.link?.source">经 {{ r.link.source }} 提交</span>
+                <button
+                  v-if="r.job_id"
+                  type="button"
+                  class="job-link"
+                  title="最近一次处理这条记录的任务"
+                  @click="emit('openJob', r.job_id)"
+                >
+                  任务 #{{ r.job_id }}
+                </button>
                 <button
                   v-if="r.file_list?.length"
                   type="button"
@@ -948,6 +962,26 @@ async function clearAll() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.job-link {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+}
+.job-link:hover {
+  text-decoration: underline;
+}
+.job-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 6px 6px 14px;
+  margin-bottom: 12px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  color: var(--foreground);
 }
 .files-toggle {
   all: unset;

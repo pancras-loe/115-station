@@ -51,6 +51,9 @@ const routes: RouteRecordRaw[] = [
         name: 'organize',
         component: () => import('@/pages/OrganizePage.vue'),
         meta: { title: '自动整理', desc: '基础配置 / 识别规则 / 分类策略 / 洗版 / 重命名', icon: 'organize' },
+        // 整理记录搬到了任务中心：旧收藏 /organize?tab=records[&status=…] 照样能打开
+        beforeEnter: (to) =>
+          to.query.tab === 'records' ? { name: 'tasks', query: to.query, replace: true } : true,
       },
       {
         path: 'upload-download',

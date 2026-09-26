@@ -1,11 +1,16 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { navItems } from './navItems'
+import { recordStats } from '@/stores/recordStats'
 import BrandMark from '@/components/BrandMark.vue'
 
 defineProps<{ version?: string }>()
 const emit = defineEmits<{ navigate: [] }>()
 const route = useRoute()
+
+/** 入口上的角标：任务中心挂「待确认」条数 —— 开着人工确认时，不点进去也要看得见有活 */
+const badges = computed<Record<string, number>>(() => ({ tasks: recordStats.value.awaiting || 0 }))
 </script>
 
 <template>
@@ -29,6 +34,9 @@ const route = useRoute()
         >
           <component :is="item.icon" :size="17" :stroke-width="1.75" class="nav-icon" />
           <span>{{ item.label }}</span>
+          <span v-if="badges[item.name]" class="nav-badge" :title="`${badges[item.name]} 项待确认`">
+            {{ badges[item.name] }}
+          </span>
         </RouterLink>
       </template>
     </nav>
@@ -132,6 +140,19 @@ const route = useRoute()
 }
 .nav-icon {
   flex-shrink: 0;
+}
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--warning-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
 }
 
 .sidebar-foot {
