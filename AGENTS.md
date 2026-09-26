@@ -95,7 +95,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
 | **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
-| **任务队列** | `taskqueue.go` `taskjobs.go` `taskstage.go` `taskprogress.go` | 手动的重新整理 / 确认入库**入队立即返回（202）**，常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue` + `stores/queue.ts`。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
+| **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` | **所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**，常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（还不进队列的后台任务在 `endTask` 时补一行 `kind=background`，空转轮次 `markTaskIdle` 不留；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue` + `stores/queue.ts`。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
@@ -301,7 +301,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - **任务队列的 worker 也是这把锁的使用者**（`taskqueue.go`）：它排队时登记等待，增量照常让路；
       反过来每跑完一个任务，若增量已超过两个周期没跑，worker 放锁且不登记，等增量跑完一轮再继续
       （`waitIncrWindow`，时间戳由 `runIncrPollTick` 的 `markIncrRun` 打）。否则一批几十条的重新整理会把增量整段饿死。
-      新增手动入口优先做成入队（`enqueueJob` + `queuedReply`），别再在 HTTP 请求里 `Acquire` 同步跑。
+      **新增手动入口一律做成入队**（`enqueueJob` + `queuedReply`，执行器注册进 `jobExecutors`），别再在 HTTP 请求里 `Acquire` 同步跑。
+      后台触发（定时整理 / 转存触发 / 定时全量 / Emby 深删）仍直接抢锁，并入队列是阶段 4。
     - 测试：`synclock_test.go`（锁与让路）、`taskqueue_test.go`（入队去重、顺序、结果、取消、重启中断、让路窗口）、`walkctl_test.go`（深度上限与中断）、
       `incr_scope_test.go`（永久跳过不阻塞消费、浅/深遍历选型、让路不消费）、`strmwrite_test.go`。
 
@@ -374,7 +375,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
 | 增量同步没反应 / 要排查 | 界面「Strm 管理 → 增量同步 → 事件流状态」卡片（门禁、通道、游标、上一轮结果、积压量、**当前任务锁**、**重放检测**），或直接打 `GET /sync/incr-status`；「测试事件流」按钮是纯读探针，随便点 |
 | 「一直在轮询 / 反复扫同样的目录」 | 日志按轮次号 `[同步#N]` 对比相邻两轮：内容一样就是重放。看「本轮账单」那行的结尾（消费了没有、为什么没消费）与「回退遍历 N 个目录 ← 哪条事件带来的」清单。机制见 §6.12，代码在 `incrtrace.go` |
-| 「整理/转存半天不动」 | `GET /sync/incr-status` 的 `task_lock`：谁占着、占了多久、谁在排队。日志里 `[定时] ○ 整理未开始：…` / `[整理] ○ 转存后自动整理未开始：…` 会写明被谁挡住。机制见 §6.12 |
+| 「整理/转存半天不动」 | 顶栏「任务队列」面板（排第几、在等谁、后台任务在跑什么），或 `GET /tasks`；`GET /sync/incr-status` 的 `task_lock`：谁占着、占了多久、谁在排队。日志里 `[定时] ○ 整理未开始：…` / `[整理] ○ 转存后自动整理未开始：…` 会写明被谁挡住。机制见 §6.12 |
 
 ---
 

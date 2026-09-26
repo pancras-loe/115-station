@@ -227,22 +227,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 			c.JSON(http.StatusOK, gin.H{"next": next})
 		})
 
-		// 任务状态（前端轮询：任务进行中禁用同步/整理按钮）+ 最近运行记录
-		protected.GET("/sync/status", func(c *gin.Context) {
-			running, name, start, progress := TaskStatus()
-			g := gin.H{"running": running}
-			if running {
-				g["task"] = name
-				g["since"] = start.Format("15:04:05")
-				g["elapsed"] = time.Since(start).Truncate(time.Second).String()
-				if progress != "" {
-					g["progress"] = progress
-				}
-			}
-			g["recent"] = GetRecentRuns()
-			c.JSON(http.StatusOK, g)
-		})
-
 		// STRM 管理
 		// 302 直连（与 6086 代理同款，6060 也能作为 strm 直连地址，CMS 二合一模式）
 		registerDirectPlaybackRoutes(r, h.DB, h.Config)

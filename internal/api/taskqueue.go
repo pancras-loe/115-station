@@ -61,11 +61,23 @@ var (
 	incrWindowMax  = 90 * time.Second
 )
 
-// jobParams 任务参数（redo / confirm 共用）
+// jobParams 任务参数（各类型共用一个结构，用不到的字段留空）
 type jobParams struct {
-	RecordIDs []uint `json:"record_ids"`
+	RecordIDs []uint `json:"record_ids,omitempty"`
 	TmdbID    int    `json:"tmdb_id,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
+	// Sync 全量 / 手动增量的同步参数
+	Sync *syncJobParams `json:"sync,omitempty"`
+}
+
+// syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
+type syncJobParams struct {
+	Cid       string   `json:"cid"`
+	LocalPath string   `json:"local_path"`
+	VideoExt  []string `json:"video_ext"`
+	ImageExt  []string `json:"image_ext"`
+	DataExt   []string `json:"data_ext"`
+	Mode      string   `json:"mode,omitempty"`
 }
 
 func decodeJobParams(job *model.TaskJob) jobParams {
@@ -88,6 +100,58 @@ type jobSpec struct {
 type jobOutcome struct {
 	Message  string
 	Canceled bool // 用户中途停止（已完成的部分照常生效）
+	Result   any  // 给前端的结构化结果（如整理后有几项待确认），落 TaskJob.Result
+}
+
+// jobKindBackground 后台任务（定时整理、转存触发 …）跑完留下的历史行。
+// 它们还不进队列（TASK-QUEUE-PLAN.md §7 阶段 4），但要在队列面板的「最近结束」里看得到，
+// 取代原来只在内存里存 5 条的 recentRuns
+const jobKindBackground = "background"
+
+// jobStoppable 运行中能不能请求停止：只有「逐条处理」的任务能在两条之间停下。
+// 单条的重新整理 / 确认本身就是一条；全量、增量的遍历中途停下没有意义（下一轮原样重来）
+func jobStoppable(job *model.TaskJob) bool {
+	switch job.Kind {
+	case "organize":
+		return true
+	case "confirm":
+		return len(decodeJobParams(job).RecordIDs) > 1
+	}
+	return false
+}
+
+// ---- 完成回调 ----
+//
+// 机器人指令入队后要在跑完时回一句话。回调只存在内存里：服务重启后排队中的任务照常执行，
+// 只是不会再回复（任务历史里看得到结果）
+
+var (
+	jobHooksMu sync.Mutex
+	jobHooks   = map[uint][]func(model.TaskJob){}
+)
+
+// onJobDone 登记任务结束（完成 / 失败 / 取消）时的回调
+func onJobDone(id uint, fn func(model.TaskJob)) {
+	jobHooksMu.Lock()
+	jobHooks[id] = append(jobHooks[id], fn)
+	jobHooksMu.Unlock()
+}
+
+func fireJobHooks(db *gorm.DB, id uint) {
+	jobHooksMu.Lock()
+	fns := jobHooks[id]
+	delete(jobHooks, id)
+	jobHooksMu.Unlock()
+	if len(fns) == 0 {
+		return
+	}
+	var job model.TaskJob
+	if db.First(&job, id).Error != nil {
+		return
+	}
+	for _, fn := range fns {
+		fn(job)
+	}
 }
 
 // jobExecutor 执行一个任务。返回 error = 失败，error 文本即失败原因
@@ -109,8 +173,9 @@ func wakeJobWorker() {
 	}
 }
 
-// enqueueJob 入队。同 DedupeKey 已有排队中的任务 → 覆盖它的参数与标题
-// （同一条记录改了几次指定，以最后一次为准），不新增；已经在跑的不受影响，新任务排在后面
+// enqueueJob 入队。同 DedupeKey、同类型已有排队中的任务 → 覆盖它的参数与标题
+// （同一条记录改了几次指定，以最后一次为准；连点两次「全量同步」只排一次），不新增；
+// 已经在跑的不受影响，新任务排在后面。类型不同（排着重新整理又点了深度删除）不合并，依次执行
 func enqueueJob(db *gorm.DB, spec jobSpec) (model.TaskJob, error) {
 	params, _ := json.Marshal(spec.Params)
 	jobQueueMu.Lock()
@@ -118,7 +183,7 @@ func enqueueJob(db *gorm.DB, spec jobSpec) (model.TaskJob, error) {
 
 	var job model.TaskJob
 	if spec.DedupeKey != "" &&
-		db.Where("dedupe_key = ? AND status = ?", spec.DedupeKey, jobQueued).First(&job).Error == nil {
+		db.Where("dedupe_key = ? AND kind = ? AND status = ?", spec.DedupeKey, spec.Kind, jobQueued).First(&job).Error == nil {
 		job.Kind, job.Title, job.Params = spec.Kind, spec.Title, string(params)
 		if spec.Priority < job.Priority {
 			job.Priority = spec.Priority
@@ -273,8 +338,8 @@ func (h *Handler) runJob(job *model.TaskJob) {
 	if err != nil {
 		failTask(err)
 	}
+	endTask() // 要在清当前任务之前：endTask 据此知道这是队列任务、不另记一行后台历史
 	prog := endJobProgress()
-	endTask()
 
 	finished := time.Now()
 	status, msg := jobSuccess, out.Message
@@ -285,9 +350,16 @@ func (h *Handler) runJob(job *model.TaskJob) {
 		status = jobCanceled
 	}
 	progJSON, _ := json.Marshal(prog)
-	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Updates(map[string]interface{}{
+	upd := map[string]interface{}{
 		"status": status, "message": truncateStr(msg, 480), "progress": string(progJSON), "finished_at": finished,
-	})
+	}
+	if out.Result != nil {
+		if b, e := json.Marshal(out.Result); e == nil {
+			upd["result"] = string(b)
+		}
+	}
+	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Updates(upd)
+	defer fireJobHooks(h.DB, job.ID)
 	elapsed := finished.Sub(started).Truncate(time.Second)
 	switch status {
 	case jobSuccess:
@@ -368,14 +440,20 @@ func pruneTaskJobs() {
 // taskJobDTO 列表返回体：运行中的带实时进度，排队中的带位置与预计耗时
 type taskJobDTO struct {
 	model.TaskJob
-	RecordIDs []uint       `json:"record_ids,omitempty"`
-	Progress  *jobProgress `json:"progress,omitempty"`
-	Position  int          `json:"position,omitempty"`
-	EtaSec    int          `json:"eta_sec,omitempty"`
+	RecordIDs []uint          `json:"record_ids,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Stoppable bool            `json:"stoppable,omitempty"`
+	Progress  *jobProgress    `json:"progress,omitempty"`
+	Position  int             `json:"position,omitempty"`
+	EtaSec    int             `json:"eta_sec,omitempty"`
 }
 
 func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 	d := taskJobDTO{TaskJob: job, RecordIDs: decodeJobParams(&job).RecordIDs}
+	if job.Result != "" && json.Valid([]byte(job.Result)) {
+		d.Result = json.RawMessage(job.Result)
+	}
+	d.Stoppable = job.Status == jobQueued || (job.Status == jobRunning && jobStoppable(&job))
 	switch job.Status {
 	case jobRunning:
 		if id, p := currentJob(); id == job.ID {
@@ -434,6 +512,9 @@ func (h *Handler) ListTaskJobs(c *gin.Context) {
 	lock := gin.H{"busy": false}
 	if owner, dur, ok := taskMu.Holder(); ok {
 		lock = gin.H{"busy": true, "holder": owner, "held_sec": int(dur.Seconds())}
+		if _, _, _, prog := TaskStatus(); prog != "" {
+			lock["progress"] = prog
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"data": items, "running": len(running), "queued": len(queued), "lock": lock,
@@ -466,11 +547,12 @@ func (h *Handler) CancelTaskJob(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "任务刚刚开始执行，请刷新后再试"})
 			return
 		}
+		fireJobHooks(h.DB, job.ID)
 		c.JSON(http.StatusOK, gin.H{"message": "已取消"})
 	case jobRunning:
-		if len(decodeJobParams(&job).RecordIDs) <= 1 {
+		if !jobStoppable(&job) {
 			// 单条的重新整理 / 确认本身就是一条，中途打断只会留下搬了一半的中间态
-			c.JSON(http.StatusBadRequest, gin.H{"error": "单条任务执行中无法中途停止，请等它跑完"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "这个任务执行中无法中途停止，请等它跑完"})
 			return
 		}
 		if !requestJobStop(job.ID) {
@@ -492,6 +574,10 @@ func (h *Handler) RetryTaskJob(c *gin.Context) {
 	}
 	if job.Status == jobQueued || job.Status == jobRunning || job.Status == jobSuccess {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "只有失败、中断或已取消的任务可以重试"})
+		return
+	}
+	if jobExecutors[job.Kind] == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "后台任务不能在这里重试，等它下一轮自动运行"})
 		return
 	}
 	nj, err := enqueueJob(h.DB, jobSpec{

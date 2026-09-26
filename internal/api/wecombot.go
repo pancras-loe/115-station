@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"115-station/internal/model"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -292,14 +294,21 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 				lines = append(lines, "转存目录待处理：查询超时（115 响应慢）")
 			}
 		}
-		if runs := GetRecentRuns(); len(runs) > 0 {
+		if n := len(queuedJobs(h.DB)); n > 0 {
+			lines = append(lines, fmt.Sprintf("任务队列：%d 个排队中", n))
+		}
+		if runs := recentFinishedJobs(5); len(runs) > 0 {
 			lines = append(lines, "最近任务：")
 			for _, r := range runs {
 				mark := "✓"
-				if !r.OK {
+				if r.Status != jobSuccess {
 					mark = "✗"
 				}
-				lines = append(lines, fmt.Sprintf("  %s %s %s（%s）", mark, r.Name, r.Start, r.Elapsed))
+				when, took := r.CreatedAt.Format("01-02 15:04:05"), ""
+				if r.StartedAt != nil && r.FinishedAt != nil {
+					took = r.FinishedAt.Sub(*r.StartedAt).Truncate(time.Second).String()
+				}
+				lines = append(lines, fmt.Sprintf("  %s %s %s（%s）", mark, r.Title, when, took))
 			}
 		}
 		reply(lines...)
@@ -361,42 +370,16 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		reply("已开始扫描媒体库，缺画质信息的文件将入队探测。")
 
 	case lower == "整理":
-		reply("已开始整理，完成后通知。")
-		go func() {
-			// 必须取任务互斥锁：此前直接调执行函数，可与全量同步/定时任务
-			// 并发搬动同一棵 115 目录树
-			if !taskMu.Acquire("机器人指令-整理", organizeAcquireWait) {
-				reply("○ 整理未开始：" + busyErr())
-				return
-			}
-			defer taskMu.Unlock()
-			beginTask("机器人指令-整理")
-			defer endTask()
-			if _, _, err := h.executeOrganize(); err != nil {
-				reply("✗ 整理失败: " + err.Error())
-			} else {
-				reply("✓ 整理完成（详见日志）")
-			}
-		}()
+		// 进任务队列：此前在这里抢锁、等不到就回一句「未开始」，用户只能过会儿再发一遍
+		h.wecomEnqueue(jobSpec{Kind: "organize", Title: "机器人指令-整理", DedupeKey: "organize",
+			Source: "wecom", Priority: jobPriorityManual}, "整理", reply)
 
 	case lower == "同步":
-		reply("已开始增量同步，完成后通知。")
-		go func() {
-			// 同上：增量同步与全量共用事件流与本地树，必须互斥
-			if !taskMu.Acquire("机器人指令-增量同步", manualAcquireWait) {
-				reply("○ 增量同步未开始：" + busyErr())
-				return
-			}
-			defer taskMu.Unlock()
-			beginTask("机器人指令-增量同步")
-			defer endTask()
-			p := h.incrParamsFromConfig()
-			if _, err := h.executeIncrementalSync(p); err != nil {
-				reply("✗ 增量同步失败: " + err.Error())
-			} else {
-				reply("✓ 增量同步完成（详见日志）")
-			}
-		}()
+		p := h.incrParamsFromConfig()
+		h.wecomEnqueue(jobSpec{Kind: "incr", Title: "机器人指令-增量同步", DedupeKey: "incr",
+			Source: "wecom", Priority: jobPriorityManual, Params: jobParams{Sync: &syncJobParams{
+				Cid: p.Cid, LocalPath: p.LocalPath, VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt,
+			}}}, "增量同步", reply)
 
 	default:
 		reply("未识别的指令。发送「帮助」查看可用指令。")
@@ -517,4 +500,29 @@ func (h *Handler) submitOfflineLink(rawURL, source string) error {
 	// 来源链接：与 offlineSubmitCore 同样登记，整理记录才认得出这批内容从哪来
 	dlLinkRecord(h, rawURL, "", "", source, nil)
 	return nil
+}
+
+// wecomEnqueue 机器人指令入任务队列：先回「已加入队列第 N 位」，跑完再回结果
+func (h *Handler) wecomEnqueue(spec jobSpec, what string, reply func(lines ...string)) {
+	job, err := enqueueJob(h.DB, spec)
+	if err != nil {
+		reply("✗ " + what + "未能加入任务队列: " + err.Error())
+		return
+	}
+	onJobDone(job.ID, func(j model.TaskJob) {
+		switch j.Status {
+		case jobSuccess:
+			reply("✓ " + what + "完成：" + orDash(j.Message))
+		case jobCanceled:
+			reply("○ " + what + "已取消：" + orDash(j.Message))
+		default:
+			reply("✗ " + what + "失败：" + orDash(j.Message))
+		}
+	})
+	pos, _ := queuePosition(queuedJobs(h.DB), job.ID)
+	if pos > 1 {
+		reply(fmt.Sprintf("已加入任务队列（第 %d 位），完成后通知。", pos))
+	} else {
+		reply("已加入任务队列，完成后通知。")
+	}
 }

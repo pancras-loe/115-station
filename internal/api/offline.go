@@ -196,6 +196,7 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 	start := time.Now()
 
 	// 整理：直接扫描转存目录（转存触发时不需要扫待整理目录）
+	organized := 0 // 本轮整理处理了几个条目（0 且增量也没产出 = 空转，任务历史里不留）
 	shareFolder := ""
 	var shareCfg struct {
 		Folder string `json:"folder"`
@@ -216,14 +217,16 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 			if orgCfg.Pending != shareFolder {
 				orgCfg.Pending = shareFolder
 			}
-			_, _, orgErr := h.executeOrganizeWithConfig(orgCfg)
+			_, details, orgErr := h.executeOrganizeWithConfig(orgCfg)
+			organized = len(details)
 			if orgErr != nil {
 				log.Printf("[上传] ○ 转存目录整理失败: %v", orgErr)
 			}
 		}
 	} else {
 		// 没配转存目录，退回到扫待整理目录
-		_, _, orgErr := h.executeOrganize()
+		_, details, orgErr := h.executeOrganize()
+		organized = len(details)
 		if orgErr != nil {
 			log.Printf("[上传] ○ 整理跳过: %v", orgErr)
 		}
@@ -237,6 +240,9 @@ func (h *Handler) triggerOrganizeAndSync() bool {
 		return true
 	}
 	// 空转（STRM/附属都是 0）静默，只有真的生成了内容才记录
+	if organized == 0 && sum.StrmCreated+sum.AssetsDownloaded == 0 {
+		markTaskIdle()
+	}
 	if sum.StrmCreated+sum.AssetsDownloaded > 0 {
 		log.Printf("[上传] ✅ 自动整理+增量完成，耗时 %s · STRM %d，附属 %d",
 			time.Since(start).Truncate(time.Second), sum.StrmCreated, sum.AssetsDownloaded)

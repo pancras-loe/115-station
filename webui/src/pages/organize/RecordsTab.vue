@@ -163,7 +163,7 @@ function onSizeChange(n: number) {
 onMounted(reload)
 // 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
 const offFinished = queue.onFinished((j) => {
-  if (j.kind === 'redo' || j.kind === 'confirm') void reload()
+  if (['redo', 'confirm', 'ignore', 'deepdel', 'organize'].includes(j.kind)) void reload()
 })
 onUnmounted(offFinished)
 
@@ -316,8 +316,8 @@ async function ignoreOne(r: OrganizeRecord) {
   acting.value = r.id
   try {
     const d = await organizeApi.ignoreRecord(r.id)
-    message.success(d.message || '已忽略')
-    await reload()
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '忽略失败')
   } finally {
@@ -363,8 +363,8 @@ async function deepDeleteRecord(r: OrganizeRecord) {
   acting.value = r.id
   try {
     const d = await organizeApi.deepDeleteRecord(r.id)
-    message.success(d.message || '深度删除完成')
-    await reload()
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '深度删除失败')
   } finally {
@@ -636,8 +636,8 @@ async function clearAll() {
                   <template #icon><PencilLine /></template>
                   重新指定
                 </HButton>
-                <HPopconfirm confirm-text="忽略" :disabled="busy" @confirm="ignoreOne(r)">
-                  <HButton size="sm" variant="ghost" :disabled="busy">
+                <HPopconfirm confirm-text="忽略" :disabled="busy || !!queuedJob(r)" @confirm="ignoreOne(r)">
+                  <HButton size="sm" variant="ghost" :disabled="busy || !!queuedJob(r)">
                     <template #icon><Ban /></template>
                     忽略
                   </HButton>

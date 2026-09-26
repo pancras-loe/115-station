@@ -14,14 +14,14 @@ import IncrHelp from './IncrHelp.vue'
 import { syncApi } from '@/api'
 import type { FullSetting } from './fullSetting'
 import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
-import { useTaskStore } from '@/stores/task'
+import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
 
 const props = defineProps<{ full: FullSetting }>()
 
 const { message } = useFeedback()
-const task = useTaskStore()
+const queue = useQueueStore()
 
 /**
  * 本页只管轮询间隔。同一个 setting 里的 cron 是**自动整理**的调度开关，
@@ -83,8 +83,6 @@ async function runIncremental() {
   }
 
   running.value = true
-  message.info('增量同步进行中…')
-  task.poll()
   try {
     const d = await syncApi.runIncremental({
       cid: cfg.cid,
@@ -93,16 +91,12 @@ async function runIncremental() {
       image_ext: cfg.image_ext,
       data_ext: cfg.data_ext,
     })
-    const s = d.summary
-    message.success(
-      `增量同步完成（${s.elapsed}）：事件 ${s.events_total}，视频 ${s.videos}，` +
-        `新增 STRM ${s.strm_created}（已存在 ${s.strm_existing}），附属文件下载 ${s.assets_downloaded}`,
-    )
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
-    toastError(e, '增量同步失败')
+    toastError(e, '提交增量同步失败')
   } finally {
     running.value = false
-    task.poll()
   }
 }
 
@@ -144,7 +138,8 @@ onMounted(async () => {
   }
 })
 
-const busy = computed(() => running.value || task.status.running)
+/** 队列里已有手动增量（排队或执行中）：再点也只是合并成同一个任务 */
+const busy = computed(() => running.value || !!queue.activeOf('incr'))
 
 /** 间隔填 0（或清空）= 关掉独立轮询，增量此时没有自己的时间表 */
 const pollingOff = computed(() => (interval.value ?? 0) <= 0)

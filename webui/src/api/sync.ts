@@ -1,4 +1,5 @@
 import { http } from './client'
+import type { QueuedReply } from './tasks'
 
 export type FullSyncMode = 'normal' | 'fast'
 
@@ -47,28 +48,8 @@ export interface DeepDeleteConfig {
   notify: boolean
 }
 
-export interface FullSyncResult {
-  message?: string
-  /** 实际使用的模式：选了 fast 但接口失败时会降级为 normal */
-  mode_used?: FullSyncMode
-  /** 本次清单是否完整；false 时后端会跳过失效 STRM 标记 */
-  scan_complete?: boolean
-  /** 当前待清理的失效 STRM 数 */
-  orphans?: number
-  total: number
-  /** 真正新写/改写的 strm */
-  created: number
-  /** 本地已有且内容一致，没动 */
-  existing?: number
-  assets_total: number
-  assets_downloaded: number
-  assets_skipped: number
-  assets_failed: number
-}
-
-/** 全量同步是长任务（受 115 节流限制可能数分钟），必须放宽超时 */
-export const runFull = (body: SyncExtConfig) =>
-  http.post<FullSyncResult>('/sync/full', body, { timeoutMs: 30 * 60_000 })
+/** 全量同步 → 入任务队列立即返回；结果（新增 STRM、失效 STRM 数、是否降级）在任务结束时由队列带回 */
+export const runFull = (body: SyncExtConfig) => http.post<QueuedReply>('/sync/full', body)
 
 export interface IncrSummary {
   /** 轮次号，与日志里的 [同步#N] 对应 */
@@ -121,10 +102,8 @@ export interface IncrSummary {
   stall_rounds: number
 }
 
-export const runIncremental = (body: SyncExtConfig) =>
-  http.post<{ message?: string; summary: IncrSummary }>('/sync/incremental', body, {
-    timeoutMs: 30 * 60_000,
-  })
+/** 手动增量 → 入任务队列立即返回 */
+export const runIncremental = (body: SyncExtConfig) => http.post<QueuedReply>('/sync/incremental', body)
 
 export interface SyncCapabilities {
   fast_available: boolean
@@ -222,12 +201,3 @@ export const incrProbe = () =>
 
 export const cronPreview = (cron: string) => http.post<{ next: string[] }>('/sync/cron-preview', { cron })
 
-export interface TaskStatus {
-  running: boolean
-  task?: string
-  elapsed?: string
-  progress?: string
-  recent?: { ok: boolean; name: string; elapsed: string; start: string; message?: string }[]
-}
-
-export const status = () => http.get<TaskStatus>('/sync/status', { timeoutMs: 15_000 })

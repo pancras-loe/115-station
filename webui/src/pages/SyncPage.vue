@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import TaskStatusBar from '@/components/TaskStatusBar.vue'
 import StrmTabBar from './strm/StrmTabBar.vue'
 import ConfigTab from './strm/ConfigTab.vue'
 import FullSyncTab from './strm/FullSyncTab.vue'
@@ -21,8 +20,6 @@ const full = useFullSetting()
 
 <template>
   <div class="page">
-    <TaskStatusBar />
-
     <StrmTabBar v-model="tab" :tabs="STRM_TABS" />
 
     <Transition name="tab" mode="out-in">

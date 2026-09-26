@@ -392,6 +392,8 @@ func (h *Handler) runScheduledTick() {
 	// 增量那半边的明细由它自己按轮次号打账单（见 incrtrace.go），这里不复述
 	if !idle {
 		log.Printf("[定时] ✅ 定时任务完成，耗时 %.2f 秒", time.Since(start).Seconds())
+	} else {
+		markTaskIdle() // 任务历史里也不留这一轮（10 分钟一次，多数空转）
 	}
 }
 

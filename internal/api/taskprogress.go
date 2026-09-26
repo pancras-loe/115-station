@@ -55,7 +55,7 @@ func currentJob() (uint, jobProgress) {
 }
 
 // setJobProgress 更新当前任务的进度；没有任务在执行时（定时整理、增量轮询）是空操作。
-// 同时写一份旧式文字进度，/sync/status 与 TaskStatusBar 照常能看到
+// 同时写一份文字进度（TaskStatus）：机器人「状态」指令与队列面板的后台任务行读它
 func setJobProgress(phase string, done, total int, label string) {
 	curJobMu.Lock()
 	if curJobID == 0 {

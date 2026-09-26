@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
@@ -17,7 +17,7 @@ import { useRouter } from 'vue-router'
 import { syncApi } from '@/api'
 import type { FullSyncConfig, FullSyncMode, OrphanReport } from '@/api/sync'
 import { defaultFull, type FullSetting } from './fullSetting'
-import { useTaskStore } from '@/stores/task'
+import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
 
@@ -25,7 +25,7 @@ const props = defineProps<{ full: FullSetting }>()
 
 const { message } = useFeedback()
 const router = useRouter()
-const task = useTaskStore()
+const queue = useQueueStore()
 const cfg = computed(() => props.full.model.value)
 
 const running = ref(false)
@@ -143,12 +143,6 @@ async function runFull() {
   const mode: FullSyncMode = fastAvailable.value ? src.mode : 'normal'
 
   running.value = true
-  message.info(
-    mode === 'fast'
-      ? '全量同步进行中（快速模式）…'
-      : '全量同步进行中（受 API 间隔限制可能持续数分钟）…',
-  )
-  task.poll()
   try {
     const d = await syncApi.runFull({
       cid,
@@ -158,28 +152,23 @@ async function runFull() {
       data_ext: src.data_ext,
       mode,
     })
-    // 快速模式失败会被后端降级，这时不能让用户以为自己跑的是快速模式
-    if (mode === 'fast' && d.mode_used === 'normal') {
-      message.warning('快速模式不可用，已自动降级为标准模式完成本次同步（详见日志）')
-    }
-    message.success(
-      `全量同步完成：视频 ${d.total} 个（新增 STRM ${d.created}，已存在 ${d.existing ?? 0}），` +
-        `附属文件 ${d.assets_total} 个（下载 ${d.assets_downloaded}，跳过 ${d.assets_skipped}，失败 ${d.assets_failed}）`,
-    )
-    // 失效标记开关后端只读库里那份，这里跟着 saved 走，别拿界面上还没保存的开关判断
-    if (props.full.saved.value.detect_orphans && d.scan_complete === false) {
-      message.warning('本次清单不完整，已跳过失效 STRM 标记（详见日志）')
-    }
-    await loadOrphans()
+    message.success(d.message)
+    await queue.submitted(d.job_id)
   } catch (e) {
-    toastError(e, '全量同步失败')
+    toastError(e, '提交全量同步失败')
   } finally {
     running.value = false
-    task.poll()
   }
 }
 
-const busy = computed(() => running.value || task.status.running)
+// 全量跑完（结果提示由任务队列统一弹）：失效 STRM 数可能变了，刷新检测结果
+const offFinished = queue.onFinished((j) => {
+  if (j.kind === 'full') void loadOrphans()
+})
+onUnmounted(offFinished)
+
+/** 队列里已有全量（排队或执行中）：再点也只是合并成同一个任务 */
+const busy = computed(() => running.value || !!queue.activeOf('full'))
 
 const helpVisible = ref(false)
 

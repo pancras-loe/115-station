@@ -1417,7 +1417,13 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 	}
 
 	for i, entry := range topEntries {
+		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
+		if jobStopRequested() {
+			onLog(fmt.Sprintf("○ 已按要求停止：完成 %d/%d 个条目，其余留在原处", i, len(topEntries)))
+			break
+		}
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
+		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
 		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -2830,7 +2836,13 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 
 	onLog(fmt.Sprintf("▶ 转存目录发现 %d 个条目，开始整理...", len(topEntries)))
 	for i, entry := range topEntries {
+		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
+		if jobStopRequested() {
+			onLog(fmt.Sprintf("○ 已按要求停止：完成 %d/%d 个条目，其余留在原处", i, len(topEntries)))
+			break
+		}
 		SetTaskProgress(fmt.Sprintf("整理 %d/%d：%s", i+1, len(topEntries), truncateStr(entry.Name, 40)))
+		setJobProgress("整理", i, len(topEntries), truncateStr(entry.Name, 60))
 		results = append(results, processEntry(ctx, guards, entry, 0, &successCount)...)
 		time.Sleep(300 * time.Millisecond)
 	}

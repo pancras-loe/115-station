@@ -1,30 +1,13 @@
 import { http } from './client'
+import type { QueuedReply } from './tasks'
 
-export interface PipelineStep {
-  step: string
-  status: string
-  message: string
-}
-
-export interface PipelineDetail {
-  file_name: string
-  status: 'success' | 'exists' | string
-  message: string
-}
-
-export interface PipelineResult {
-  message?: string
-  steps?: PipelineStep[]
-  shows?: { title: string; year?: string; target: string }[]
-  details?: PipelineDetail[]
-}
+export type { QueuedReply }
 
 /**
- * 整理是长任务，和同步互斥（后端共用 fullSyncMu）。
+ * 整理 → 入任务队列立即返回。结果（含待确认条数）在任务结束时由队列带回。
  * 无请求体：整理自带落盘（STRM + 刮削 + 刷 Emby），不再有「整理后是否同步」这个开关。
  */
-export const runPipeline = () =>
-  http.post<PipelineResult>('/organize/pipeline', undefined, { timeoutMs: 60 * 60_000 })
+export const runPipeline = () => http.post<QueuedReply>('/organize/pipeline')
 
 // ---- 二级分类 / 洗版规则（YAML） ----
 export const getCategories = () => http.get<{ config?: string }>('/scrape/categories')
@@ -146,14 +129,6 @@ export const recordStats = () =>
  * 确认入库：按识别结果（或改指定的条目）走完后半条流水线。
  * 和整理互斥，一部剧上百集时耗时按分钟计
  */
-/** 入队接口的回复（202）：任务 id、排第几、预计多久后跑完 */
-export interface QueuedReply {
-  message: string
-  job_id: number
-  position: number
-  eta_sec: number
-}
-
 /** 确认入库 → 入任务队列立即返回。label 是选中条目的「片名 (年份)」，只用于任务标题 */
 export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: string; label?: string }) =>
   http.post<QueuedReply>(
@@ -163,8 +138,7 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
 
 /** 批量按识别结果入库；没识别出来的由后端跳过 */
 /** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */
-export const ignoreRecord = (id: number) =>
-  http.post<{ message?: string }>(`/organize/records/${id}/ignore`, {}, { timeoutMs: 5 * 60_000 })
+export const ignoreRecord = (id: number) => http.post<QueuedReply>(`/organize/records/${id}/ignore`, {})
 
 export const deleteRecord = (id: number) => http.del(`/organize/records/${id}`)
 
@@ -175,15 +149,7 @@ export const clearRecords = (status: string) =>
  * 深度删除：删掉这条记录整理出来的**网盘源文件**（进 115 回收站），
  * 连同本地 STRM/附属与台账。和上面的 deleteRecord（只删记录）是两回事。
  */
-export const deepDeleteRecord = (id: number) =>
-  http.post<{
-    message?: string
-    removed: number
-    videos: number
-    assets: number
-    pan_dirs: number
-    skipped: number
-  }>(`/organize/records/${id}/deep-delete`, {}, { timeoutMs: 10 * 60_000 })
+export const deepDeleteRecord = (id: number) => http.post<QueuedReply>(`/organize/records/${id}/deep-delete`, {})
 
 /** 重新整理会动网盘与本地文件，和整理/同步互斥，耗时按分钟计 */
 /** 暂存指定（不执行）；pick 为空 = 撤销暂存 */

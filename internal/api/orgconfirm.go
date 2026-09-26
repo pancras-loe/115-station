@@ -322,28 +322,32 @@ func (h *Handler) IgnoreOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这条记录不在待确认状态"})
 		return
 	}
-	if !taskMu.Acquire("忽略待确认条目", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "ignore",
+		Title:     fmt.Sprintf("忽略《%s》", shortTitle(rec.Source)),
+		DedupeKey: fmt.Sprintf("record:%d", rec.ID), Source: "web", Priority: jobPriorityManual,
+		Params: jobParams{RecordIDs: []uint{rec.ID}}})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	defer taskMu.Unlock()
+	h.queuedReply(c, job, "忽略")
+}
 
+// ignoreAwaiting 忽略一条待确认记录：移到冗余，记录改成未识别。调用方持有 taskMu
+func (h *Handler) ignoreAwaiting(rec *model.OrganizeRecord) (string, error) {
 	cfg, err := h.loadOrgConfig()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		return "", err
 	}
 	ops, err := h.newPan115Ops()
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		return "", err
 	}
 	ops.suppress = true
 	msg := ""
 	if rec.SourceKind == "dir" {
 		if err := ops.moveFiles(cfg.Redundant, []string{rec.SourceFid}); err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "移到冗余失败: " + err.Error()})
-			return
+			return "", fmt.Errorf("移到冗余失败: %w", err)
 		}
 		msg = "已人工忽略，目录已移到冗余"
 	} else {
@@ -362,8 +366,7 @@ func (h *Handler) IgnoreOrganizeRecord(c *gin.Context) {
 		holdingDir := sourceHoldingDir(rec.Source, "")
 		holdingCid, err := moveToHoldingDir(ops, cfg.Redundant, holdingDir, fids)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": "移到冗余失败: " + err.Error()})
-			return
+			return "", fmt.Errorf("移到冗余失败: %w", err)
 		}
 		// 字幕等附件跟着走，别在待整理里留一堆孤儿
 		for _, v := range videos {
@@ -375,7 +378,7 @@ func (h *Handler) IgnoreOrganizeRecord(c *gin.Context) {
 		"status": "unrecognized", "stage": "confirm", "message": msg,
 	})
 	log.Printf("[整理] ○ 人工忽略《%s》：%s", rec.Source, msg)
-	c.JSON(http.StatusOK, gin.H{"message": msg})
+	return msg, nil
 }
 
 // ---- 统计 ----

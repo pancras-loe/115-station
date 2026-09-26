@@ -57,14 +57,24 @@ function pct(j: TaskJob) {
   return Math.min(100, Math.round((p.done / p.total) * 100))
 }
 
-/** 单条任务执行中不能停（中途打断会留下搬了一半的中间态），批量的可以做完手上这条再停 */
+/** 可不可以取消 / 停止以后端为准：单条任务执行中不能停（中途打断会留下搬了一半的中间态） */
 function stoppable(j: TaskJob) {
-  return j.status === 'queued' || (j.status === 'running' && (j.record_ids?.length ?? 0) > 1)
+  return !!j.stoppable
 }
 
+/** 后台任务（定时整理等）不在队列里执行，没法在这里重试，等它下一轮自动跑 */
 function retryable(j: TaskJob) {
-  return j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled'
+  return j.kind !== 'background' && (j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled')
 }
+
+/**
+ * 锁被不在队列里的后台任务占着（定时整理、转存触发、增量轮询）：面板上单独显示一行。
+ * 占用不到 3 秒的不显示 —— 增量轮询 30 秒一轮、多数一两秒就完，每轮闪一下没有意义
+ */
+const background = computed(() => {
+  if (runningJobs.value.length || !queue.lock.busy || (queue.lock.held_sec ?? 0) < 3) return null
+  return { title: queue.lock.holder || '后台任务', since: dur(queue.lock.held_sec ?? 0), progress: queue.lock.progress }
+})
 </script>
 
 <template>
@@ -88,11 +98,21 @@ function retryable(j: TaskJob) {
           </HButton>
         </div>
 
-        <p v-if="!queue.jobs.length" class="qp-empty">
-          没有任务。重新整理、确认入库提交后会在这里排队依次执行。
+        <p v-if="!queue.jobs.length && !background" class="qp-empty">
+          没有任务。整理、重新整理、同步等操作提交后会在这里排队依次执行。
         </p>
 
         <ul class="qp-list">
+          <li v-if="background" class="qp-item">
+            <div class="qp-row">
+              <HChip color="accent">后台</HChip>
+              <span class="qp-title" :title="background.title">{{ background.title }}</span>
+            </div>
+            <p class="qp-sub">
+              <span v-if="background.progress">{{ background.progress }}</span>
+              <span class="qp-dim"> · 已运行 {{ background.since }}</span>
+            </p>
+          </li>
           <li v-for="j in [...runningJobs, ...queuedJobs, ...doneJobs]" :key="j.id" class="qp-item">
             <div class="qp-row">
               <HChip :color="STATUS[j.status]?.color ?? 'default'">{{ STATUS[j.status]?.text ?? j.status }}</HChip>

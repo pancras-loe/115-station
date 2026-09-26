@@ -211,11 +211,29 @@ const ROUTES: Record<string, Route> = {
     const v = SETTINGS[q.get('key') ?? '']
     return v === undefined ? {} : { value: JSON.stringify(v) }
   },
-  '/sync/status': {
-    running: true,
-    task: '全量同步',
-    elapsed: '1m24s',
-    progress: '已扫描 3,120 / 约 18,400 个文件 · 当前：/媒体库/剧集/欧美剧集',
+  '/tasks': {
+    running: 1,
+    queued: 2,
+    lock: { busy: true, holder: '全量同步', held_sec: 84 },
+    data: [
+      {
+        id: 12, kind: 'full', title: '全量同步', priority: 0, status: 'running', source: 'web', message: '',
+        created_at: '2026-09-26T10:00:00+08:00', started_at: '2026-09-26T10:00:02+08:00',
+        progress: { phase: '全量同步', done: 0, total: 0, label: '已扫描 3,120 / 约 18,400 个文件 · 当前：/媒体库/剧集/欧美剧集' },
+      },
+      {
+        id: 13, kind: 'redo', title: '重新整理《三体.S01》→ 三体 (2023)', priority: 0, status: 'queued', source: 'web',
+        message: '', created_at: '2026-09-26T10:01:00+08:00', record_ids: [3], position: 1, eta_sec: 15, stoppable: true,
+      },
+      {
+        id: 14, kind: 'confirm', title: '批量确认入库 6 条', priority: 0, status: 'queued', source: 'web', message: '',
+        created_at: '2026-09-26T10:01:30+08:00', record_ids: [4, 5, 6, 7, 8, 9], position: 2, eta_sec: 105, stoppable: true,
+      },
+      {
+        id: 11, kind: 'background', title: '定时整理+增量', priority: 1, status: 'success', source: 'auto', message: '完成',
+        created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
+      },
+    ],
   },
   '/sync/cron-preview': { next: ['09-25 04:00', '09-26 04:00', '09-27 04:00'] },
   '/sync/capabilities': { fast_available: true, reason: '' },

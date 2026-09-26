@@ -24,51 +24,36 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ==================== 任务运行历史（最近 5 次） ====================
+// ==================== 任务运行历史 ====================
+//
+// 此前是内存里的最近 5 条（recentRuns），重启即丢。现在历史统一落 TaskJob 表：
+// 队列任务由 worker 自己写；还不进队列的后台任务（定时整理、转存触发 …）在 endTask 时补一行
+// kind=background，队列面板的「最近结束」与机器人「状态」指令都读这张表。
 
-type runRecord struct {
-	Name    string `json:"name"`
-	Start   string `json:"start"`
-	Elapsed string `json:"elapsed"`
-	OK      bool   `json:"ok"`
-	Message string `json:"message,omitempty"`
+// recordBackgroundRun 后台任务跑完落一行历史。空转的轮次（markTaskIdle）不留：
+// 定时整理默认 10 分钟一轮、多数什么都没干，全记下来面板就被刷满了
+func recordBackgroundRun(name string, start time.Time, failure string) {
+	if model.DB == nil || name == "" {
+		return
+	}
+	now := time.Now()
+	st, msg := jobSuccess, "完成"
+	if failure != "" {
+		st, msg = jobFailed, failure
+	}
+	model.DB.Create(&model.TaskJob{
+		Kind: jobKindBackground, Title: name, Priority: jobPriorityBackground, Source: "auto",
+		Status: st, Message: truncateStr(msg, 480), CreatedAt: start, StartedAt: &start, FinishedAt: &now,
+	})
 }
 
-var (
-	recentRunsMu sync.Mutex
-	recentRuns   []runRecord
-)
-
-// RecordRun 记录一次任务运行（保留最近 5 次）
-func RecordRun(name string, start time.Time, ok bool, messages ...string) {
-	rec := runRecord{
-		Name:    name,
-		Start:   start.Format("01-02 15:04:05"),
-		Elapsed: time.Since(start).Truncate(time.Second).String(),
-		OK:      ok,
+// recentFinishedJobs 最近结束的 n 个任务（新的在前）
+func recentFinishedJobs(n int) []model.TaskJob {
+	var rows []model.TaskJob
+	if model.DB != nil {
+		model.DB.Where("status IN ?", jobFinishedStatuses).Order("id DESC").Limit(n).Find(&rows)
 	}
-	if len(messages) > 0 {
-		rec.Message = messages[0]
-	}
-	recentRunsMu.Lock()
-	defer recentRunsMu.Unlock()
-	recentRuns = append(recentRuns, rec)
-	if len(recentRuns) > 5 {
-		recentRuns = recentRuns[len(recentRuns)-5:]
-	}
-}
-
-// GetRecentRuns 返回最近运行记录（新的在前）
-func GetRecentRuns() []runRecord {
-	recentRunsMu.Lock()
-	defer recentRunsMu.Unlock()
-	out := make([]runRecord, len(recentRuns))
-	copy(out, recentRuns)
-	// 反转（新的在前）
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out
+	return rows
 }
 
 // stopCh 进程退出信号（关闭后所有后台协程停止）。
@@ -101,6 +86,7 @@ var (
 	taskStateMu  sync.Mutex
 	taskRunning  bool
 	taskFailure  string
+	taskIdle     bool // 本轮什么都没干（markTaskIdle），结束时不留历史
 	taskName     string
 	taskStart    time.Time
 	taskProgress string // 当前阶段/进度描述（如 "整理 3/12：xxx"），前端轮询展示
@@ -121,7 +107,7 @@ func setTaskProgressText(text string) {
 
 func beginTask(name string) {
 	taskStateMu.Lock()
-	taskFailure = ""
+	taskFailure, taskIdle = "", false
 	taskRunning, taskName, taskStart, taskProgress = true, name, time.Now(), ""
 	taskStateMu.Unlock()
 }
@@ -143,10 +129,22 @@ func endTask() {
 	name := taskName
 	start := taskStart
 	failure := taskFailure
+	idle := taskIdle
 	taskRunning, taskProgress = false, ""
 	taskStateMu.Unlock()
-	// 自动记录到运行历史
-	RecordRun(name, start, failure == "", failure)
+	// 队列任务的历史由 worker 自己写（它此刻还登记着当前任务）；其余的是后台任务，补一行
+	if id, _ := currentJob(); id == 0 && !idle {
+		recordBackgroundRun(name, start, failure)
+	}
+}
+
+// markTaskIdle 当前后台任务本轮空转：结束时不留历史（失败的照样留）
+func markTaskIdle() {
+	taskStateMu.Lock()
+	if taskFailure == "" {
+		taskIdle = true
+	}
+	taskStateMu.Unlock()
 }
 
 // TaskStatus 当前任务状态快照（含进度描述）
@@ -203,43 +201,21 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 		return
 	}
 
-	// 同一时刻只允许一个全量同步。等一小会儿：正在跑的增量遍历
-	// 看到有人排队会提前收工，通常几秒内就能让出锁
-	if !taskMu.Acquire("全量同步", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
+	title := "全量同步"
+	if req.Mode == "fast" {
+		title = "全量同步（快速模式）"
 	}
-	defer taskMu.Unlock()
-	beginTask("全量同步")
-	defer endTask()
-
-	sum, err := h.executeFullSync(fullParams{
-		Cid: req.Cid, LocalPath: req.LocalPath,
-		VideoExt: req.VideoExt, ImageExt: req.ImageExt, DataExt: req.DataExt, Mode: req.Mode,
-	})
+	// 进任务队列：此前在请求里等 20 秒拿锁再同步跑完，全量动辄几十分钟，页面只能一直转
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "full", Title: title, DedupeKey: "full",
+		Source: "web", Priority: jobPriorityManual, Params: jobParams{Sync: &syncJobParams{
+			Cid: req.Cid, LocalPath: req.LocalPath,
+			VideoExt: req.VideoExt, ImageExt: req.ImageExt, DataExt: req.DataExt, Mode: req.Mode,
+		}}})
 	if err != nil {
-		var ce fullConfigErr
-		if errors.As(err, &ce) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": ce.Error()})
-			return
-		}
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"message":           "全量同步完成",
-		"mode_used":         sum.ModeUsed,
-		"scan_complete":     sum.ScanComplete,
-		"orphans":           sum.Orphans,
-		"elapsed":           sum.Elapsed,
-		"total":             sum.Total,
-		"created":           sum.Created,
-		"existing":          sum.Existing,
-		"assets_total":      sum.AssetsTotal,
-		"assets_downloaded": sum.AssetsDownloaded,
-		"assets_skipped":    sum.AssetsSkipped,
-		"assets_failed":     sum.AssetsFailed,
-	})
+	h.queuedReply(c, job, "全量同步")
 }
 
 // executeFullSync 全量同步核心：递归遍历 cid 目录，视频生成 .strm，附属文件实体落盘。

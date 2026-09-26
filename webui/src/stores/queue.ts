@@ -8,7 +8,8 @@ import { useFeedback } from '@/composables/useFeedback'
  * 任务队列（重新整理 / 确认入库 …）。
  *
  * 轮询挂在布局层（AppLayout 挂载即启动），**不依赖某个页面挂着**：
- * 旧的 stores/task.ts 轮询挂在 TaskStatusBar 上，切页签它被卸载，状态就冻住了（a25715a 修过一处）。
+ * 此前的 stores/task.ts 轮询挂在 TaskStatusBar 上，切页签它被卸载，状态就冻住了（a25715a 修过一处），
+ * 阶段 3 起两者都已删除，全站只剩这一条轮询。
  * 有活跃任务时 2 秒一轮，空闲 15 秒一轮。
  *
  * 任务结束时弹一条提示，并通知订阅者（整理记录页据此刷新列表）。
@@ -106,6 +107,11 @@ export const useQueueStore = defineStore('queue', () => {
     return () => listeners.delete(fn)
   }
 
+  /** 某类任务是否在队列里（排队中 / 执行中）：同类按钮据此显示「已在队列」 */
+  function activeOf(kind: string) {
+    return active.value.find((j) => j.kind === kind)
+  }
+
   /** 某条整理记录是否在队列里（排队中 / 执行中），记录页行上据此显示状态 */
   function recordJob(recordId: number) {
     return active.value.find((j) => j.record_ids?.includes(recordId))
@@ -159,6 +165,7 @@ export const useQueueStore = defineStore('queue', () => {
     submitted,
     onFinished,
     recordJob,
+    activeOf,
     cancel,
     retry,
     clearFinished,

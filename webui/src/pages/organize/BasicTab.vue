@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HAlert from '@/components/hero/HAlert.vue'
@@ -9,18 +9,17 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import CronField from '@/components/ui/CronField.vue'
-import TaskStatusBar from '@/components/TaskStatusBar.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import { configApi, organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
 import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
-import { useTaskStore } from '@/stores/task'
+import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { confirmUnsaved } from '@/composables/confirmUnsaved'
 import { ORG_BASIC_DEFAULTS } from './orgBasic'
 
 const { message } = useFeedback()
-const task = useTaskStore()
+const queue = useQueueStore()
 const router = useRouter()
 const tmdbReady = ref<boolean | null>(null)
 const tmdbError = ref('')
@@ -87,7 +86,21 @@ watch(
 )
 
 const running = ref(false)
-const busy = computed(() => running.value || task.status.running)
+/** 已有整理在队列里（排队或执行中）时按钮置灰：再点也只是合并成同一个任务 */
+const queuedOrganize = computed(() => queue.activeOf('organize'))
+const busy = computed(() => running.value || !!queuedOrganize.value)
+
+// 本页提交的整理跑完：有待确认的条目就带用户去确认（此前是同步等待整理结果再跳）
+let myJob = 0
+const offFinished = queue.onFinished((j) => {
+  if (j.id !== myJob || j.status !== 'success') return
+  const awaiting = Number(j.result?.awaiting ?? 0)
+  if (awaiting > 0) {
+    message.info(`识别完成，${awaiting} 项等待人工确认`, { duration: 6000 })
+    void router.push({ query: { tab: 'records', status: 'awaiting' } })
+  }
+})
+onUnmounted(offFinished)
 
 /**
  * 自动整理的定时开关。存在 setting `incr` 里（历史上整理与增量共用一条 cron），
@@ -198,36 +211,20 @@ async function runOrganize() {
   running.value = true
   try {
     if (localFirst && !(await resolveAll())) return
-    message.info('整理任务执行中…')
-    task.poll()
     const d = await organizeApi.runPipeline()
-    const details = d.details ?? []
-    const awaiting = details.filter((x) => x.status === 'awaiting').length
-    const failed = details.filter(
-      (x) => x.status !== 'success' && x.status !== 'exists' && x.status !== 'awaiting',
-    ).length
-    const ok = details.filter((x) => x.status === 'success').length
-    if (awaiting) {
-      message.info(`识别完成，${awaiting} 项等待人工确认`, { duration: 6000 })
-      void router.push({ query: { tab: 'records', status: 'awaiting' } })
-      return
-    }
-    message.success(
-      d.message || `整理完成：成功 ${ok}${failed ? `，失败 ${failed}` : ''}，详情见实时日志`,
-    )
+    message.success(d.message)
+    myJob = d.job_id
+    await queue.submitted(d.job_id)
   } catch (e) {
-    toastError(e, '整理失败')
+    toastError(e, '提交整理失败')
   } finally {
     running.value = false
-    task.poll()
   }
 }
 </script>
 
 <template>
   <div class="stack">
-    <TaskStatusBar />
-
     <HAlert status="warning" v-if="tmdbReady === false" title="整理前需要配置 TMDB">
       尚未填写 TMDB API 密钥，手动及自动触发的整理均无法识别影视。填写并测试连接后再开始整理。
       <div class="alert-action"><HButton variant="tertiary" size="sm" @click="configureTmdb">去配置</HButton></div>

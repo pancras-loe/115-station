@@ -217,22 +217,16 @@ func (h *Handler) RunIncrementalSync(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	p := normalizeIncrParams(req.Cid, req.LocalPath, req.VideoExt, req.ImageExt, req.DataExt, req.Limit)
-
-	if !taskMu.Acquire("手动增量同步", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-	beginTask("增量同步")
-	defer endTask()
-
-	sum, err := h.executeIncrementalSync(p)
+	// 进任务队列（执行时再 normalizeIncrParams）：此前在请求里等锁同步跑，撞上后台任务就 409
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "incr", Title: "手动增量同步", DedupeKey: "incr",
+		Source: "web", Priority: jobPriorityManual, Params: jobParams{Sync: &syncJobParams{
+			Cid: req.Cid, LocalPath: req.LocalPath, VideoExt: req.VideoExt, ImageExt: req.ImageExt, DataExt: req.DataExt,
+		}}})
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "增量同步完成", "summary": sum})
+	h.queuedReply(c, job, "增量同步")
 }
 
 func normalizeIncrParams(cid, localPath string, videoExt, imageExt, dataExt []string, limit int) incrParams {

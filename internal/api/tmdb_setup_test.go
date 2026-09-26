@@ -63,19 +63,20 @@ func TestTmdbSetupBlocksOrganizeAndReportsFailure(t *testing.T) {
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "TMDB") {
 		t.Fatalf("未拒绝缺少配置的整理: %s", w.Body.String())
 	}
-	runs := GetRecentRuns()
-	if len(runs) == 0 || runs[0].OK || !strings.Contains(runs[0].Message, "TMDB") {
-		t.Fatalf("错误未进入历史: %+v", runs)
+	// 手动入口在入队前就拒绝，不会排进队列再失败
+	if q := queuedJobs(model.DB); len(q) != 0 {
+		t.Fatalf("缺少配置的整理不该入队: %d", len(q))
 	}
 	beginTask("后台整理")
 	_, _, err := h.executeOrganizeWithConfig(nil)
 	endTask()
-	if err == nil || GetRecentRuns()[0].OK {
-		t.Fatal("后台入口误报成功")
+	runs := recentFinishedJobs(1)
+	if err == nil || len(runs) == 0 || runs[0].Status != jobFailed || !strings.Contains(runs[0].Message, "TMDB") {
+		t.Fatalf("后台入口误报成功或失败原因未进入历史: %+v", runs)
 	}
 	beginTask("下一次任务")
 	endTask()
-	if !GetRecentRuns()[0].OK || GetRecentRuns()[0].Message != "" {
+	if runs := recentFinishedJobs(1); runs[0].Status != jobSuccess || runs[0].Title != "下一次任务" {
 		t.Fatal("失败状态污染下一次任务")
 	}
 }

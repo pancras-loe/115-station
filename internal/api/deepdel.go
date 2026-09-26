@@ -435,33 +435,52 @@ func (h *Handler) DeepDeleteOrganizeRecord(c *gin.Context) {
 		}
 	}
 
-	if !taskMu.Acquire("深度删除", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-
 	var rec model.OrganizeRecord
 	if h.DB.First(&rec, c.Param("id")).Error != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}
-	rows, total, err := deepDelRowsForRecord(h.DB, rec)
-	if err != nil {
+	// 能不能删当场判（只读台账）：对不上的不进队列
+	if _, err := deepDelRowsOrErr(h.DB, rec); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if len(rows) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "这些文件不在媒体库台账里，深度删除不处理：整理失败或未识别的内容还在待整理目录，请到 115 里直接处理",
-		})
-		return
-	}
-
-	res, err := h.runDeepDelete(rows, "manual_record")
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "deepdel",
+		Title:     fmt.Sprintf("深度删除《%s》", shortTitle(orDash(firstNonEmpty(rec.Title, rec.Source)))),
+		DedupeKey: fmt.Sprintf("record:%d", rec.ID), Source: "web", Priority: jobPriorityManual,
+		Params: jobParams{RecordIDs: []uint{rec.ID}}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	h.queuedReply(c, job, "深度删除")
+}
+
+// deepDelRowsOrErr 记录 → 可删的台账行；一行都对不上时返回给用户看的原因
+func deepDelRowsOrErr(db *gorm.DB, rec model.OrganizeRecord) ([]model.SyncedFile, error) {
+	rows, _, err := deepDelRowsForRecord(db, rec)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("这些文件不在媒体库台账里，深度删除不处理：整理失败或未识别的内容还在待整理目录，请到 115 里直接处理")
+	}
+	return rows, nil
+}
+
+// deepDeleteRecord 整理记录入口的深度删除执行体。调用方持有 taskMu；执行时重新对台账（排队期间可能变了）
+func (h *Handler) deepDeleteRecord(rec model.OrganizeRecord) (string, error) {
+	rows, total, err := deepDelRowsForRecord(h.DB, rec)
+	if err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		_, err := deepDelRowsOrErr(h.DB, rec)
+		return "", err
+	}
+	res, err := h.runDeepDelete(rows, "manual_record")
+	if err != nil {
+		return "", err
 	}
 	// 记录本身留着（它是流水，删了就查不到这次整理发生过什么），但要标一笔 ——
 	// 否则用户回头看到一条 success 记录，点「重新整理」却发现文件早没了
@@ -470,12 +489,11 @@ func (h *Handler) DeepDeleteOrganizeRecord(c *gin.Context) {
 		Update("message", truncateStr(strings.TrimPrefix(note, "｜ "), 480))
 	msg := fmt.Sprintf("已删除《%s》的网盘源文件 %d 个（视频 %d / 附属 %d），在 115 回收站可还原",
 		rec.Title, res.Fids, res.Videos, res.Assets)
-	c.JSON(http.StatusOK, gin.H{
-		"message": msg, "removed": res.Fids,
-		"videos": res.Videos, "assets": res.Assets, "pan_dirs": res.PanDirs,
-		// 台账里查不到的那些 fid：整理时落过盘、后来被移走或删掉了，如实报出来
-		"skipped": total - len(rows),
-	})
+	// 台账里查不到的那些 fid：整理时落过盘、后来被移走或删掉了，如实报出来
+	if skipped := total - len(rows); skipped > 0 {
+		msg += fmt.Sprintf("；另有 %d 个已不在台账里，未处理", skipped)
+	}
+	return msg, nil
 }
 
 // deepDelRowsForRecord 整理记录 → 可删的台账行，以及记录里一共有几个 fid。

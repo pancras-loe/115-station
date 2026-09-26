@@ -159,37 +159,23 @@ func organizeSummaryLine(sink *orgSink, results []OrganizeResult) string {
 	return line
 }
 
-// RunOrganizePipeline 整理流水线 HTTP 入口
-// POST /organize/pipeline
+// RunOrganizePipeline POST /organize/pipeline → 入任务队列，202。
+// 连点几次只排一次（DedupeKey=organize）；结果见任务队列与整理记录
 func (h *Handler) RunOrganizePipeline(c *gin.Context) {
-	// 等一会儿再说忙：30 秒一轮的增量轮询占着锁的概率不低，
-	// 一抢不到就弹「任务进行中」的话，用户点十次有五次是白点
-	if !taskMu.Acquire("手动整理", manualAcquireWait) {
-		c.JSON(http.StatusConflict, gin.H{"error": busyErr()})
-		return
-	}
-	defer taskMu.Unlock()
-	beginTask("自动整理")
-	defer endTask()
-
-	steps, details, err := h.executeOrganize()
-	if err != nil {
+	// 配置缺失当场报：别让一个注定失败的任务去排队
+	if _, err := loadTmdbClient(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// 按部归并（前端一行一部）
-	showSet := map[string]bool{}
-	var shows []gin.H
-	for _, r := range details {
-		if r.TmdbID == 0 || r.Status != "success" {
-			continue
-		}
-		key := fmt.Sprintf("%d-%s", r.TmdbID, r.TargetDir)
-		if showSet[key] {
-			continue
-		}
-		showSet[key] = true
-		shows = append(shows, gin.H{"title": r.Title, "year": r.Year, "category": r.Category, "target": r.TargetDir})
+	if _, err := h.loadOrgConfig(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"steps": steps, "details": details, "shows": shows, "message": "整理执行完成"})
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "organize", Title: "手动整理", DedupeKey: "organize",
+		Source: "web", Priority: jobPriorityManual})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.queuedReply(c, job, "整理")
 }
