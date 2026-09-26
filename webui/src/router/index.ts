@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
           to.query.tab === 'records' ? { name: 'tasks', query: to.query, replace: true } : true,
       },
       {
+        path: 'files',
+        name: 'files',
+        component: () => import('@/pages/FilesPage.vue'),
+        meta: { title: '网盘文件', desc: '浏览 115 网盘 / 手动刮削与整理', icon: 'files' },
+      },
+      {
         path: 'upload-download',
         name: 'upload-download',
         component: () => import('@/pages/UploadDownloadPage.vue'),

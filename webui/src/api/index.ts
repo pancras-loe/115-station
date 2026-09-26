@@ -2,6 +2,7 @@ export { http, request, ApiError, tokenStorage, setUnauthorizedHandler } from '.
 export * as authApi from './auth'
 export * as configApi from './config'
 export * as dashboardApi from './dashboard'
+export * as filesApi from './files'
 export * as organizeApi from './organize'
 export * as pluginsApi from './plugins'
 export * as resourcesApi from './resources'

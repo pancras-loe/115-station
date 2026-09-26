@@ -16,6 +16,8 @@ export const JOB_KIND: Record<string, string> = {
   transfer: '转存后整理',
   redo: '重新整理',
   confirm: '确认入库',
+  orgpick: '整理所选',
+  scrape: '刮削',
   ignore: '忽略',
   deepdel: '深度删除',
   full: '全量同步',

@@ -203,7 +203,27 @@ const SETTINGS: Record<string, unknown> = {
   },
   incr: { cron: '*/30 * * * *', interval_sec: 30 },
   deepdel: { enabled: true, prune_pan_dirs: true, notify: false },
+  monitor: { enabled: false },
+  'org-basic': { manual_confirm: true },
 }
+
+/** 网盘文件页（/files/115?cid=…）：一棵小目录树 */
+const d = (id: string, name: string, root?: string) => ({ id, name, is_dir: true, ...(root ? { root } : {}) })
+const f = (id: string, name: string, size: number) => ({ id, name, is_dir: false, size, pickcode: 'pc' + id })
+const FILE_TREE: Record<string, unknown[]> = {
+  '0': [d('2894561234', '媒体库', 'library'), d('300', 'StrmStation'), d('400', '我的资源'), f('9001', '说明.txt', 1_200)],
+  '300': [d('301', '待整理', 'pending'), d('302', '转存', 'share'), d('303', '已存在', 'existing'), d('304', '冗余', 'redundant')],
+  '301': [
+    d('3011', '沙丘2.Dune.Part.Two.2024.2160p.WEB-DL'),
+    d('3012', 'The.Last.of.Us.S01.1080p'),
+    f('3013', '奥本海默.Oppenheimer.2023.1080p.BluRay.x264.mkv', 12_884_901_888),
+    f('3014', '奥本海默.Oppenheimer.2023.1080p.BluRay.x264.chs.ass', 84_000),
+  ],
+  '2894561234': [d('201', '电影'), d('202', '剧集')],
+  '201': [d('2011', '科幻电影'), d('2012', '动画电影')],
+  '2011': [d('20111', '沙丘 (2021) [tmdb=438631]'), d('20112', '星际穿越 (2014) [tmdb=157336]')],
+}
+const FILE_ROOTS = { '2894561234': 'library', '301': 'pending', '302': 'share', '303': 'existing', '304': 'redundant' }
 
 type Route = unknown | ((q: URLSearchParams) => unknown)
 
@@ -323,6 +343,11 @@ const ROUTES: Record<string, Route> = {
       { id: 90228, media_type: 'tv', title: '沙丘：预言', year: '2024', vote: 7.1, poster: '', overview: '' },
     ],
   },
+  '/files/115': (q: URLSearchParams) => {
+    const cid = q.get('cid') ?? '0'
+    return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS }
+  },
+  '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true } },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },
   '/version': { version: '2.4.1-preview' },

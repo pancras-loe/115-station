@@ -107,6 +107,13 @@ func (h *Handler) upload115File(cookie string, pid int64, filename string, data 
 	if !h.monitorUploadConfig().Enabled {
 		return fmt.Errorf("上传到 115 未启用")
 	}
+	return h.upload115FileConsented(cookie, pid, filename, data)
+}
+
+// upload115FileConsented 不看总开关的上传：只给「用户这一次明确勾选了上传」的入口用
+// （网盘文件页的手动刮削，filescrape.go）。总开关管的是后台引擎会不会自己往网盘写，
+// 用户在确认框里亲手勾上的那一次不受它约束；新增调用点前想清楚是不是真有这份授权
+func (h *Handler) upload115FileConsented(cookie string, pid int64, filename string, data []byte) error {
 	if oc := h.getOpen115(); oc != nil && oc.authorized() {
 		return h.upload115FileOpen(oc, pid, filename, data)
 	}

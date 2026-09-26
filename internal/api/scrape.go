@@ -415,8 +415,87 @@ func (h *Handler) scrapeAll(cfg scrapeCfg) {
 	}
 }
 
-// scrapeOne 单个片目：详情 → NFO + 图片
+// ---- 刮削对象与产物落点 ----
+//
+// 刮削核心（scrapeTitleMeta）只管「拉 TMDB → 生成 NFO / 图片字节」，写到哪里交给 metaWriter：
+//   - 「开始刮削」与整理后自动刮削只写本地媒体库（localMetaWriter），回传 115 仍归监控上传；
+//   - 网盘文件页的手动刮削（filescrape.go）按用户这一次的选择决定写本地、写网盘或两者都写，
+//     本地没有对应片目（选的不在媒体库里）时只能写网盘。
+
+// metaDest 一个元数据产物目录：本地与网盘两个落点，可以只有其一。
+// 网盘落点用「已知 cid + 相对路径」表示，只在真的要上传时才逐级解析，不上传的刮削零 115 请求
+type metaDest struct {
+	Local     string // 本地绝对目录；空 = 本地没有对应目录
+	CloudBase string // 网盘上一个已知目录的 cid；空 = 没有网盘落点
+	CloudRel  string // 从 CloudBase 往下的相对路径（/ 分隔，空 = 就是 CloudBase）
+}
+
+// scrapeVideo 片目里的一个视频：影片 NFO / 集 NFO 与它同名（xxx.mkv → xxx.mkv.nfo），
+// 口径与本地 STRM（xxx.mkv.strm）以及 Emby 自己刮削出来的产物一致
+type scrapeVideo struct {
+	Name     string // 视频文件名（带扩展名）
+	PickCode string // 轨道探测用
+	Dir      metaDest
+}
+
+// scrapeTitle 一个待刮削片目
+type scrapeTitle struct {
+	Kind   string // movie / tv
+	Title  string
+	Year   string
+	TmdbID int
+	Dir    metaDest // 标题目录：tvshow.nfo、海报、季海报
+	Videos []scrapeVideo
+}
+
+// metaWriter 产物出口。返回 wrote=false 表示按「只补缺失」跳过了
+type metaWriter interface {
+	put(d metaDest, name string, data []byte) (wrote bool, err error)
+}
+
+// localMetaWriter 只写本地媒体库（「开始刮削」与整理后自动刮削）
+type localMetaWriter struct{ force bool }
+
+func (w localMetaWriter) put(d metaDest, name string, data []byte) (bool, error) {
+	if d.Local == "" {
+		return false, nil
+	}
+	return writeMetaFile(d.Local, name, data, w.force)
+}
+
+// scrapeReporter 错误与停止请求的去处：全局刮削状态（刮削页的进度）或任务队列
+type scrapeReporter interface {
+	errf(format string, args ...any)
+	stopped() bool
+}
+
+type globalScrapeReporter struct{}
+
+func (globalScrapeReporter) errf(format string, args ...any) { scrapeAddErr(format, args...) }
+func (globalScrapeReporter) stopped() bool                   { return scrapeStopRequested() }
+
+// scrapeOne 单个已入库片目（台账标题目录）：详情 → NFO + 图片，只写本地
 func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title, year string, tmdbID int) {
+	t := scrapeTitle{Kind: kind, Title: title, Year: year, TmdbID: tmdbID, Dir: metaDest{Local: dir}}
+	for _, sf := range scrapeDirVideoRows(key) {
+		t.Videos = append(t.Videos, scrapeVideo{
+			Name:     strings.TrimSuffix(path.Base(sf.RelPath), ".strm"),
+			PickCode: sf.PickCode,
+			Dir:      metaDest{Local: filepath.Join(cfg.LocalRoot, filepath.FromSlash(path.Dir(sf.RelPath)))},
+		})
+	}
+	scrapeTitleMeta(tc, cfg, t, localMetaWriter{force: cfg.Force}, globalScrapeReporter{})
+}
+
+// scrapeTitleMeta 刮削核心：详情 → NFO + 图片，产物交给 w。
+// cfg 只读 WriteNFO / WriteImages 两个开关（覆盖与否由 writer 自己掌握）
+func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter, rep scrapeReporter) {
+	kind, title, tmdbID := t.Kind, t.Title, t.TmdbID
+	put := func(d metaDest, name string, b []byte) {
+		if _, err := w.put(d, name, b); err != nil {
+			rep.errf("%s: 写 %s 失败 %v", title, name, err)
+		}
+	}
 	kindPath := kind
 	params := map[string]string{"language": "zh-CN", "append_to_response": "credits"}
 	body, err := tc.get("/"+kindPath+"/"+strconv.Itoa(tmdbID), params)
@@ -425,33 +504,36 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 		// 回退按标题+年份搜一次，自愈错误 ID
 		var alt *TmdbMedia
 		if kind == "tv" {
-			alt, _ = tc.SearchTV(title, year)
+			alt, _ = tc.SearchTV(title, t.Year)
 		} else {
-			alt, _ = tc.SearchMovie(title, year)
+			alt, _ = tc.SearchMovie(title, t.Year)
 		}
 		if alt == nil || alt.TmdbID == 0 {
-			scrapeAddErr("%s: TMDB 详情失败 %v（id=%d，按标题搜索也未命中）", title, err, tmdbID)
+			rep.errf("%s: TMDB 详情失败 %v（id=%d，按标题搜索也未命中）", title, err, tmdbID)
 			return
 		}
 		log.Printf("[影视刮削] ○ %s: 标记 id=%d 查无详情，按标题匹配到 id=%d，已自愈", title, tmdbID, alt.TmdbID)
 		body, err = tc.get("/"+kindPath+"/"+strconv.Itoa(alt.TmdbID), params)
 		if err != nil {
-			scrapeAddErr("%s: TMDB 详情失败 %v", title, err)
+			rep.errf("%s: TMDB 详情失败 %v", title, err)
 			return
 		}
+		// NFO 的 uniqueid 与逐集信息都要用自愈后的 id：沿用旧 id 的话 NFO 里写的仍是
+		// 查无条目的那个，剧集每季的集信息也会全部拉空
+		tmdbID = alt.TmdbID
 	}
+	videos := t.Videos
 
 	// ---- NFO ----
 	if cfg.WriteNFO {
 		// 片目录下的视频文件（含 pickcode）：探测轨道写 streamdetails；
 		// 剧集还逐集生成同名集级 NFO
-		videoRows := scrapeDirVideoRows(key)
 		var mainProbe *probeResult
-		if len(videoRows) > 0 {
-			if p, perr := probeFileNow(videoRows[0].PickCode); perr == "" && p != nil {
+		if len(videos) > 0 && videos[0].PickCode != "" {
+			if p, perr := probeFileNow(videos[0].PickCode); perr == "" && p != nil {
 				mainProbe = p
 			} else if perr != "" {
-				scrapeAddErr("%s: 轨道探测失败（%s），NFO 不含 streamdetails", title, truncateStr(perr, 80))
+				rep.errf("%s: 轨道探测失败（%s），NFO 不含 streamdetails", title, truncateStr(perr, 80))
 			}
 		}
 		if kind == "movie" {
@@ -481,7 +563,7 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 				} `json:"production_companies"`
 			}
 			if json.Unmarshal(body, &d) != nil {
-				scrapeAddErr("%s: 详情解析失败", title)
+				rep.errf("%s: 详情解析失败", title)
 				return
 			}
 			nfo := nfoMovie{
@@ -512,10 +594,10 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 			for _, pc := range d.ProductionCompanies {
 				nfo.Studios = append(nfo.Studios, pc.Name)
 			}
-			for i, name := range movieNFONames(videoRows) {
-				probe := mainProbe // videoRows[0] 上面已经探过，别再探一遍
+			for i, name := range videoNFONames(videos) {
+				probe := mainProbe // videos[0] 上面已经探过，别再探一遍
 				if i > 0 {
-					if pr, perr := probeFileNow(videoRows[i].PickCode); perr == "" {
+					if pr, perr := probeFileNow(videos[i].PickCode); perr == "" {
 						probe = pr
 					} else {
 						probe = nil
@@ -526,9 +608,12 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 				if err != nil {
 					continue
 				}
-				if _, err := writeMetaFile(dir, name, b, cfg.Force); err != nil {
-					scrapeAddErr("%s: 写 %s 失败 %v", title, name, err)
+				// 与视频同名的 NFO 放在视频旁边；没有视频时兜底的 movie.nfo 放标题目录
+				dest := t.Dir
+				if i < len(videos) {
+					dest = videos[i].Dir
 				}
+				put(dest, name, b)
 			}
 		} else {
 			var d struct {
@@ -548,7 +633,7 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 				} `json:"created_by"`
 			}
 			if json.Unmarshal(body, &d) != nil {
-				scrapeAddErr("%s: 详情解析失败", title)
+				rep.errf("%s: 详情解析失败", title)
 				return
 			}
 			nfo := nfoTVShow{
@@ -568,19 +653,16 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 				nfo.Actors = append(nfo.Actors, nfoActor{Name: cb.Name})
 			}
 			if b, err := marshalNFO(nfo); err == nil {
-				if _, err := writeMetaFile(dir, "tvshow.nfo", b, cfg.Force); err != nil {
-					scrapeAddErr("%s: 写 tvshow.nfo 失败 %v", title, err)
-				}
+				put(t.Dir, "tvshow.nfo", b)
 			}
 			// 集级 NFO：每集与视频同名（xxx.mkv → xxx.mkv.nfo）落在集文件旁，
 			// TMDB 集信息（标题/首播/简介/剧照）+ 该集轨道 streamdetails。
 			// 解析不出集号的集文件跳过（tvshow.nfo 与海报仍正常生成）
-			for _, sf := range videoRows {
-				if scrapeStopRequested() {
+			for _, v := range videos {
+				if rep.stopped() {
 					return
 				}
-				base := strings.TrimSuffix(path.Base(sf.RelPath), ".strm")
-				fp := parseFileName(base)
+				fp := parseFileName(v.Name)
 				if fp.Episode == 0 {
 					continue
 				}
@@ -605,14 +687,17 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 				if ep.StillPath != "" {
 					epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
 				}
-				if probe, perr := probeFileNow(sf.PickCode); perr == "" {
-					epNFO.Fileinfo = nfoFileInfoFrom(probe)
+				if v.PickCode != "" {
+					if probe, perr := probeFileNow(v.PickCode); perr == "" {
+						epNFO.Fileinfo = nfoFileInfoFrom(probe)
+					}
 				}
 				if b, err := marshalNFO(epNFO); err == nil {
-					epDir := filepath.Join(cfg.LocalRoot, filepath.FromSlash(path.Dir(sf.RelPath)))
-					_ = os.MkdirAll(epDir, 0o755)
-					if _, err := writeMetaFile(epDir, base+".nfo", b, cfg.Force); err != nil {
-						scrapeAddErr("%s: 写集 NFO %s 失败 %v", title, base, err)
+					if v.Dir.Local != "" {
+						_ = os.MkdirAll(v.Dir.Local, 0o755)
+					}
+					if _, err := w.put(v.Dir, v.Name+".nfo", b); err != nil {
+						rep.errf("%s: 写集 NFO %s 失败 %v", title, v.Name, err)
 					}
 				}
 			}
@@ -648,7 +733,7 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 		}
 	}
 	for _, img := range images {
-		if scrapeStopRequested() {
+		if rep.stopped() {
 			return
 		}
 		if img[0] == "" {
@@ -656,12 +741,10 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 		}
 		data, err := tmdbFetchImageBytes(img[0])
 		if err != nil {
-			scrapeAddErr("%s: 拉图失败 %s %v", title, img[1], err)
+			rep.errf("%s: 拉图失败 %s %v", title, img[1], err)
 			continue
 		}
-		if _, err := writeMetaFile(dir, img[1], data, cfg.Force); err != nil {
-			scrapeAddErr("%s: 写 %s 失败 %v", title, img[1], err)
-		}
+		put(t.Dir, img[1], data)
 	}
 }
 
@@ -680,9 +763,18 @@ func dateYear(d string) string {
 // 用户一眼看不出哪份是谁写的。
 // 台账里查不到视频行（还没落盘/被清过）时才退回固定名
 func movieNFONames(rows []model.SyncedFile) []string {
-	out := make([]string, 0, len(rows))
+	vs := make([]scrapeVideo, 0, len(rows))
 	for _, sf := range rows {
-		out = append(out, strings.TrimSuffix(path.Base(sf.RelPath), ".strm")+".nfo")
+		vs = append(vs, scrapeVideo{Name: strings.TrimSuffix(path.Base(sf.RelPath), ".strm")})
+	}
+	return videoNFONames(vs)
+}
+
+// videoNFONames 同上，按刮削对象里的视频算
+func videoNFONames(vs []scrapeVideo) []string {
+	out := make([]string, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, v.Name+".nfo")
 	}
 	if len(out) == 0 {
 		return []string{"movie.nfo"}

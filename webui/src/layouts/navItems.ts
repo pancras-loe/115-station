@@ -4,6 +4,7 @@ import {
   UserRoundCog,
   RefreshCcw,
   Wand2,
+  FolderTree,
   ArrowDownUp,
   Download,
   Settings,
@@ -34,6 +35,7 @@ export const navItems: NavItem[] = [
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
+  { name: 'files', label: '网盘文件', icon: FolderTree },
 
   { name: 'upload-download', label: '上传下载', icon: ArrowDownUp, group: '传输' },
   { name: 'media-transfer', label: '影视转存', icon: Download },

@@ -70,6 +70,8 @@ type jobParams struct {
 	Sync *syncJobParams `json:"sync,omitempty"`
 	// Scheduled 定时整理（cron 触发）：独立增量轮询关着时顺带跑一轮增量（逃生门下的老行为）
 	Scheduled bool `json:"scheduled,omitempty"`
+	// Files 网盘文件页勾选的条目（刮削 / 整理所选，filebrowser.go）
+	Files *fileJobParams `json:"files,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
@@ -121,6 +123,12 @@ func jobStoppable(job *model.TaskJob) bool {
 		return true
 	case "confirm":
 		return len(decodeJobParams(job).RecordIDs) > 1
+	case "scrape", "orgpick":
+		// 网盘文件页勾选的一批：刮削逐个片目、整理逐个条目，两个之间都能停
+		if f := decodeJobParams(job).Files; f != nil {
+			return len(f.Items) > 1 || job.Kind == "scrape"
+		}
+		return false
 	}
 	return false
 }

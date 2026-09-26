@@ -281,6 +281,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 整理流水线（识别 → 搬移 → STRM → 刮削 → 刷 Emby 一条龙）
 		protected.POST("/organize/pipeline", h.RunOrganizePipeline)
+
+		// 网盘文件页：浏览 115 目录，对勾选的条目刮削 / 整理（都入任务队列）
+		protected.GET("/files/115", h.ListFiles115)
+		protected.POST("/files/scrape", h.ScrapeFiles)
+		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
 
 		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理
