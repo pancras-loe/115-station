@@ -396,5 +396,8 @@ func (h *Handler) OrganizeRecordStats(c *gin.Context) {
 			out["problem"] += r.N
 		}
 	}
+	var staged int64
+	h.DB.Model(&model.OrganizeRecord{}).Where("pending_tmdb_id > 0").Count(&staged)
+	out["staged"] = staged
 	c.JSON(http.StatusOK, gin.H{"data": out})
 }

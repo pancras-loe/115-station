@@ -302,7 +302,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理
 		protected.GET("/organize/records", h.ListOrganizeRecords)
 		protected.GET("/organize/records/stats", h.OrganizeRecordStats)
-		protected.POST("/organize/records/confirm", h.ConfirmOrganizeRecords)
+		protected.POST("/organize/records/submit", h.SubmitOrganizeRecords)
+		protected.PUT("/organize/records/:id/pending", h.SetRecordPending)
 		protected.POST("/organize/records/:id/confirm", h.ConfirmOrganizeRecord)
 		protected.POST("/organize/records/:id/ignore", h.IgnoreOrganizeRecord)
 		protected.GET("/organize/records/:id", h.GetOrganizeRecord)

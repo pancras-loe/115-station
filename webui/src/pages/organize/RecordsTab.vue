@@ -55,6 +55,7 @@ const FILTERS: { key: string; label: string; type: TagType }[] = [
   { key: 'all', label: '全部', type: 'default' },
   { key: 'awaiting', label: '待确认', type: 'warning' },
   { key: 'problem', label: '需要处理', type: 'error' },
+  { key: 'staged', label: '已指定', type: 'info' },
   { key: 'success', label: '成功', type: 'success' },
   { key: 'exists', label: '已存在', type: 'info' },
   { key: 'unrecognized', label: '未识别', type: 'warning' },
@@ -226,10 +227,16 @@ function queuedJob(r: OrganizeRecord) {
   return queue.recordJob(r.id)
 }
 
-// ---- 待确认：勾选与批量确认 ----
+// ---- 勾选与统一提交 ----
 const selected = ref(new Set<number>())
-/** 能直接确认的：已经识别出 TMDB 条目的待确认记录 */
-const confirmable = computed(() => rows.value.filter((r) => r.status === 'awaiting' && r.tmdb_id > 0))
+/**
+ * 能提交的：暂存了指定的（任意状态），或已识别出 TMDB 条目的待确认记录。
+ * 前者按暂存的指定执行，后者按识别结果确认入库（后端 planSubmit 同一套口径）
+ */
+function canSubmit(r: OrganizeRecord) {
+  return (r.pending_tmdb_id ?? 0) > 0 || (r.status === 'awaiting' && r.tmdb_id > 0)
+}
+const confirmable = computed(() => rows.value.filter(canSubmit))
 const allPicked = computed(
   () => confirmable.value.length > 0 && confirmable.value.every((r) => selected.value.has(r.id)),
 )
@@ -246,19 +253,46 @@ function toggleAll(on: boolean) {
 }
 
 const batching = ref(false)
-async function confirmSelected() {
+async function submitSelected() {
   const ids = [...selected.value]
   if (!ids.length) return
   batching.value = true
   try {
-    const d = await organizeApi.confirmRecords(ids)
+    const d = await organizeApi.submitRecords(ids)
     message.success(d.message)
     selected.value = new Set()
-    await queue.submitted(d.job_id)
+    for (const id of d.job_ids ?? []) void queue.submitted(id)
+    await reload() // 暂存已清空，行上的「将改为」要消失
   } catch (e) {
-    toastError(e, '批量确认失败')
+    toastError(e, '提交失败')
   } finally {
     batching.value = false
+  }
+}
+
+/** 暂存指定：只记在记录上，不执行；勾选后统一提交 */
+async function doStage(pick: TmdbCandidate) {
+  const target = pickTarget.value
+  if (!target) return
+  pickShow.value = false
+  const label = pick.year ? `${pick.title} (${pick.year})` : pick.title
+  try {
+    const d = await organizeApi.setPending(target.id, { tmdbId: pick.id, mediaType: pick.media_type, label })
+    message.success(d.message)
+    selected.value = new Set([...selected.value, target.id]) // 暂存了多半就是要提交的，顺手勾上
+    await reload()
+  } catch (e) {
+    toastError(e, '暂存失败')
+  }
+}
+
+async function unstage(r: OrganizeRecord) {
+  try {
+    await organizeApi.setPending(r.id)
+    toggleSelect(r.id, false)
+    await reload()
+  } catch (e) {
+    toastError(e, '撤销失败')
   }
 }
 
@@ -418,8 +452,9 @@ async function clearAll() {
 
       <div v-if="confirmable.length" class="batch">
         <HCheckbox :checked="allPicked" :indeterminate="somePicked" @update:checked="toggleAll">
-          全选本页可确认的 {{ confirmable.length }} 项
+          全选本页可提交的 {{ confirmable.length }} 项
         </HCheckbox>
+        <span class="dim batch-hint">「重新整理 / 重新指定」里点「暂存」可以先改好多条，再一起提交</span>
         <span class="grow" />
         <span v-if="selected.size" class="dim">已选 {{ selected.size }} 项</span>
         <HButton
@@ -427,10 +462,10 @@ async function clearAll() {
           size="sm"
           :disabled="!selected.size || busy"
           :loading="batching"
-          @click="confirmSelected"
+          @click="submitSelected"
         >
           <template #icon><Check /></template>
-          确认所选并入库
+          提交到队列
         </HButton>
       </div>
 
@@ -464,10 +499,10 @@ async function clearAll() {
             class="row"
             :class="{ 'row-awaiting': r.status === 'awaiting', picked: selected.has(r.id) }"
           >
-            <div v-if="r.status === 'awaiting'" class="pick">
+            <div v-if="r.status === 'awaiting' || r.pending_tmdb_id" class="pick">
               <HCheckbox
                 :checked="selected.has(r.id)"
-                :disabled="!r.tmdb_id"
+                :disabled="!canSubmit(r)"
                 :aria-label="`选择 ${r.title || r.source}`"
                 @update:checked="(v: boolean) => toggleSelect(r.id, v)"
               />
@@ -536,6 +571,12 @@ async function clearAll() {
                   <code class="plan-dir">{{ r.target_dir || '（确认时按模板生成）' }}</code>
                 </template>
                 <template v-else>{{ r.message || '未能自动识别，请重新指定 TMDB 条目' }}</template>
+              </div>
+
+              <div v-if="r.pending_tmdb_id" class="plan plan-staged">
+                <span class="plan-label">已指定，待提交</span>
+                <b>{{ r.pending_label || `${r.pending_media_type}/${r.pending_tmdb_id}` }}</b>
+                <button type="button" class="link-btn" @click="unstage(r)">撤销</button>
               </div>
 
               <div class="meta">
@@ -676,7 +717,7 @@ async function clearAll() {
       />
     </SectionCard>
 
-    <RedoDialog v-model:show="pickShow" :record="pickTarget" :mode="pickMode" @confirm="doPick" />
+    <RedoDialog v-model:show="pickShow" :record="pickTarget" :mode="pickMode" @confirm="doPick" @stage="doStage" />
   </div>
 </template>
 
@@ -859,6 +900,27 @@ async function clearAll() {
 }
 .plan-label {
   color: var(--muted);
+}
+.plan-staged b {
+  color: var(--accent-soft-foreground);
+  font-weight: 500;
+}
+.link-btn {
+  all: unset;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+}
+.link-btn:hover {
+  text-decoration: underline;
+}
+.link-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.batch-hint {
+  font-size: 12px;
 }
 .plan-dir {
   padding: 2px 8px;

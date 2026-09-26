@@ -54,6 +54,9 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 		if st == "problem" {
 			// 「需要处理」= 失败 + 未识别：用户最常看的就是这一档
 			q = q.Where("status IN ?", []string{"failed", "unrecognized"})
+		} else if st == "staged" {
+			// 「已指定」= 暂存了指定、还没提交到队列的，跨状态
+			q = q.Where("pending_tmdb_id > 0")
 		} else {
 			q = q.Where("status = ?", st)
 		}

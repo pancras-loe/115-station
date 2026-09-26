@@ -110,6 +110,11 @@ export interface OrganizeRecord {
   ai_note?: string
   /** 因为 AI 判定停下来等确认（与「人工确认」开关无关） */
   hold_ai?: boolean
+  /** 暂存的指定（还没提交到任务队列）；0 = 没有 */
+  pending_tmdb_id?: number
+  pending_media_type?: string
+  /** 暂存条目的「片名 (年份)」 */
+  pending_label?: string
   redo_count: number
   created_at: string
   file_list: OrganizeRecordFile[]
@@ -157,8 +162,6 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
   )
 
 /** 批量按识别结果入库；没识别出来的由后端跳过 */
-export const confirmRecords = (ids: number[]) => http.post<QueuedReply>('/organize/records/confirm', { ids })
-
 /** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */
 export const ignoreRecord = (id: number) =>
   http.post<{ message?: string }>(`/organize/records/${id}/ignore`, {}, { timeoutMs: 5 * 60_000 })
@@ -183,6 +186,17 @@ export const deepDeleteRecord = (id: number) =>
   }>(`/organize/records/${id}/deep-delete`, {}, { timeoutMs: 10 * 60_000 })
 
 /** 重新整理会动网盘与本地文件，和整理/同步互斥，耗时按分钟计 */
+/** 暂存指定（不执行）；pick 为空 = 撤销暂存 */
+export const setPending = (id: number, pick?: { tmdbId: number; mediaType: string; label?: string }) =>
+  http.put<{ message: string }>(
+    `/organize/records/${id}/pending`,
+    pick ? { tmdb_id: pick.tmdbId, media_type: pick.mediaType, label: pick.label } : {},
+  )
+
+/** 统一提交勾选的记录：暂存了指定的按指定执行，已识别的待确认合成一个批量确认 */
+export const submitRecords = (ids: number[]) =>
+  http.post<{ message: string; job_ids: number[]; eta_sec: number }>('/organize/records/submit', { ids })
+
 /** 重新整理 → 入任务队列立即返回 */
 export const redoRecord = (id: number, tmdbId: number, mediaType: string, label?: string) =>
   http.post<QueuedReply>(`/organize/records/${id}/redo`, { tmdb_id: tmdbId, media_type: mediaType, label })

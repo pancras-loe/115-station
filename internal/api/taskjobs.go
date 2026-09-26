@@ -9,6 +9,7 @@ import (
 	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ==================== 队列任务：重新整理 / 确认入库 ====================
@@ -57,6 +58,17 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	job, err := h.enqueueRedo(&rec, req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.queuedReply(c, job, "重新整理")
+}
+
+// enqueueRedo 把一条记录的重新整理入队（调用方已做过 redoPrecheck）。
+// 入队即清掉这条记录上暂存的指定：用户已经给出了最终结论
+func (h *Handler) enqueueRedo(rec *model.OrganizeRecord, req pickReq) (model.TaskJob, error) {
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind:      "redo",
 		Title:     fmt.Sprintf("重新整理《%s》→ %s", shortTitle(rec.Source), pickLabel(req)),
@@ -64,11 +76,17 @@ func (h *Handler) RedoOrganizeRecord(c *gin.Context) {
 		Source:    "web", Priority: jobPriorityManual,
 		Params: jobParams{RecordIDs: []uint{rec.ID}, TmdbID: req.TmdbID, MediaType: req.MediaType},
 	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	if err == nil {
+		clearPending(h.DB, rec.ID)
 	}
-	h.queuedReply(c, job, "重新整理")
+	return job, err
+}
+
+// clearPending 清掉记录上暂存的指定
+func clearPending(db *gorm.DB, id uint) {
+	db.Model(&model.OrganizeRecord{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"pending_tmdb_id": 0, "pending_media_type": "", "pending_label": "",
+	})
 }
 
 // redoPrecheck 重新整理的前置校验（入队时与执行时各查一次）
@@ -124,6 +142,16 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条没有识别出来，请先搜索并指定 TMDB 条目"})
 		return
 	}
+	job, err := h.enqueueConfirm(&rec, req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.queuedReply(c, job, "确认入库")
+}
+
+// enqueueConfirm 单条待确认记录入队；req.TmdbID 为 0 = 按识别结果入库。入队即清暂存
+func (h *Handler) enqueueConfirm(rec *model.OrganizeRecord, req pickReq) (model.TaskJob, error) {
 	target := strings.TrimSpace(rec.Title + " " + rec.Year)
 	params := jobParams{RecordIDs: []uint{rec.ID}}
 	if req.TmdbID > 0 {
@@ -136,49 +164,10 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 		DedupeKey: fmt.Sprintf("record:%d", rec.ID),
 		Source:    "web", Priority: jobPriorityManual, Params: params,
 	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	if err == nil {
+		clearPending(h.DB, rec.ID)
 	}
-	h.queuedReply(c, job, "确认入库")
-}
-
-// ConfirmOrganizeRecords POST /organize/records/confirm  body: {"ids":[1,2,3]}
-// 批量按识别结果入库 → 一个任务（同一批共用一次刮削与 Emby 刷新）。没识别出来的跳过
-func (h *Handler) ConfirmOrganizeRecords(c *gin.Context) {
-	var req struct {
-		IDs []uint `json:"ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择要确认的记录"})
-		return
-	}
-	if len(req.IDs) > jobMaxBatch {
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多提交 %d 条", jobMaxBatch)})
-		return
-	}
-	var ids []uint
-	h.DB.Model(&model.OrganizeRecord{}).Where("id IN ? AND status = ? AND tmdb_id > 0", req.IDs, orgStatusAwaiting).
-		Order("created_at ASC, id ASC").Pluck("id", &ids)
-	if len(ids) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "所选记录里没有可直接确认的条目（未识别的要先指定 TMDB 条目）"})
-		return
-	}
-	job, err := enqueueJob(h.DB, jobSpec{
-		Kind:   "confirm",
-		Title:  fmt.Sprintf("批量确认入库 %d 条", len(ids)),
-		Source: "web", Priority: jobPriorityManual,
-		Params: jobParams{RecordIDs: ids},
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	what := fmt.Sprintf("%d 条确认入库", len(ids))
-	if skipped := len(req.IDs) - len(ids); skipped > 0 {
-		what = fmt.Sprintf("%d 条确认入库（%d 条未识别或已处理，已跳过）", len(ids), skipped)
-	}
-	h.queuedReply(c, job, what)
+	return job, err
 }
 
 func execConfirmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {

@@ -281,6 +281,12 @@ type OrganizeRecord struct {
 	// 与「人工确认」开关无关：开关关着时普通待确认会被自动整理接手，这种不会 ——
 	// 否则每一轮都会重新识别、重新调一次模型、又停回来
 	HoldAI bool `json:"hold_ai"`
+	// PendingTmdbID / PendingMediaType / PendingLabel 用户暂存的指定（还没提交到任务队列）。
+	// 放在记录上而不是前端：改了几十条一刷新全丢是最坏的体验，换台设备也要能接着提交。
+	// 提交入队时清空。PendingLabel 是「片名 (年份)」，列表直接显示，不必再查 TMDB
+	PendingTmdbID    int    `json:"pending_tmdb_id" gorm:"index"`
+	PendingMediaType string `json:"pending_media_type" gorm:"size:20"`
+	PendingLabel     string `json:"pending_label" gorm:"size:255"`
 
 	// LinkID 这批内容是从哪条离线/分享链接下来的（DownloadLink.ID，0 = 认不出来源）。
 	// 一条链接可以对应多条记录（合集分享、散文件逐集），所以挂在记录这一侧

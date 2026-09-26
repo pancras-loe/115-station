@@ -23,20 +23,22 @@ const props = withDefaults(
 const TEXT = {
   redo: {
     title: '重新整理',
-    note: '确认后会把这些文件从当前位置改名并搬到正确目录，旧的 STRM 与元数据一并清理。',
-    ok: '用这个条目重新整理',
+    note: '加入队列后会把这些文件从当前位置改名并搬到正确目录，旧的 STRM 与元数据一并清理。',
+    ok: '加入队列重新整理',
   },
   confirm: {
     title: '重新指定 TMDB 条目',
-    note: '确认后按这个条目继续整理：洗版、重命名、搬入媒体库、写 STRM 与刮削。',
-    ok: '按这个条目入库',
+    note: '加入队列后按这个条目继续整理：洗版、重命名、搬入媒体库、写 STRM 与刮削。',
+    ok: '加入队列入库',
   },
 }
 const text = computed(() => TEXT[props.mode])
 const emit = defineEmits<{
   'update:show': [boolean]
-  /** 用户确认了某个条目 */
+  /** 用户确认了某个条目：立即加入任务队列 */
   confirm: [TmdbCandidate]
+  /** 只暂存这个指定，稍后和别的记录一起「提交到队列」 */
+  stage: [TmdbCandidate]
 }>()
 
 const keyword = ref('')
@@ -156,6 +158,14 @@ async function search() {
       <span class="foot-note">{{ text.note }}</span>
       <div class="foot-btns">
         <HButton variant="tertiary" @click="emit('update:show', false)">取消</HButton>
+        <HButton
+          variant="secondary"
+          :disabled="!picked"
+          title="先记在这条记录上，改好多条后在列表里勾选统一提交"
+          @click="picked && emit('stage', picked)"
+        >
+          暂存
+        </HButton>
         <HButton variant="primary" :disabled="!picked" @click="picked && emit('confirm', picked)">
           {{ text.ok }}
         </HButton>
