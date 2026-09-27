@@ -27,6 +27,7 @@ func newTestDB(t *testing.T, name string) {
 // 这里用 scanLedgerTitles 的 key 做交叉验证：刮削按它定位片目目录
 func TestOrgSinkPathMatchesLedgerKey(t *testing.T) {
 	newTestDB(t, "orgsink.db")
+	seedCategoryRules(t, model.CategoryRule{MediaType: "tv", Name: "剧集/国产剧"})
 	s := &orgSink{libName: "媒体库", jobs: map[string]scrapeJob{}}
 
 	// 剧集：视频落季目录，刮削目标是标题目录
