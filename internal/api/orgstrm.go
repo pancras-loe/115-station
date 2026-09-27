@@ -526,6 +526,13 @@ func sumSizes(files []remoteFile) int64 {
 	return n
 }
 
+// recordsSnapshot 本轮落下的整理记录快照（收尾推通知用）
+func (s *orgSink) recordsSnapshot() []*model.OrganizeRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*model.OrganizeRecord(nil), s.records...)
+}
+
 // strmTotal 本轮整理直接生成的 STRM 总数
 func (s *orgSink) strmTotal() int {
 	s.mu.Lock()

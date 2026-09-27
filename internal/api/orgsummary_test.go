@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // 两个整理入口共用同一段收尾：完成行格式一致，入库片单一条都不能少。
@@ -44,5 +46,34 @@ func TestFinishOrganizeSilentWhenIdle(t *testing.T) {
 
 	if out := buf.String(); strings.Contains(out, "整理完成") {
 		t.Fatalf("空转不该打完成汇总: %s", out)
+	}
+}
+
+// 没入库的结果要推一条汇总：此前只有入库卡片，全判为已存在时用户收不到任何下文。
+// 同一条失败在静默期内不重复推（定时整理每一轮都会再失败一次）
+func TestOrgOutcomeNotifyText(t *testing.T) {
+	now := time.Now()
+	recs := []*model.OrganizeRecord{
+		{Status: "success", SourceFid: "s1", Title: "入库的"},
+		{Status: "exists", SourceFid: "d1", Title: "武林外传", Year: "2006",
+			Message: "库内已有同一份文件（sha1 相同），80 个视频已移到 已存在/武林外传"},
+		{Status: "failed", SourceFid: "d2", Source: "某目录/", Message: "移到已存在失败"},
+	}
+	text := orgOutcomeNotifyText(recs, now)
+	if strings.Contains(text, "入库的") {
+		t.Fatalf("入库成功另有卡片，不该再列: %s", text)
+	}
+	if !strings.Contains(text, "○ 已存在 · 武林外传 (2006)") || !strings.Contains(text, "80 个视频") ||
+		!strings.Contains(text, "✗ 失败 · 某目录") {
+		t.Fatalf("汇总内容不对: %s", text)
+	}
+	if again := orgOutcomeNotifyText(recs[2:], now.Add(time.Hour)); again != "" {
+		t.Fatalf("静默期内同一条失败不该重复推: %s", again)
+	}
+	if later := orgOutcomeNotifyText(recs[2:], now.Add(orgOutcomeQuiet+time.Minute)); later == "" {
+		t.Fatal("过了静默期应当再推")
+	}
+	if none := orgOutcomeNotifyText(recs[:1], now); none != "" {
+		t.Fatalf("全部成功时不推: %s", none)
 	}
 }

@@ -1847,11 +1847,25 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		rejectFiles = append(rejectFiles, orgRecordFile{Fid: f.Fid, Name: f.Name,
 			Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1})
 	}
+	// 「同一份文件」的逐集判定行只打前几条：同一个分享转存两次，80 集就是 80 行
+	// 一模一样的话，真正要看的其他判定被冲得找不到。总数在下面的汇总行里
+	const sameFileLogMax = 3
 	for _, vf := range videoFiles {
 		vdir := vplace.relOf[vf.Fid]
-		plan := washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), onLog)
+		var lines []string
+		capture := func(s string) { lines = append(lines, s) }
+		// 兜底只在确实没配策略时走：此前无条件先跑一遍，配了策略的用户也会
+		// 看到「未配置洗版策略」（现场：武林外传 80 集，每集两行、互相矛盾）
+		var plan washPlan
 		if st != nil {
-			plan = decideWash(media, vf.Name, vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), onLog)
+			plan = decideWash(media, vf.Name, vf.Sha1, vdir, st, sc.libFiles(vdir), sc.sameFile(vf.Sha1), capture)
+		} else {
+			plan = washNoStrategy(vf.Name, sc.sameFile(vf.Sha1), capture)
+		}
+		if plan.decision != washSameFile || sameFileVideos < sameFileLogMax {
+			for _, l := range lines {
+				onLog(l)
+			}
 		}
 		if plan.decision == washReplaced {
 			p := plan
@@ -1906,7 +1920,14 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			Files: marshalRecordFiles(rejectFiles), VideoCount: rejectVideos,
 		})
 	}
+	if sameFileVideos > sameFileLogMax {
+		onLog(fmt.Sprintf("○ 洗版判定: 另有 %d 个视频同样与库内是同一份文件（sha1 相同），逐集日志从略",
+			sameFileVideos-sameFileLogMax))
+	}
 	if len(accepted) == 0 {
+		// 全部判为已存在时源目录同样要收拾，和正常入库的收尾一致。
+		// 此前直接返回，空壳留在转存目录里，守望者只好再排一轮整理专门来删它
+		pruneOrMove(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", onLog)
 		return results
 	}
 	videoFiles = accepted

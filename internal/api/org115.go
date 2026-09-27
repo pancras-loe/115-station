@@ -5,7 +5,10 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
 )
@@ -131,6 +134,82 @@ func finishOrganize(sink *orgSink, results []OrganizeResult, start time.Time) {
 	}
 	log.Printf("[整理] ✅ 整理完成（耗时 %s · %s）",
 		time.Since(start).Truncate(time.Second), organizeSummaryLine(sink, results))
+	if text := orgOutcomeNotifyText(sink.recordsSnapshot(), time.Now()); text != "" {
+		go NotifyMessage("📋 整理结果", text)
+	}
+}
+
+// orgOutcomeSeen 已推过的「没入库」结果，按 来源 fid + 状态 + 原因 去重。
+// 失败的条目留在待整理里，定时整理每一轮都会再失败一次，不去重就是每 10 分钟一条
+var orgOutcomeSeen = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+const (
+	orgOutcomeQuiet = 6 * time.Hour // 同一条结果多久内不重复推
+	orgOutcomeMax   = 10            // 一条消息最多列几部，其余只报数
+)
+
+// orgOutcomeNotifyText 本轮**没入库**的条目（已存在 / 未识别 / 失败 / 待确认）汇成一条消息。
+//
+// 入库成功的每部片各有一张卡片（notifyMediaStoredFull），其余结果此前一条都不推：
+// 转存后内容全被判成已存在，用户只看到转存成功，之后再无下文，
+// 不翻日志不知道走到了哪一步（现场：武林外传重复转存，80 集移进「已存在」）
+func orgOutcomeNotifyText(recs []*model.OrganizeRecord, now time.Time) string {
+	orgOutcomeSeen.Lock()
+	defer orgOutcomeSeen.Unlock()
+	for k, t := range orgOutcomeSeen.at {
+		if now.Sub(t) > orgOutcomeQuiet {
+			delete(orgOutcomeSeen.at, k)
+		}
+	}
+	var lines []string
+	n := 0
+	for _, r := range recs {
+		if r == nil || r.Status == "success" {
+			continue
+		}
+		key := r.SourceFid + "|" + r.Status + "|" + r.Message
+		if r.SourceFid != "" {
+			if _, ok := orgOutcomeSeen.at[key]; ok {
+				continue
+			}
+			orgOutcomeSeen.at[key] = now
+		}
+		n++
+		if n > orgOutcomeMax {
+			continue
+		}
+		name := strings.TrimSuffix(r.Source, "/")
+		if r.Title != "" {
+			name = r.Title
+			if r.Year != "" {
+				name += " (" + r.Year + ")"
+			}
+		}
+		lines = append(lines, fmt.Sprintf("%s %s\n   %s", orgOutcomeLabel(r.Status), truncateStr(name, 60), truncateStr(r.Message, 120)))
+	}
+	if n == 0 {
+		return ""
+	}
+	if n > orgOutcomeMax {
+		lines = append(lines, fmt.Sprintf("… 另有 %d 条", n-orgOutcomeMax))
+	}
+	lines = append(lines, "详情见 任务中心 → 整理记录")
+	return strings.Join(lines, "\n")
+}
+
+func orgOutcomeLabel(status string) string {
+	switch status {
+	case "exists":
+		return "○ 已存在 ·"
+	case "unrecognized":
+		return "? 未识别 ·"
+	case orgStatusAwaiting:
+		return "⏸ 待确认 ·"
+	}
+	return "✗ 失败 ·"
 }
 
 // organizeSummaryLine 完成行里的计数。以落盘台账（sink）为准，
