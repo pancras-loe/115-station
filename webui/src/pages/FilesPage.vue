@@ -35,7 +35,7 @@ import { useQueueStore } from '@/stores/queue'
  *
  * 每行最右侧是这一行能做的操作；勾选后只有批量刮削与批量移动（整理一次只做一项）。
  * 媒体库里只有「片目目录」（当前二级分类目录的下一层）能整理和移动，片目里的季目录 / 视频只能刮削，
- * 库根与分类目录什么都不能动。哪一行是片目目录按后端给的分类目录列表算，执行时后端会再判一次。
+ * 库根与分类目录什么都不能动。媒体库外只能整理和移动，不能刮削（还没整理的内容刮了也白刮）。哪一行是片目目录按后端给的分类目录列表算，执行时后端会再判一次。
  *
  * 115 只有 cid 没有父目录概念，面包屑就是一路点进来的栈；提交时连同面包屑一起交给后端，
  * 后端优先用 Cookie 通道查真实祖先链，查不到（OpenAPI 独立模式）才用它定位。
@@ -211,7 +211,9 @@ function actionsOf(it: FileItem): RowActions {
     if (title) return { scrape: true, organize: true, move: true, title: true }
     return { ...none, scrape: insideTitle.value && media }
   }
-  return { scrape: media, organize: media, move: true, title: false }
+  // 媒体库外不刮削：那里的内容还没整理，片名 / 目录结构都不规整，刮出来的元数据
+  // 随整理搬走、改名就作废了；要刮先整理进媒体库
+  return { scrape: false, organize: media, move: true, title: false }
 }
 
 const rowMenu = (a: RowActions) =>
@@ -256,6 +258,14 @@ function bodyOf(list: FileItem[]): FileJobBody {
     items: list.map(({ id, name, is_dir, pickcode }) => ({ id, name, is_dir, pickcode })),
   }
 }
+
+/** 批量刮削为什么不能点（空 = 能点）；媒体库外整个按钮不显示 */
+const batchScrapeBlock = computed(() => {
+  const list = selectedItems.value
+  if (!list.length) return '先勾选要刮削的条目'
+  const bad = list.find((it) => !actionsOf(it).scrape)
+  return bad ? `「${bad.name}」不能刮削：媒体库里只有片目目录与片目里的季目录、视频能刮削` : ''
+})
 
 /** 批量移动为什么不能点（空 = 能点） */
 const batchMoveBlock = computed(() => {
@@ -365,7 +375,14 @@ onMounted(() => load())
         <div class="actions">
           <span class="sel-count">已选 {{ selectedItems.length }} 项</span>
           <HButton variant="tertiary" size="sm" :disabled="!selectedItems.length" @click="selected = new Set()">清除</HButton>
-          <HButton variant="secondary" size="sm" :disabled="!selectedItems.length" @click="openScrape(selectedItems)">
+          <HButton
+            v-if="libRel !== null"
+            variant="secondary"
+            size="sm"
+            :disabled="!!batchScrapeBlock"
+            :title="selectedItems.length ? batchScrapeBlock || undefined : undefined"
+            @click="openScrape(selectedItems)"
+          >
             <Images :size="14" />批量刮削
           </HButton>
           <HButton
