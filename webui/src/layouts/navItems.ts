@@ -29,13 +29,14 @@ export interface NavItem {
  */
 export const navItems: NavItem[] = [
   { name: 'dashboard', label: '总览面板', icon: LayoutDashboard, group: '概览' },
-  // 图标与顶栏的任务弹层入口一致
-  { name: 'tasks', label: '任务中心', icon: ListChecks },
 
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
   { name: 'files', label: '网盘文件', icon: FolderTree },
+  // 任务中心看的是整理 / 同步 / 刮削这些媒体库任务的进度与记录，跟它们放在一组。
+  // 图标与顶栏的任务弹层入口一致
+  { name: 'tasks', label: '任务中心', icon: ListChecks },
 
   { name: 'upload-download', label: '上传下载', icon: ArrowDownUp, group: '传输' },
   { name: 'media-transfer', label: '影视转存', icon: Download },

@@ -9,15 +9,16 @@ import { recordStats } from '@/stores/recordStats'
  * 手机底部导航：放最常用的四个入口，其余收进「更多」（打开侧栏抽屉）。
  * 抽屉菜单要伸手够左上角，单手握持时底栏才是拇指够得着的地方。
  */
-// 任务中心占了原来 Strm 管理的位置：手机上最常做的是看进度、确认待确认的条目，
-// Strm 管理基本是配置和偶尔一次全量，收进「更多」
-const TAB_NAMES = ['dashboard', 'tasks', 'organize', 'media-transfer']
+// 手机上最常做的是看进度、确认待确认的条目、对网盘里的条目手动刮削 / 整理；
+// Strm 管理基本是配置和偶尔一次全量，影视转存多在电脑上挑资源，都收进「更多」。
+// 任务放最右，贴着拇指最常落的位置
+const TAB_NAMES = ['dashboard', 'organize', 'files', 'tasks']
 /** 底栏上的标签只有四五个字宽，用短名 */
 const SHORT: Record<string, string> = {
   dashboard: '总览',
-  tasks: '任务',
   organize: '整理',
-  'media-transfer': '转存',
+  files: '网盘',
+  tasks: '任务',
 }
 
 const emit = defineEmits<{ more: [] }>()
