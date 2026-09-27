@@ -14,7 +14,7 @@ import type { OrganizeRecord } from '@/api/organize'
  * 指定 TMDB 条目。两种用途共用一个弹窗：
  *   - redo：已整理过的条目识别错了，后端按记录里的 fid 原地重做；
  *   - confirm：人工确认模式下还在待整理里的条目，按指定条目走完整流水线入库。
- * 搜索框既吃片名也吃纯数字的 TMDB ID（后端 /tmdb/search 已经区分处理）。
+ * 搜索框既吃片名也吃 TMDB ID / 链接（后端 /tmdb/search 已经区分处理，只填数字时电影剧集两边都查）。
  */
 const props = withDefaults(
   defineProps<{ show: boolean; record: OrganizeRecord | null; mode?: 'redo' | 'confirm' }>(),
@@ -97,7 +97,7 @@ async function search() {
         <HSearchField
           v-model="keyword"
           class="search-input"
-          placeholder="输入片名，或直接填 TMDB ID（纯数字）"
+          placeholder="输入片名，或填 TMDB ID / 链接（如 tv/108545）"
           @search="search"
         />
         <HButton variant="primary" :loading="loading" @click="search">搜索</HButton>

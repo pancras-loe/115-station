@@ -82,6 +82,7 @@ const trail = ref<Crumb[]>(loadTrail())
 const cid = computed(() => trail.value[trail.value.length - 1]?.cid ?? '0')
 const items = ref<FileItem[]>([])
 const roots = ref<Record<string, WorkspaceRole>>({})
+const rootPaths = ref<Record<string, string>>({})
 const categories = ref<Set<string>>(new Set())
 const truncated = ref(false)
 const loading = ref(false)
@@ -92,6 +93,8 @@ const selected = ref(new Set<string>())
 /** 渲染上限：几千个文件的目录一次铺满会卡，按需再展开 */
 const PAGE = 300
 const limit = ref(PAGE)
+/** 列表自己的滚动容器：表头钉在顶上，只滚内容 */
+const listEl = ref<HTMLElement | null>(null)
 
 async function load(refresh = false) {
   loading.value = true
@@ -100,6 +103,7 @@ async function load(refresh = false) {
     const d = await filesApi.list(cid.value, refresh)
     items.value = d.data ?? []
     roots.value = d.roots ?? {}
+    rootPaths.value = d.root_paths ?? {}
     categories.value = new Set(d.categories ?? [])
     truncated.value = !!d.truncated
   } catch (e) {
@@ -116,6 +120,7 @@ function go(next: Crumb[]) {
   selected.value = new Set()
   keyword.value = ''
   limit.value = PAGE
+  listEl.value?.scrollTo({ top: 0 })
   void load()
 }
 
@@ -136,6 +141,22 @@ const zone = computed<WorkspaceRole | ''>(() => {
   return ''
 })
 const configured = computed(() => Object.values(roots.value))
+
+/**
+ * 工作区根不在网盘根下时（如 /StrmStation/冗余），一路上的祖先目录要标出「里面有冗余」，
+ * 否则从根目录点进来根本不知道往哪走。按路径比：面包屑名字 + 行名 是不是某个根路径的前缀
+ */
+const curPath = computed(() => trail.value.map((c) => '/' + c.name).join(''))
+function containedRoles(it: FileItem): WorkspaceRole[] {
+  if (!it.is_dir || it.root) return []
+  const prefix = `${curPath.value}/${it.name}/`
+  const out: WorkspaceRole[] = []
+  for (const [rcid, p] of Object.entries(rootPaths.value)) {
+    const role = roots.value[rcid]
+    if (role && p.startsWith(prefix) && !out.includes(role)) out.push(role)
+  }
+  return out
+}
 
 // ---- 媒体库里的层级：分类目录的下一层是片目目录（与后端 libCategoryLayout.isTitleRel 同一口径） ----
 
@@ -369,7 +390,7 @@ onMounted(() => load())
       <HAlert v-if="error" status="danger" class="tip">{{ error }}</HAlert>
       <HAlert v-if="truncated" status="warning" class="tip">目录太大，只列出了前几千项；要找的条目不在里面时请到 115 里整理一下目录。</HAlert>
 
-      <div class="list" role="table" aria-label="目录内容">
+      <div ref="listEl" class="list" role="table" aria-label="目录内容">
         <div class="row head" role="row">
           <HCheckbox
             :checked="allChecked"
@@ -411,6 +432,13 @@ onMounted(() => load())
             </span>
             <HChip v-if="it.root" :color="ROLE_TONE[it.root]" size="sm">{{ ROLE_TEXT[it.root] }}</HChip>
             <HChip v-else-if="actionsOf(it).title" color="success" size="sm">片目</HChip>
+            <HChip
+              v-else-if="containedRoles(it).length"
+              size="sm"
+              :title="`这个目录里有工作区：${containedRoles(it).map((r) => ROLE_TEXT[r]).join('、')}`"
+            >
+              含{{ containedRoles(it).map((r) => ROLE_TEXT[r]).join(' · ') }}
+            </HChip>
           </div>
           <span class="size-col">{{ humanSize(it.size) }}</span>
           <div class="ops-col">
@@ -421,9 +449,11 @@ onMounted(() => load())
                   :key="o.key"
                   variant="ghost"
                   size="sm"
+                  class="op"
+                  :class="`op-${o.key}`"
                   @click="onRowAction(it, o.key)"
                 >
-                  {{ o.label }}
+                  <component :is="o.icon" :size="14" />{{ o.label }}
                 </HButton>
               </div>
               <!-- HDropdown 的根是 Reka 的无渲染组件，类名挂不上去，外面包一层 -->
@@ -526,10 +556,24 @@ onMounted(() => load())
   margin: 0;
 }
 
+/* 列表单独滚动、表头吸顶：几百项的目录不用滚整页才能回到批量按钮。
+   高度扣掉顶栏、面包屑与工具栏（与日志页同一做法），矮屏上至少留 320px */
 .list {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  max-height: calc(100dvh - 300px);
+  min-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.row.head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex: none;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--separator);
 }
 .row {
   display: flex;
@@ -568,13 +612,33 @@ onMounted(() => load())
 /* 操作列定宽：三个按钮的位置在每一行都对齐，没有操作的行留空 */
 .ops-col {
   flex: none;
-  width: 168px;
+  width: 222px;
   display: flex;
   justify-content: flex-end;
 }
 .ops-inline {
   display: flex;
-  gap: 2px;
+  gap: 4px;
+}
+/* 三个动作各一个颜色：刮削（只写元数据）用强调色、整理（会搬移改名）用绿、
+   移动（挪出当前位置）用黄，扫一眼就能分清，不用读字 */
+.op {
+  gap: 4px;
+  --op-c: var(--accent);
+  color: var(--op-c);
+  background: color-mix(in oklab, var(--op-c) 10%, transparent);
+}
+.op-organize {
+  --op-c: var(--success);
+}
+.op-move {
+  --op-c: var(--warning);
+}
+@media (hover: hover) {
+  .op:hover {
+    color: var(--op-c);
+    background: color-mix(in oklab, var(--op-c) 18%, transparent);
+  }
 }
 .ops-menu {
   display: none;
@@ -640,6 +704,9 @@ onMounted(() => load())
   }
   .ops-col {
     width: 36px;
+  }
+  .list {
+    max-height: calc(100dvh - 360px - var(--tabbar-h));
   }
   .ops-inline {
     display: none;

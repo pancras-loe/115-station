@@ -10,7 +10,7 @@ import type { TmdbCandidate } from '@/api/resources'
 
 /**
  * 内嵌在刮削 / 整理弹窗里的 TMDB 条目选择：搜索框 + 候选列表。
- * 与整理记录的 RedoDialog 同一个搜索接口（片名或纯数字 TMDB ID 都行），
+ * 与整理记录的 RedoDialog 同一个搜索接口（片名、TMDB ID 或 TMDB 链接都行），
  * 这里不自成弹窗 —— 弹窗里再叠弹窗在手机上是两层底部抽屉。
  */
 const props = defineProps<{ initial: string }>()
@@ -51,7 +51,7 @@ const isPicked = (it: TmdbCandidate) => picked.value?.id === it.id && picked.val
 <template>
   <div class="picker">
     <div class="search">
-      <HSearchField v-model="keyword" class="search-input" placeholder="输入片名，或直接填 TMDB ID（纯数字）" @search="search" />
+      <HSearchField v-model="keyword" class="search-input" placeholder="输入片名，或填 TMDB ID / 链接（如 tv/108545）" @search="search" />
       <HButton variant="secondary" :loading="loading" @click="search">搜索</HButton>
     </div>
 

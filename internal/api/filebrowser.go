@@ -87,6 +87,53 @@ func (h *Handler) workspaceRoles() map[string]string {
 	return out
 }
 
+// workspaceRootPaths 工作区根 cid → 网盘绝对路径。
+//
+// 工作区根常常不在网盘根下（一键创建的就在 /StrmStation/ 里），只给根目录本身打标的话，
+// 从网盘根往下点时一路上看不出哪个目录里装着待整理 / 冗余。前端拿这张表比对
+// 「当前路径 + 行名」是不是某个根的祖先，给那一行标「含 xx」。
+// 只是显示提示，走 PathCache（整理自己的搬移 / 改名会失效它）；没 Cookie 时只查缓存，
+// 查不到的根就不标 —— 不值得为一个角标每次列目录都多打几次节流请求
+func (h *Handler) workspaceRootPaths(roles map[string]string) map[string]string {
+	out := map[string]string{}
+	cookie, _ := h.get115Cookie()
+	for cid := range roles {
+		p, ok := lookupCachedAbs(cid)
+		if !ok && cookie != "" && !rootPathFailedRecently(cid) {
+			var err error
+			if p, err = resolveDirAbs(cookie, cid); err != nil {
+				// 根目录被删了 / 风控：记一下，免得之后每列一次目录都再打一次
+				markRootPathFailed(cid)
+				p = ""
+			}
+		}
+		if p != "" && p != "/" {
+			out[cid] = p
+		}
+	}
+	return out
+}
+
+var (
+	rootPathFailMu sync.Mutex
+	rootPathFail   = map[string]time.Time{}
+)
+
+// rootPathFailTTL 解析失败的工作区根多久之后再试
+const rootPathFailTTL = 10 * time.Minute
+
+func rootPathFailedRecently(cid string) bool {
+	rootPathFailMu.Lock()
+	defer rootPathFailMu.Unlock()
+	return time.Now().Before(rootPathFail[cid])
+}
+
+func markRootPathFailed(cid string) {
+	rootPathFailMu.Lock()
+	rootPathFail[cid] = time.Now().Add(rootPathFailTTL)
+	rootPathFailMu.Unlock()
+}
+
 // ListFiles115 GET /files/115?cid=0[&refresh=1] → 目录内容（文件夹在前）+ 工作区根
 func (h *Handler) ListFiles115(c *gin.Context) {
 	cid := strings.TrimSpace(c.Query("cid"))
@@ -97,8 +144,9 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 	// categories：当前分类目录（库内相对路径）。前端据此判断媒体库里哪一行是片目目录，
 	// 显示「整理 / 移动」按钮；执行时后端按网盘上的真实位置再判一次
 	categories := libCategories(loadLibCategoryLayout())
+	rootPaths := h.workspaceRootPaths(roles)
 	reply := func(items []fileEntry, truncated bool) {
-		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": items, "truncated": truncated, "roots": roles, "categories": categories})
+		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": items, "truncated": truncated, "roots": roles, "root_paths": rootPaths, "categories": categories})
 	}
 	if c.Query("refresh") != "1" {
 		fileListMu.Lock()

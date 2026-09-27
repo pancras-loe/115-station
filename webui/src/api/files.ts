@@ -24,6 +24,8 @@ export interface FileList {
   truncated?: boolean
   /** 工作区根目录：cid → 角色 */
   roots: Record<string, WorkspaceRole>
+  /** 工作区根目录：cid → 网盘绝对路径（解析不出的不在表里）。用来给它的祖先目录标「含 xx」 */
+  root_paths?: Record<string, string>
   /** 当前二级分类目录（库内相对路径）：分类目录的下一层是片目目录 */
   categories?: string[]
 }
