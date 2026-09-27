@@ -214,3 +214,20 @@ func TestDeepDelScopeAllowsColonInFilename(t *testing.T) {
 		}
 	}
 }
+
+// 剧/季删除事件能否展开成整个目录，标题目录上的编号标签是证据之一。
+// 这里故意只认 [tmdb=…]：parseTitleDir 后来多认了默认模板的 {tmdbid=…} 等写法，
+// 深度删除不跟着放宽（§6.10），要放宽请单独评估
+func TestDeepDelTitleTaggedStaysStrict(t *testing.T) {
+	for dir, want := range map[string]bool{
+		"狂飙-2023-[tmdb=207468]":     true,
+		"狂飙-2023-[tmdb=0]":          false,
+		"狂飙.2023.{tmdbid=207468}":   false,
+		"狂飙 (2023) [tmdbid=207468]": false,
+		"狂飙 (2023)":                 false,
+	} {
+		if got := deepDelTitleTagged(dir); got != want {
+			t.Errorf("deepDelTitleTagged(%q) = %v，预期 %v", dir, got, want)
+		}
+	}
+}

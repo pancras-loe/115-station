@@ -156,3 +156,32 @@ func TestScanLedgerTitlesLayoutEdges(t *testing.T) {
 		{"剧集/测试短路径-2023-[tmdb=789]", "测试短路径", "2023", "tv", 789},
 	})
 }
+
+// 标题目录名 → 片名 / 年份 / 编号。默认重命名模板渲染出来的是 {tmdbid=…}，
+// 此前只认 [tmdb=…]，用默认模板的库「开始刮削」一个片目都找不到
+func TestParseTitleDir(t *testing.T) {
+	cases := []struct {
+		dir, title, year string
+		tmdb             int
+	}{
+		{"流浪地球.2019.{tmdbid=535167}", "流浪地球", "2019", 535167}, // 默认模板
+		{"流浪地球.2019.[tmdbid=535167]", "流浪地球", "2019", 535167},
+		{"流浪地球 (2019) [tmdbid=535167]", "流浪地球", "2019", 535167}, // Emby 风格
+		{"流浪地球 (2019) {tmdb-535167}", "流浪地球", "2019", 535167},   // Plex 风格
+		{"Z-重器-2026-[tmdb=291856]", "重器", "2026", 291856},       // 首字母分组的老模板
+		{"三体.2023.{[tmdbid=204541;type=tv]}", "三体", "2023", 204541},
+		{"星际穿越 (2014)", "星际穿越", "2014", 0},
+		{"某片（2020）", "某片", "2020", 0},
+		{"繁花", "繁花", "", 0},
+		// 片名本身是年份：取最右侧那个当年份
+		{"1917-2019", "1917", "2019", 0},
+		{"2012.2009.{tmdbid=14161}", "2012", "2009", 14161},
+		{"The Matrix.1999.{tmdbid=603}", "The Matrix", "1999", 603},
+	}
+	for _, c := range cases {
+		title, year, tmdb := parseTitleDir(c.dir)
+		if title != c.title || year != c.year || tmdb != c.tmdb {
+			t.Errorf("parseTitleDir(%q) = (%q, %q, %d)，预期 (%q, %q, %d)", c.dir, title, year, tmdb, c.title, c.year, c.tmdb)
+		}
+	}
+}

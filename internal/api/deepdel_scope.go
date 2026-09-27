@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"115-station/internal/model"
@@ -64,8 +65,7 @@ func (h *Handler) checkDeepDelScope(kind string, rels []string) error {
 		if len(rows) == 0 {
 			continue
 		}
-		_, _, tmdb := parseTitleDir(path.Base(series))
-		evidence, videos := tmdb > 0, 0
+		evidence, videos := deepDelTitleTagged(path.Base(series)), 0
 		for _, row := range rows {
 			if row.RelPath == series+"/tvshow.nfo" {
 				evidence = true
@@ -88,6 +88,22 @@ func (h *Handler) checkDeepDelScope(kind string, rels []string) error {
 		}
 	}
 	return nil
+}
+
+// deepDelTitleTagged 目录名带 [tmdb=…] 标签，算一条「这是剧的标题目录」的证据。
+//
+// 故意只认这一种写法，不跟随 parseTitleDir（它还认默认模板的 {tmdbid=…} 等）：
+// 这条证据决定剧/季删除事件能不能展开成整个目录，多认一种写法就是把守卫放宽一档（§6.10）。
+// 要放宽请单独评估、单独提交
+var reDeepDelTmdbTag = regexp.MustCompile(`\[tmdb=(\d+)\]`)
+
+func deepDelTitleTagged(dir string) bool {
+	m := reDeepDelTmdbTag.FindStringSubmatch(dir)
+	if m == nil {
+		return false
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n > 0
 }
 
 // 执行前读取当前真实库目录；移除库之后到达的子项事件同样必须被拦住。

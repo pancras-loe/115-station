@@ -112,7 +112,7 @@ async function submit() {
         />
       </FieldRow>
       <p v-if="mode === 'auto'" class="note">
-        媒体库里的片目按目录名里的 <code>[tmdb=编号]</code> 取条目，没有编号的按片名识别；
+        媒体库里的片目按目录名里的 TMDB 编号（如 <code>{tmdbid=编号}</code>）取条目，没有编号的按片名识别；
         不在媒体库里的文件夹按一部影片识别。<template v-if="!single">指定条目只能单选一项。</template>
       </p>
       <TmdbPicker v-else v-model="picked" :initial="firstName" />

@@ -4,10 +4,10 @@ import (
 	"115-station/internal/model"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // ledgerTitleEntry 从台账聚合出的一个标题条目
@@ -150,29 +150,56 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 	return out
 }
 
-// parseTitleDir 解析标题目录名："Z-重器-2026-[tmdb=291856]" → (重器, 2026, 291856)
-func parseTitleDir(dir string) (title, year string, tmdb int) {
-	tmdb = 0
-	if m := regexp.MustCompile(`\[tmdb=(\d+)\]`).FindStringSubmatch(dir); m != nil {
-		tmdb, _ = strconv.Atoi(m[1])
-	}
-	// 取最右侧的年份（目录名惯例是 标题-年份-[tmdb=x]；取最左会把
-	// 片名本身是年份的 "1917-2019" 剜成 "2019"）
-	year = ""
-	reYear := regexp.MustCompile(`(?:^|[-. ])((?:19|20)\d{2})(?:$|[-. ])`)
-	if ms := reYear.FindAllStringSubmatchIndex(dir, -1); len(ms) > 0 {
-		last := ms[len(ms)-1]
-		year = dir[last[2]:last[3]]
-	}
-	title = dir
-	title = regexp.MustCompile(`\[tmdb=\d+\]`).ReplaceAllString(title, "")
-	if year != "" {
-		if i := strings.LastIndex(title, year); i >= 0 {
-			title = title[:i] + title[i+len(year):]
+var (
+	reTitleDirYear    = regexp.MustCompile(`(?:19|20)\d{2}`)
+	reTitleDirLetter  = regexp.MustCompile(`^[A-Z\d]-`)
+	reTitleDirSepRuns = regexp.MustCompile(`([-. _])[-. _]+`)
+)
+
+// titleDirYearAt 最右侧一个「前后是分隔符或括号」的四位年份的位置，没有返回 -1。
+// 边界手工判断而不写进正则：正则会把两个年份之间共用的那个分隔符算进前一个匹配，
+// 「1917-2019」里的 2019 就再也匹配不上了（此前的实现正是这样，取到的是 1917）
+func titleDirYearAt(s string) (int, int) {
+	isSep := func(r rune) bool { return strings.ContainsRune("-. _([)]（）", r) }
+	start, end := -1, -1
+	for _, m := range reTitleDirYear.FindAllStringIndex(s, -1) {
+		before, _ := utf8.DecodeLastRuneInString(s[:m[0]])
+		after, _ := utf8.DecodeRuneInString(s[m[1]:])
+		if (m[0] == 0 || isSep(before)) && (m[1] == len(s) || isSep(after)) {
+			start, end = m[0], m[1]
 		}
 	}
-	title = regexp.MustCompile(`^[A-Z\d]-`).ReplaceAllString(title, "")
-	title = strings.Trim(title, "- _.[]")
+	return start, end
+}
+
+// parseTitleDir 解析标题目录名 → (片名, 年份, TMDB 编号)：
+//
+//	"流浪地球.2019.{tmdbid=535167}"  → (流浪地球, 2019, 535167)   默认重命名模板
+//	"流浪地球 (2019) [tmdbid=535167]" → (流浪地球, 2019, 535167)   Emby 风格
+//	"Z-重器-2026-[tmdb=291856]"       → (重器, 2026, 291856)       首字母分组的老模板
+//
+// 编号标签交给识别环节同一个 takeTags 摘（[tmdbid=…] / [tmdb=…] / {tmdb-…} / {[tmdbid=…;type=tv]} 都认）。
+// 此前只认 [tmdb=…]，而默认模板渲染出来的是 {tmdbid=…}：用默认模板的库，
+// 「开始刮削」一个片目都找不到（它只刮带编号的），年份也不认括号
+func parseTitleDir(dir string) (title, year string, tmdb int) {
+	tag, rest := takeTags(dir)
+	tmdb = tag.TmdbID
+	// 取最右侧的年份（取最左会把片名本身是年份的 "1917-2019" 剜成 "2019"）
+	if ys, ye := titleDirYearAt(rest); ys >= 0 {
+		year = rest[ys:ye]
+		before, after := rest[:ys], rest[ye:]
+		// 包着年份的括号一起摘掉，不然片名尾巴上挂着一对空括号
+		for _, p := range [][2]string{{"(", ")"}, {"[", "]"}, {"（", "）"}} {
+			if strings.HasSuffix(before, p[0]) && strings.HasPrefix(after, p[1]) {
+				before, after = strings.TrimSuffix(before, p[0]), strings.TrimPrefix(after, p[1])
+				break
+			}
+		}
+		rest = before + after
+	}
+	title = reTitleDirSepRuns.ReplaceAllString(rest, "$1") // 摘掉年份留下的 ".." / "--"
+	title = reTitleDirLetter.ReplaceAllString(title, "")
+	title = strings.Trim(title, "- _.[]()（）")
 	if title == "" {
 		title = dir
 	}
