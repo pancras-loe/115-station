@@ -26,9 +26,11 @@ import (
 //   - 在媒体库里、台账认得出片目 → 按台账写本地媒体库（与「开始刮削」同一份产物），
 //     勾了上传再把这次写出的文件传进网盘对应目录；没勾上传则把它们登记成「已处理」，
 //     免得开着的监控上传随后又自己传上去 —— 用户这一次明确说了不传；
-//   - 不在媒体库里（待整理 / 冗余 / 任意目录），或台账里没有 → 本地没有对应片目，
+//   - 在媒体库里但台账里没有（还没同步到本地）→ 本地没有对应片目，
 //     产物只能直接写进网盘里那个目录（MoviePilot 对存储条目刮削也是写回原目录），
 //     所以必须勾上传；网盘里的文件夹按一部影片处理。
+//
+// 媒体库外（待整理 / 冗余 / 任意目录）一律拒绝，见 errScrapeOutsideLib。
 
 func init() {
 	jobExecutors["scrape"] = execFileScrapeJob
@@ -41,6 +43,10 @@ type fileScrapeOpts struct {
 	Force       bool `json:"force"`  // 覆盖已存在的元数据
 	Upload      bool `json:"upload"` // 这一次把产物写进网盘
 }
+
+// errScrapeOutsideLib 媒体库外不刮削：那里的内容还没整理，片名 / 目录结构都不规整，
+// 刮出来的元数据随整理搬走、改名就作废了，还会在待整理 / 转存目录里留下一堆 nfo 和图片
+var errScrapeOutsideLib = errors.New("只能刮削媒体库里的条目，媒体库外的请先整理入库")
 
 // ScrapeFiles POST /files/scrape → 入队，202
 // body: {cid, chain, items:[{id,name,is_dir,pickcode}], scrape:{write_nfo,write_images,force,upload},
@@ -69,18 +75,13 @@ func (h *Handler) ScrapeFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// 不上传就只能刮媒体库里的：面包屑说得清位置时当场拦下，别排一次队再失败
-	if !o.Upload && (req.Cid == "0" || len(req.Chain) > 0) {
-		inLib := false
+	// 只刮媒体库里的：面包屑说得清位置时当场拦下，别排一次队再失败（执行时按真实祖先链再判一次）
+	if req.Cid == "0" || len(req.Chain) > 0 {
 		for _, it := range req.Items {
-			if itemLibIndex(req.Chain, roles, it) >= -1 {
-				inLib = true
-				break
+			if itemLibIndex(req.Chain, roles, it) == -2 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": errScrapeOutsideLib.Error() + "（「" + it.Name + "」）"})
+				return
 			}
-		}
-		if !inLib {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "所选条目不在媒体库里，本地没有对应片目：要刮削请勾选「上传到网盘」，产物会直接写进网盘目录"})
-			return
 		}
 	}
 	title := "刮削" + fileJobTitle(req.Items)
@@ -235,8 +236,11 @@ func (pl *fileScrapePlanner) planItem(it fileJobItem) ([]scrapeTitle, error) {
 		}
 		log.Printf("[影视刮削] ○ %s 在媒体库里但台账没有对应片目（还没同步到本地？），按网盘内容刮削", it.Name)
 	}
+	if idx == -2 {
+		return nil, errScrapeOutsideLib
+	}
 	if !pl.upload {
-		return nil, errors.New("不在媒体库里（或本地还没有对应片目），只能直接写进网盘目录：请勾选「上传到网盘」")
+		return nil, errors.New("本地还没有对应片目，只能直接写进网盘目录：请勾选「上传到网盘」")
 	}
 	t, err := pl.cloudTitle(it)
 	if err != nil {

@@ -22,7 +22,10 @@ import (
 //     （现场：搜「三体」找不到 Netflix 的 3 Body Problem，tv/108545）；
 //   - 片名里的数字换成中文数字 / 反过来再搜一遍（「3体」↔「三体」）；
 //   - TMDB 的电影和剧集是两套独立编号，同一个数字两边都可能有条目，
-//     只填数字时两边都查、都列出来；写明类型（tv/108545、链接）就只查那一边。
+//     只填数字时两边都查、都列出来；写明类型（tv/108545、链接）就只查那一边；
+//   - 输入不是编号时，和自动整理用同一套识别：替换规则 → parseFileName（摘 id 标签、
+//     年份、季集号、发布标记）→ titleCandidates（中英双名拆开）。用户常把文件名 / 目录名
+//     整个粘进来（「3体.2024.{tmdbid=108545}」），原样丢给 TMDB 一条也搜不到。
 
 // tmdbSearchMax 最多返回几条候选
 const tmdbSearchMax = 20
@@ -133,10 +136,59 @@ func tmdbNorm(s string) string {
 	return strings.ToLower(strings.ReplaceAll(cleanSearchTitle(s), " ", ""))
 }
 
-// rankTmdbCands 去重后排序：片名（或原名）与搜索词完全相同的在前，其次是包含的，同档按热度
-func rankTmdbCands(cands []manualCand, queries []string) []manualCand {
-	norms := make([]string, 0, len(queries))
-	for _, q := range queries {
+// tmdbSearchPlan 一次手动搜索要做什么：id 非空就直查编号，否则按 queries 搜片名
+type tmdbSearchPlan struct {
+	id, kind string // kind 为空 = 电影剧集都查
+	queries  []string
+	year     string // 名字里的年份：只用来排序，不当过滤条件（TMDB 的年份与发布名常差一年）
+	tv       bool   // 名字里有季集号等剧集特征
+}
+
+// tmdbSearchQueryMax 片名最多搜几种写法（每种电影剧集各一次请求）
+const tmdbSearchQueryMax = 4
+
+// planTmdbSearch 把输入框里的东西换算成搜索计划
+func planTmdbSearch(q string, rules []ReplaceRule) tmdbSearchPlan {
+	if id, kind, ok := parseTmdbIDQuery(q); ok {
+		return tmdbSearchPlan{id: id, kind: kind}
+	}
+	name := applyReplaceRules(q, rules)
+	p := parseFileName(name)
+	if p.TmdbID > 0 {
+		return tmdbSearchPlan{id: strconv.Itoa(p.TmdbID), kind: p.TmdbKind}
+	}
+	title := strings.TrimSpace(p.Title)
+	if title == "" {
+		title = cleanSearchTitle(name)
+	}
+	if title == "" {
+		title = q
+	}
+	plan := tmdbSearchPlan{year: p.Year, tv: p.IsTV}
+	seen := map[string]bool{}
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" && !seen[s] && len(plan.queries) < tmdbSearchQueryMax {
+			seen[s] = true
+			plan.queries = append(plan.queries, s)
+		}
+	}
+	cands := titleCandidates(title)
+	for _, t := range cands {
+		add(t)
+	}
+	for _, t := range cands {
+		for _, v := range tmdbQueryVariants(t) {
+			add(v)
+		}
+	}
+	return plan
+}
+
+// rankTmdbCands 去重后排序：片名（或原名）与搜索词完全相同的在前，其次是包含的；
+// 同档里年份对得上的在前，再是类型对得上的（名字像剧集时剧集在前），最后按热度
+func rankTmdbCands(cands []manualCand, plan tmdbSearchPlan) []manualCand {
+	norms := make([]string, 0, len(plan.queries))
+	for _, q := range plan.queries {
 		if n := tmdbNorm(q); n != "" {
 			norms = append(norms, n)
 		}
@@ -158,6 +210,16 @@ func rankTmdbCands(cands []manualCand, queries []string) []manualCand {
 		}
 		return best
 	}
+	score := func(c manualCand) int {
+		n := tier(c) * 4 // 片名档位压过年份与类型
+		if plan.year != "" && c.Year == plan.year {
+			n += 2
+		}
+		if plan.tv && c.MediaType == "tv" {
+			n++
+		}
+		return n
+	}
 	seen := map[string]bool{}
 	out := make([]manualCand, 0, len(cands))
 	tiers := map[string]int{}
@@ -167,7 +229,7 @@ func rankTmdbCands(cands []manualCand, queries []string) []manualCand {
 			continue
 		}
 		seen[k] = true
-		tiers[k] = tier(c)
+		tiers[k] = score(c)
 		out = append(out, c)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -197,7 +259,8 @@ func (h *Handler) TmdbSearchMulti(c *gin.Context) {
 		return
 	}
 
-	if id, kind, ok := parseTmdbIDQuery(q); ok {
+	plan := planTmdbSearch(q, loadReplaceRules())
+	if id, kind := plan.id, plan.kind; id != "" {
 		kinds := []string{"tv", "movie"}
 		if kind != "" {
 			kinds = []string{kind}
@@ -240,10 +303,9 @@ func (h *Handler) TmdbSearchMulti(c *gin.Context) {
 		return
 	}
 
-	queries := append([]string{q}, tmdbQueryVariants(q)...)
 	type job struct{ query, kind string }
 	var jobs []job
-	for _, qq := range queries {
+	for _, qq := range plan.queries {
 		jobs = append(jobs, job{qq, "tv"}, job{qq, "movie"})
 	}
 	results := make([][]manualCand, len(jobs))
@@ -285,5 +347,5 @@ func (h *Handler) TmdbSearchMulti(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB 搜索失败: " + errs[0].Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": rankTmdbCands(all, queries)})
+	c.JSON(http.StatusOK, gin.H{"data": rankTmdbCands(all, plan)})
 }
