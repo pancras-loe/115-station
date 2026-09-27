@@ -345,7 +345,7 @@ const ROUTES: Record<string, Route> = {
   },
   '/files/115': (q: URLSearchParams) => {
     const cid = q.get('cid') ?? '0'
-    return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS }
+    return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS, categories: ['电影/科幻电影', '电影/动画电影'] }
   },
   '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true } },
   '/auth/status': { initialized: true },

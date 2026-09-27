@@ -88,6 +88,7 @@ func (h *Handler) ScrapeFiles(c *gin.Context) {
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
 	}
 	fp := req.fileJobParams
+	fp.Target = ""
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind: "scrape", Title: title, DedupeKey: fileJobDedupe(fp),
 		Source: "web", Priority: jobPriorityManual,

@@ -24,6 +24,8 @@ export interface FileList {
   truncated?: boolean
   /** 工作区根目录：cid → 角色 */
   roots: Record<string, WorkspaceRole>
+  /** 当前二级分类目录（库内相对路径）：分类目录的下一层是片目目录 */
+  categories?: string[]
 }
 
 /** refresh 跳过后端 2 分钟的浏览缓存 */
@@ -58,3 +60,8 @@ export interface ScrapeOptions {
 export const scrape = (body: FileJobBody & { scrape: ScrapeOptions }) => http.post<QueuedReply>('/files/scrape', body)
 
 export const organize = (body: FileJobBody) => http.post<QueuedReply>('/files/organize', body)
+
+/** 移动目标：只能是这三个工作区 */
+export type MoveTarget = 'redundant' | 'existing' | 'pending'
+
+export const move = (body: FileJobBody & { target: MoveTarget }) => http.post<QueuedReply>('/files/move', body)

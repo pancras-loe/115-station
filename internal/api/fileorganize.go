@@ -20,8 +20,8 @@ import (
 // 指定了 TMDB 条目时跳过识别（ctx.forced，与「确认入库 / 重新指定」同一个口子），也就不会停下来等确认；
 // 没指定时一切照整理配置走，开着人工确认就停在待确认。
 //
-// 媒体库里的条目不收：已入库的内容挪位置要走「重新整理」（它知道旧 STRM / 台账怎么收拾），
-// 在这里重跑一遍流水线会把库内文件当成新素材，洗版判定撞上自己。
+// 媒体库里的条目不进这条流水线（它会把库内文件当成新素材，洗版判定撞上自己）：
+// 片目目录由 OrganizeFiles 分派给 filelibrary.go 的「重新整理」，其余层级拒收。
 
 func init() {
 	jobExecutors["orgpick"] = execFileOrganizeJob
@@ -38,6 +38,11 @@ func (h *Handler) OrganizeFiles(c *gin.Context) {
 	roles := h.workspaceRoles()
 	if err := req.validate(roles); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// 媒体库里的片目目录走「重新整理」（filelibrary.go）
+	if chainRoleIndex(req.Chain, roles, "library") >= 0 {
+		h.enqueueLibRedo(c, req, roles)
 		return
 	}
 	if err := orgPickPrecheck(req.Chain, roles, req.Items); err != nil {
@@ -57,7 +62,7 @@ func (h *Handler) OrganizeFiles(c *gin.Context) {
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
 	}
 	fp := req.fileJobParams
-	fp.Scrape = nil
+	fp.Scrape, fp.Target = nil, ""
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind: "orgpick", Title: title, DedupeKey: fileJobDedupe(fp),
 		Source: "web", Priority: jobPriorityManual,

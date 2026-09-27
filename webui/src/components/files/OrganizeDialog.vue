@@ -15,8 +15,11 @@ import { useQueueStore } from '@/stores/queue'
 /**
  * 整理所选条目：与自动整理同一条流水线（识别 → 洗版 → 重命名 → 搬进媒体库 → 写 STRM → 刮削 → 刷 Emby），
  * 只处理勾选的这几项。指定 TMDB 条目时跳过识别，也不会停下来等人工确认。
+ *
+ * library=true 是媒体库里的片目目录：后端走「重新整理」（在库内改名 / 换目录，清掉旧的 STRM 与元数据），
+ * 自动识别按目录名里的 TMDB 编号，结果与现状一致时只重建 STRM 与元数据、不动网盘。
  */
-const props = defineProps<{ body: FileJobBody | null }>()
+const props = defineProps<{ body: FileJobBody | null; library?: boolean }>()
 const show = defineModel<boolean>('show', { required: true })
 
 const { message } = useFeedback()
@@ -65,7 +68,7 @@ async function submit() {
 </script>
 
 <template>
-  <HModal v-model:show="show" title="整理" width="620px">
+  <HModal v-model:show="show" :title="library ? '重新整理片目' : '整理'" width="620px">
     <div class="body">
       <p class="src">
         所选：<b>{{ firstName }}</b>
@@ -82,8 +85,12 @@ async function submit() {
         />
       </FieldRow>
       <template v-if="mode === 'auto'">
-        <p class="note">按整理配置识别：识别规则、识别记忆、AI 增强识别照常生效。</p>
-        <HAlert v-if="manualConfirm" status="accent">
+        <p v-if="library" class="note">
+          按目录名里的 TMDB 编号取条目，没有编号的按片名识别。结果和现在一致时只按当前配置重建 STRM 与元数据，
+          网盘里一个文件都不动；改过重命名模板或分类规则的，会在库内改名、换目录。
+        </p>
+        <p v-else class="note">按整理配置识别：识别规则、识别记忆、AI 增强识别照常生效。</p>
+        <HAlert v-if="manualConfirm && !library" status="accent">
           已开启「人工确认」：识别完会先停在「任务中心 → 整理记录」的待确认里，确认后才搬进媒体库。
           想直接入库，请改用「指定 TMDB 条目」。
         </HAlert>
@@ -95,7 +102,10 @@ async function submit() {
         </HAlert>
       </template>
 
-      <p class="note">
+      <p v-if="library" class="note">
+        旧位置的 STRM、NFO 与台账会被清理，空出来的目录一并删掉；会新增一条整理记录，之后也能在记录页里再「重新整理」。
+      </p>
+      <p v-else class="note">
         文件会被改名并搬进媒体库，写 STRM、刮削、刷新 Emby 一次做完；识别不出来的进冗余目录，
         洗版判输的进已存在目录。结果见「任务中心 → 整理记录」。
       </p>

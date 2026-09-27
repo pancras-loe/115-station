@@ -18,6 +18,8 @@ export const JOB_KIND: Record<string, string> = {
   confirm: '确认入库',
   orgpick: '整理所选',
   scrape: '刮削',
+  libredo: '重新整理片目',
+  filemove: '移动',
   ignore: '忽略',
   deepdel: '深度删除',
   full: '全量同步',

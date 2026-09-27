@@ -32,6 +32,8 @@ export interface TaskJob {
     | 'organize'
     | 'orgpick'
     | 'scrape'
+    | 'libredo'
+    | 'filemove'
     | 'full'
     | 'incr'
     | 'transfer'

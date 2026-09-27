@@ -94,8 +94,11 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 		cid = "0"
 	}
 	roles := h.workspaceRoles()
+	// categories：当前分类目录（库内相对路径）。前端据此判断媒体库里哪一行是片目目录，
+	// 显示「整理 / 移动」按钮；执行时后端按网盘上的真实位置再判一次
+	categories := libCategories(loadLibCategoryLayout())
 	reply := func(items []fileEntry, truncated bool) {
-		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": items, "truncated": truncated, "roots": roles})
+		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": items, "truncated": truncated, "roots": roles, "categories": categories})
 	}
 	if c.Query("refresh") != "1" {
 		fileListMu.Lock()
@@ -263,6 +266,8 @@ type fileJobParams struct {
 	Chain  []browseCrumb   `json:"chain,omitempty"` // 前端面包屑：Cookie 通道取不到祖先链时兜底
 	Items  []fileJobItem   `json:"items"`
 	Scrape *fileScrapeOpts `json:"scrape,omitempty"`
+	// Target 移动的目标工作区（redundant / existing / pending，filelibrary.go）
+	Target string `json:"target,omitempty"`
 }
 
 // fileJobRequest 两个入队接口的请求体

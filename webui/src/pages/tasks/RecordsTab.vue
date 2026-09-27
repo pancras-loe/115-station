@@ -113,6 +113,7 @@ const STAGE_TEXT: Record<string, string> = {
   strm: 'STRM 阶段',
   scrape: '刮削阶段',
   confirm: '人工确认',
+  moved: '已移出媒体库',
 }
 
 const KIND_TEXT: Record<string, string> = {
@@ -181,7 +182,7 @@ function clearJobFilter() {
 }
 // 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
 const offFinished = queue.onFinished((j) => {
-  if (['redo', 'confirm', 'ignore', 'deepdel', 'organize', 'orgpick', 'transfer'].includes(j.kind)) void reload()
+  if (['redo', 'confirm', 'ignore', 'deepdel', 'organize', 'orgpick', 'libredo', 'filemove', 'transfer'].includes(j.kind)) void reload()
 })
 onUnmounted(offFinished)
 
@@ -544,6 +545,7 @@ async function clearAll() {
                   rel="noopener"
                   >tmdb={{ r.tmdb_id }}</a
                 >
+                <HChip v-if="r.stage === 'moved'" color="warning" :title="r.message">已移出媒体库</HChip>
                 <HChip v-if="r.manual_tmdb" color="success">手动指定</HChip>
                 <template v-else-if="r.recog_via">
                   <HTooltip v-if="r.ai_note" :content="r.ai_note">
