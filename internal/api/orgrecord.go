@@ -540,6 +540,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
 	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
 	taken := map[string]string{}
+	var vids []metaVideo // NFO / 图片认主人用：视频改名**前**的基名（与它们现在的名字同一时刻）
 
 	for _, f := range files {
 		if f.Kind != "video" {
@@ -560,6 +561,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 		if specials && parsed.Episode == 0 {
 			rel := specialsRel(media, base, out.rootRel, parsed, f.Name)
 			out.groups[rel] = append(out.groups[rel], f)
+			vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: rel})
 			videos++
 			continue
 		}
@@ -580,6 +582,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 			taken[key] = f.Name
 		}
 		out.groups[mediaRel] = append(out.groups[mediaRel], nf)
+		vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: mediaRel})
 		videos++
 	}
 	if out.rootRel == "" || videos == 0 {
@@ -622,7 +625,28 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 				}
 			}
 		case "meta":
-			out.metaFiles = append(out.metaFiles, f)
+			// 集 / 季一级的跟视频进季目录（集 NFO 顺带跟视频改名），剧一级的进标题目录。
+			// 与正常整理的 placeMeta 同一口径；此前一律进标题目录
+			rel := ""
+			if media.MediaType == "tv" {
+				rel = metaRel(f.Name, f.Dir, vids, rules)
+			}
+			if rel == "" || rel == out.rootRel {
+				out.metaFiles = append(out.metaFiles, f)
+				continue
+			}
+			nf := f
+			fb := baseName(f.Name)
+			for oldB, newB := range newBaseOf {
+				if fb == oldB || strings.HasPrefix(fb, oldB+".") || strings.HasPrefix(fb, oldB+"-") {
+					if n := newB + strings.TrimPrefix(fb, oldB) + pathExt(f.Name); n != f.Name {
+						nf.Name = n
+						out.renames[f.Fid] = n
+					}
+					break
+				}
+			}
+			out.groups[rel] = append(out.groups[rel], nf)
 		}
 	}
 	return out, nil

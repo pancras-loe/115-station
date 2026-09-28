@@ -147,6 +147,13 @@ func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, vi
 		pl.relOf[s.Fid] = rel
 	}
 
+	pl.collectDirs()
+	return pl
+}
+
+// collectDirs 按 relOf 重算用到的目录
+func (pl *orgPlacement) collectDirs() {
+	pl.dirs = pl.dirs[:0]
 	seen := map[string]bool{}
 	for _, rel := range pl.relOf {
 		if !seen[rel] {
@@ -155,5 +162,119 @@ func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, vi
 		}
 	}
 	sort.Strings(pl.dirs)
-	return pl
+}
+
+// ==================== NFO / 图片的落点：剧 / 季 / 集三级 ====================
+//
+// 此前 NFO 与封面一律进标题目录：每集自带的「集名.nfo」被从季目录里拎出来，
+// 几季的集 NFO 全堆在「海绵宝宝/」下面，Emby 读不到（它只在视频旁边找同名 NFO）。
+// 现在按 Emby / Kodi 的约定分三级，与 MoviePilot app/chain/media.py 刮削时的落点一致：
+//   - 剧：tvshow.nfo、poster / fanart / seasonXX-poster 等 → 标题目录
+//   - 季：season.nfo、纯季目录（Season 1 / S01 / 第1季）里没有主人的通用图片 → 季目录
+//   - 集：与某个视频同基名的 xxx.nfo、xxx-thumb.jpg → 跟那个视频走
+
+// assetOwner 附属文件（字幕 / NFO / 图片）的主人视频在 bases 里的下标，没有返回 -1。
+// 基名等于视频基名、或以「视频基名.」「视频基名-」开头都算（xxx.chs.ass、xxx.nfo、xxx-thumb.jpg）。
+// 对得上多个时取最长的：「E1.nfo」不能被「E1」和「E10」同时认领
+func assetOwner(assetBase string, bases []string) int {
+	owner, best := -1, -1
+	for i, vb := range bases {
+		if vb == "" || len(vb) <= best {
+			continue
+		}
+		if assetBase == vb || strings.HasPrefix(assetBase, vb+".") || strings.HasPrefix(assetBase, vb+"-") {
+			owner, best = i, len(vb)
+		}
+	}
+	return owner
+}
+
+// isSeasonOnlyDir 目录名是不是纯季目录（Season 1 / S01 / 第1季），带片名的「某剧 第1季」不算：
+// 那种目录往往就是整部剧的顶层，里面的 poster.jpg 是剧的海报
+func isSeasonOnlyDir(name string, rules []ReplaceRule) bool {
+	if len(rules) > 0 {
+		name = applyReplaceRules(name, rules)
+	}
+	p := parseFileName(name)
+	return p.Season > 0 && !p.SeasonGuessed && p.Episode == 0 && !usableTitle(p.Title)
+}
+
+// isSeasonLevelMeta 没有主人视频的 NFO / 图片是不是季一级的。dir 是它所在的源目录名
+func isSeasonLevelMeta(name, dir string, rules []ReplaceRule) bool {
+	lower := strings.ToLower(name)
+	if lower == "season.nfo" {
+		return true
+	}
+	if classifyFile(name) != FileTypeStdImage || reSeasonImg.MatchString(baseName(lower)) {
+		return false // seasonXX-poster.jpg 按约定放在标题目录
+	}
+	return isSeasonOnlyDir(dir, rules)
+}
+
+// metaVideo 算 NFO / 图片落点时需要的视频信息
+type metaVideo struct {
+	base string // 视频基名（与附属文件同一时刻的名字：都改名前、或都改名后）
+	dir  string // 所在的源目录（remoteFile.Path / orgRecordFile.Dir）
+	rel  string // 视频的库内落点
+}
+
+// metaRel 剧集条目里一个 NFO / 图片的库内落点，"" 表示标题目录
+func metaRel(name, dir string, vids []metaVideo, rules []ReplaceRule) string {
+	bases := make([]string, len(vids))
+	for i, v := range vids {
+		bases[i] = v.base
+	}
+	if i := assetOwner(baseName(name), bases); i >= 0 {
+		return vids[i].rel
+	}
+	if !isSeasonLevelMeta(name, pathBase(dir), rules) {
+		return ""
+	}
+	// 季一级的：跟同一个源目录里的视频走；那个目录里没有视频（季 NFO 单放一处）就跟视频最多的季
+	count := map[string]int{}
+	for _, v := range vids {
+		if v.dir == dir {
+			count[v.rel]++
+		}
+	}
+	if len(count) == 0 {
+		for _, v := range vids {
+			count[v.rel]++
+		}
+	}
+	major := ""
+	for rel, n := range count {
+		if major == "" || n > count[major] || (n == count[major] && rel < major) {
+			major = rel
+		}
+	}
+	return major
+}
+
+// placeMeta 把剧集条目里的 NFO / 图片分到集、季目录（记进 relOf），剧一级的不记 —— 调用方另行放进标题目录。
+// 电影不分：视频本来就在标题目录里
+func (pl *orgPlacement) placeMeta(media *TmdbMedia, rootRel string, videos, metas []remoteFile,
+	enrichRenames map[string]string, rules []ReplaceRule) {
+	if media.MediaType != "tv" || len(metas) == 0 {
+		return
+	}
+	vids := make([]metaVideo, 0, len(videos))
+	for _, v := range videos {
+		vids = append(vids, metaVideo{base: baseName(v.Name), dir: v.Path, rel: pl.relOf[v.Fid]})
+	}
+	for _, m := range metas {
+		name := m.Name
+		// 视频被画质补全改过名，NFO 还是旧基名：先映射一次再认主人（同字幕）
+		fb := baseName(name)
+		for oldB, newB := range enrichRenames {
+			if fb == oldB || strings.HasPrefix(fb, oldB+".") || strings.HasPrefix(fb, oldB+"-") {
+				name = newB + strings.TrimPrefix(fb, oldB) + pathExt(name)
+				break
+			}
+		}
+		if rel := metaRel(name, m.Path, vids, rules); rel != "" && rel != rootRel {
+			pl.relOf[m.Fid] = rel
+		}
+	}
+	pl.collectDirs()
 }

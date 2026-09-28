@@ -261,7 +261,7 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 		//   1) 与视频同名的附件（字幕/同名 nfo/同名图片）→ 随行并跟随视频新名
 		//   2) 标准元数据命名的文件（poster/fanart/tvshow.nfo 等）
 		//      → 随行但保持标准名——播放器/刮削器认固定名，跟随改名反而失效
-		sameBase := base == videoOldBase || strings.HasPrefix(base, videoOldBase+".")
+		sameBase := base == videoOldBase || strings.HasPrefix(base, videoOldBase+".") || strings.HasPrefix(base, videoOldBase+"-")
 		metaFixed := !sameBase && orgMetaFixedName(base, ext)
 		if !sameBase && !metaFixed {
 			continue
@@ -348,13 +348,15 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 		return file, file != vf.Name
 	}
 
-	names := map[string]string{}         // fid -> 新名
-	videoNewBases := map[string]string{} // 原视频基名 → 新视频基名（字幕跟随用）
+	names := map[string]string{} // fid -> 新名
+	// 原视频基名 → 新视频基名（字幕 / 集 NFO / 集缩略图跟随用），两个切片下标对齐
+	var oldBases, newBases []string
 	example := ""
 	for _, vf := range videoFiles {
 		if n, changed := videoNewName(vf); changed {
 			names[vf.Fid] = n
-			videoNewBases[baseName(vf.Name)] = baseName(n)
+			oldBases = append(oldBases, baseName(vf.Name))
+			newBases = append(newBases, baseName(n))
 			if example == "" {
 				example = fmt.Sprintf("%s → %s", vf.Name, n)
 			}
@@ -376,16 +378,12 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 				break
 			}
 		}
-		for vfOldBase, vfNewBase := range videoNewBases {
-			if fb != vfOldBase && !strings.HasPrefix(fb, vfOldBase+".") {
-				continue
-			}
-			suffix := strings.TrimPrefix(fb, vfOldBase)
-			newSubName := vfNewBase + suffix + ext
+		// 「集名.chs.ass」「集名.nfo」「集名-thumb.jpg」都跟着改；对得上多集时取基名最长的
+		if i := assetOwner(fb, oldBases); i >= 0 {
+			newSubName := newBases[i] + strings.TrimPrefix(fb, oldBases[i]) + ext
 			if newSubName != f.Name {
 				names[f.Fid] = newSubName
 			}
-			break
 		}
 	}
 
@@ -1142,9 +1140,10 @@ func classifyFile(name string) FileType {
 	if ext == ".nfo" || ext == ".xml" {
 		return FileTypeNFO
 	}
-	// 图片：只保留标准命名的
+	// 图片：只保留标准命名的。带前后缀的变体（集名-thumb.jpg、season01-poster.jpg）
+	// 同样是 Emby 认的元数据，此前被当垃圾扔进了冗余
 	if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" {
-		if standardImageNames[base] {
+		if standardImageNames[base] || isStandardMediaImageName(strings.ToLower(name)) {
 			return FileTypeStdImage
 		}
 		return FileTypeJunk
@@ -1182,6 +1181,120 @@ type dirEntry struct {
 	PickCode string // 文件 pickcode（散文件一条龙落盘写 STRM 直链要用）
 	// Parent 容器目录名（「美剧/狂飙 (2023)/…」里的「美剧」）。识别时作为最外层的路径上下文
 	Parent string
+}
+
+// redundantEntryRel 目录条目的垃圾在冗余下的相对目录：容器里拆出来的子条目带上父目录名
+// （海绵宝宝 (1999)/Season 1），保持源目录的层级，不同剧的同名季目录才不会混在一起
+func redundantEntryRel(dir dirEntry) string {
+	name := sanitizeName(dir.Name)
+	if parent := sanitizeName(dir.Parent); parent != "" {
+		return parent + "/" + name
+	}
+	return name
+}
+
+// containerMetaTarget 容器目录的剧级元数据该跟哪条记录走：本轮子条目认出的片必须是同一部，
+// 且至少有一个目录条目入库成功（标题目录才真的建出来了）。
+// 容器里装的是几部不同的片、或一个都没入库时返回 nil —— 这些文件属于谁说不清，留在原地
+func containerMetaTarget(recs []*model.OrganizeRecord) *model.OrganizeRecord {
+	var target *model.OrganizeRecord
+	tmdb, kind := 0, ""
+	for _, r := range recs {
+		if r.TmdbID == 0 {
+			continue // 未识别 / 失败的子条目不影响判断，下轮再整理照样落进同一个标题目录
+		}
+		if tmdb == 0 {
+			tmdb, kind = r.TmdbID, r.MediaType
+		} else if r.TmdbID != tmdb || r.MediaType != kind {
+			return nil
+		}
+		if target == nil && r.Status == "success" && r.SourceKind == "dir" && r.TargetCid != "" && r.TargetDir != "" {
+			target = r
+		}
+	}
+	return target
+}
+
+// splitContainerMeta 从容器目录的残留里挑出剧级元数据（tvshow.nfo、poster.jpg、season01-poster.jpg …），
+// 按标题目录里是否已有同名文件分成「搬进去」与「让位」两组。
+// season.nfo 不算：放在容器顶层说不清是哪一季的，交给季目录自己带
+func splitContainerMeta(remaining []dirEntry, existing map[string]bool) (adopt, clash []dirEntry) {
+	for _, r := range remaining {
+		if r.IsDir || strings.EqualFold(r.Name, "season.nfo") {
+			continue
+		}
+		if k := classifyFile(r.Name); k != FileTypeNFO && k != FileTypeStdImage {
+			continue
+		}
+		if existing[r.Name] {
+			clash = append(clash, r)
+		} else {
+			adopt = append(adopt, r)
+		}
+	}
+	return adopt, clash
+}
+
+// adoptContainerMeta 容器目录（海绵宝宝 (1999)/Season 1、Season 2 …）直属的剧级元数据
+// 搬进子条目共同落进的标题目录并落盘。
+// 此前容器只拆子目录，这些文件一直留在原处，容器于是永远「仍有残留条目」清不掉。
+// 标题目录里已有同名的（上一批入库时就带了、或刮削已上传）不覆盖，移到 冗余/容器名/。
+// 返回是否动过网盘（调用方据此重新列目录）
+func adoptContainerMeta(ctx *orgCtx, entry dirEntry, remaining []dirEntry, recs []*model.OrganizeRecord) bool {
+	target := containerMetaTarget(recs)
+	if target == nil {
+		return false
+	}
+	if adopt, _ := splitContainerMeta(remaining, nil); len(adopt) == 0 {
+		return false // 没有元数据就不去列标题目录，省一次请求
+	}
+	ops, onLog := ctx.ops, ctx.onLog
+	existing := map[string]bool{}
+	list, err := listPendingTopLevel(ops, target.TargetCid)
+	if err != nil {
+		onLog(fmt.Sprintf("○ %s/ - 列标题目录失败，剧级 NFO/封面留在原地: %v", entry.Name, err))
+		return false
+	}
+	for _, e := range list {
+		existing[e.Name] = true
+	}
+	adopt, clash := splitContainerMeta(remaining, existing)
+	moved := false
+	if len(clash) > 0 {
+		fids := make([]string, 0, len(clash))
+		for _, c := range clash {
+			fids = append(fids, c.Fid)
+		}
+		if _, err := moveToHoldingDir(ops, ctx.cfg.Redundant, entry.Name, fids); err != nil {
+			onLog(fmt.Sprintf("○ %s/ - %d 个与标题目录重名的 NFO/封面移到冗余失败: %v", entry.Name, len(fids), err))
+		} else {
+			moved = true
+			onLog(fmt.Sprintf("○ %s/ - 标题目录已有同名文件，%d 个 NFO/封面移到 冗余/%s", entry.Name, len(fids), sanitizePath(entry.Name)))
+		}
+	}
+	if len(adopt) == 0 {
+		return moved
+	}
+	fids := make([]string, 0, len(adopt))
+	for _, a := range adopt {
+		fids = append(fids, a.Fid)
+	}
+	onLog(fmt.Sprintf("▣ 移动容器内 %d 个剧级 NFO/封面 → %s（cid=%s）", len(fids), target.TargetDir, target.TargetCid))
+	if err := ops.moveFiles(target.TargetCid, fids); err != nil {
+		onLog(fmt.Sprintf("○ %s/ - 剧级 NFO/封面移动失败（留在原地）: %v", entry.Name, err))
+		return moved
+	}
+	assets := make([]remoteFile, 0, len(adopt))
+	for _, a := range adopt {
+		assets = append(assets, remoteFile{Fid: a.Fid, Name: a.Name, PickCode: a.PickCode, Size: a.Size, Sha1: a.Sha1})
+	}
+	media := &TmdbMedia{TmdbID: target.TmdbID, Title: target.Title, Year: target.Year, MediaType: target.MediaType}
+	// 不并进任何一季的整理记录：那样从某一季的记录点「深度删除」会把整部剧的 tvshow.nfo 一起删掉，
+	// 「重新整理」某一季也会把它搬走。台账里有它的行（commit 写入），事件深删照常按路径认
+	_, dl := ctx.sink.commit(ops, media, target.TargetDir, target.TargetDir, nil, assets)
+	onLog(fmt.Sprintf("✓ %s/ - 剧级 NFO/封面落盘 %d 个 → %s", entry.Name, dl,
+		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(target.TargetDir)))))
+	return true
 }
 
 // listPendingTopLevel 列出待整理目录下的顶层条目（不递归）
@@ -1510,6 +1623,7 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 		}
 		if !hasDirectVideo && len(subDirs) > 0 {
 			onLog(fmt.Sprintf("▣ %s/ 为容器目录（无直接视频，含 %d 个子目录），逐个处理", entry.Name, len(subDirs)))
+			recsBefore := len(ctx.sink.recordsSnapshot())
 			for _, child := range subDirs {
 				child.Parent = entry.Name
 				results = append(results, processEntry(ctx, guards, child, depth+1, successCount)...)
@@ -1520,6 +1634,12 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 			if relistErr != nil {
 				onLog(fmt.Sprintf("○ %s/ - 复查目录失败，保留原地: %v", entry.Name, relistErr))
 				return results
+			}
+			if adoptContainerMeta(ctx, entry, remaining, ctx.sink.recordsSnapshot()[recsBefore:]) {
+				if remaining, relistErr = listPendingTopLevel(ops, entry.Cid); relistErr != nil {
+					onLog(fmt.Sprintf("○ %s/ - 复查目录失败，保留原地: %v", entry.Name, relistErr))
+					return results
+				}
 			}
 			if len(remaining) > 0 {
 				// 散落的纯垃圾文件（txt/url 广告等）可随壳一起清进冗余
@@ -1532,8 +1652,9 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 					junkFids = append(junkFids, r.Fid)
 				}
 				if allJunk && len(junkFids) > 0 {
-					if err := ops.moveFiles(cfg.Redundant, junkFids); err == nil {
-						onLog(fmt.Sprintf("○ %s/ - 容器内 %d 个垃圾文件已移到冗余", entry.Name, len(junkFids)))
+					// 和子条目的垃圾同一个目录（冗余/剧名/），此前散在冗余根下认不出是谁的
+					if _, err := moveToHoldingDir(ops, cfg.Redundant, entry.Name, junkFids); err == nil {
+						onLog(fmt.Sprintf("○ %s/ - 容器内 %d 个垃圾文件已移到 冗余/%s", entry.Name, len(junkFids), sanitizePath(entry.Name)))
 						remaining, _ = listPendingTopLevel(ops, entry.Cid)
 					}
 				}
@@ -1953,6 +2074,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	}
 
 	var mediaFids, metaFids, junkFids []string
+	var metaFiles []remoteFile
 	for _, f := range files {
 		switch classifyFile(f.Name) {
 		case FileTypeVideo:
@@ -1966,7 +2088,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		case FileTypeSubtitle:
 			mediaFids = append(mediaFids, f.Fid)
 		case FileTypeNFO, FileTypeStdImage:
-			metaFids = append(metaFids, f.Fid) // 封面/NFO 放剧集根目录
+			metaFiles = append(metaFiles, f) // 剧 / 季 / 集三级分开放，见 placeMeta
 		default:
 			junkFids = append(junkFids, f.Fid)
 		}
@@ -2043,6 +2165,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 	}
 	place := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, subFiles, eps, enrichRenames)
+	place.placeMeta(media, rootRel, videoFiles, metaFiles, enrichRenames, replaceRules)
 	groups := map[string][]string{} // 库内相对目录 → fid
 	for _, fid := range mediaFids {
 		rel, ok := place.relOf[fid]
@@ -2050,6 +2173,14 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			rel = fallbackRel
 		}
 		groups[rel] = append(groups[rel], fid)
+	}
+	// 集 / 季一级的 NFO、图片随所在季目录的视频一起搬（同一次 move），剧一级的另搬进标题目录
+	for _, f := range metaFiles {
+		if rel, ok := place.relOf[f.Fid]; ok {
+			groups[rel] = append(groups[rel], f.Fid)
+		} else {
+			metaFids = append(metaFids, f.Fid)
+		}
 	}
 	relCid := map[string]string{rootRel: rootCid}
 	for _, rel := range place.dirs {
@@ -2078,7 +2209,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		if len(fids) == 0 {
 			continue
 		}
-		onLog(fmt.Sprintf("▣ 移动 %d 个视频/字幕 → %s（cid=%s）", len(fids), rel, relCid[rel]))
+		onLog(fmt.Sprintf("▣ 移动 %d 个视频/字幕/NFO →%s（cid=%s）", len(fids), rel, relCid[rel]))
 		if err := ops.moveFiles(relCid[rel], fids); err != nil {
 			moveErr = err
 			break
@@ -2091,7 +2222,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		failMedia("failed", "move", "移动文件到媒体库失败: "+moveErr.Error(), media, category, rootRel)
 		return results
 	}
-	// 封面/NFO → 标题目录
+	// 剧一级的封面/NFO → 标题目录
 	if len(metaFids) > 0 {
 		onLog(fmt.Sprintf("▣ 移动 %d 个 NFO/封面 → %s（cid=%s）", len(metaFids), rootRel, rootCid))
 		if err := ops.moveFiles(rootCid, metaFids); err != nil {
@@ -2100,14 +2231,17 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	}
 
 	// 移动无用文件到冗余
+	// 容器目录拆出来的子条目（海绵宝宝/Season 1）要带上父目录名：
+	// 此前只用子目录名，各部剧的 Season 1 垃圾全混进同一个 冗余/Season 1
 	if len(junkFids) > 0 {
-		junkCid, err := ops.ensurePath(cfg.Redundant, dir.Name)
+		junkRel := redundantEntryRel(dir)
+		junkCid, err := ops.ensurePath(cfg.Redundant, junkRel)
 		if err != nil {
 			onLog(fmt.Sprintf("○ %s/ - 冗余目录创建失败，%d 个无用文件留在原地: %v", dir.Name, len(junkFids), err))
 		} else if err := ops.moveFiles(junkCid, junkFids); err != nil {
 			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件移到冗余失败: %v", dir.Name, len(junkFids), err))
 		} else {
-			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件已移到 冗余/%s", dir.Name, len(junkFids), dir.Name))
+			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件已移到 冗余/%s", dir.Name, len(junkFids), junkRel))
 		}
 	}
 
@@ -2176,9 +2310,16 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			strmAssets = append(strmAssets, f)
 		}
 	}
-	// 按季分组落盘：commit 只认一个视频目录（NFO / 封面它自己放到标题目录）
+	// 按季分组落盘：字幕与集 / 季 NFO 跟着自己所在的季，剧一级的 NFO / 封面单独落进标题目录。
+	// 本地必须和网盘同一个布局，Emby 读的是本地
 	strmCreated, assetsDL := 0, 0
-	for i, rel := range movedRels {
+	var titleAssets []remoteFile
+	for _, f := range strmAssets {
+		if _, ok := place.relOf[f.Fid]; !ok {
+			titleAssets = append(titleAssets, f)
+		}
+	}
+	for _, rel := range movedRels {
 		var vs, as []remoteFile
 		for _, f := range strmVideos {
 			if place.relOf[f.Fid] == rel {
@@ -2186,13 +2327,16 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			}
 		}
 		for _, f := range strmAssets {
-			// 标题级附属（NFO / 封面）只跟第一组落一次；字幕跟自己所在的季
-			if r, ok := place.relOf[f.Fid]; (ok && r == rel) || (!ok && i == 0) {
+			if r, ok := place.relOf[f.Fid]; ok && r == rel {
 				as = append(as, f)
 			}
 		}
 		sc, dl := ctx.sink.commit(ops, media, rootRel, rel, vs, as)
 		strmCreated += sc
+		assetsDL += dl
+	}
+	if len(movedRels) > 0 && len(titleAssets) > 0 {
+		_, dl := ctx.sink.commit(ops, media, rootRel, rootRel, nil, titleAssets)
 		assetsDL += dl
 	}
 	landedAt := filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(rootRel)))

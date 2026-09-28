@@ -237,3 +237,42 @@ func TestPlanRedoLayoutRawNames(t *testing.T) {
 		t.Fatalf("改过名的文件不该再套替换规则：%s", seasonOf(plan, "a"))
 	}
 }
+
+// 重新整理：集 NFO 跟视频进季目录并跟着改名，tvshow.nfo 仍在标题目录
+func TestPlanRedoLayoutEpisodeMeta(t *testing.T) {
+	useDefaultRenameTpl(t)
+	media := &TmdbMedia{TmdbID: 456, Title: "测试剧集", Year: "2025", MediaType: "tv"}
+	files := []orgRecordFile{
+		{Fid: "v1", Name: "Test.Show.S01E01.1080p.mkv", Kind: "video"},
+		{Fid: "n1", Name: "Test.Show.S01E01.1080p.nfo", Kind: "meta"},
+		{Fid: "t1", Name: "Test.Show.S01E01.1080p-thumb.jpg", Kind: "meta"},
+		{Fid: "tv", Name: "tvshow.nfo", Kind: "meta"},
+	}
+	plan, err := planRedoLayout(media, "剧集/国产剧", files, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.metaFiles) != 1 || plan.metaFiles[0].Fid != "tv" {
+		t.Fatalf("只有 tvshow.nfo 该进标题目录，实际 %+v", plan.metaFiles)
+	}
+	var videoRel string
+	relOf := map[string]string{}
+	for rel, gfs := range plan.groups {
+		for _, f := range gfs {
+			relOf[f.Fid] = rel
+			if f.Fid == "v1" {
+				videoRel = rel
+			}
+		}
+	}
+	if relOf["n1"] != videoRel || relOf["t1"] != videoRel {
+		t.Fatalf("集 NFO / 缩略图应跟视频进 %s，实际 %v", videoRel, relOf)
+	}
+	vb := baseName(plan.renames["v1"])
+	if vb == "" {
+		t.Fatal("视频应改名")
+	}
+	if plan.renames["n1"] != vb+".nfo" || plan.renames["t1"] != vb+"-thumb.jpg" {
+		t.Errorf("集 NFO / 缩略图应跟视频改名：%v", plan.renames)
+	}
+}

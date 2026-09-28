@@ -57,23 +57,6 @@ func TestOrgSinkLibRelWithoutLibName(t *testing.T) {
 	}
 }
 
-// NFO 与标准封面进标题目录，字幕跟视频进季目录——分流口径要和 classifyFile 一致
-func TestIsTitleLevelAsset(t *testing.T) {
-	for _, c := range []struct {
-		name string
-		want bool
-	}{
-		{"tvshow.nfo", true},
-		{"poster.jpg", true},
-		{"测试剧集 - S01E01.chs.ass", false},
-		{"测试剧集 - S01E01.srt", false},
-	} {
-		if got := isTitleLevelAsset(c.name); got != c.want {
-			t.Errorf("%s: 得到 %v，预期 %v", c.name, got, c.want)
-		}
-	}
-}
-
 // 记录里的文件清单要能原样往返：重新整理完全依赖它定位 fid
 func TestRecordFilesRoundTrip(t *testing.T) {
 	in := []orgRecordFile{

@@ -117,8 +117,12 @@ func (s *orgSink) libRel(rel string) string {
 // commit 把本条目移动完成后的文件落到本地：视频写 .strm，附属文件（字幕/NFO/封面）下载。
 //
 //	rootRel  标题目录的库内相对路径（电影/剧集 → 分类 → 标题目录），刮削与 Emby 刷新的单位
-//	mediaRel 视频与字幕的实际落点（电影同 rootRel，剧集为 rootRel/Season XX）
+//	mediaRel 视频与附属文件的实际落点（电影同 rootRel，剧集为 rootRel/Season XX）
 //	videos / assets 的 Name 必须是**重命名之后的最终文件名**
+//
+// 附属文件一律落在 mediaRel，与网盘上的位置一致：剧一级的 NFO / 封面由调用方另外以
+// mediaRel = rootRel 提交一次。此前这里按文件类型把所有 NFO 都放标题目录，
+// 集 NFO 在网盘上跟着视频进了季目录，本地却落在标题目录，两边对不上
 func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel string, videos, assets []remoteFile) (strmCreated, downloaded int) {
 	if len(videos) == 0 && len(assets) == 0 {
 		return 0, 0
@@ -142,12 +146,7 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 			handover = append(handover, f.Fid)
 			continue
 		}
-		// NFO / 封面落在标题目录，字幕跟着视频走
-		if isTitleLevelAsset(f.Name) {
-			f.Path = s.libRel(rootRel)
-		} else {
-			f.Path = s.libRel(mediaRel)
-		}
+		f.Path = s.libRel(mediaRel)
 		as = append(as, f)
 	}
 
@@ -196,16 +195,6 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 		}
 	}
 	return sc, dl
-}
-
-// isTitleLevelAsset NFO 与标准封面图放在标题目录（Emby 按此约定读取），
-// 字幕等跟随视频。与 organize.go 的 classifyFile 分流口径保持一致
-func isTitleLevelAsset(name string) bool {
-	switch classifyFile(name) {
-	case FileTypeNFO, FileTypeStdImage:
-		return true
-	}
-	return false
 }
 
 // flushScrape 本轮整理结束后统一刮削：只刮本轮真的动过的片目。
