@@ -2110,7 +2110,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 				enrichLog = func(string) {}
 			}
 			enrichLog(fmt.Sprintf("▣ 补全探测: %s（文件名缺画质信息）", vf.Name))
-			probe, perr := probeFileNow(vf.PickCode)
+			probe, _, perr := probeCached(vf.PickCode) // 探测结果落库，之后刮削直接用
 			if probe == nil {
 				enrichLog(fmt.Sprintf("○ 补全探测失败 %s（保留原名）: %s", vf.Name, perr))
 				enrichFailed++

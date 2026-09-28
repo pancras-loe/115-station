@@ -20,8 +20,8 @@ func TestIdleJobDropped(t *testing.T) {
 	})
 	idle, _ := enqueueJob(model.DB, jobSpec{Kind: "idle", Title: "定时整理", Priority: jobPriorityBackground})
 	busy, _ := enqueueJob(model.DB, jobSpec{Kind: "busy", Title: "定时整理", Priority: jobPriorityBackground})
-	h.runJob(&idle)
-	h.runJob(&busy)
+	h.runJob(&idle, mainLane)
+	h.runJob(&busy, mainLane)
 	var n int64
 	model.DB.Model(&model.TaskJob{}).Where("id = ?", idle.ID).Count(&n)
 	if n != 0 {
@@ -42,7 +42,7 @@ func TestBackgroundFailureCollapsed(t *testing.T) {
 	})
 	run := func(title string, prio int) uint {
 		j, _ := enqueueJob(model.DB, jobSpec{Kind: "organize", Title: title, Priority: prio})
-		h.runJob(&j)
+		h.runJob(&j, mainLane)
 		return j.ID
 	}
 	run("定时整理", jobPriorityBackground)

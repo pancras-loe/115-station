@@ -28,7 +28,15 @@ const show = defineModel<boolean>('show', { required: true })
 const { message } = useFeedback()
 const queue = useQueueStore()
 
-const opts = ref<ScrapeOptions>({ write_nfo: true, write_images: true, force: false, upload: false })
+const DEFAULT_OPTS: ScrapeOptions = {
+  write_nfo: true,
+  write_images: true,
+  force: false,
+  upload: false,
+  probe: false,
+  skip_shared_stills: true,
+}
+const opts = ref<ScrapeOptions>({ ...DEFAULT_OPTS })
 /** 已保存的配置（对照显示「与已保存不同」） */
 const saved = ref<ScrapeOptions>({ ...opts.value })
 const monitorOn = ref(false)
@@ -53,10 +61,17 @@ watch(show, async (v) => {
     ])
     const c = sc.cfg ?? {}
     // 这两项后端缺省视为开启
-    saved.value = { write_nfo: c.write_nfo !== false, write_images: c.write_images !== false, force: !!c.force, upload: false }
+    saved.value = {
+      write_nfo: c.write_nfo !== false,
+      write_images: c.write_images !== false,
+      force: !!c.force,
+      upload: false,
+      probe: !!c.probe_streams,
+      skip_shared_stills: c.skip_shared_stills !== false,
+    }
     monitorOn.value = !!mon.enabled
   } catch {
-    saved.value = { write_nfo: true, write_images: true, force: false, upload: false }
+    saved.value = { ...DEFAULT_OPTS }
   } finally {
     opts.value = { ...saved.value, force: saved.value.force || props.preset === 'force' || props.preset === 'pick' }
     loading.value = false
@@ -135,6 +150,18 @@ async function submit() {
         </FieldRow>
         <FieldRow label="覆盖模式">
           <HSegmented v-model="opts.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
+        </FieldRow>
+        <FieldRow label="占位剧照" hint="同一季里 3 集以上共用一张剧照时判为占位图，这些集不写集剧照。">
+          <HSegmented
+            v-model="opts.skip_shared_stills"
+            :options="[{ label: '不写', value: true }, { label: '照写', value: false }]"
+          />
+        </FieldRow>
+        <FieldRow
+          label="轨道探测"
+          hint="逐个视频经 115 直链读文件头，把音轨 / 字幕写进 NFO。每个视频多 2–10 秒，几百集的剧会多出几十分钟；主要对 Kodi 有用。"
+        >
+          <HSegmented v-model="opts.probe" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
         </FieldRow>
         <FieldRow label="上传到网盘" :hint="uploadHint">
           <HSwitch v-model="opts.upload" aria-label="上传到网盘" />

@@ -131,17 +131,11 @@ func TestMetaSkipper(t *testing.T) {
 	if _, err := writeMetaFile(dir, "E01-thumb.jpg", []byte("x"), true); err != nil {
 		t.Fatal(err)
 	}
-	if !(localMetaWriter{}).skip(d, "E01-thumb.jpg") {
-		t.Error("已有文件应跳过")
-	}
-	if (localMetaWriter{}).skip(d, "E02-thumb.jpg") {
+	if newFileScrapeWriter(nil, false, false).skip(d, "E02-thumb.jpg") {
 		t.Error("缺失的文件不该跳过")
 	}
-	if (localMetaWriter{force: true}).skip(d, "E01-thumb.jpg") {
+	if newFileScrapeWriter(nil, true, false).skip(d, "E01-thumb.jpg") {
 		t.Error("覆盖模式不该跳过")
-	}
-	if !(localMetaWriter{}).skip(metaDest{}, "x.jpg") {
-		t.Error("没有本地落点时本地 writer 写不了，应跳过")
 	}
 	fw := newFileScrapeWriter(nil, false, true)
 	if !fw.skip(d, "E01-thumb.jpg") || fw.stat.Skipped != 1 {

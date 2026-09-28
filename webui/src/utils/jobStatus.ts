@@ -33,6 +33,7 @@ export const JOB_SOURCE: Record<string, string> = {
   wecom: '企业微信',
   cron: '定时',
   auto: '自动',
+  organize: '整理后',
 }
 
 export function jobKindText(kind: string) {
@@ -57,6 +58,16 @@ export function elapsed(j: TaskJob) {
   return dur((end - new Date(j.started_at).getTime()) / 1000)
 }
 
+/** 条目内的第二级进度：「集剧照 87/212：S01E87-thumb.jpg」；没有时为空串 */
+export function subProgressText(j: TaskJob) {
+  const s = j.progress?.sub
+  if (!s?.phase) return ''
+  let t = s.phase
+  if (s.total) t += ` ${s.done}/${s.total}`
+  if (s.label) t += `：${s.label}`
+  return t
+}
+
 export function pct(j: TaskJob) {
   const p = j.progress
   if (!p || !p.total) return 0
@@ -75,13 +86,41 @@ const RESULT_LABEL: [string, string][] = [
   ['failed', '失败'],
   ['awaiting', '待确认'],
   ['orphans', '失效 STRM'],
+  // 刮削（localscrape.go 的 fileScrapeResult）
+  ['titles', '片目'],
+  ['reused', '复用已下载图片'],
+  ['placeholder', '占位剧照未写'],
+  ['probed', '轨道探测'],
+  ['reclaimed', '收回孤儿文件'],
+]
+
+/** 刮削结果里嵌套的产物计数 */
+const SCRAPE_STAT_LABEL: [string, string][] = [
+  ['local', '写入本地'],
+  ['uploaded', '上传网盘'],
+  ['skipped', '已存在跳过'],
 ]
 
 /** 结果摘要：「成功 12 · 已存在 3 · 待确认 1」；没有可显示的计数时为空串 */
 export function resultSummary(j: TaskJob) {
   const r = j.result
   if (!r) return ''
-  return RESULT_LABEL.filter(([k]) => typeof r[k] === 'number' && (r[k] as number) > 0)
-    .map(([k, label]) => `${label} ${r[k]}`)
-    .join(' · ')
+  const parts = RESULT_LABEL.filter(([k]) => typeof r[k] === 'number' && (r[k] as number) > 0).map(
+    ([k, label]) => `${label} ${r[k]}`,
+  )
+  const stat = r.stat as Record<string, unknown> | undefined
+  if (stat && typeof stat === 'object') {
+    for (const [k, label] of SCRAPE_STAT_LABEL) {
+      if (typeof stat[k] === 'number' && (stat[k] as number) > 0) parts.push(`${label} ${stat[k]}`)
+    }
+  }
+  return parts.join(' · ')
+}
+
+/** 结果里的问题清单（刮削：未能刮削的片目 problems + 出错明细 errors） */
+export function resultIssues(j: TaskJob): string[] {
+  const r = j.result
+  if (!r) return []
+  const pick = (k: string) => (Array.isArray(r[k]) ? (r[k] as unknown[]).filter((x): x is string => typeof x === 'string') : [])
+  return [...pick('problems'), ...pick('errors')]
 }

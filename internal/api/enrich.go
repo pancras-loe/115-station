@@ -7,6 +7,7 @@ package api
 // 重新命名。队列异步执行（串行限速，不卡整理主流程）。
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -116,7 +117,9 @@ func probeViaTempFile(u string, headers map[string]string) (*probeResult, error)
 
 // probeMediaInfoFile 探测本地文件（下载头部后的回退方案）
 func probeMediaInfoFile(filePath string) (*probeResult, error) {
-	cmd := exec.Command("ffprobe",
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams", "-show_format",
@@ -227,13 +230,24 @@ func probeMediaInfo(directURL string, headers map[string]string) (*probeResult, 
 		"-show_streams", "-show_format",
 		"-analyzeduration", "10M", "-probesize", "10M",
 		directURL)
-	cmd := exec.Command("ffprobe", args...)
+	// 超时两道：-rw_timeout 管单次网络读（微秒），context 管整个进程。
+	// 此前两样都没有，CDN 卡住时 ffprobe 一直挂着，整个刮削任务跟着停在这一集
+	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	defer cancel()
+	args = append(args[:len(args)-1], "-rw_timeout", "20000000", directURL)
+	cmd := exec.CommandContext(ctx, "ffprobe", args...)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("ffprobe 超时（%s）", probeTimeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe 执行失败: %v（输出: %.200s）", err, string(out))
 	}
 	return parseProbeOutput(out)
 }
+
+// probeTimeout 单次 ffprobe 的时限：只读头部十来 MB，正常几秒；一分钟还没完就是 CDN 卡住了
+const probeTimeout = 60 * time.Second
 
 // pixFromHeight 高度 → 分辨率标签（与 CMS resource_pix 对齐）
 func pixFromHeight(h int) string {

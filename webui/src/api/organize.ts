@@ -23,14 +23,18 @@ export interface ScrapeConfig {
   write_images: boolean
   force: boolean
   auto_after_organize: boolean
+  /** 刮削时 ffprobe 探测轨道写进 NFO（默认关，慢） */
+  probe_streams: boolean
+  /** 同一季多集共用的剧照判为占位图，不写集剧照（默认开） */
+  skip_shared_stills: boolean
 }
 
 /** 后端回的是 { cfg, status } 两层结构，不是扁平配置 —— 摊平取会全部读成 undefined */
 export const getScrapeConfig = () =>
   http.get<{ cfg?: Partial<ScrapeConfig>; status?: { running?: boolean } }>('/scrape/config')
 export const saveScrapeConfig = (cfg: ScrapeConfig) => http.post('/scrape/config', cfg)
-export const runScrape = () => http.post('/scrape/run')
-export const stopScrape = () => http.post('/scrape/stop')
+export const runScrape = () => http.post<{ message?: string; job_id?: number }>('/scrape/run')
+export const stopScrape = () => http.post<{ message?: string }>('/scrape/stop')
 export const scrapeStatus = () =>
   http.get<{ running?: boolean; progress?: string }>('/scrape/status', { timeoutMs: 15_000 })
 

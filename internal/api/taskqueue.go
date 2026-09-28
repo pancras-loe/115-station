@@ -26,6 +26,11 @@ import (
 // 现在：提交入队立即返回，一个常驻 worker 串行执行，每个任务有状态、结构化进度与结果。
 // 锁仍然只有 taskMu，串行语义不变 —— worker 只是它的又一个使用者，每个任务单独拿放锁。
 //
+// 刮削单独走一条队列（scrapeLane，2026-09-28 起）：一部几百集的综艺刮一遍要几十分钟，
+// 此前它挂在整理任务末尾、占着 taskMu，这段时间整理 / 同步 / 确认入库全在排队。
+// 刮削只写本地元数据（勾了上传才碰网盘，且走 pan115Ops 的节流与抑制），不需要和整理互斥；
+// 与整理动同一个片目时的冲突由刮削自己收拾（localscrape.go 的 scrapeCompensate），主队列不等它。
+//
 // 形态借鉴 LitePan internal/automation/service_run.go 的 submitRun / endRun
 // （提交即返回、有任务在跑就排队、跑完取下一个；只读参考，未复制代码）。
 // 设计全文见 docs/115-station-notes/TASK-QUEUE-PLAN.md
@@ -100,6 +105,9 @@ type jobSpec struct {
 	Source    string
 	Priority  int
 	Params    jobParams
+	// Merge 同键已有排队中的任务时怎么合并参数（默认以新的为准）。
+	// 整理后刮削要并集：上一轮整理的片目还没刮，不能被这一轮覆盖掉
+	Merge func(prev, next jobParams) (jobParams, string)
 }
 
 // jobOutcome 执行结果
@@ -125,10 +133,13 @@ func jobStoppable(job *model.TaskJob) bool {
 		return true
 	case "confirm":
 		return len(decodeJobParams(job).RecordIDs) > 1
-	case "scrape", "orgpick":
-		// 网盘文件页勾选的一批：刮削逐个片目、整理逐个条目，两个之间都能停
+	case "scrape":
+		// 刮削逐个片目、片目内逐个文件，随时能停（写了一半的片目下次「只补缺失」接着补）
+		return true
+	case "orgpick":
+		// 网盘文件页勾选的一批：整理逐个条目，两个之间能停
 		if f := decodeJobParams(job).Files; f != nil {
-			return len(f.Items) > 1 || job.Kind == "scrape"
+			return len(f.Items) > 1
 		}
 		return false
 	}
@@ -175,16 +186,40 @@ type jobExecutor func(h *Handler, job *model.TaskJob) (jobOutcome, error)
 // jobExecutors 各类型任务的执行器（见 taskjobs.go）。做成变量是为了测试能换成假执行器
 var jobExecutors = map[string]jobExecutor{}
 
-var (
-	// jobQueueMu 入队去重与「取下一个」互斥：否则两次并发提交同一条记录会各建一行
-	jobQueueMu sync.Mutex
-	jobWake    = make(chan struct{}, 1)
-)
+// jobQueueMu 入队去重与「取下一个」互斥：否则两次并发提交同一条记录会各建一行
+var jobQueueMu sync.Mutex
+
+// jobWakes 每条队列一个唤醒信号
+var jobWakes = map[*jobLane]chan struct{}{
+	mainLane:   make(chan struct{}, 1),
+	scrapeLane: make(chan struct{}, 1),
+}
+
+// jobKindScrape 走刮削队列的任务类型
+const jobKindScrape = "scrape"
+
+// laneOfKind 任务类型 → 队列
+func laneOfKind(kind string) *jobLane {
+	if kind == jobKindScrape {
+		return scrapeLane
+	}
+	return mainLane
+}
+
+// laneWhere 取某条队列任务的查询条件
+func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
+	if l == scrapeLane {
+		return db.Where("kind = ?", jobKindScrape)
+	}
+	return db.Where("kind <> ?", jobKindScrape)
+}
 
 func wakeJobWorker() {
-	select {
-	case jobWake <- struct{}{}:
-	default:
+	for _, ch := range jobWakes {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -203,7 +238,13 @@ func enqueueJob(db *gorm.DB, spec jobSpec) (model.TaskJob, error) {
 			// 排着一个手动整理、定时整理又命中了：手动的那个已经涵盖，原样保留（标题、参数都不动）
 			return job, nil
 		}
+		prev := decodeJobParams(&job)
 		job.Kind, job.Title, job.Params = spec.Kind, spec.Title, string(params)
+		if spec.Merge != nil {
+			merged, title := spec.Merge(prev, spec.Params)
+			b, _ := json.Marshal(merged)
+			job.Params, job.Title = string(b), title
+		}
 		if spec.Priority < job.Priority {
 			// 排着一个定时整理、用户又手动点了整理：合并成一个，按手动的优先级排
 			job.Priority, job.Source = spec.Priority, spec.Source
@@ -232,12 +273,12 @@ func queuedJobs(db *gorm.DB) []model.TaskJob {
 	return rows
 }
 
-// nextQueuedJob 下一个该执行的任务
-func nextQueuedJob(db *gorm.DB) (model.TaskJob, bool) {
+// nextQueuedJob 某条队列下一个该执行的任务
+func nextQueuedJob(db *gorm.DB, l *jobLane) (model.TaskJob, bool) {
 	jobQueueMu.Lock()
 	defer jobQueueMu.Unlock()
 	var job model.TaskJob
-	err := db.Where("status = ?", jobQueued).Order("priority ASC, id ASC").First(&job).Error
+	err := laneWhere(db, l).Where("status = ?", jobQueued).Order("priority ASC, id ASC").First(&job).Error
 	return job, err == nil
 }
 
@@ -249,13 +290,28 @@ func jobItems(job *model.TaskJob) int {
 	return 1
 }
 
-// queuePosition 任务在队列里排第几（从 1 起）与预计多久后跑完（含它自己）；不在排队返回 0
+// queuePosition 任务在它那条队列里排第几（从 1 起）与预计多久后跑完（含它自己）；不在排队返回 0。
+// 两条队列各排各的：排着的刮削不挡整理，算位置时也不该把它们混在一起数
 func queuePosition(queued []model.TaskJob, id uint) (int, time.Duration) {
-	items := 0
+	var lane *jobLane
 	for i := range queued {
+		if queued[i].ID == id {
+			lane = laneOfKind(queued[i].Kind)
+			break
+		}
+	}
+	if lane == nil {
+		return 0, 0
+	}
+	items, pos := 0, 0
+	for i := range queued {
+		if laneOfKind(queued[i].Kind) != lane {
+			continue
+		}
+		pos++
 		items += jobItems(&queued[i])
 		if queued[i].ID == id {
-			return i + 1, time.Duration(items) * jobItemEstimate
+			return pos, time.Duration(items) * jobItemEstimate
 		}
 	}
 	return 0, 0
@@ -272,7 +328,8 @@ func markIncrRun() { lastIncrRun.Store(time.Now().UnixNano()) }
 func StartTaskWorker(h *Handler) {
 	recoverInterruptedJobs(h.DB)
 	markIncrRun() // 刚启动时别立刻判定「增量很久没跑」
-	go h.taskWorkerLoop()
+	go h.taskWorkerLoop(mainLane)
+	go h.taskWorkerLoop(scrapeLane)
 	if n := len(queuedJobs(h.DB)); n > 0 {
 		log.Printf("[队列] ○ 启动时有 %d 个排队中的任务，稍后依次执行", n)
 	}
@@ -292,25 +349,26 @@ func recoverInterruptedJobs(db *gorm.DB) {
 	}
 }
 
-func (h *Handler) taskWorkerLoop() {
+func (h *Handler) taskWorkerLoop(l *jobLane) {
 	for {
 		select {
 		case <-stopCh:
 			return
 		default:
 		}
-		job, ok := nextQueuedJob(h.DB)
+		job, ok := nextQueuedJob(h.DB, l)
 		if !ok {
 			select {
-			case <-jobWake:
+			case <-jobWakes[l]:
 			case <-stopCh:
 				return
 			case <-time.After(jobIdlePoll):
 			}
 			continue
 		}
-		h.runJob(&job)
-		if len(queuedJobs(h.DB)) > 0 {
+		h.runJob(&job, l)
+		// 让路窗口只有主队列需要：刮削队列不拿 taskMu，挡不住增量
+		if l == mainLane && len(queuedJobs(h.DB)) > 0 {
 			waitIncrWindow(h.loadIncrInterval())
 		}
 	}
@@ -335,12 +393,14 @@ func acquireForJob(db *gorm.DB, job *model.TaskJob) bool {
 	}
 }
 
-// runJob 执行一个任务：拿锁 → 翻成 running → 执行 → 写结果
-func (h *Handler) runJob(job *model.TaskJob) {
-	if !acquireForJob(h.DB, job) {
-		return
+// runJob 执行一个任务：拿锁（仅主队列）→ 翻成 running → 执行 → 写结果
+func (h *Handler) runJob(job *model.TaskJob, l *jobLane) {
+	if l == mainLane {
+		if !acquireForJob(h.DB, job) {
+			return
+		}
+		defer taskMu.Unlock()
 	}
-	defer taskMu.Unlock()
 
 	// 抢到锁后再原子地从 queued 翻成 running：等锁期间被取消的在这里落空
 	started := time.Now()
@@ -352,14 +412,19 @@ func (h *Handler) runJob(job *model.TaskJob) {
 	job.Status, job.StartedAt = jobRunning, &started
 	log.Printf("[队列] ▶ 开始：%s", job.Title)
 
-	beginTask(job.Title)
-	beginJobProgress(job.ID)
-	out, err := execJob(h, job)
-	if err != nil {
-		failTask(err)
+	// beginTask / endTask 是 taskMu 持有者的全局状态（机器人「状态」、后台历史），刮削队列不碰
+	if l == mainLane {
+		beginTask(job.Title)
 	}
-	endTask() // 要在清当前任务之前：endTask 据此知道这是队列任务、不另记一行后台历史
-	prog := endJobProgress()
+	l.begin(job.ID)
+	out, err := execJob(h, job)
+	if l == mainLane {
+		if err != nil {
+			failTask(err)
+		}
+		endTask() // 要在清当前任务之前：endTask 据此知道这是队列任务、不另记一行后台历史
+	}
+	prog := l.end()
 
 	finished := time.Now()
 	status, msg := jobSuccess, out.Message
@@ -488,7 +553,7 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 	d.Stoppable = job.Status == jobQueued || (job.Status == jobRunning && jobStoppable(&job))
 	switch job.Status {
 	case jobRunning:
-		if id, p := currentJob(); id == job.ID {
+		if p, ok := liveJobProgress(job.ID); ok {
 			d.Progress = &p
 		}
 	case jobQueued:

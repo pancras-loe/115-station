@@ -8,6 +8,15 @@ export interface TaskJobProgress {
   done: number
   total: number
   label?: string
+  /** 当前条目内部的进度（刮削一部剧：集 NFO 87/212 · 当前文件）；只在运行中出现 */
+  sub?: TaskJobSubProgress
+}
+
+export interface TaskJobSubProgress {
+  phase?: string
+  done: number
+  total: number
+  label?: string
 }
 
 /** 入队接口的回复（202）：任务 id、排第几、预计多久后跑完 */

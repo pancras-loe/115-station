@@ -27,6 +27,7 @@ import {
   pct,
   resultSummary,
   retryable,
+  subProgressText,
 } from '@/utils/jobStatus'
 import { fullTime, relTime } from '@/utils/time'
 
@@ -49,11 +50,13 @@ async function loadIncr() {
 }
 
 const running = computed(() => queue.jobs.filter((j) => j.status === 'running'))
+/** 主队列上正在跑的：刮削单独一条队列、不拿任务锁，「锁被谁占着」只看主队列 */
+const runningMain = computed(() => running.value.filter((j) => j.kind !== 'scrape'))
 const queued = computed(() => queue.jobs.filter((j) => j.status === 'queued'))
 
 /** 锁被不在队列里的东西占着（增量轮询、Emby 事件深删）：进行中列表里单独一行 */
 const outside = computed(() => {
-  if (running.value.length || !queue.lock.busy || (queue.lock.held_sec ?? 0) < 3) return null
+  if (runningMain.value.length || !queue.lock.busy || (queue.lock.held_sec ?? 0) < 3) return null
   return { title: queue.lock.holder || '后台任务', since: dur(queue.lock.held_sec ?? 0), progress: queue.lock.progress }
 })
 
@@ -231,12 +234,13 @@ onUnmounted(() => {
                 <span v-if="j.progress?.label">：{{ j.progress.label }}</span>
                 <span class="dim"> · 已运行 {{ elapsed(j) }}</span>
               </p>
+              <p v-if="subProgressText(j)" class="sub dim">└ {{ subProgressText(j) }}</p>
             </template>
             <p v-else class="sub">
-              第 {{ j.position }} 位
+              {{ j.kind === 'scrape' ? '刮削队列' : '' }}第 {{ j.position }} 位
               <span v-if="j.priority !== 0" class="dim"> · 手动提交的会排在它前面</span>
               <span v-if="(j.eta_sec ?? 0) >= 60"> · 预计约 {{ Math.round((j.eta_sec ?? 0) / 60) }} 分钟内跑完</span>
-              <span v-if="j.position === 1 && !running.length && queue.lock.busy" class="dim">
+              <span v-if="j.position === 1 && j.kind !== 'scrape' && !runningMain.length && queue.lock.busy" class="dim">
                 · 正在等 {{ queue.lock.holder }}
               </span>
               <span class="dim"> · 提交于 {{ relTime(j.created_at) }}</span>

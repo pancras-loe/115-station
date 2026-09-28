@@ -8,7 +8,7 @@ import HPopover from '@/components/hero/HPopover.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import { useQueueStore } from '@/stores/queue'
 import type { TaskJob } from '@/api/tasks'
-import { JOB_STATUS, dur, elapsed, pct, retryable } from '@/utils/jobStatus'
+import { JOB_STATUS, dur, elapsed, pct, retryable, subProgressText } from '@/utils/jobStatus'
 
 /**
  * 顶栏的任务队列入口：图标 + 角标（执行中 + 排队数），点开看执行中 / 排队中 / 最近结束。
@@ -24,6 +24,11 @@ onUnmounted(() => queue.stop())
 
 const badge = computed(() => queue.running + queue.queued)
 const runningJobs = computed(() => queue.jobs.filter((j) => j.status === 'running'))
+/**
+ * 主队列上正在跑的（拿着任务锁的）。刮削单独一条队列、不拿锁（taskqueue.go），
+ * 它在跑不代表锁被队列任务占着：「正在等谁」「后台任务」两行只看主队列
+ */
+const runningMain = computed(() => runningJobs.value.filter((j) => j.kind !== 'scrape'))
 const queuedJobs = computed(() => queue.jobs.filter((j) => j.status === 'queued'))
 const doneJobs = computed(() => queue.finished.slice(0, 20))
 
@@ -31,7 +36,7 @@ const STATUS = JOB_STATUS
 
 /** 排在第一位、而锁被别的任务占着：说清楚在等谁（多半是定时整理或增量同步） */
 const waitingFor = computed(() => {
-  if (runningJobs.value.length || !queue.lock.busy || !queue.lock.holder) return ''
+  if (runningMain.value.length || !queue.lock.busy || !queue.lock.holder) return ''
   return `${queue.lock.holder}（已运行 ${dur(queue.lock.held_sec ?? 0)}）`
 })
 
@@ -51,7 +56,7 @@ function openCenter(id?: number) {
  * 占用不到 3 秒的不显示 —— 增量轮询 30 秒一轮、多数一两秒就完，每轮闪一下没有意义
  */
 const background = computed(() => {
-  if (runningJobs.value.length || !queue.lock.busy || (queue.lock.held_sec ?? 0) < 3) return null
+  if (runningMain.value.length || !queue.lock.busy || (queue.lock.held_sec ?? 0) < 3) return null
   return { title: queue.lock.holder || '后台任务', since: dur(queue.lock.held_sec ?? 0), progress: queue.lock.progress }
 })
 </script>
@@ -131,13 +136,14 @@ const background = computed(() => {
                 <span v-if="j.progress?.label" class="qp-label">：{{ j.progress.label }}</span>
                 <span class="qp-dim"> · 已运行 {{ elapsed(j) }}</span>
               </p>
+              <p v-if="subProgressText(j)" class="qp-sub qp-sub2">└ {{ subProgressText(j) }}</p>
             </template>
 
             <p v-else-if="j.status === 'queued'" class="qp-sub">
-              第 {{ j.position }} 位
+              {{ j.kind === 'scrape' ? '刮削队列' : '' }}第 {{ j.position }} 位
               <span v-if="j.priority !== 0" class="qp-dim"> · 后台任务，手动提交的会排在它前面</span>
               <span v-if="(j.eta_sec ?? 0) >= 60"> · 预计约 {{ Math.round((j.eta_sec ?? 0) / 60) }} 分钟内跑完</span>
-              <span v-if="j.position === 1 && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
+              <span v-if="j.position === 1 && j.kind !== 'scrape' && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
             </p>
 
             <p v-else class="qp-sub" :class="{ 'qp-err': j.status === 'failed' || j.status === 'interrupted' }">
@@ -250,6 +256,10 @@ const background = computed(() => {
   font-size: 12px;
   color: color-mix(in oklab, var(--foreground) 70%, var(--muted));
   word-break: break-all;
+}
+.qp-sub2 {
+  margin-top: 2px;
+  color: var(--muted);
 }
 .qp-err {
   color: var(--danger);

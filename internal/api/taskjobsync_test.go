@@ -40,7 +40,7 @@ func TestJobHooks(t *testing.T) {
 		job, _ := enqueueJob(model.DB, jobSpec{Kind: kind, Title: kind})
 		k := kind
 		onJobDone(job.ID, func(j model.TaskJob) { got[k] = j.Status + ":" + j.Message })
-		h.runJob(&job)
+		h.runJob(&job, mainLane)
 		fireJobHooks(model.DB, job.ID) // 第二次不该再回
 	}
 	if got["ok"] != "success:好了" || got["bad"] != "failed:坏了" {
@@ -79,7 +79,7 @@ func TestBackgroundRunHistory(t *testing.T) {
 		"x": func(*Handler, *model.TaskJob) (jobOutcome, error) { return jobOutcome{Message: "ok"}, nil },
 	})
 	job, _ := enqueueJob(model.DB, jobSpec{Kind: "x", Title: "队列任务"})
-	h.runJob(&job)
+	h.runJob(&job, mainLane)
 	var n int64
 	model.DB.Model(&model.TaskJob{}).Where("kind = ?", jobKindBackground).Count(&n)
 	if n != 2 {

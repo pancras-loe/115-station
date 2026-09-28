@@ -15,6 +15,7 @@ import (
 	"115-station/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // ==================== 本地文件页：刮削所选片目 ====================
@@ -27,8 +28,12 @@ import (
 // 「上传到网盘」只管这一次：勾了就当场把这次写出的文件传进网盘对应目录（upload115FileConsented，
 // 不看监控上传总开关）；没勾就只写本地，传不传交给监控上传 —— 它开着会照常把新文件传上去。
 
+//
+// 整理后自动刮削与「开始刮削」全库也走这里的执行器（execScrapeJob），只是参数不同：
+// 前者带整理当时识别到的条目（Hints），后者 All=true 执行时现取台账。三者都在刮削队列上跑，不拿 taskMu。
+
 func init() {
-	jobExecutors["scrape"] = execLocalScrapeJob
+	jobExecutors[jobKindScrape] = execScrapeJob
 }
 
 // fileScrapeOpts 本次刮削的选项
@@ -37,12 +42,29 @@ type fileScrapeOpts struct {
 	WriteImages bool `json:"write_images"`
 	Force       bool `json:"force"`  // 覆盖已存在的元数据
 	Upload      bool `json:"upload"` // 这一次把产物写进网盘
+	// Probe 逐个视频 ffprobe 写 NFO 的 streamdetails（scrapeCfg.ProbeStreams）
+	Probe bool `json:"probe"`
+	// SkipSharedStills 同一季多集共用的剧照判为占位图，不写（scrapeCfg.SkipSharedStills）
+	SkipSharedStills bool `json:"skip_shared_stills"`
 }
 
 // localScrapeParams 刮削任务参数：台账片目 key（含库名前缀，与 ledgerTitleEntry.Key 同口径）
 type localScrapeParams struct {
-	Keys   []string       `json:"keys"`
+	Keys   []string       `json:"keys,omitempty"`
 	Scrape fileScrapeOpts `json:"scrape"`
+	// All 全库：执行时现取台账里带 TMDB 编号的片目（排队期间入库的也算上）
+	All bool `json:"all,omitempty"`
+	// Hints 整理后刮削：整理当时识别到的条目。重命名模板不带 {tmdbid} 时目录名里没有编号，
+	// 光看台账认不出来，而整理手上明明有
+	Hints map[string]scrapeHint `json:"hints,omitempty"`
+}
+
+// scrapeHint 整理时识别到的片目信息
+type scrapeHint struct {
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Year   string `json:"year,omitempty"`
+	TmdbID int    `json:"tmdb_id"`
 }
 
 // localScrapeMax 一次最多刮多少部：再多就该用「开始刮削」跑全库
@@ -101,7 +123,7 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
 	}
 	job, err := enqueueJob(h.DB, jobSpec{
-		Kind: "scrape", Title: title, DedupeKey: truncateStr("local:"+strings.Join(keys, "|"), 240),
+		Kind: jobKindScrape, Title: title, DedupeKey: truncateStr("local:"+strings.Join(keys, "|"), 240),
 		Source: "web", Priority: jobPriorityManual,
 		Params: jobParams{TmdbID: req.TmdbID, MediaType: req.MediaType,
 			Local: &localScrapeParams{Keys: keys, Scrape: *req.Scrape}},
@@ -246,11 +268,16 @@ func (w *fileScrapeWriter) skip(d metaDest, name string) bool {
 	return true
 }
 
+// errMetaDirGone 本地落点目录已不在。刮削不建目录：媒体库里的片目目录一定已经有 STRM，
+// 目录没了说明刮削期间片目被整理 / 洗版 / 深删 / 增量挪走了，建一个只会在旧位置留下
+// 只有 NFO 和海报的空壳，Emby 把它认成一部没有视频的剧
+var errMetaDirGone = errors.New("本地目录已不在")
+
 func (w *fileScrapeWriter) put(d metaDest, name string, data []byte) (bool, error) {
 	localPath := ""
 	if d.Local != "" {
-		if err := os.MkdirAll(d.Local, 0o755); err != nil {
-			return false, err
+		if st, err := os.Stat(d.Local); err != nil || !st.IsDir() {
+			return false, errMetaDirGone
 		}
 		wrote, err := writeMetaFile(d.Local, name, data, w.force)
 		if err != nil {
@@ -366,35 +393,88 @@ func (w *fileScrapeWriter) cloudNames(cid string) (map[string]string, error) {
 	return m, nil
 }
 
-// jobScrapeReporter 手动刮削的错误收集：进日志，也进任务结果
+// jobScrapeReporter 刮削任务的错误收集：进日志，也进任务结果；停止与进度走刮削队列
 type jobScrapeReporter struct {
 	n    int
 	errs []string
 }
 
+// scrapeMaxErrs 任务结果里最多留几条错误（完整的在日志里）
+const scrapeMaxErrs = 50
+
 func (r *jobScrapeReporter) errf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	log.Printf("[影视刮削] ✗ %s", msg)
+	log.Printf("[影视刮削]   ✗ %s", msg)
 	r.n++
-	if len(r.errs) < 20 {
+	if len(r.errs) < scrapeMaxErrs {
 		r.errs = append(r.errs, msg)
 	}
 }
 
-func (r *jobScrapeReporter) stopped() bool { return jobStopRequested() }
+func (r *jobScrapeReporter) stopped() bool { return scrapeLane.stopRequested() }
+
+func (r *jobScrapeReporter) sub(phase string, done, total int, label string) {
+	scrapeLane.setSub(phase, done, total, label)
+}
 
 // fileScrapeResult 任务结果（前端任务详情里显示）
 type fileScrapeResult struct {
-	Titles   int            `json:"titles"`
-	Stat     fileScrapeStat `json:"stat"`
-	Problems []string       `json:"problems,omitempty"`
-	Errors   []string       `json:"errors,omitempty"`
+	Titles      int            `json:"titles"`
+	Stat        fileScrapeStat `json:"stat"`
+	Reused      int            `json:"reused,omitempty"`      // 复用本次已下载的图
+	Placeholder int            `json:"placeholder,omitempty"` // 判为占位剧照没写的集
+	Probed      int            `json:"probed,omitempty"`      // 轨道探测（含缓存命中）
+	Reclaimed   int            `json:"reclaimed,omitempty"`   // 片目被挪走后收回的文件
+	Problems    []string       `json:"problems,omitempty"`
+	Errors      []string       `json:"errors,omitempty"`
 }
 
-func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+// scrapeTarget 一个待刮片目：台账条目 + 整理时的识别结果（可无）
+type scrapeTarget struct {
+	key  string
+	e    *ledgerTitleEntry
+	hint *scrapeHint
+}
+
+// scrapeTargets 按任务参数列出要刮的片目。All = 台账里带 TMDB 编号的全部片目
+func scrapeTargets(lp *localScrapeParams, ledger map[string]*ledgerTitleEntry) (targets []scrapeTarget, problems []string, noID int) {
+	if lp.All {
+		for k, e := range ledger {
+			if e.TmdbID <= 0 {
+				noID++ // 全库刮削只刮带编号的（与改造前一致），按片名猜太容易刮错
+				continue
+			}
+			targets = append(targets, scrapeTarget{key: k, e: e})
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i].key < targets[j].key })
+		return targets, nil, noID
+	}
+	for _, k := range lp.Keys {
+		var hint *scrapeHint
+		if h, ok := lp.Hints[k]; ok && h.TmdbID > 0 {
+			hint = &h
+		}
+		e := ledger[k]
+		if e == nil && hint != nil {
+			// 台账口径的 key 与整理算的一致（库名/分类/标题）；老台账不带库名前缀时对不上，按识别结果补一条
+			e = &ledgerTitleEntry{Key: k, Title: hint.Title, Year: hint.Year, TmdbID: hint.TmdbID, MediaType: hint.Kind}
+			if i := strings.Index(k, "/"); i > 0 {
+				e.LibName = k[:i]
+			}
+		}
+		if e == nil {
+			problems = append(problems, k+"：台账里已经没有这个片目（被移走或删除了）")
+			continue
+		}
+		targets = append(targets, scrapeTarget{key: k, e: e, hint: hint})
+	}
+	return targets, problems, 0
+}
+
+func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	p := decodeJobParams(job)
 	lp := p.Local
-	if lp == nil || len(lp.Keys) == 0 {
+	if lp == nil || (len(lp.Keys) == 0 && !lp.All) {
 		// 老版本网盘文件页入队的刮削任务（参数在 Files 里）：那条入口已经移除
 		return jobOutcome{}, errors.New("任务参数错误（网盘文件页的刮削已移到本地文件页，请在那里重新提交）")
 	}
@@ -419,7 +499,7 @@ func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		pick = media
 	}
 
-	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求，没配账号也能刮
+	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求（开了轨道探测除外，那要取直链），没配账号也能刮
 	var cloud cloudMetaOps
 	libCid := ""
 	if o.Upload {
@@ -441,34 +521,9 @@ func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		defer resetFileListCache()
 	}
 
-	ledger := scanLedgerTitles()
-	var titles []scrapeTitle
-	var problems []string
-	for i, k := range lp.Keys {
-		if jobStopRequested() {
-			break
-		}
-		e := ledger[k]
-		if e == nil {
-			problems = append(problems, k+"：台账里已经没有这个片目（被移走或删除了）")
-			continue
-		}
-		setJobProgress("识别", i, len(lp.Keys), truncateStr(e.Title, 60))
-		t, err := ledgerScrapeTitle(tc, e, localRoot, libCid, pick)
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s：%v", e.Title, err))
-			continue
-		}
-		titles = append(titles, t)
-	}
-	for _, pr := range problems {
-		log.Printf("[影视刮削] ✗ %s", pr)
-	}
-	if len(titles) == 0 {
-		if jobStopRequested() {
-			return jobOutcome{Message: "已按要求停止，没有刮削任何片目", Canceled: true}, nil
-		}
-		return jobOutcome{}, errors.New(strings.Join(problems, "；"))
+	targets, problems, noID := scrapeTargets(lp, scanLedgerTitles())
+	if noID > 0 {
+		log.Printf("[影视刮削] ○ %d 个片目的目录名里没有 TMDB 编号，全库刮削跳过（可在本地文件页逐个指定条目刮削）", noID)
 	}
 
 	w := newFileScrapeWriter(cloud, o.Force, o.Upload)
@@ -478,36 +533,98 @@ func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		}
 	}
 	rep := &jobScrapeReporter{}
-	cfg := scrapeCfg{WriteNFO: o.WriteNFO, WriteImages: o.WriteImages, Force: o.Force}
+	sess := newScrapeSession(tc, o, w, rep)
 	where := "本地媒体库"
 	if o.Upload {
 		where += "，并上传网盘"
 	}
-	log.Printf("[影视刮削] ▶ 手动刮削 %d 个片目（%s，%s）", len(titles), where, map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force])
+	log.Printf("[影视刮削] ▶ %s：%d 个片目（%s，%s，NFO %s · 图片 %s · 轨道探测 %s · 占位剧照 %s）",
+		job.Title, len(targets), where, map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force],
+		onOff(o.WriteNFO), onOff(o.WriteImages), onOff(o.Probe), map[bool]string{true: "不写", false: "照写"}[o.SkipSharedStills])
+
+	res := fileScrapeResult{}
 	done, canceled := 0, false
-	for i, t := range titles {
-		if jobStopRequested() {
+	for i, tg := range targets {
+		if rep.stopped() {
 			canceled = true
 			break
 		}
-		setJobProgress("刮削", i, len(titles), truncateStr(t.Title, 60))
-		log.Printf("[影视刮削] ▶ %s (%s) [tmdb=%d]，视频 %d 个", t.Title, t.Year, t.TmdbID, len(t.Videos))
-		scrapeTitleMeta(tc, cfg, t, w, rep)
+		name := tg.e.Title
+		scrapeLane.set("刮削", i, len(targets), truncateStr(name, 60))
+		// 片目逐个现解析（视频列表现查台账），不在开头一次性算好：
+		// 全库几百部刮下来要几个小时，开头算的列表到后面早就过时了
+		e := *tg.e
+		if tg.hint != nil {
+			e.MediaType, e.Title, e.Year, e.TmdbID = tg.hint.Kind, tg.hint.Title, tg.hint.Year, tg.hint.TmdbID
+		}
+		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s：%v", name, err))
+			log.Printf("[影视刮削] ✗ %s：%v", name, err)
+			continue
+		}
+		if !localHasStrm(t.Dir.Local) {
+			problems = append(problems, name+"：本地片目目录里已经没有 STRM（被移走或删除了）")
+			log.Printf("[影视刮削] ○ %s：本地片目目录里已经没有 STRM，跳过 → %s", name, t.Dir.Local)
+			continue
+		}
+		start := time.Now()
+		log.Printf("[影视刮削] ▶ 《%s》(%s) [tmdb=%d] %s，视频 %d 个 → %s",
+			t.Title, t.Year, t.TmdbID, map[string]string{"tv": "剧集", "movie": "电影"}[t.Kind], len(t.Videos), t.Dir.Local)
+		st := sess.scrapeTitleMeta(t)
+		reclaimed := scrapeCompensate(t, st.written, localRoot)
+		res.Reused += st.Reused
+		res.Placeholder += st.Placeholder
+		res.Probed += st.Probed + st.ProbeCached
+		res.Reclaimed += reclaimed
+		mark := "✓"
+		if st.Failed > 0 || st.Gone {
+			mark = "○"
+		}
+		line := fmt.Sprintf("[影视刮削] %s 《%s》：写入 %d 个", mark, t.Title, len(st.Wrote))
+		if sm := st.summary(); sm != "" {
+			line += " [" + sm + "]"
+		}
+		line += fmt.Sprintf("，已有跳过 %d", st.Skipped)
+		if st.Reused > 0 {
+			line += fmt.Sprintf("，复用已下载 %d", st.Reused)
+		}
+		if st.Placeholder > 0 {
+			line += fmt.Sprintf("，占位剧照 %d 集未写", st.Placeholder)
+		}
+		if st.Probed+st.ProbeCached > 0 {
+			line += fmt.Sprintf("，探测 %d（缓存 %d）", st.Probed+st.ProbeCached, st.ProbeCached)
+		}
+		line += fmt.Sprintf("，失败 %d，用时 %s", st.Failed, time.Since(start).Round(time.Second))
+		log.Print(line)
+		if reclaimed > 0 {
+			log.Printf("[影视刮削] ○ 《%s》刮削期间片目（或其中几集）被移走 / 删除，已收回这次写下的 %d 个文件", t.Title, reclaimed)
+		}
 		done = i + 1
 		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
 	}
-	setJobProgress("", done, progressKeep, "")
+	scrapeLane.set("", done, progressKeep, "")
+	for _, pr := range problems {
+		if len(res.Problems) < scrapeMaxErrs {
+			res.Problems = append(res.Problems, pr)
+		}
+	}
 
-	// 本地写了新的元数据：通知 Emby 按路径刷新
+	// 本地写了新的元数据：通知 Emby 按路径刷新。整理那边落盘后已经刷过一次，
+	// 但那时刮削还没开始（它排在刮削队列里），元数据要靠这一次才进得去
 	if len(w.localDirs) > 0 {
 		dirs := make([]string, 0, len(w.localDirs))
 		for d := range w.localDirs {
-			dirs = append(dirs, d)
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				dirs = append(dirs, d)
+			}
 		}
 		sort.Strings(dirs)
-		notifyEmbyPaths(dirs, embyRefreshAdded)
+		if len(dirs) > 0 {
+			notifyEmbyPaths(dirs, embyRefreshAdded)
+		}
 		if !o.Upload {
-			// 这一次没勾上传：交给监控上传（与「开始刮削」同口径，它们各自看自己的开关）
+			// 这一次没勾上传：交给监控上传（它看自己的开关）
 			go func() {
 				time.Sleep(2 * time.Second) // 等最后写入落盘
 				monitorOnce(h)
@@ -518,6 +635,9 @@ func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 	msg := fmt.Sprintf("刮削 %d 个片目：写入本地 %d 个、上传网盘 %d 个、已存在跳过 %d 个",
 		done, w.stat.Local, w.stat.Uploaded, w.stat.Skipped)
+	if res.Placeholder > 0 {
+		msg += fmt.Sprintf("、占位剧照未写 %d 集", res.Placeholder)
+	}
 	if rep.n > 0 {
 		msg += fmt.Sprintf("；%d 处出错（见任务详情 / 实时日志）", rep.n)
 	}
@@ -528,9 +648,145 @@ func execLocalScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		msg = "已按要求停止；" + msg
 	}
 	log.Printf("[影视刮削] ■ %s", msg)
-	res := fileScrapeResult{Titles: done, Stat: w.stat, Problems: problems, Errors: rep.errs}
+	res.Titles, res.Stat, res.Errors = done, w.stat, rep.errs
+	if len(targets) == 0 && len(problems) > 0 {
+		return jobOutcome{Result: res}, errors.New(strings.Join(problems, "；"))
+	}
 	if w.stat.Local+w.stat.Uploaded+w.stat.Skipped == 0 && rep.n > 0 && !canceled {
 		return jobOutcome{Result: res}, errors.New(msg)
 	}
-	return jobOutcome{Message: msg, Result: res, Canceled: canceled}, nil
+	// 整理后刮削什么都没写（全都已有）：后台任务不留行，免得每轮整理都添一条「跳过 N 个」
+	idle := job.Priority == jobPriorityBackground && w.stat.Local+w.stat.Uploaded == 0 && rep.n == 0 && len(problems) == 0
+	return jobOutcome{Message: msg, Result: res, Canceled: canceled, Idle: idle}, nil
+}
+
+// localHasStrm 本地目录（含子目录）里还有没有 STRM：片目还在不在原位的判据
+func localHasStrm(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	found := false
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && strings.EqualFold(filepath.Ext(p), ".strm") {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// scrapeCompensate 刮完一部后核对它还在不在原位，返回收回的文件数。
+//
+// 刮削不拿 taskMu（taskqueue.go），整理 / 洗版 / 深删 / 增量可能正好在这期间把片目或其中几集
+// 挪走、删掉。本地 STRM 不在了，这次写下的元数据就成了孤儿 —— 留着的话空目录删不掉，
+// Emby 会把只剩 NFO 和海报的壳认成一部没有视频的剧。所以：
+//   - 整个片目没有 STRM 了 → 这次写的全收回；
+//   - 片目还在但某集的 STRM 没了（洗版换了文件名）→ 收回那一集的 NFO / 剧照。
+//
+// 只删这一次写下的，此前就有的不碰（那归删片目的一方管，与改造前一致）；
+// 删完沿父目录往上收空目录，止于本地媒体库根。
+// 选这种「事后收拾」而不是片目锁：删改本地的入口有十几处（增量还是拿着 taskMu 删的），
+// 让它们等刮削放锁，几百集的剧又能把主队列卡住
+func scrapeCompensate(t scrapeTitle, written []string, localRoot string) int {
+	if len(written) == 0 {
+		return 0
+	}
+	titleAlive := localHasStrm(t.Dir.Local)
+	owner := map[string]scrapeVideo{} // 集级产物的本地路径 → 所属视频
+	for _, v := range t.Videos {
+		if v.Dir.Local == "" {
+			continue
+		}
+		owner[filepath.Join(v.Dir.Local, v.Name+".nfo")] = v
+		owner[filepath.Join(v.Dir.Local, v.Name+"-thumb.jpg")] = v
+	}
+	removed := 0
+	dirs := map[string]bool{}
+	for _, p := range written {
+		orphan := !titleAlive
+		if !orphan {
+			if v, ok := owner[p]; ok && !fileExists(filepath.Join(v.Dir.Local, v.Name+".strm")) {
+				orphan = true
+			}
+		}
+		if !orphan {
+			continue
+		}
+		if err := os.Remove(p); err == nil || os.IsNotExist(err) {
+			removed++
+			dirs[filepath.Dir(p)] = true
+		} else {
+			log.Printf("[影视刮削] ✗ 收回孤儿元数据失败 %s: %v", p, err)
+		}
+	}
+	for d := range dirs {
+		removeEmptyParents(d, localRoot)
+	}
+	return removed
+}
+
+// ---- 整理后自动刮削 ----
+
+// scrapeAutoDedupe 整理后刮削的去重键：还没开始刮的几轮整理并成一个任务
+const scrapeAutoDedupe = "auto"
+
+// enqueueAutoScrape 整理完成后把本轮动过的片目丢进刮削队列就返回。
+// 此前在整理任务里当场刮，一部几百集的综艺刮完才放 taskMu，这段时间整理 / 同步全在排队
+func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg) {
+	p := &localScrapeParams{Scrape: cfg.opts(), Hints: map[string]scrapeHint{}}
+	for _, j := range jobs {
+		p.Keys = append(p.Keys, j.Key)
+		p.Hints[j.Key] = scrapeHint{Kind: j.Kind, Title: j.Title, Year: j.Year, TmdbID: j.TmdbID}
+	}
+	p.Keys = normalizeTitleKeys(p.Keys)
+	job, err := enqueueJob(db, jobSpec{
+		Kind: jobKindScrape, Title: autoScrapeTitle(p), DedupeKey: scrapeAutoDedupe,
+		Source: "organize", Priority: jobPriorityBackground,
+		Params: jobParams{Local: p}, Merge: mergeAutoScrape,
+	})
+	if err != nil {
+		log.Printf("[影视刮削] ✗ 整理后刮削入队失败: %v", err)
+		return
+	}
+	log.Printf("[影视刮削] ○ 整理完成，%d 个片目加入刮削队列（任务 #%d，与整理分开执行，不占任务锁）", len(p.Keys), job.ID)
+	wakeJobWorker()
+}
+
+// mergeAutoScrape 排着的整理后刮削还没开始，又来一轮：片目取并集，选项以新的为准
+func mergeAutoScrape(prev, next jobParams) (jobParams, string) {
+	out := next
+	if prev.Local == nil || next.Local == nil {
+		return out, autoScrapeTitle(next.Local)
+	}
+	lp := *next.Local
+	lp.Keys = normalizeTitleKeys(append(append([]string{}, prev.Local.Keys...), next.Local.Keys...))
+	lp.Hints = map[string]scrapeHint{}
+	for k, v := range prev.Local.Hints {
+		lp.Hints[k] = v
+	}
+	for k, v := range next.Local.Hints {
+		lp.Hints[k] = v
+	}
+	out.Local = &lp
+	return out, autoScrapeTitle(&lp)
+}
+
+// autoScrapeTitle 「整理后刮削《片名》等 N 部」
+func autoScrapeTitle(p *localScrapeParams) string {
+	if p == nil || len(p.Keys) == 0 {
+		return "整理后刮削"
+	}
+	name := path.Base(p.Keys[0])
+	if h, ok := p.Hints[p.Keys[0]]; ok && h.Title != "" {
+		name = h.Title
+	}
+	s := "整理后刮削《" + truncateStr(name, 40) + "》"
+	if len(p.Keys) > 1 {
+		s += fmt.Sprintf("等 %d 部", len(p.Keys))
+	}
+	return s
 }

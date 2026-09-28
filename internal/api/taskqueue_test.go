@@ -67,7 +67,7 @@ func TestQueueOrderAndPosition(t *testing.T) {
 	if len(q) != 3 || q[0].ID != m1.ID || q[1].ID != m2.ID || q[2].ID != bg.ID {
 		t.Fatalf("顺序不对：%v", []uint{q[0].ID, q[1].ID, q[2].ID})
 	}
-	next, ok := nextQueuedJob(model.DB)
+	next, ok := nextQueuedJob(model.DB, mainLane)
 	if !ok || next.ID != m1.ID {
 		t.Fatalf("下一个应是 手动1，实际 %d", next.ID)
 	}
@@ -98,7 +98,7 @@ func TestRunJobOutcomes(t *testing.T) {
 	cases := map[string]string{"ok": jobSuccess, "bad": jobFailed, "boom": jobFailed, "half": jobCanceled}
 	for kind, want := range cases {
 		job, _ := enqueueJob(model.DB, jobSpec{Kind: kind, Title: kind})
-		h.runJob(&job)
+		h.runJob(&job, mainLane)
 		got := jobStatus(t, job.ID)
 		if got.Status != want {
 			t.Fatalf("%s：状态应为 %s，实际 %s（%s）", kind, want, got.Status, got.Message)
@@ -137,7 +137,7 @@ func TestRunJobCanceledWhileWaiting(t *testing.T) {
 	}
 	job, _ := enqueueJob(model.DB, jobSpec{Kind: "x", Title: "x"})
 	done := make(chan struct{})
-	go func() { h.runJob(&job); close(done) }()
+	go func() { h.runJob(&job, mainLane); close(done) }()
 	time.Sleep(50 * time.Millisecond)
 	model.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("status", jobCanceled)
 	select {

@@ -15,11 +15,13 @@ import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import type { ScrapeConfig } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useQueueStore } from '@/stores/queue'
 
 const { message } = useFeedback()
 const router = useRouter()
 const media = useFullSetting()
 const monitor = useSetting('monitor', { enabled: false })
+const queue = useQueueStore()
 
 const cfg = ref<ScrapeConfig>({
   local_root: '',
@@ -27,6 +29,8 @@ const cfg = ref<ScrapeConfig>({
   write_images: true,
   force: false,
   auto_after_organize: false,
+  probe_streams: false,
+  skip_shared_stills: true,
 })
 const saving = ref(false)
 const starting = ref(false)
@@ -45,6 +49,9 @@ async function load() {
       write_images: c.write_images !== false,
       force: !!c.force,
       auto_after_organize: !!c.auto_after_organize,
+      probe_streams: !!c.probe_streams,
+      // 后端缺省开启
+      skip_shared_stills: c.skip_shared_stills !== false,
     }
   } catch {
     // 首次使用尚无配置
@@ -74,8 +81,9 @@ async function run() {
     cfg.value.local_root = media.model.value.local_path
     // 先存再跑：后端跑的是已保存的配置，不是请求体
     await organizeApi.saveScrapeConfig(cfg.value)
-    await organizeApi.runScrape()
-    message.success('刮削已开始，进度与结果见实时日志')
+    const d = await organizeApi.runScrape()
+    message.success(d.message || '全库刮削已加入刮削队列')
+    await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '启动失败')
   } finally {
@@ -85,8 +93,9 @@ async function run() {
 
 async function stop() {
   try {
-    await organizeApi.stopScrape()
-    message.success('已请求停止')
+    const d = await organizeApi.stopScrape()
+    message.success(d.message || '已请求停止')
+    await queue.submitted()
   } catch (e) {
     toastError(e, '停止失败')
   }
@@ -126,9 +135,10 @@ onMounted(load)
     <HAlert status="accent" class="note">
       按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录；仅在允许上传时由「监控上传」回传 115
       —— 替代「Emby 刮削到本地」。Emby 侧建议把元数据读取器设为「仅 NFO」，以本站数据为准。
-      电影生成与视频同名的 NFO（口径与 Emby 自己刮削一致），剧集生成 tvshow.nfo、整季海报与逐集同名
-      NFO；NFO 内含 fileinfo/streamdetails
-      轨道信息（ffprobe 探测的多音轨 / 内嵌字幕），播放器无需探测 strm 远端即可显示音轨字幕。
+      电影生成与视频同名的 NFO（口径与 Emby 自己刮削一致），剧集生成 tvshow.nfo、season.nfo、季海报、
+      逐集同名 NFO 与集剧照。
+      刮削在单独的「刮削队列」里执行，不占任务锁：几百集的剧刮半小时，整理与同步照常进行。
+      进度见顶栏任务队列，逐个文件的下载地址、大小与去向见实时日志（搜「[影视刮削]」）。
     </HAlert>
 
     <FieldRow
@@ -147,6 +157,23 @@ onMounted(load)
 
     <FieldRow label="覆盖模式">
       <HSegmented v-model="cfg.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
+    </FieldRow>
+
+    <FieldRow
+      label="占位剧照"
+      hint="综艺常见同一季几十集挂同一张剧照。同一季里 3 集以上共用一张（或内容完全相同）时判为占位图，这些集不写集剧照，Emby 会改用剧的背景图。只在同一季内比较，别的季用过同一张图不算。"
+    >
+      <HSegmented
+        v-model="cfg.skip_shared_stills"
+        :options="[{ label: '不写', value: true }, { label: '照写', value: false }]"
+      />
+    </FieldRow>
+
+    <FieldRow
+      label="轨道探测"
+      hint="逐个视频读取网盘文件头部（经 115 直链），把分辨率、编码、音轨、内嵌字幕写进 NFO 的 streamdetails。每个视频多 2–10 秒，几百集的剧会多出十几到几十分钟，并产生同样数量的 115 直链请求。Emby / Jellyfin 导入 NFO 一般不读这一段，主要对 Kodi 有用。探测结果按文件缓存，重刮不会再探一遍。"
+    >
+      <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
     </FieldRow>
 
     <!-- 用户反馈过「未识别的文件手动刮削没用」：刮削只认已入库的片目，这里把范围说清楚，并给出正确入口 -->

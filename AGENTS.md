@@ -95,7 +95,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
 | **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
-| **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` `taskhistory.go` | **所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**；**后台任务**（定时整理 / 定时全量 / 转存与离线完成触发的 `transfer` / 转存守望者）也只入队，优先级 1（排队中手动优先，运行中不抢占），同类去重（`organize` / `full` / `transfer`），空转轮次（`jobOutcome.Idle`）跑完删行、同因重复失败只留最新一条。常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（仍不进队列的只剩增量轮询与 Emby 事件深删，后者在 `endTask` 时补一行 `kind=background`；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue`（只看当前）+ `stores/queue.ts`，完整的历史、筛选与任务详情在**任务中心** `/tasks`（`taskhistory.go` 的 `GET /tasks/history` 与扩充后的 `GET /tasks/:id`；`OrganizeRecord.JobID` 记「最近一次处理它的任务」，任务与记录据此互相跳转，老记录为 0 不回填）。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
+| **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` `taskhistory.go` | **两条队列**：主队列（下面这些）串行在 `taskMu` 上；**刮削队列**只跑 `kind=scrape`、不拿 `taskMu`（见 §6.16）。进度按队列各存一份（`jobLane`，主队列沿用 `setJobProgress` 等包级函数，刮削显式用 `scrapeLane`），刮削还有第二级进度 `progress.sub`。**所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**；**后台任务**（定时整理 / 定时全量 / 转存与离线完成触发的 `transfer` / 转存守望者）也只入队，优先级 1（排队中手动优先，运行中不抢占），同类去重（`organize` / `full` / `transfer`），空转轮次（`jobOutcome.Idle`）跑完删行、同因重复失败只留最新一条。常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（仍不进队列的只剩增量轮询与 Emby 事件深删，后者在 `endTask` 时补一行 `kind=background`；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue`（只看当前）+ `stores/queue.ts`，完整的历史、筛选与任务详情在**任务中心** `/tasks`（`taskhistory.go` 的 `GET /tasks/history` 与扩充后的 `GET /tasks/:id`；`OrganizeRecord.JobID` 记「最近一次处理它的任务」，任务与记录据此互相跳转，老记录为 0 不回填）。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **网盘文件页** | `filebrowser.go` `fileorganize.go` `filelibrary.go` | 浏览 115 目录树（`GET /files/115`），每行「整理 / 移动」，勾选后批量移动，都入任务队列（`orgpick` / `libredo` / `filemove`）。**媒体库里只有片目目录（当前二级分类目录的下一层，`libCategoryLayout.isTitleRel`）能整理和移动**：整理不走新文件流水线（洗版会撞上自己），而是现场列文件建一条记录交给 `redoOrganize`（`libredo`）；移动只能到 冗余 / 已存在 / 待整理，移出媒体库时 `cleanupMovedTitle` **先删台账再删本地、最后通知 Emby**（反过来深度删除会按台账把刚移走的网盘文件删掉），并清空记录的 `target_cid`（否则之后重新整理被判原地刷新）。整理复用 `processEntry`，媒体库内的条目拒收（走重新整理）。**刮削不在这一页**（2026-09 挪到本地文件页）。测试 `filebrowser_test.go` |
 | **本地文件页** | `locallib.go` `localscrape.go` | 本地媒体库的片目卡片墙（`GET /local/titles`）：一张卡片 = 台账里一个片目（`scanLedgerTitles`），状态只看本地标题目录里有没有 NFO / 海报，**零 115 请求**，列表 30 秒缓存（刮削任务结束时 `forgetLocalTitles`）。海报缩略图走公开路由 `GET /local/poster`（`<img>` 带不了登录态）：列表按 key 签 HMAC（JWT 密钥），`underRoot` 防 `../`，缩成 400px 宽 JPEG 放内存缓存。刮削 `POST /local/scrape` 入队（`scrape`，参数在 `jobParams.Local`），核心是 `scrape.go` 的 `scrapeTitleMeta` + `fileScrapeWriter`，产物写本地媒体库。「上传到网盘」只管这一次，走 `upload115FileConsented`（不看监控上传总开关）；**没勾时不登记上传指纹**，传不传照常由监控上传决定。形态参考 LitePan 的海报墙（PolyForm Noncommercial，只看思路），但片目边界与类型取台账，不在目录里写标记文件。测试 `locallib_test.go` / `localscrape_test.go` |
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
@@ -216,7 +216,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    企微「更 新」菜单、前端更新弹窗）已整条删除。它依赖发布公共镜像，与本仓库的许可证立场
    冲突。用户更新走 `docker compose pull && docker compose up -d`，**不要再把它加回来**。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
-   刮削 → 刷 Emby），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
+   刷 Emby → 本轮片目入刮削队列），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename 都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
    （对齐 p115strmhelper 的 `pantransfercacher`）。
    - 新增任何在整理链路里改网盘的代码，都要走 `ops.moveFiles` / `ops.rename` / `ops.renameBatch`，
@@ -367,6 +367,19 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 附属文件跟着视频改名时，名字里残留的视频扩展名段要去掉（`trimVideoExtLead`：`xxx.mkv-thumb.jpg` → `新名-thumb.jpg`）。
     - 测试：`strmname_test.go`、`strmmigrate_test.go`、`strmwrite_test.go`。
 
+16. **刮削单独一条队列，不拿 `taskMu`**（`taskqueue.go` 的 `scrapeLane`、`localscrape.go`、`scrapecore.go`，2026-09-28 起）：
+    此前整理后刮削在整理任务里当场跑，一部几百集的综艺刮完才放锁（每集 ffprobe + 剧照），整理 / 同步全在排队。
+    - 三个入口（整理后 `flushScrape`、「开始刮削」全库、本地文件页勾选）都是 `scrape` 任务，执行器只有 `execScrapeJob` 一个。
+      整理后刮削去重键 `auto`，还没开始的几轮用 `jobSpec.Merge` 取并集（默认的「同键覆盖」会丢掉上一轮的片目）。
+    - 与整理并行的冲突**靠刮削自己收拾，不加锁**：刮削不建目录（`fileScrapeWriter.put` 遇到不存在的目录返回 `errMetaDirGone`，
+      别再加 `MkdirAll`，那会在旧位置造出只有 NFO 的空壳）；每刮完一部 `scrapeCompensate` 核对 STRM 还在不在，
+      不在就收回这次写下的文件并收空目录。没用片目锁是因为删改本地的入口有十几处（增量拿着 `taskMu` 删），让它们等刮削又会卡住主队列。
+    - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
+    - ffprobe 默认关（`scrape.probe_streams`）：Emby / Jellyfin 导入 NFO 一般不读 streamdetails。探测结果按 pickcode 落 `ProbeCache`
+      （整理补全也写它，`probeCached`），ffprobe 有 60 秒超时。
+    - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
+    - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
+
 ---
 
 ## 7. 常见任务入口
@@ -387,7 +400,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 改整理记录页 | `webui/src/pages/tasks/RecordsTab.vue`（在任务中心的「整理记录」页签；原在自动整理页，旧地址 `/organize?tab=records` 由 `organize` 路由的 `beforeEnter` 重定向，别删）+ `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`；`mode=confirm` 时用于待确认条目改指定）。筛选栏角标、页签角标与侧栏 / 手机底栏「任务中心」上的待确认角标共用 `stores/recordStats.ts`（布局层在队列任务结束时刷新）。`?job_id=` 只看某个任务涉及的记录。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
 | 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12）；整理与全量的 cron 命中时**只入任务队列**（`runScheduledTick` / `runScheduledFullSync`，后台优先级、各自去重），由 worker 排队执行，不存在「错过」。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |
-| 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`） |
+| 改整理落盘 / 刮削触发 | `internal/api/orgstrm.go` 的 `orgSink`（`commit` / `flushScrape` / `flushRefresh`）；`flushScrape` 只入刮削队列 |
+| 改刮削本身（NFO / 图片 / 日志 / 占位剧照 / 探测） | `internal/api/scrapecore.go`（`titleRun`：逐产物日志、片目内进度、`episodeStills`）+ `scrape.go`（配置、NFO 结构、接口）+ `localscrape.go`（执行器、`scrapeCompensate`）。先读 §6.16 |
 | 改整理记录 / 重新整理 | `internal/api/orgrecord.go`；路径推导在纯函数 `planRedoLayout`、原地刷新判定在 `isInPlaceRedo`，配套测试 `orgrecord_test.go`。**没改过名的文件（记录里无 `Orig`，即未识别 / 失败的）必须走 `redoParseVideo` → `parseVideoInDir`**，和正常整理同一套（替换规则 → 子目录季号 → 条目目录季号，子目录取自 `orgRecordFile.Dir`）；只用 `parseFileName` 的话各季同名的 E01.mkv 会撞名。记录里的文件若已出现在**更新的**整理记录里（用户挪走另行整理了），重新整理要剔除（`dropClaimedFiles`），否则会把它们搬回来、还按 fid 删掉别处刚生成的 STRM；带集号的剧集里没集号的视频进特别篇、保持原名（`specialsRel`，与正常整理同口径）。**改 `redoOrganize` 前先读它的步骤注释**：算布局 → 动网盘 → 删旧本地产物 → 落盘，这个顺序是有来由的，破坏性动作必须排在计算之后 |
 | 改网盘文件页（整理 / 移动所选） | 后端 `internal/api/filebrowser.go`（列目录、定位、入队参数）/ `fileorganize.go` / `filelibrary.go`；前端 `webui/src/pages/FilesPage.vue` + `webui/src/components/files/`。新增会写网盘的分支记得走 `ops.*`（抑制、缓存失效） |
 | 改本地文件页（片目卡片 / 手动刮削） | 后端 `internal/api/locallib.go`（列表、状态、海报缩略图）/ `localscrape.go`（入队与执行、产物出口）；前端 `webui/src/pages/LocalFilesPage.vue` + `webui/src/components/local/ScrapeDialog.vue`。上传只在用户这一次勾了才能用 `upload115FileConsented` |

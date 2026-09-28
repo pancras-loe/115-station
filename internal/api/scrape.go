@@ -3,13 +3,17 @@ package api
 // ==================== 影视刮削（原生 NFO + 海报到本地媒体库） ====================
 //
 // 直接生成 Emby/Kodi 标准元数据，替代"Emby 刮削到本地"这半段：
-//   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 <视频同名>.nfo / tvshow.nfo / season.nfo
+//   按台账片目的 TMDB 编号拉详情 → 写 <视频同名>.nfo / tvshow.nfo / season.nfo
 //   + poster.jpg / fanart.jpg / clearlogo.png / landscape.jpg / seasonNN-poster.jpg
 //   + <集同名>-thumb.jpg 到本地媒体库对应片目目录，
 //   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
 //
-// 接口：GET/POST /scrape/config、POST /scrape/run、GET /scrape/status
+// 三个入口（整理后自动刮削、「开始刮削」全库、本地文件页勾选）全部是刮削队列里的 scrape 任务，
+// 执行器只有一个（localscrape.go 的 execScrapeJob），核心在 scrapecore.go。
+// 刮削队列不拿 taskMu（taskqueue.go），几百集的综艺刮半小时也不挡整理与同步。
+//
+// 接口：GET/POST /scrape/config、POST /scrape/run、GET /scrape/status、POST /scrape/stop
 
 import (
 	"encoding/json"
@@ -21,14 +25,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"115-station/internal/model"
+
+	"github.com/gin-gonic/gin"
 )
 
 type scrapeCfg struct {
@@ -37,13 +40,23 @@ type scrapeCfg struct {
 	WriteImages bool   `json:"write_images"`
 	Force       bool   `json:"force"` // 覆盖已存在的元数据文件
 
-	// AutoAfterOrganize 整理完成后自动刮削本轮入库的片目（orgSink.flushScrape）。
+	// AutoAfterOrganize 整理完成后自动刮削本轮入库的片目（orgSink.flushScrape 入刮削队列）。
 	// 此前挂在增量同步末尾且扫全台账——新增一部片也要全库过一遍
 	AutoAfterOrganize bool `json:"auto_after_organize"`
+
+	// ProbeStreams 刮削时逐个视频 ffprobe，把轨道写进 NFO 的 fileinfo/streamdetails。默认关：
+	// 每个视频要取一次 115 直链再读十来 MB，几百集的剧多出几十分钟；Emby / Jellyfin 导入 NFO
+	// 一般不读这一段，主要是 Kodi 用得上。此前是无条件探测，剧集的探测失败还被静默吞掉，
+	// 维护者的 NFO 里一直没有 streamdetails 也没人发现（2026-09-28）
+	ProbeStreams bool `json:"probe_streams"`
+
+	// SkipSharedStills 同一季里多集共用同一张剧照（综艺常见）时判为占位图，这些集不写 -thumb.jpg。
+	// Emby 没有集缩略图时用剧的背景图，观感和一墙同样的图差不多，但省下几百次下载。默认开
+	SkipSharedStills bool `json:"skip_shared_stills"`
 }
 
 func loadScrapeCfg() scrapeCfg {
-	c := scrapeCfg{WriteNFO: true, WriteImages: true}
+	c := scrapeCfg{WriteNFO: true, WriteImages: true, SkipSharedStills: true}
 	if v := settingValueCompat("scrape"); v != "" {
 		_ = json.Unmarshal([]byte(v), &c)
 	}
@@ -58,56 +71,22 @@ func saveScrapeCfg(c scrapeCfg) error {
 	return notifyConfigSource.SaveSetting("scrape", string(b))
 }
 
-// ---- 运行状态 ----
-
-type scrapeStatus struct {
-	Running bool     `json:"running"`
-	Total   int      `json:"total"`
-	Done    int      `json:"done"`
-	Failed  int      `json:"failed"`
-	Current string   `json:"current"`
-	Errors  []string `json:"errors"`
+// opts 全局配置 → 一次刮削任务的选项（整理后刮削、全库刮削用）
+func (c scrapeCfg) opts() fileScrapeOpts {
+	return fileScrapeOpts{WriteNFO: c.WriteNFO, WriteImages: c.WriteImages, Force: c.Force,
+		Probe: c.ProbeStreams, SkipSharedStills: c.SkipSharedStills}
 }
 
-var (
-	scrapeMu       sync.Mutex
-	scrapeSt       scrapeStatus
-	scrapeStopFlag bool
-)
-
-func scrapeStatusSnapshot() scrapeStatus {
-	scrapeMu.Lock()
-	defer scrapeMu.Unlock()
-	st := scrapeSt
-	st.Errors = append([]string(nil), scrapeSt.Errors...)
-	return st
-}
-
-// scrapeAddErr 错误进刮削状态，同时打日志（状态面板上限 20 条，日志是唯一完整的记录）
-func scrapeAddErr(format string, args ...any) {
-	log.Printf("[影视刮削] ✗ "+format, args...)
-	scrapeMu.Lock()
-	defer scrapeMu.Unlock()
-	scrapeSt.Failed++
-	if len(scrapeSt.Errors) < 20 {
-		scrapeSt.Errors = append(scrapeSt.Errors, fmt.Sprintf(format, args...))
-	}
-}
-
-// Mukaku 风格的图片拉取：走 TMDB 配置的图床/代理（国内直连常不通）
-func tmdbFetchImageBytes(imgPath string) ([]byte, error) {
-	return tmdbFetchImageSized(imgPath, "original")
-}
-
-// tmdbFetchImageSized 按 TMDB 尺寸档（original / w780 …）拉图。
-// 集剧照一部剧就是几十上百张，原图单张常见 0.5–1MB，列表缩略图用不着那么大
-func tmdbFetchImageSized(imgPath, size string) ([]byte, error) {
+// tmdbFetchImageSized 按 TMDB 尺寸档（original / w780 …）拉图，走 TMDB 配置的图床 / 代理（国内直连常不通）。
+// 集剧照一部剧就是几十上百张，原图单张常见 0.5–1MB，列表缩略图用不着那么大。
+// 返回实际请求的地址：刮削日志要写清「从哪下的」，图床配错时一眼能看出来
+func tmdbFetchImageSized(imgPath, size string) ([]byte, string, error) {
 	var cfg model.TmdbConfig
 	_ = model.DB.First(&cfg).Error // 没有配置行时 cfg 为零值：图床走默认官方，代理走全局
 	imgURL := tmdbImageURL(cfg.ImageApiUrl, size, imgPath)
 	req, err := http.NewRequest(http.MethodGet, imgURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, imgURL, err
 	}
 	// 原图背景常见几 MB，走代理时 20 秒不够读完
 	client := &http.Client{Timeout: 60 * time.Second}
@@ -122,13 +101,14 @@ func tmdbFetchImageSized(imgPath, size string) ([]byte, error) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, imgURL, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d（%s）", resp.StatusCode, imgURL)
+		return nil, imgURL, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	return data, imgURL, err
 }
 
 // tmdbImageURL 拼图片地址。图床配置里常见三种写法都要认：只填域名、填到 /t/p、
@@ -305,10 +285,30 @@ func writeMetaFile(dir, name string, content []byte, force bool) (bool, error) {
 
 // ---- 处理器 ----
 
+// scrapeLaneStatus 刮削队列此刻在跑什么（刮削页的状态读它）
+func scrapeLaneStatus() (running bool, progress string) {
+	id, p := scrapeLane.current()
+	if id == 0 {
+		return false, ""
+	}
+	progress = p.Phase
+	if p.Total > 0 {
+		progress += fmt.Sprintf(" %d/%d", p.Done, p.Total)
+	}
+	if p.Label != "" {
+		progress += "：" + p.Label
+	}
+	if s := p.Sub; s != nil {
+		progress += fmt.Sprintf("（%s %d/%d）", s.Phase, s.Done, s.Total)
+	}
+	return true, progress
+}
+
 // ScrapeGetConfig GET /scrape/config → 配置 + 状态
 func (h *Handler) ScrapeGetConfig(c *gin.Context) {
 	cfg := loadScrapeCfg()
-	c.JSON(http.StatusOK, gin.H{"cfg": cfg, "status": scrapeStatusSnapshot()})
+	running, progress := scrapeLaneStatus()
+	c.JSON(http.StatusOK, gin.H{"cfg": cfg, "status": gin.H{"running": running, "progress": progress}})
 }
 
 // ScrapeSaveConfig POST /scrape/config
@@ -324,137 +324,86 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[影视刮削] ✓ 配置已保存（根目录 %s）", req.LocalRoot)
+	log.Printf("[影视刮削] ✓ 配置已保存（根目录 %s，轨道探测 %s，占位剧照 %s）",
+		req.LocalRoot, onOff(req.ProbeStreams), map[bool]string{true: "不写", false: "照写"}[req.SkipSharedStills])
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
-// ScrapeRun POST /scrape/run → 后台刮削（进行中时拒绝重复触发）
+// scrapeAllDedupe 全库刮削的去重键：排着或跑着一个就不再收第二个
+const scrapeAllDedupe = "all"
+
+// ScrapeRun POST /scrape/run → 全库刮削入刮削队列（按已保存的配置）
 func (h *Handler) ScrapeRun(c *gin.Context) {
-	scrapeMu.Lock()
-	if scrapeSt.Running {
-		scrapeMu.Unlock()
-		c.JSON(http.StatusConflict, gin.H{"error": "刮削正在进行中"})
+	cfg := loadScrapeCfg()
+	if cfg.LocalRoot == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未配置本地媒体库根目录"})
 		return
 	}
-	scrapeSt = scrapeStatus{Running: true, Errors: []string{}}
-	scrapeMu.Unlock()
-	go h.scrapeAll(loadScrapeCfg())
-	c.JSON(http.StatusOK, gin.H{"message": "刮削已开始，可刷新状态查看进度"})
+	if !cfg.WriteNFO && !cfg.WriteImages {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "NFO 与图片至少要生成一项"})
+		return
+	}
+	if _, err := loadTmdbClient(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var n int64
+	h.DB.Model(&model.TaskJob{}).Where("kind = ? AND dedupe_key = ? AND status IN ?",
+		jobKindScrape, scrapeAllDedupe, []string{jobQueued, jobRunning}).Count(&n)
+	if n > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "全库刮削已在刮削队列里"})
+		return
+	}
+	job, err := enqueueJob(h.DB, jobSpec{
+		Kind: jobKindScrape, Title: "全库刮削", DedupeKey: scrapeAllDedupe, Source: "web", Priority: jobPriorityManual,
+		Params: jobParams{Local: &localScrapeParams{All: true, Scrape: cfg.opts()}},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	h.queuedReply(c, job, "全库刮削")
 }
 
 // ScrapeStatus GET /scrape/status
 func (h *Handler) ScrapeStatus(c *gin.Context) {
-	c.JSON(http.StatusOK, scrapeStatusSnapshot())
+	running, progress := scrapeLaneStatus()
+	c.JSON(http.StatusOK, gin.H{"running": running, "progress": progress})
 }
 
-// ScrapeStop POST /scrape/stop → 停止本轮（当前条目处理完即退出）
+// ScrapeStop POST /scrape/stop → 停掉正在跑的刮削（当前文件写完即退出），
+// 并取消排着的全库刮削与整理后刮削。本地文件页手动提交的留着：那是用户点名要刮的，要取消去任务队列
 func (h *Handler) ScrapeStop(c *gin.Context) {
-	scrapeMu.Lock()
-	if scrapeSt.Running {
-		scrapeStopFlag = true
+	stopped := false
+	if id, _ := scrapeLane.current(); id != 0 {
+		stopped = scrapeLane.requestStop(id)
 	}
-	scrapeMu.Unlock()
-	c.JSON(http.StatusOK, gin.H{"message": "已请求停止，当前条目处理完即退出"})
+	res := h.DB.Model(&model.TaskJob{}).
+		Where("kind = ? AND status = ? AND (dedupe_key = ? OR priority = ?)", jobKindScrape, jobQueued, scrapeAllDedupe, jobPriorityBackground).
+		Updates(map[string]interface{}{"status": jobCanceled, "message": "已取消（未执行）", "finished_at": time.Now()})
+	msg := "没有正在进行的刮削"
+	switch {
+	case stopped && res.RowsAffected > 0:
+		msg = fmt.Sprintf("已请求停止，当前文件写完即退出；另取消了 %d 个排队中的刮削", res.RowsAffected)
+	case stopped:
+		msg = "已请求停止，当前文件写完即退出"
+	case res.RowsAffected > 0:
+		msg = fmt.Sprintf("已取消 %d 个排队中的刮削", res.RowsAffected)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": msg})
 }
 
-func scrapeStopRequested() bool {
-	select {
-	case <-stopCh:
-		return true
-	default:
+func onOff(b bool) string {
+	if b {
+		return "开"
 	}
-	scrapeMu.Lock()
-	defer scrapeMu.Unlock()
-	return scrapeStopFlag
-}
-
-// scrapeAll 主流程：遍历媒体库（有 tmdb id 的）逐条刮削
-func (h *Handler) scrapeAll(cfg scrapeCfg) {
-	// 开跑先清停止标志：此前点过一次「停止刮削」之后标志永远留着，
-	// 后续每一轮刮削都在第一个片目就退出（整理后自动刮削尤其看不出来）
-	scrapeMu.Lock()
-	scrapeStopFlag = false
-	scrapeMu.Unlock()
-	defer func() {
-		scrapeMu.Lock()
-		scrapeSt.Running = false
-		scrapeSt.Current = ""
-		scrapeMu.Unlock()
-		log.Printf("[影视刮削] ■ 本轮结束：完成 %d，失败 %d", scrapeStatusSnapshot().Done, scrapeStatusSnapshot().Failed)
-	}()
-	// 用户允许上传时边刮边传；默认禁止，因此这两个入口通常只是快速返回。
-	go func() {
-		time.Sleep(2 * time.Second) // 等最后写入落盘
-		monitorOnce(h)
-		h.uploadMetadataOnce()
-	}()
-	if cfg.LocalRoot == "" {
-		scrapeAddErr("未配置本地媒体库根目录")
-		return
-	}
-	tc, err := loadTmdbClient()
-	if err != nil {
-		scrapeAddErr("TMDB 未配置: %v", err)
-		return
-	}
-	// 以台账标题目录为刮削单位（每片一条，目录真实存在于 115/本地）。
-	// 不用 MediaLibrary.TargetPath：剧集行记录的是"每集文件路径"，
-	// 拿它当目录会在本地造出 <集名>.mkv/ 的假目录
-	entries := scanLedgerTitlesCached()
-	type scrapeTarget struct {
-		key, kind, title, year string
-		tmdbID                 int
-	}
-	var targets []scrapeTarget
-	for _, e := range entries {
-		if e.Key == "" {
-			continue
-		}
-		if e.TmdbID > 0 {
-			targets = append(targets, scrapeTarget{key: e.Key, kind: "movie", title: e.Title, year: e.Year, tmdbID: int(e.TmdbID)})
-			if e.MediaType == "tv" {
-				targets[len(targets)-1].kind = "tv"
-			}
-			continue
-		}
-	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].key < targets[j].key })
-	scrapeMu.Lock()
-	scrapeSt.Total = len(targets)
-	scrapeMu.Unlock()
-	if len(targets) == 0 {
-		return
-	}
-	log.Printf("[影视刮削] ▶ 开始：共 %d 个片目（根目录 %s）", len(targets), cfg.LocalRoot)
-	for _, t := range targets {
-		if scrapeStopRequested() {
-			return
-		}
-		scrapeMu.Lock()
-		scrapeSt.Current = t.title
-		scrapeMu.Unlock()
-		dir := filepath.Join(cfg.LocalRoot, filepath.FromSlash(strings.Trim(t.key, "/")))
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			scrapeAddErr("%s: 创建目录失败 %v", t.title, err)
-			scrapeMu.Lock()
-			scrapeSt.Done++
-			scrapeMu.Unlock()
-			continue
-		}
-		h.scrapeOne(tc, cfg, dir, t.key, t.kind, t.title, t.year, t.tmdbID)
-		scrapeMu.Lock()
-		scrapeSt.Done++
-		scrapeMu.Unlock()
-		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
-	}
+	return "关"
 }
 
 // ---- 刮削对象与产物落点 ----
 //
-// 刮削核心（scrapeTitleMeta）只管「拉 TMDB → 生成 NFO / 图片字节」，写到哪里交给 metaWriter：
-//   - 「开始刮削」与整理后自动刮削只写本地媒体库（localMetaWriter），回传 115 仍归监控上传；
-//   - 网盘文件页的手动刮削（filescrape.go）按用户这一次的选择决定写本地、写网盘或两者都写，
-//     本地没有对应片目（选的不在媒体库里）时只能写网盘。
+// 刮削核心（scrapecore.go）只管「拉 TMDB → 生成 NFO / 图片字节」，写到哪里交给 metaWriter：
+// 唯一的实现是 fileScrapeWriter（localscrape.go），写本地媒体库，这一次勾了上传再写网盘。
 
 // metaDest 一个元数据产物目录：本地与网盘两个落点，可以只有其一。
 // 网盘落点用「已知 cid + 相对路径」表示，只在真的要上传时才逐级解析，不上传的刮削零 115 请求
@@ -483,19 +432,10 @@ type scrapeTitle struct {
 	Videos []scrapeVideo
 }
 
-// metaWriter 产物出口。返回 wrote=false 表示按「只补缺失」跳过了
+// metaWriter 产物出口。返回 wrote=false 表示按「只补缺失」跳过了；
+// 本地目录已不在时返回 errMetaDirGone（刮削不建目录，见 fileScrapeWriter.put）
 type metaWriter interface {
 	put(d metaDest, name string, data []byte) (wrote bool, err error)
-}
-
-// localMetaWriter 只写本地媒体库（「开始刮削」与整理后自动刮削）
-type localMetaWriter struct{ force bool }
-
-func (w localMetaWriter) put(d metaDest, name string, data []byte) (bool, error) {
-	if d.Local == "" {
-		return false, nil
-	}
-	return writeMetaFile(d.Local, name, data, w.force)
 }
 
 // metaSkipper writer 可选实现：拉图之前先问一声这个产物会不会被「只补缺失」跳过。
@@ -510,423 +450,12 @@ func localMetaExists(dir, name string) bool {
 	return err == nil && st.Size() > 0
 }
 
-func (w localMetaWriter) skip(d metaDest, name string) bool {
-	return d.Local == "" || (!w.force && localMetaExists(d.Local, name))
-}
-
-// scrapeReporter 错误与停止请求的去处：全局刮削状态（刮削页的进度）或任务队列
+// scrapeReporter 错误、停止请求与片目内进度的去处（刮削队列）
 type scrapeReporter interface {
 	errf(format string, args ...any)
 	stopped() bool
-}
-
-// globalScrapeReporter 错误进刮削状态（scrapeAddErr 顺带打日志）：此前只进状态，而刮削页并不展示它，
-// 整理后自动刮削拉图失败（图床不通、配置写错）在界面和日志里都看不到任何痕迹
-type globalScrapeReporter struct{ n *int }
-
-func (r globalScrapeReporter) errf(format string, args ...any) {
-	scrapeAddErr(format, args...)
-	if r.n != nil {
-		*r.n++
-	}
-}
-func (globalScrapeReporter) stopped() bool { return scrapeStopRequested() }
-
-// tallyMetaWriter 记下这一个片目写了什么、跳过了几个，刮完打一行账单
-type tallyMetaWriter struct {
-	inner   metaWriter
-	wrote   []string
-	skipped int
-}
-
-func (w *tallyMetaWriter) put(d metaDest, name string, data []byte) (bool, error) {
-	ok, err := w.inner.put(d, name, data)
-	if ok {
-		w.wrote = append(w.wrote, name)
-	} else if err == nil {
-		w.skipped++
-	}
-	return ok, err
-}
-
-func (w *tallyMetaWriter) skip(d metaDest, name string) bool {
-	if s, ok := w.inner.(metaSkipper); ok && s.skip(d, name) {
-		w.skipped++
-		return true
-	}
-	return false
-}
-
-// summary 写入的文件名：集 NFO / 集剧照成批出现，按类归并成计数，免得一部剧刷一整屏
-func (w *tallyMetaWriter) summary() string {
-	var fixed []string
-	epNFO, epThumb := 0, 0
-	for _, n := range w.wrote {
-		switch {
-		case strings.HasSuffix(n, "-thumb.jpg"):
-			epThumb++
-		case strings.HasSuffix(n, ".nfo") && n != "tvshow.nfo" && n != "season.nfo" && n != "movie.nfo":
-			epNFO++
-		default:
-			fixed = append(fixed, n)
-		}
-	}
-	if epNFO > 0 {
-		fixed = append(fixed, fmt.Sprintf("视频 NFO×%d", epNFO))
-	}
-	if epThumb > 0 {
-		fixed = append(fixed, fmt.Sprintf("集剧照×%d", epThumb))
-	}
-	return strings.Join(fixed, " ")
-}
-
-// scrapeOne 单个已入库片目（台账标题目录）：详情 → NFO + 图片，只写本地
-func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title, year string, tmdbID int) {
-	t := scrapeTitle{Kind: kind, Title: title, Year: year, TmdbID: tmdbID, Dir: metaDest{Local: dir}}
-	for _, sf := range scrapeDirVideoRows(key) {
-		t.Videos = append(t.Videos, scrapeVideo{
-			Name:     strings.TrimSuffix(path.Base(sf.RelPath), ".strm"),
-			PickCode: sf.PickCode,
-			Dir:      metaDest{Local: filepath.Join(cfg.LocalRoot, filepath.FromSlash(path.Dir(sf.RelPath)))},
-		})
-	}
-	w := &tallyMetaWriter{inner: localMetaWriter{force: cfg.Force}}
-	var nErr int
-	scrapeTitleMeta(tc, cfg, t, w, globalScrapeReporter{n: &nErr})
-	mark := "✓"
-	if nErr > 0 {
-		mark = "○"
-	}
-	log.Printf("[影视刮削] %s %s：写入 %d 个 [%s]，已有跳过 %d，失败 %d（NFO %s · 图片 %s）→ %s",
-		mark, title, len(w.wrote), w.summary(), w.skipped, nErr, onOff(cfg.WriteNFO), onOff(cfg.WriteImages), dir)
-}
-
-func onOff(b bool) string {
-	if b {
-		return "开"
-	}
-	return "关"
-}
-
-// scrapeTitleMeta 刮削核心：详情 → NFO + 图片，产物交给 w。
-// cfg 只读 WriteNFO / WriteImages 两个开关（覆盖与否由 writer 自己掌握）
-func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter, rep scrapeReporter) {
-	kind, title, tmdbID := t.Kind, t.Title, t.TmdbID
-	put := func(d metaDest, name string, b []byte) {
-		if _, err := w.put(d, name, b); err != nil {
-			rep.errf("%s: 写 %s 失败 %v", title, name, err)
-		}
-	}
-	kindPath := kind
-	// images 随详情一次带回（clearlogo / landscape 从这里挑），不多打一次 TMDB。
-	// 不写 include_image_language 时 TMDB 只回 zh 与无语言的图，英文 logo 就挑不到了
-	params := map[string]string{"language": "zh-CN", "append_to_response": "credits,images",
-		"include_image_language": "zh,en,null"}
-	body, err := tc.get("/"+kindPath+"/"+strconv.Itoa(tmdbID), params)
-	if err != nil {
-		// 详情 404 = 目录名标记的 tmdb id 查无条目（整理时匹配错/条目已删）：
-		// 回退按标题+年份搜一次，自愈错误 ID
-		var alt *TmdbMedia
-		if kind == "tv" {
-			alt, _ = tc.SearchTV(title, t.Year)
-		} else {
-			alt, _ = tc.SearchMovie(title, t.Year)
-		}
-		if alt == nil || alt.TmdbID == 0 {
-			rep.errf("%s: TMDB 详情失败 %v（id=%d，按标题搜索也未命中）", title, err, tmdbID)
-			return
-		}
-		log.Printf("[影视刮削] ○ %s: 标记 id=%d 查无详情，按标题匹配到 id=%d，已自愈", title, tmdbID, alt.TmdbID)
-		body, err = tc.get("/"+kindPath+"/"+strconv.Itoa(alt.TmdbID), params)
-		if err != nil {
-			rep.errf("%s: TMDB 详情失败 %v", title, err)
-			return
-		}
-		// NFO 的 uniqueid 与逐集信息都要用自愈后的 id：沿用旧 id 的话 NFO 里写的仍是
-		// 查无条目的那个，剧集每季的集信息也会全部拉空
-		tmdbID = alt.TmdbID
-	}
-	videos := t.Videos
-
-	// ---- NFO ----
-	if cfg.WriteNFO {
-		// 片目录下的视频文件（含 pickcode）：探测轨道写 streamdetails；
-		// 剧集还逐集生成同名集级 NFO
-		var mainProbe *probeResult
-		if len(videos) > 0 && videos[0].PickCode != "" {
-			if p, perr := probeFileNow(videos[0].PickCode); perr == "" && p != nil {
-				mainProbe = p
-			} else if perr != "" {
-				rep.errf("%s: 轨道探测失败（%s），NFO 不含 streamdetails", title, truncateStr(perr, 80))
-			}
-		}
-		if kind == "movie" {
-			var d struct {
-				Title         string  `json:"title"`
-				OriginalTitle string  `json:"original_title"`
-				Overview      string  `json:"overview"`
-				VoteAverage   float64 `json:"vote_average"`
-				ReleaseDate   string  `json:"release_date"`
-				Runtime       int     `json:"runtime"`
-				IMDbID        string  `json:"imdb_id"`
-				Genres        []struct {
-					Name string `json:"name"`
-				} `json:"genres"`
-				Credits struct {
-					Cast []struct {
-						Name      string `json:"name"`
-						Character string `json:"character"`
-					} `json:"cast"`
-					Crew []struct {
-						Job  string `json:"job"`
-						Name string `json:"name"`
-					} `json:"crew"`
-				} `json:"credits"`
-				ProductionCompanies []struct {
-					Name string `json:"name"`
-				} `json:"production_companies"`
-			}
-			if json.Unmarshal(body, &d) != nil {
-				rep.errf("%s: 详情解析失败", title)
-				return
-			}
-			nfo := nfoMovie{
-				Title: d.Title, OriginalTitle: d.OriginalTitle, Plot: d.Overview,
-				Ratings: []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: d.VoteAverage}},
-				Year:    dateYear(d.ReleaseDate), Premiered: d.ReleaseDate,
-				Runtime: d.Runtime,
-				UniqueIDs: []nfoUniqueID{
-					{Type: "tmdb", Default: true, Value: strconv.Itoa(tmdbID)},
-					{Type: "imdb", Value: d.IMDbID},
-				},
-				TmdbID: strconv.Itoa(tmdbID), IMDbID: d.IMDbID,
-			}
-			for _, g := range d.Genres {
-				nfo.Genres = append(nfo.Genres, g.Name)
-			}
-			for _, c := range d.Credits.Crew {
-				if c.Job == "Director" {
-					nfo.Directors = append(nfo.Directors, c.Name)
-				}
-			}
-			for _, cc := range d.Credits.Cast {
-				if cc.Name == "" {
-					continue
-				}
-				nfo.Actors = append(nfo.Actors, nfoActor{Name: cc.Name, Role: cc.Character})
-			}
-			for _, pc := range d.ProductionCompanies {
-				nfo.Studios = append(nfo.Studios, pc.Name)
-			}
-			for i, name := range videoNFONames(videos) {
-				probe := mainProbe // videos[0] 上面已经探过，别再探一遍
-				if i > 0 {
-					if pr, perr := probeFileNow(videos[i].PickCode); perr == "" {
-						probe = pr
-					} else {
-						probe = nil
-					}
-				}
-				nfo.Fileinfo = nfoFileInfoFrom(probe)
-				b, err := marshalNFO(nfo)
-				if err != nil {
-					continue
-				}
-				// 与视频同名的 NFO 放在视频旁边；没有视频时兜底的 movie.nfo 放标题目录
-				dest := t.Dir
-				if i < len(videos) {
-					dest = videos[i].Dir
-				}
-				put(dest, name, b)
-			}
-		} else {
-			var d struct {
-				Name         string  `json:"name"`
-				OriginalName string  `json:"original_name"`
-				Overview     string  `json:"overview"`
-				VoteAverage  float64 `json:"vote_average"`
-				FirstAirDate string  `json:"first_air_date"`
-				Genres       []struct {
-					Name string `json:"name"`
-				} `json:"genres"`
-				Networks []struct {
-					Name string `json:"name"`
-				} `json:"networks"`
-				CreatedBy []struct {
-					Name string `json:"name"`
-				} `json:"created_by"`
-				Seasons []struct {
-					SeasonNumber int    `json:"season_number"`
-					Name         string `json:"name"`
-					Overview     string `json:"overview"`
-					AirDate      string `json:"air_date"`
-				} `json:"seasons"`
-			}
-			if json.Unmarshal(body, &d) != nil {
-				rep.errf("%s: 详情解析失败", title)
-				return
-			}
-			nfo := nfoTVShow{
-				Title: d.Name, OriginalTitle: d.OriginalName, Plot: d.Overview,
-				Ratings: []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: d.VoteAverage}},
-				Year:    dateYear(d.FirstAirDate), Premiered: d.FirstAirDate,
-				UniqueIDs: []nfoUniqueID{{Type: "tmdb", Default: true, Value: strconv.Itoa(tmdbID)}},
-				TmdbID:    strconv.Itoa(tmdbID),
-			}
-			for _, g := range d.Genres {
-				nfo.Genres = append(nfo.Genres, g.Name)
-			}
-			for _, nw := range d.Networks {
-				nfo.Studios = append(nfo.Studios, nw.Name)
-			}
-			for _, cb := range d.CreatedBy {
-				nfo.Actors = append(nfo.Actors, nfoActor{Name: cb.Name})
-			}
-			if b, err := marshalNFO(nfo); err == nil {
-				put(t.Dir, "tvshow.nfo", b)
-			}
-			// 季级 NFO：季名 / 简介 / 首播都在详情的 seasons 里，不用再按季请求
-			seasonDirs := scrapeSeasonDirs(videos, t.Dir)
-			for _, sn := range d.Seasons {
-				dest, ok := seasonDirs[sn.SeasonNumber]
-				if !ok {
-					continue
-				}
-				b, err := marshalNFO(nfoSeason{
-					Title: sn.Name, Plot: sn.Overview, Premiered: sn.AirDate,
-					Year: dateYear(sn.AirDate), SeasonNumber: sn.SeasonNumber,
-				})
-				if err == nil {
-					put(dest, "season.nfo", b)
-				}
-			}
-			// 集级 NFO：每集与 STRM 同基名（xxx.strm → xxx.nfo）落在集文件旁，
-			// TMDB 集信息（标题/首播/简介/剧照）+ 该集轨道 streamdetails。
-			// 解析不出集号的集文件跳过（tvshow.nfo 与海报仍正常生成）
-			for _, v := range videos {
-				if rep.stopped() {
-					return
-				}
-				season, epNo := scrapeEpisodeNo(v.Name)
-				if epNo == 0 {
-					continue
-				}
-				ep := tc.tmdbSeasonEpisodes(tmdbID, season)[epNo]
-				epNFO := nfoEpisode{
-					Season:  season,
-					Episode: epNo,
-					Title:   ep.Name,
-					Aired:   ep.AirDate,
-					Plot:    ep.Overview,
-					UniqueIDs: []nfoUniqueID{
-						{Type: "tmdb", Default: true, Value: strconv.Itoa(tmdbID)},
-					},
-				}
-				if ep.VoteAverage > 0 {
-					epNFO.Ratings = []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: ep.VoteAverage}}
-				}
-				if ep.StillPath != "" {
-					epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
-				}
-				if v.PickCode != "" {
-					if probe, perr := probeFileNow(v.PickCode); perr == "" {
-						epNFO.Fileinfo = nfoFileInfoFrom(probe)
-					}
-				}
-				if b, err := marshalNFO(epNFO); err == nil {
-					if v.Dir.Local != "" {
-						_ = os.MkdirAll(v.Dir.Local, 0o755)
-					}
-					if _, err := w.put(v.Dir, v.Name+".nfo", b); err != nil {
-						rep.errf("%s: 写集 NFO %s 失败 %v", title, v.Name, err)
-					}
-				}
-			}
-		}
-	}
-
-	// ---- 图片 ----
-	if !cfg.WriteImages {
-		return
-	}
-	var d struct {
-		PosterPath   string `json:"poster_path"`
-		BackdropPath string `json:"backdrop_path"`
-		Seasons      []struct {
-			SeasonNumber int    `json:"season_number"`
-			PosterPath   string `json:"poster_path"`
-		} `json:"seasons"`
-		Images struct {
-			Logos     []tmdbImage `json:"logos"`
-			Backdrops []tmdbImage `json:"backdrops"`
-		} `json:"images"`
-	}
-	if json.Unmarshal(body, &d) != nil {
-		return
-	}
-	skipper, _ := w.(metaSkipper)
-	// fetchPut 先问 writer 要不要，再拉图写入；已有的不拉
-	fetchPut := func(dest metaDest, imgPath, size, name string) {
-		if imgPath == "" || (skipper != nil && skipper.skip(dest, name)) {
-			return
-		}
-		data, err := tmdbFetchImageSized(imgPath, size)
-		if err != nil {
-			rep.errf("%s: 拉图失败 %s %v", title, name, err)
-			return
-		}
-		put(dest, name, data)
-	}
-	images := [][2]string{
-		{d.PosterPath, "poster.jpg"},
-		{d.BackdropPath, "fanart.jpg"},
-		// clearlogo 只要 PNG：TMDB 的 logo 有一部分是 SVG，Emby 不认
-		{pickTMDBImage(d.Images.Logos, []string{"zh", "en", ""}, ".png"), "clearlogo.png"},
-		// landscape 是带片名字样的横图，只从有语言的背景里挑；
-		// 无语言的背景就是 fanart 那张，挑不到宁可不写，别复制一份 fanart 充数
-		{pickTMDBImage(d.Images.Backdrops, []string{"zh", "en"}, ""), "landscape.jpg"},
-	}
-	if kind == "tv" {
-		for _, sn := range d.Seasons {
-			if sn.PosterPath == "" {
-				continue
-			}
-			name := fmt.Sprintf("season%02d-poster.jpg", sn.SeasonNumber)
-			images = append(images, [2]string{sn.PosterPath, name})
-		}
-	}
-	for _, img := range images {
-		if rep.stopped() {
-			return
-		}
-		fetchPut(t.Dir, img[0], "original", img[1])
-	}
-	if kind != "tv" {
-		return
-	}
-	// 集剧照：xxx.strm → xxx-thumb.jpg 落在集文件旁，Emby 按这个名字配对成集缩略图。
-	// 先判已有再请求季信息，已刮过的剧整季零请求
-	for _, v := range videos {
-		if rep.stopped() {
-			return
-		}
-		season, epNo := scrapeEpisodeNo(v.Name)
-		if epNo == 0 {
-			continue
-		}
-		name := v.Name + "-thumb.jpg"
-		if skipper != nil && skipper.skip(v.Dir, name) {
-			continue
-		}
-		still := tc.tmdbSeasonEpisodes(tmdbID, season)[epNo].StillPath
-		if still == "" {
-			continue
-		}
-		if v.Dir.Local != "" {
-			_ = os.MkdirAll(v.Dir.Local, 0o755)
-		}
-		fetchPut(v.Dir, still, "w780", name)
-	}
+	// sub 片目内的第二级进度（集 NFO 87/212 · 当前文件）
+	sub(phase string, done, total int, label string)
 }
 
 // tmdbImage /images 接口里的一张图
@@ -1044,20 +573,27 @@ func videoNFONames(vs []scrapeVideo) []string {
 }
 
 // scrapeDirVideoRows 台账里某片目录（key 含库名前缀）下的视频文件行，
-// 取 pickcode 供轨道探测；带前缀/任意前缀两级 LIKE 兜底（与洗版查询同套路）
+// 取 pickcode 供轨道探测；带前缀/任意前缀两级 LIKE 兜底（与洗版查询同套路）。
+// 只查 STRM 行、不设上限：此前取前 300 行再筛视频，综艺连同字幕 / NFO / 剧照的台账行
+// 轻易过 300，排在后面的集被静默漏刮
 func scrapeDirVideoRows(key string) []model.SyncedFile {
 	base := strings.Trim(key, "/")
 	if base == "" {
 		return nil
 	}
-	var sfs []model.SyncedFile
-	model.DB.Where("rel_path LIKE ?", base+"/%").Limit(300).Find(&sfs)
+	strmRows := func(pattern string) []model.SyncedFile {
+		var sfs []model.SyncedFile
+		model.DB.Where(`rel_path LIKE ? ESCAPE '\' AND rel_path LIKE ?`, pattern, "%.strm").
+			Order("rel_path").Find(&sfs)
+		return sfs
+	}
+	sfs := strmRows(likeEscape(base) + "/%")
 	if len(sfs) == 0 {
-		model.DB.Where("rel_path LIKE ?", "%/"+base+"/%").Limit(300).Find(&sfs)
+		sfs = strmRows("%/" + likeEscape(base) + "/%")
 	}
 	var out []model.SyncedFile
 	for _, sf := range sfs {
-		if sf.PickCode == "" || !strings.HasSuffix(strings.ToLower(sf.RelPath), ".strm") {
+		if sf.PickCode == "" {
 			continue
 		}
 		// STRM 名不再带视频扩展名（strmname.go），认视频看台账的 kind；旧写法的行仍按扩展名认
@@ -1079,34 +615,45 @@ type tmdbEpisodeInfo struct {
 	VoteAverage   float64 `json:"vote_average"`
 }
 
+// scrapeSeasonTTL 集信息缓存多久：此前进程内永久缓存，连载中的剧新出的集在重启之前永远没有标题和剧照
+const scrapeSeasonTTL = 6 * time.Hour
+
+type seasonCacheEntry struct {
+	eps map[int]tmdbEpisodeInfo
+	at  time.Time
+}
+
 var (
 	scrapeSeasonMu    sync.Mutex
-	scrapeSeasonCache = map[string]map[int]tmdbEpisodeInfo{}
+	scrapeSeasonCache = map[string]seasonCacheEntry{}
 )
 
-// tmdbSeasonEpisodes 某季的集信息映射（集号 → 信息）；TMDB 失败返回空表
-// （集标题/剧照缺失时集级 NFO 仍会生成季集号与轨道信息）
-func (tc *TmdbClient) tmdbSeasonEpisodes(tvID, season int) map[int]tmdbEpisodeInfo {
+// tmdbSeasonEpisodes 某季的集信息映射（集号 → 信息）。cached = 命中缓存；
+// TMDB 失败返回空表与错误（集标题 / 剧照缺失时集级 NFO 仍会生成季集号），失败不缓存
+func (tc *TmdbClient) tmdbSeasonEpisodes(tvID, season int) (eps map[int]tmdbEpisodeInfo, cached bool, err error) {
 	cacheKey := fmt.Sprintf("%d:%d", tvID, season)
 	scrapeSeasonMu.Lock()
-	if m, ok := scrapeSeasonCache[cacheKey]; ok {
+	if e, ok := scrapeSeasonCache[cacheKey]; ok && time.Since(e.at) < scrapeSeasonTTL {
 		scrapeSeasonMu.Unlock()
-		return m
+		return e.eps, true, nil
 	}
 	scrapeSeasonMu.Unlock()
 	m := map[int]tmdbEpisodeInfo{}
-	if body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), map[string]string{"language": "zh-CN"}); err == nil {
-		var r struct {
-			Episodes []tmdbEpisodeInfo `json:"episodes"`
-		}
-		if json.Unmarshal(body, &r) == nil {
-			for _, e := range r.Episodes {
-				m[e.EpisodeNumber] = e
-			}
-		}
+	body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), map[string]string{"language": "zh-CN"})
+	if err != nil {
+		return m, false, err
+	}
+	var r struct {
+		Episodes []tmdbEpisodeInfo `json:"episodes"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return m, false, fmt.Errorf("解析失败: %w", err)
+	}
+	for _, e := range r.Episodes {
+		m[e.EpisodeNumber] = e
 	}
 	scrapeSeasonMu.Lock()
-	scrapeSeasonCache[cacheKey] = m
+	scrapeSeasonCache[cacheKey] = seasonCacheEntry{eps: m, at: time.Now()}
 	scrapeSeasonMu.Unlock()
-	return m
+	return m, false, nil
 }

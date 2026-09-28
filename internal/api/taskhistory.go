@@ -148,6 +148,21 @@ func jobParamsSummary(p jobParams) []string {
 	if p.Scheduled {
 		out = append(out, "定时触发")
 	}
+	if l := p.Local; l != nil {
+		if l.All {
+			out = append(out, "全库（执行时取台账里带 TMDB 编号的片目）")
+		} else {
+			out = append(out, fmt.Sprintf("片目 %d 部", len(l.Keys)))
+		}
+		o := l.Scrape
+		mode := map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force]
+		out = append(out, fmt.Sprintf("NFO %s · 图片 %s · %s · 轨道探测 %s · 占位剧照 %s",
+			onOff(o.WriteNFO), onOff(o.WriteImages), mode, onOff(o.Probe),
+			map[bool]string{true: "不写", false: "照写"}[o.SkipSharedStills]))
+		if o.Upload {
+			out = append(out, "这一次上传到网盘")
+		}
+	}
 	return out
 }
 

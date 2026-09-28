@@ -83,6 +83,10 @@ export interface ScrapeOptions {
   force: boolean
   /** 这一次直接传进网盘；不勾时交给监控上传 */
   upload: boolean
+  /** 逐个视频 ffprobe，把轨道写进 NFO（慢） */
+  probe: boolean
+  /** 同一季多集共用的剧照判为占位图，不写 */
+  skip_shared_stills: boolean
 }
 
 export interface LocalScrapeBody {

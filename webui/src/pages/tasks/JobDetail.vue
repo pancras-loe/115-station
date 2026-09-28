@@ -9,7 +9,17 @@ import { tasksApi } from '@/api'
 import type { TaskJobDetail } from '@/api/tasks'
 import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
-import { JOB_STATUS, elapsed, jobKindText, jobSourceText, pct, resultSummary, retryable } from '@/utils/jobStatus'
+import {
+  JOB_STATUS,
+  elapsed,
+  jobKindText,
+  jobSourceText,
+  pct,
+  resultIssues,
+  resultSummary,
+  retryable,
+  subProgressText,
+} from '@/utils/jobStatus'
 import { fullTime } from '@/utils/time'
 
 /**
@@ -134,11 +144,20 @@ async function retry() {
           <span v-if="job.progress.total"> {{ job.progress.done }}/{{ job.progress.total }}</span>
           <span v-if="job.progress.label" class="dim">：{{ job.progress.label }}</span>
         </p>
+        <p v-if="subProgressText(job)" class="line dim">└ {{ subProgressText(job) }}</p>
       </section>
 
       <section v-if="resultSummary(job)" class="block">
         <h3>结果</h3>
         <p class="line">{{ resultSummary(job) }}</p>
+      </section>
+
+      <section v-if="resultIssues(job).length" class="block">
+        <h3>问题（{{ resultIssues(job).length }}）</h3>
+        <ul class="plain issues">
+          <li v-for="(s, i) in resultIssues(job)" :key="i">{{ s }}</li>
+        </ul>
+        <p class="dim">最多列 50 条，完整的在实时日志里（搜「[影视刮削]」）。</p>
       </section>
 
       <section v-if="job.params_summary?.length" class="block">
@@ -257,6 +276,13 @@ async function retry() {
   padding-left: 18px;
   font-size: 13px;
   color: var(--foreground);
+}
+.issues {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  word-break: break-all;
 }
 .bar {
   height: 4px;

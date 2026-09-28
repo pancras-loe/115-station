@@ -199,7 +199,8 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 }
 
 // flushScrape 本轮整理结束后统一刮削：只刮本轮真的动过的片目。
-// 此前是「增量同步动过媒体库 → 扫全台账刮一遍」，新增一部片也要全库过一遍
+// 此前是「增量同步动过媒体库 → 扫全台账刮一遍」，新增一部片也要全库过一遍；
+// 再之后是在这里当场刮，整理任务要等刮完才放 taskMu。现在只入刮削队列就返回（localscrape.go）
 func (s *orgSink) flushScrape() {
 	s.mu.Lock()
 	jobs := make([]scrapeJob, 0, len(s.jobs))
@@ -207,59 +208,19 @@ func (s *orgSink) flushScrape() {
 		jobs = append(jobs, j)
 	}
 	s.mu.Unlock()
-	if len(jobs) == 0 || !s.scrapeOn {
+	if len(jobs) == 0 || !s.scrapeOn || s.h == nil {
 		return
 	}
 	if s.scrapeCfg.LocalRoot == "" {
 		log.Printf("[影视刮削] ○ 未配置本地媒体库根目录，跳过整理后刮削")
 		return
 	}
-	tc, err := loadTmdbClient()
-	if err != nil {
+	if _, err := loadTmdbClient(); err != nil {
 		log.Printf("[影视刮削] ○ TMDB 未配置，跳过整理后刮削: %v", err)
 		return
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Key < jobs[j].Key })
-
-	scrapeMu.Lock()
-	if scrapeSt.Running {
-		scrapeMu.Unlock()
-		log.Printf("[影视刮削] ○ 全量刮削进行中，本轮整理的 %d 个片目交由它一并覆盖", len(jobs))
-		return
-	}
-	scrapeSt = scrapeStatus{Running: true, Total: len(jobs), Errors: []string{}}
-	scrapeStopFlag = false
-	scrapeMu.Unlock()
-	defer func() {
-		scrapeMu.Lock()
-		scrapeSt.Running = false
-		scrapeSt.Current = ""
-		scrapeMu.Unlock()
-	}()
-
-	log.Printf("[影视刮削] ▶ 整理完成，刮削本轮 %d 个片目", len(jobs))
-	for _, j := range jobs {
-		// 「停止刮削」按钮与优雅退出对这一轮同样有效（口径与 scrapeAll 一致）
-		if scrapeStopRequested() {
-			log.Printf("[影视刮削] ○ 收到停止请求，整理后刮削提前结束")
-			return
-		}
-		scrapeMu.Lock()
-		scrapeSt.Current = j.Title
-		scrapeMu.Unlock()
-		dir := filepath.Join(s.scrapeCfg.LocalRoot, filepath.FromSlash(strings.Trim(j.Key, "/")))
-		s.h.scrapeOne(tc, s.scrapeCfg, dir, j.Key, j.Kind, j.Title, j.Year, j.TmdbID)
-		scrapeMu.Lock()
-		scrapeSt.Done++
-		scrapeMu.Unlock()
-		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
-	}
-	// 用户允许上传时回传 115：等最后一写落盘再跑，不用等分钟级 ticker
-	go func() {
-		time.Sleep(2 * time.Second)
-		monitorOnce(s.h)
-		s.h.uploadMetadataOnce()
-	}()
+	enqueueAutoScrape(s.h.DB, jobs, s.scrapeCfg)
 }
 
 // flushRefresh 通知 Emby 刷新：只传本轮受影响的最浅目录（传库根等于全刷）

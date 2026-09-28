@@ -233,6 +233,14 @@ type MediaEnrich struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ProbeCache ffprobe 探测结果缓存（pickcode → 轨道信息 JSON）。
+// 同一个文件的轨道不会变，整理补全与刮削共用，免得几百集的剧每刮一次都要重新探测
+type ProbeCache struct {
+	PickCode  string    `json:"pick_code" gorm:"primaryKey;size:64"`
+	Result    string    `json:"result" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -389,6 +397,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&ScrapeRule{},
 		&CategoryRule{},
 		&MediaEnrich{},
+		&ProbeCache{},
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},
