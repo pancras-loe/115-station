@@ -471,6 +471,16 @@ func newFileScrapeWriter(ops cloudMetaOps, force, upload bool) *fileScrapeWriter
 		dirs: map[string]string{}, names: map[string]map[string]string{}, localDirs: map[string]bool{}}
 }
 
+// skip 与 put 里「本地已有且不覆盖」那一支同口径（网盘那份同样不动）。
+// 只有网盘落点时要列目录才知道，这里不为省一次拉图去多发 115 请求，交给 put 判断
+func (w *fileScrapeWriter) skip(d metaDest, name string) bool {
+	if w.force || d.Local == "" || !localMetaExists(d.Local, name) {
+		return false
+	}
+	w.stat.Skipped++
+	return true
+}
+
 func (w *fileScrapeWriter) put(d metaDest, name string, data []byte) (bool, error) {
 	localPath := ""
 	if d.Local != "" {

@@ -3,8 +3,9 @@ package api
 // ==================== 影视刮削（原生 NFO + 海报到本地媒体库） ====================
 //
 // 直接生成 Emby/Kodi 标准元数据，替代"Emby 刮削到本地"这半段：
-//   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 <视频同名>.nfo / tvshow.nfo
-//   + poster.jpg / fanart.jpg / seasonNN-poster.jpg 到本地媒体库对应片目目录，
+//   按 MediaLibrary(TmdbID) 拉 TMDB 详情 → 写 <视频同名>.nfo / tvshow.nfo / season.nfo
+//   + poster.jpg / fanart.jpg / clearlogo.png / landscape.jpg / seasonNN-poster.jpg
+//   + <集同名>-thumb.jpg 到本地媒体库对应片目目录，
 //   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
 //
@@ -93,6 +94,12 @@ func scrapeAddErr(format string, args ...any) {
 
 // Mukaku 风格的图片拉取：走 TMDB 配置的图床/代理（国内直连常不通）
 func tmdbFetchImageBytes(imgPath string) ([]byte, error) {
+	return tmdbFetchImageSized(imgPath, "original")
+}
+
+// tmdbFetchImageSized 按 TMDB 尺寸档（original / w780 …）拉图。
+// 集剧照一部剧就是几十上百张，原图单张常见 0.5–1MB，列表缩略图用不着那么大
+func tmdbFetchImageSized(imgPath, size string) ([]byte, error) {
 	var cfg model.TmdbConfig
 	if err := model.DB.First(&cfg).Error; err != nil || cfg.ImageApiUrl == "" {
 		return nil, fmt.Errorf("TMDB 图床未配置")
@@ -101,7 +108,7 @@ func tmdbFetchImageBytes(imgPath string) ([]byte, error) {
 	if !strings.HasSuffix(base, "/t/p") {
 		base += "/t/p"
 	}
-	req, _ := http.NewRequest(http.MethodGet, base+"/original"+imgPath, nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"/"+size+imgPath, nil)
 	client := &http.Client{Timeout: 20 * time.Second}
 	proxyURL := getProxyURL()
 	if cfg.EnableProxy && cfg.ProxyUrl != "" {
@@ -249,6 +256,18 @@ type nfoEpisode struct {
 	UniqueIDs []nfoUniqueID `xml:"uniqueid"`
 	Thumb     string        `xml:"thumb"`
 	Fileinfo  *nfoFileInfo  `xml:"fileinfo,omitempty"`
+}
+
+// ---- 季级 NFO（season.nfo，放在季目录里）----
+// Emby 没有它也能按目录名认季，有了才带上 TMDB 的季名与简介（「第 1 季」之外的「烈火篇」之类）
+
+type nfoSeason struct {
+	XMLName      xml.Name `xml:"season"`
+	Title        string   `xml:"title"`
+	Plot         string   `xml:"plot"`
+	Premiered    string   `xml:"premiered,omitempty"`
+	Year         string   `xml:"year,omitempty"`
+	SeasonNumber int      `xml:"seasonnumber"`
 }
 
 func marshalNFO(v any) ([]byte, error) {
@@ -464,6 +483,22 @@ func (w localMetaWriter) put(d metaDest, name string, data []byte) (bool, error)
 	return writeMetaFile(d.Local, name, data, w.force)
 }
 
+// metaSkipper writer 可选实现：拉图之前先问一声这个产物会不会被「只补缺失」跳过。
+// 图片要从 TMDB 图床下载，集剧照一部剧就是几十上百张，已有的不该每轮刮削都重拉一遍。
+// 返回 true 就当 put 过一次（计数由 writer 自己记），调用方不再拉图
+type metaSkipper interface {
+	skip(d metaDest, name string) bool
+}
+
+func localMetaExists(dir, name string) bool {
+	st, err := os.Stat(filepath.Join(dir, name))
+	return err == nil && st.Size() > 0
+}
+
+func (w localMetaWriter) skip(d metaDest, name string) bool {
+	return d.Local == "" || (!w.force && localMetaExists(d.Local, name))
+}
+
 // scrapeReporter 错误与停止请求的去处：全局刮削状态（刮削页的进度）或任务队列
 type scrapeReporter interface {
 	errf(format string, args ...any)
@@ -498,7 +533,10 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 		}
 	}
 	kindPath := kind
-	params := map[string]string{"language": "zh-CN", "append_to_response": "credits"}
+	// images 随详情一次带回（clearlogo / landscape 从这里挑），不多打一次 TMDB。
+	// 不写 include_image_language 时 TMDB 只回 zh 与无语言的图，英文 logo 就挑不到了
+	params := map[string]string{"language": "zh-CN", "append_to_response": "credits,images",
+		"include_image_language": "zh,en,null"}
 	body, err := tc.get("/"+kindPath+"/"+strconv.Itoa(tmdbID), params)
 	if err != nil {
 		// 详情 404 = 目录名标记的 tmdb id 查无条目（整理时匹配错/条目已删）：
@@ -632,6 +670,12 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 				CreatedBy []struct {
 					Name string `json:"name"`
 				} `json:"created_by"`
+				Seasons []struct {
+					SeasonNumber int    `json:"season_number"`
+					Name         string `json:"name"`
+					Overview     string `json:"overview"`
+					AirDate      string `json:"air_date"`
+				} `json:"seasons"`
 			}
 			if json.Unmarshal(body, &d) != nil {
 				rep.errf("%s: 详情解析失败", title)
@@ -656,6 +700,21 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 			if b, err := marshalNFO(nfo); err == nil {
 				put(t.Dir, "tvshow.nfo", b)
 			}
+			// 季级 NFO：季名 / 简介 / 首播都在详情的 seasons 里，不用再按季请求
+			seasonDirs := scrapeSeasonDirs(videos, t.Dir)
+			for _, sn := range d.Seasons {
+				dest, ok := seasonDirs[sn.SeasonNumber]
+				if !ok {
+					continue
+				}
+				b, err := marshalNFO(nfoSeason{
+					Title: sn.Name, Plot: sn.Overview, Premiered: sn.AirDate,
+					Year: dateYear(sn.AirDate), SeasonNumber: sn.SeasonNumber,
+				})
+				if err == nil {
+					put(dest, "season.nfo", b)
+				}
+			}
 			// 集级 NFO：每集与 STRM 同基名（xxx.strm → xxx.nfo）落在集文件旁，
 			// TMDB 集信息（标题/首播/简介/剧照）+ 该集轨道 streamdetails。
 			// 解析不出集号的集文件跳过（tvshow.nfo 与海报仍正常生成）
@@ -663,18 +722,14 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 				if rep.stopped() {
 					return
 				}
-				fp := parseFileName(v.Name)
-				if fp.Episode == 0 {
+				season, epNo := scrapeEpisodeNo(v.Name)
+				if epNo == 0 {
 					continue
 				}
-				season := fp.Season
-				if season == 0 {
-					season = 1
-				}
-				ep := tc.tmdbSeasonEpisodes(tmdbID, season)[fp.Episode]
+				ep := tc.tmdbSeasonEpisodes(tmdbID, season)[epNo]
 				epNFO := nfoEpisode{
 					Season:  season,
-					Episode: fp.Episode,
+					Episode: epNo,
 					Title:   ep.Name,
 					Aired:   ep.AirDate,
 					Plot:    ep.Overview,
@@ -716,13 +771,35 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 			SeasonNumber int    `json:"season_number"`
 			PosterPath   string `json:"poster_path"`
 		} `json:"seasons"`
+		Images struct {
+			Logos     []tmdbImage `json:"logos"`
+			Backdrops []tmdbImage `json:"backdrops"`
+		} `json:"images"`
 	}
 	if json.Unmarshal(body, &d) != nil {
 		return
 	}
+	skipper, _ := w.(metaSkipper)
+	// fetchPut 先问 writer 要不要，再拉图写入；已有的不拉
+	fetchPut := func(dest metaDest, imgPath, size, name string) {
+		if imgPath == "" || (skipper != nil && skipper.skip(dest, name)) {
+			return
+		}
+		data, err := tmdbFetchImageSized(imgPath, size)
+		if err != nil {
+			rep.errf("%s: 拉图失败 %s %v", title, name, err)
+			return
+		}
+		put(dest, name, data)
+	}
 	images := [][2]string{
 		{d.PosterPath, "poster.jpg"},
 		{d.BackdropPath, "fanart.jpg"},
+		// clearlogo 只要 PNG：TMDB 的 logo 有一部分是 SVG，Emby 不认
+		{pickTMDBImage(d.Images.Logos, []string{"zh", "en", ""}, ".png"), "clearlogo.png"},
+		// landscape 是带片名字样的横图，只从有语言的背景里挑；
+		// 无语言的背景就是 fanart 那张，挑不到宁可不写，别复制一份 fanart 充数
+		{pickTMDBImage(d.Images.Backdrops, []string{"zh", "en"}, ""), "landscape.jpg"},
 	}
 	if kind == "tv" {
 		for _, sn := range d.Seasons {
@@ -737,16 +814,114 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 		if rep.stopped() {
 			return
 		}
-		if img[0] == "" {
-			continue
-		}
-		data, err := tmdbFetchImageBytes(img[0])
-		if err != nil {
-			rep.errf("%s: 拉图失败 %s %v", title, img[1], err)
-			continue
-		}
-		put(t.Dir, img[1], data)
+		fetchPut(t.Dir, img[0], "original", img[1])
 	}
+	if kind != "tv" {
+		return
+	}
+	// 集剧照：xxx.strm → xxx-thumb.jpg 落在集文件旁，Emby 按这个名字配对成集缩略图。
+	// 先判已有再请求季信息，已刮过的剧整季零请求
+	for _, v := range videos {
+		if rep.stopped() {
+			return
+		}
+		season, epNo := scrapeEpisodeNo(v.Name)
+		if epNo == 0 {
+			continue
+		}
+		name := v.Name + "-thumb.jpg"
+		if skipper != nil && skipper.skip(v.Dir, name) {
+			continue
+		}
+		still := tc.tmdbSeasonEpisodes(tmdbID, season)[epNo].StillPath
+		if still == "" {
+			continue
+		}
+		if v.Dir.Local != "" {
+			_ = os.MkdirAll(v.Dir.Local, 0o755)
+		}
+		fetchPut(v.Dir, still, "w780", name)
+	}
+}
+
+// tmdbImage /images 接口里的一张图
+type tmdbImage struct {
+	FilePath    string  `json:"file_path"`
+	Lang        *string `json:"iso_639_1"` // null = 无文字的图
+	VoteAverage float64 `json:"vote_average"`
+	Width       int     `json:"width"`
+}
+
+// pickTMDBImage 按语言优先级挑一张：同语言里评分高者优先、再比宽度。
+// langs 里的 "" 表示无语言（iso_639_1 为 null）；ext 非空时只要该扩展名。挑不到返回空
+func pickTMDBImage(imgs []tmdbImage, langs []string, ext string) string {
+	for _, lang := range langs {
+		var best *tmdbImage
+		for i := range imgs {
+			im := &imgs[i]
+			l := ""
+			if im.Lang != nil {
+				l = *im.Lang
+			}
+			if l != lang || im.FilePath == "" {
+				continue
+			}
+			if ext != "" && !strings.EqualFold(path.Ext(im.FilePath), ext) {
+				continue
+			}
+			if best == nil || im.VoteAverage > best.VoteAverage ||
+				(im.VoteAverage == best.VoteAverage && im.Width > best.Width) {
+				best = im
+			}
+		}
+		if best != nil {
+			return best.FilePath
+		}
+	}
+	return ""
+}
+
+// scrapeEpisodeNo 刮削用的季集号：文件名没写季号按第 1 季。集号为 0 = 解析不出
+func scrapeEpisodeNo(name string) (season, episode int) {
+	fp := parseFileName(name)
+	season = fp.Season
+	if season == 0 {
+		season = 1
+	}
+	return season, fp.Episode
+}
+
+// scrapeSeasonDirs 季号 → 季目录（season.nfo 的落点）。
+// 只收「整个目录都是同一季」的：集文件直接平铺在标题目录下（没有季目录），
+// 或一个目录里混着几季的，season.nfo 放进去说不清是哪一季，干脆不写
+func scrapeSeasonDirs(videos []scrapeVideo, titleDir metaDest) map[int]metaDest {
+	dirSeason := map[metaDest]int{} // -1 = 混了几季
+	for _, v := range videos {
+		season, epNo := scrapeEpisodeNo(v.Name)
+		if epNo == 0 || v.Dir == titleDir {
+			continue
+		}
+		if s, ok := dirSeason[v.Dir]; ok && s != season {
+			dirSeason[v.Dir] = -1
+		} else if !ok {
+			dirSeason[v.Dir] = season
+		}
+	}
+	out := map[int]metaDest{}
+	dup := map[int]bool{}
+	for dir, s := range dirSeason {
+		if s < 0 {
+			continue
+		}
+		if _, ok := out[s]; ok {
+			dup[s] = true // 同一季分在两个目录里：哪个都不认
+		}
+		out[s] = dir
+	}
+	for s := range dup {
+		delete(out, s)
+	}
+	return out
 }
 
 func dateYear(d string) string {

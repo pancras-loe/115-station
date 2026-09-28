@@ -656,6 +656,7 @@ func monitorOnce(h *Handler) {
 var metadataUploadNames = map[string]bool{
 	"poster.jpg": true, "poster.jpeg": true, "poster.png": true,
 	"fanart.jpg": true, "fanart.jpeg": true, "banner.jpg": true,
+	"clearlogo.png": true, "landscape.jpg": true, // 刮削产物（scrape.go）
 }
 
 // isMetadataUploadFile 兜底引擎要回传的元数据文件。
