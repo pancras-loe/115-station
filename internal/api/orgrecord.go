@@ -285,11 +285,11 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	keep := map[string]string{}
 	for rel, gfs := range groups {
 		for _, f := range gfs {
-			suffix := ""
+			p := path.Join(sink.libRel(rel), f.Name)
 			if f.Kind == "video" {
-				suffix = ".strm"
+				p = strmRelOf(p)
 			}
-			keep[f.Fid] = path.Join(sink.libRel(rel), f.Name) + suffix
+			keep[f.Fid] = p
 		}
 	}
 	for _, f := range metaFiles {

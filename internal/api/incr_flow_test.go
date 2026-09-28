@@ -218,7 +218,7 @@ func TestIncrSkipsAlreadyAppliedEvents(t *testing.T) {
 		t.Fatalf("旧文件被重放的删除事件误删了: %v", err)
 	}
 	// 新事件带 pick_code，走零遍历直推，不该触发目录遍历
-	newAbs := filepath.Join(p.LocalPath, filepath.FromSlash("媒体库/剧集/X/新片.mkv.strm"))
+	newAbs := filepath.Join(p.LocalPath, filepath.FromSlash("媒体库/剧集/X/新片.strm"))
 	if _, err := os.Stat(newAbs); err != nil {
 		t.Fatalf("新事件应生成 STRM: %v", err)
 	}

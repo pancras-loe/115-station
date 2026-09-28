@@ -15,29 +15,29 @@ import (
 func TestWriteStrmReportsWhetherItWrote(t *testing.T) {
 	root := t.TempDir()
 	f := remoteFile{Fid: "1", Name: "E01.mkv", Path: "库/剧集/某剧", PickCode: "pc-1"}
-	dst := filepath.Join(root, "库", "剧集", "某剧", "E01.mkv.strm")
+	dst := filepath.Join(root, "库", "剧集", "某剧", "E01.strm") // 不带视频扩展名，见 strmname.go
 
-	wrote, err := writeStrm(root, "http://x", "pick_code", false, true, f)
-	if err != nil || !wrote {
-		t.Fatalf("首次落盘应报 wrote=true，实得 %v err=%v", wrote, err)
+	rel, wrote, err := writeStrm(root, "http://x", "pick_code", false, true, f)
+	if err != nil || !wrote || rel != "库/剧集/某剧/E01.strm" {
+		t.Fatalf("首次落盘应报 wrote=true 与实际路径，实得 %v %q err=%v", wrote, rel, err)
 	}
 	if _, err := os.Stat(dst); err != nil {
 		t.Fatalf("文件应已生成: %v", err)
 	}
 
 	// 开着「跳过已存在」：原样跳过
-	if wrote, err := writeStrm(root, "http://x", "pick_code", false, true, f); err != nil || wrote {
+	if _, wrote, err := writeStrm(root, "http://x", "pick_code", false, true, f); err != nil || wrote {
 		t.Fatalf("已存在时应报 wrote=false，实得 %v err=%v", wrote, err)
 	}
 
 	// 关掉「跳过已存在」，但内容一模一样：写了也是原样，同样不算新增
-	if wrote, err := writeStrm(root, "http://x", "pick_code", false, false, f); err != nil || wrote {
+	if _, wrote, err := writeStrm(root, "http://x", "pick_code", false, false, f); err != nil || wrote {
 		t.Fatalf("内容一致的重写不该算新增，实得 %v err=%v", wrote, err)
 	}
 
 	// 内容真变了（换了 pickcode）才算写
 	f.PickCode = "pc-2"
-	if wrote, err := writeStrm(root, "http://x", "pick_code", false, false, f); err != nil || !wrote {
+	if _, wrote, err := writeStrm(root, "http://x", "pick_code", false, false, f); err != nil || !wrote {
 		t.Fatalf("内容变了应报 wrote=true，实得 %v err=%v", wrote, err)
 	}
 	data, err := os.ReadFile(dst)
@@ -47,7 +47,7 @@ func TestWriteStrmReportsWhetherItWrote(t *testing.T) {
 
 	// 但「跳过已存在」开着时，即便内容变了也不动（这是用户选的语义，别改）
 	f.PickCode = "pc-3"
-	if wrote, _ := writeStrm(root, "http://x", "pick_code", false, true, f); wrote {
+	if _, wrote, _ := writeStrm(root, "http://x", "pick_code", false, true, f); wrote {
 		t.Fatal("开了跳过已存在就不该改写")
 	}
 }

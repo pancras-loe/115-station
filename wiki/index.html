@@ -420,12 +420,15 @@ emby302.example.com {           # 播放器/Emby 用的 302 域名（配到 STRM
     <tr><th style="width:140px">设置</th><th>选项与建议</th></tr>
     <tr><td>直连域名</td><td>302 短链的主机部分。默认留空＝按播放请求的 Host 动态生成（多数场景最优）；套了固定域名/HTTPS 反代后必须显式填，如 <code>https://emby302.example.com</code></td></tr>
     <tr><td>直连格式</td><td><code>pick_code_name</code>（推荐）：短链带原文件名，播放器显示与缓存友好；<code>pick_code</code>：仅取件码，链接最短</td></tr>
-    <tr><td>保留扩展名</td><td>STRM 文件名是否带原始扩展名（<code>电影.mkv.strm</code> vs <code>电影.strm</code>）。建议开——Emby 识别媒体格式更准</td></tr>
+    <tr><td>保留扩展名</td><td>直链的 ID 段是否带原始扩展名（<code>/d/取件码.mkv</code> vs <code>/d/取件码</code>）。建议开——播放器据 URL 识别容器格式更准。它只影响 STRM 的<strong>内容</strong>，不影响文件名</td></tr>
     <tr><td>本地已存在时</td><td><strong>覆盖</strong>（推荐）：每次全量重写内容，改配置后能生效；<strong>跳过</strong>：存在即不动，最快但改配置不回填</td></tr>
   </table>
 
   <h4>一个 STRM 文件长什么样</h4>
-  <pre><code># pick_code_name + 保留扩展名：电影目录/电影.mkv.strm
+  <p>文件名是视频名去掉扩展名：<code>白头山.2019.1080p.BluRay.mkv</code> → <code>白头山.2019.1080p.BluRay.strm</code>。
+  网盘上与视频同基名的 <code>白头山.2019.1080p.BluRay.nfo</code>、<code>…-thumb.jpg</code>、<code>….chs.ass</code> 同步下来正好与它配对，Emby 直接认。
+  同一目录里有同基名的两个视频（<code>X.mkv</code> 与 <code>X.mp4</code>）时，后来的那个写成 <code>X.mp4.strm</code>。</p>
+  <pre><code># pick_code_name + 保留扩展名：电影目录/白头山.2019.1080p.BluRay.strm
 http://192.168.1.10:6086/d/AxB7CdEf1234/白头山.2019.1080p.BluRay.mkv
 
 # pick_code：链接最短

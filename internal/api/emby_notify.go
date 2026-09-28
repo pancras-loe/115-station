@@ -117,8 +117,17 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		// 常驻打整包会把实时日志页淹掉——Overview 一个字段就上千字
 		vlog("[Emby Webhook] 删除事件原始载荷: %s", truncateStr(string(body), 2000))
 
+		// STRM 改名迁移之后 Emby 扫库清掉旧路径条目的回声：不深删、不通知。
+		// 只对原生 library.deleted 生效 —— 神医 deep.delete 是用户在 Emby 里主动删的，照常处理
+		deepEvent := strings.Contains(event, "deep.delete")
+		if !deepEvent && strmMigrateEcho(h.mapFromEmbyPath(itemPath)) {
+			vlog("[Emby Webhook] STRM 改名迁移的回声（%s），跳过深删与通知", itemName)
+			c.JSON(http.StatusOK, gin.H{"message": "ok（STRM 改名迁移回声，已跳过）"})
+			return
+		}
+
 		// 事件仅处理自身命中的台账；通知去重不应吞掉神医事件的额外定位信息。
-		go h.deepDelOnEmbyDelete(payload, strings.Contains(event, "deep.delete"))
+		go h.deepDelOnEmbyDelete(payload, deepEvent)
 
 		// 本站自己删的（洗版让位、增量同步清 strm、深度删除）：这条事件是
 		// 我们动作的回声，不是「有人在 Emby 里删了片子」，不推通知
@@ -248,7 +257,7 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 		// 网盘上改个名、挪个位置，增量同步跟着重建 STRM，Emby 扫完推回一条
 		// library.new —— 片子还是原来那部，报「入库」是假消息。
 		// 同窗口内这条路径下真有新增内容时不会命中（见 embyRenameEcho）
-		if embyRenameEcho(localPath) {
+		if embyRenameEcho(localPath) || strmMigrateEcho(localPath) {
 			log.Printf("[Emby Webhook] ○ 本站改名/移动的回声，跳过入库通知: %s", itemPath)
 			return
 		}

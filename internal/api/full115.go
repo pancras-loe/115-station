@@ -468,8 +468,16 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 	// 视频：先全部生成 STRM，成功的收集后批量 upsert（此前逐条独立写事务，
 	// 万级视频全量同步即万次写）
 	videoRows := make([]model.SyncedFile, 0, len(videos))
+	// 本批已占用的 STRM 路径 → fid。台账在循环结束后才批量写，同一批里同目录同基名的
+	// 两个视频（X.mkv / X.mp4）strmNameFor 都查不到对方，要在这里让后来的退回旧写法
+	claimed := map[string]string{}
 	for _, f := range videos {
-		wrote, err := writeStrm(localPath, domain, format, keepExt, skipExist, f)
+		name := strmNameFor(f)
+		if owner, ok := claimed[path.Join(f.Path, name)]; ok && owner != f.Fid {
+			name = legacyStrmNameOf(f.Name)
+		}
+		claimed[path.Join(f.Path, name)] = f.Fid
+		strmRel, wrote, err := writeStrmNamed(localPath, domain, format, keepExt, skipExist, f, name)
 		if err != nil {
 			log.Printf("[同步] 生成 STRM 失败: %s/%s: %v", f.Path, f.Name, err)
 			st.StrmFailed++
@@ -482,7 +490,7 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 		}
 		videoRows = append(videoRows, model.SyncedFile{
 			FileID: f.Fid, PickCode: f.PickCode,
-			RelPath: path.Join(f.Path, f.Name+".strm"), Kind: "video", Size: f.Size, Sha1: f.Sha1,
+			RelPath: strmRel, Kind: "video", Size: f.Size, Sha1: f.Sha1,
 		})
 	}
 	upsertSyncedFiles(db, videoRows)
@@ -815,7 +823,15 @@ func parseStrmConfig(raw string) (domain, format string, keepExt, skipExist bool
 // 全部报成「新增视频 N 个」，还连带触发一次 Emby 刷新——用户看到的
 // 「全盘 strm 一直在重读重建」有一大半是这个计数造成的错觉。
 // 判据不用 skipExist：关掉「跳过已存在」时内容一致的重写也不是新增
-func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile) (wrote bool, err error) {
+//
+// strmRel 是实际写成的 STRM 相对路径（相对 localRoot）：文件名由 strmNameFor 决定，
+// 调用方登记台账、通知 Emby 一律用它，不要自己拼
+func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile) (strmRel string, wrote bool, err error) {
+	return writeStrmNamed(localRoot, domain, format, keepExt, skipExist, f, strmNameFor(f))
+}
+
+// writeStrmNamed 同 writeStrm，文件名由调用方定（同一批里去重同名视频时用）
+func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile, strmName string) (strmRel string, wrote bool, err error) {
 	base := strings.TrimRight(domain, "/")
 	idPart := f.PickCode
 	if keepExt {
@@ -831,21 +847,21 @@ func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remo
 	// 本地目录：保持网盘目录结构
 	dir := filepath.Join(localRoot, filepath.FromSlash(f.Path))
 	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return false, err
+		return "", false, err
 	}
 
-	strmName := f.Name + ".strm"
+	strmRel = path.Join(f.Path, strmName)
 	strmPath := filepath.Join(dir, strmName)
 
 	// 已存在：配置了跳过就跳过；没配跳过但内容一模一样，写了也是原样，同样算没动
 	if old, err := os.ReadFile(strmPath); err == nil {
 		if skipExist || string(old) == streamURL {
-			return false, nil
+			return strmRel, false, nil
 		}
 	}
 
 	if err := os.WriteFile(strmPath, []byte(streamURL), 0o666); err != nil {
-		return false, err
+		return "", false, err
 	}
-	return true, nil
+	return strmRel, true, nil
 }

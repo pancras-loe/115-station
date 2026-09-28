@@ -45,7 +45,7 @@ const example = computed(() => {
 </script>
 
 <template>
-  <SectionCard title="STRM 配置" hint="直链域名与格式，全量 / 增量同步生成 STRM 时都按这里的规则写">
+  <SectionCard title="STRM 配置" hint="直链域名与格式，全量 / 增量同步生成 STRM 时都按这里的规则写。STRM 文件名是视频名去掉扩展名（xxx.mkv → xxx.strm），与网盘上同基名的 NFO / 字幕 / 缩略图配对">
     <FieldRow
       label="STRM 直连域名"
       required

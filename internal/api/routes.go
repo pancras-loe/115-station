@@ -88,6 +88,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 应用用户设置的 115 API 请求间隔（数据库 > 环境变量 > 默认 1s）
 	Apply115Interval(db)
 
+	// 存量 STRM 改名迁移（一次性）。必须同步跑、排在下面任何后台任务启动之前：
+	// 迁移中台账与本地文件短暂不一致，增量 / 整理 / 深删插进来会读到半截状态（strmmigrate.go）
+	MigrateStrmNames(db)
+
 	// 启动同步 cron 调度器（每分钟检查 full / incr 配置）
 	StartSyncScheduler(h)
 

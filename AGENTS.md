@@ -348,6 +348,20 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       `dropHeld` 与 `processEntry` 两处都认 `ref.ai`，改这块别只改一处。
     - 测试：`orgconfirm_test.go`、`aiflow_test.go`。
 
+15. **STRM 文件名不带视频扩展名**（`strmname.go`，2026-09-28 起）：`xxx.mkv` → `xxx.strm`，
+    这样网盘上同基名的 `xxx.nfo` / `xxx-thumb.jpg` / `xxx.chs.ass` 落到本地正好被 Emby 配对
+    （Emby 把 STRM 的扩展名换掉去找配套文件）。「保留文件后缀」`keep_ext` 只管直链内容，不管文件名。
+    - **别再手拼 `name + ".strm"`**：写入走 `writeStrm`（返回实际写成的相对路径，台账与 Emby 通知一律用它），
+      推算走 `strmNameOf` / `strmRelOf`，按视频名反查本地产物走 `strmRelCandidates`（新旧两种都认）。
+    - 同目录同基名的两个视频（`X.mkv` / `X.mp4`）后来的退回旧写法 `X.mp4.strm`（`strmNameFor` 按台账裁决，
+      同一批写入由 `applySyncResults` 的 `claimed` 去重）；已落盘的沿用台账里的名字，不会来回变。
+      因此**台账视频行剥掉 `.strm` 不一定带视频扩展名**，认视频看 `Kind == "video"`，别用 `classifyFile`。
+    - 按名兜底删除时，新写法的路径可能属于同基名的另一个视频，删前过 `strmOwnedByOther`。
+    - 存量由 `strmmigrate.go` 在 `SetupRoutes` 里、任何后台任务启动之前一次性迁移（Setting `migrate.strm_noext`）：
+      先改文件再改台账、失败回滚、有失败不打标记下次重试；本地一个 STRM 都看不到（挂载未就绪）时拒绝迁移。
+      迁完 6 小时内，迁移动过的路径的 Emby 入库 / 原生删除事件按回声处理（`strmMigrateEcho`：不推通知、不深删）。
+    - 测试：`strmname_test.go`、`strmmigrate_test.go`、`strmwrite_test.go`。
+
 ---
 
 ## 7. 常见任务入口

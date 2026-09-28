@@ -186,7 +186,7 @@ func (s *orgSink) commit(ops *pan115Ops, media *TmdbMedia, rootRel, mediaRel str
 		if len(s.landed) >= embyVerifySample {
 			break
 		}
-		s.landed = append(s.landed, filepath.Join(s.localRoot, filepath.FromSlash(f.Path), f.Name+".strm"))
+		s.landed = append(s.landed, filepath.Join(s.localRoot, filepath.FromSlash(f.Path), strmNameOf(f.Name)))
 	}
 	if media != nil && media.TmdbID > 0 {
 		key := s.libRel(rootRel)

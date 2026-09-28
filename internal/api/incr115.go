@@ -670,7 +670,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				if base, ok, err := d.relPath(ev.Cid, p.Cid); err == nil && ok && ev.FileName != "" {
 					newRel := path.Join(libName, base, ev.FileName)
 					if ev.FileCat != "0" && isMedia(ev.FileName) {
-						newRel += ".strm"
+						newRel = strmRelOf(newRel)
 					}
 					markEmbyRenamed(filepath.Join(p.LocalPath, filepath.FromSlash(newRel)))
 				}
@@ -744,14 +744,14 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			ext := strings.ToLower(path.Ext(ev.FileName))
 			switch {
 			case filter.videoExts[ext]:
-				wrote, err := writeStrm(p.LocalPath, domain, format, keepExt, skipExist, f)
+				strmRel, wrote, err := writeStrm(p.LocalPath, domain, format, keepExt, skipExist, f)
 				if err != nil {
 					lg.infof("零遍历 strm 失败 %s: %v", rel, err)
 					addFallback(ev.Cid, false, ev, "（直推写 strm 失败）")
 					continue
 				}
-				upsertSyncedFile(h.DB, f, rel+".strm", "video")
-				strmAbs := filepath.Join(p.LocalPath, filepath.FromSlash(rel+".strm"))
+				upsertSyncedFile(h.DB, f, strmRel, "video")
+				strmAbs := filepath.Join(p.LocalPath, filepath.FromSlash(strmRel))
 				if renameEchoFids[ev.FileID] {
 					markEmbyRenamed(strmAbs)
 				} else if wrote {
@@ -1238,16 +1238,23 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				log.Printf("[同步] 目录删除-执行成功: %s", rel)
 				return local
 			}
-			// 文件：strm 与附属实体两种形态
-			for _, cand := range []struct{ rel, suffix string }{{rel, ".strm"}, {rel, ""}} {
-				full := filepath.Join(localRoot, filepath.FromSlash(cand.rel)) + cand.suffix
+			// 文件：strm（新旧两种命名，见 strmname.go）与附属实体
+			cands := []string{rel}
+			if isVideoName(ev.FileName) {
+				cands = append(strmRelCandidates(rel), rel)
+			}
+			for _, cand := range cands {
+				if h.strmOwnedByOther(cand, ev.FileID) {
+					continue // 同目录同基名的另一个视频的 STRM，不是这个
+				}
+				full := filepath.Join(localRoot, filepath.FromSlash(cand))
 				if _, err := os.Stat(full); err == nil {
 					if err := os.Remove(full); err != nil {
-						log.Printf("[同步] 删除本地文件失败 %s: %v", cand.rel+cand.suffix, err)
+						log.Printf("[同步] 删除本地文件失败 %s: %v", cand, err)
 						return ""
 					}
-					h.DB.Where("rel_path = ?", cand.rel+cand.suffix).Delete(&model.SyncedFile{})
-					vlog("[同步] 已清理: %s", cand.rel+cand.suffix)
+					h.DB.Where("rel_path = ?", cand).Delete(&model.SyncedFile{})
+					vlog("[同步] 已清理: %s", cand)
 					return full
 				}
 			}
@@ -1256,10 +1263,20 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 	// 3) 台账按文件名模糊兜底
 	if ev.FileName != "" {
 		var sfs []model.SyncedFile
-		h.DB.Where("rel_path = ? OR rel_path = ?", ev.FileName+".strm", ev.FileName).Find(&sfs)
+		names := map[string]bool{ev.FileName: true, legacyStrmNameOf(ev.FileName): true}
+		if isVideoName(ev.FileName) {
+			names[strmNameOf(ev.FileName)] = true
+		}
+		nameList := make([]string, 0, len(names))
+		for n := range names {
+			nameList = append(nameList, n)
+		}
+		h.DB.Where("rel_path IN ?", nameList).Find(&sfs)
 		// 进一步按文件名后缀精确过滤（rel_path 最后一段必须完全等于）
 		for _, sf := range sfs {
-			if path.Base(sf.RelPath) == ev.FileName+".strm" || path.Base(sf.RelPath) == ev.FileName {
+			// 新写法的 STRM 名不带视频扩展名，同目录同基名的另一个视频可能正占着它
+			otherVideo := path.Base(sf.RelPath) == strmNameOf(ev.FileName) && ev.FileID != "" && sf.FileID != ev.FileID
+			if names[path.Base(sf.RelPath)] && !otherVideo {
 				full := filepath.Join(localRoot, filepath.FromSlash(sf.RelPath))
 				if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
 					continue
@@ -1337,7 +1354,8 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				} else {
 					hitFile = p
 				}
-			} else if name == ev.FileName+".strm" {
+			} else if name == legacyStrmNameOf(ev.FileName) ||
+				(isVideoName(ev.FileName) && name == strmNameOf(ev.FileName) && !h.strmOwnedByOther(localRelOrEmpty(localRoot, p), ev.FileID)) {
 				hitFile = p
 			}
 			return nil

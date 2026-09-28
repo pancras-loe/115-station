@@ -154,7 +154,12 @@ func matchLedgerTitles(entries map[string]*ledgerTitleEntry, sel string) (out []
 
 // selWithin 台账视频行是否落在所选范围内（sel 是一集视频或季目录）
 func selWithin(relPath, sel string) bool {
-	return strings.TrimSuffix(relPath, ".strm") == sel || strings.HasPrefix(relPath, sel+"/")
+	for _, c := range strmRelCandidates(sel) {
+		if relPath == c {
+			return true
+		}
+	}
+	return strings.HasPrefix(relPath, sel+"/")
 }
 
 // fileScrapePlanner 把勾选的条目换算成刮削对象

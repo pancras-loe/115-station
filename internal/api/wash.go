@@ -237,9 +237,10 @@ func libraryFilesOf(targetDir, ledgerPrefix string) []model.SyncedFile {
 	return out
 }
 
-// ledgerName 台账行的可比文件名。视频行存的是 "片名.1080p.BluRay.mkv.strm"，
-// 剥掉 .strm 才是真正的资源名；不剥的话 classifyFile 把它当垃圾文件，
-// 洗版一个视频都挑不出来，比较对象退化成目录里的第一行（很可能是 poster.jpg）
+// ledgerName 台账行的可比文件名。视频行存的是 "片名.1080p.BluRay.strm"（旧命名与同名冲突时是
+// "片名.1080p.BluRay.mkv.strm"，见 strmname.go），剥掉 .strm 才是资源名，画质比较读它。
+// 新命名剥完不带视频扩展名，classifyFile 认不出是视频 —— 挑视频行一律走 ledgerIsVideo（看 kind），
+// 否则洗版一个视频都挑不出来，比较对象退化成目录里的第一行（很可能是 poster.jpg）
 func ledgerName(sf model.SyncedFile) string {
 	return strings.TrimSuffix(path.Base(sf.RelPath), ".strm")
 }

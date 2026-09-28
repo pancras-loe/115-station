@@ -734,7 +734,7 @@ func (h *Handler) uploadMetadataOnce() {
 			return nil
 		}
 		if !isMetadataUploadFile(d.Name()) {
-			// 每集同名 nfo（xxx.mkv.nfo）也要回传
+			// 旧命名留下的每集 nfo（xxx.mkv.nfo）也要回传（新命名的 xxx.nfo 上面已认）
 			if !strings.HasSuffix(strings.ToLower(d.Name()), ".mkv.nfo") &&
 				!strings.HasSuffix(strings.ToLower(d.Name()), ".mp4.nfo") {
 				return nil

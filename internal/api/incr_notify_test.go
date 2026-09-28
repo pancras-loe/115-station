@@ -92,7 +92,7 @@ func TestIncrRenameMarksEmbyEcho(t *testing.T) {
 		t.Fatalf("应是一次改名重建，实得 移改 %d、新增 STRM %d", sum.Moved, sum.StrmCreated)
 	}
 	seriesDir := filepath.Join(p.LocalPath, "媒体库", "剧集", "X")
-	if !embyRenameEcho(filepath.Join(seriesDir, "新名.mkv.strm")) {
+	if !embyRenameEcho(filepath.Join(seriesDir, "新名.strm")) {
 		t.Fatal("改名后的 STRM 路径没被认成回声")
 	}
 	// 实测 Emby 这时推的是剧集条目（路径是剧集目录），不是那个 .strm
@@ -126,7 +126,7 @@ func TestIncrRenameEchoKeepsRealAdds(t *testing.T) {
 	if embyRenameEcho(seriesDir) {
 		t.Fatal("这一轮真的新增了一集，剧集条目的入库通知不能被吞")
 	}
-	if !embyRenameEcho(filepath.Join(seriesDir, "新名.mkv.strm")) {
+	if !embyRenameEcho(filepath.Join(seriesDir, "新名.strm")) {
 		t.Fatal("改名出来的那条路径仍是回声")
 	}
 }

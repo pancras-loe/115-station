@@ -236,7 +236,7 @@ func nfoFileInfoFrom(probe *probeResult) *nfoFileInfo {
 	return &nfoFileInfo{StreamDetails: sd}
 }
 
-// ---- 集级 NFO（episodedetails，与视频同名落盘 xxx.mkv → xxx.mkv.nfo）----
+// ---- 集级 NFO（episodedetails，与 STRM 同基名落盘 xxx.strm → xxx.nfo）----
 
 type nfoEpisode struct {
 	XMLName   xml.Name      `xml:"episodedetails"`
@@ -430,8 +430,9 @@ type metaDest struct {
 	CloudRel  string // 从 CloudBase 往下的相对路径（/ 分隔，空 = 就是 CloudBase）
 }
 
-// scrapeVideo 片目里的一个视频：影片 NFO / 集 NFO 与它同名（xxx.mkv → xxx.mkv.nfo），
-// 口径与本地 STRM（xxx.mkv.strm）以及 Emby 自己刮削出来的产物一致
+// scrapeVideo 片目里的一个视频：影片 NFO / 集 NFO 与它的 STRM 同基名
+// （xxx.strm → xxx.nfo；同名冲突退回旧写法的 xxx.mkv.strm → xxx.mkv.nfo），
+// Emby 就是把 STRM 的扩展名换成 .nfo 去找的。Name 是 STRM 去掉 .strm，不一定是网盘上的视频名
 type scrapeVideo struct {
 	Name     string // 视频文件名（带扩展名）
 	PickCode string // 轨道探测用
@@ -655,7 +656,7 @@ func scrapeTitleMeta(tc *TmdbClient, cfg scrapeCfg, t scrapeTitle, w metaWriter,
 			if b, err := marshalNFO(nfo); err == nil {
 				put(t.Dir, "tvshow.nfo", b)
 			}
-			// 集级 NFO：每集与视频同名（xxx.mkv → xxx.mkv.nfo）落在集文件旁，
+			// 集级 NFO：每集与 STRM 同基名（xxx.strm → xxx.nfo）落在集文件旁，
 			// TMDB 集信息（标题/首播/简介/剧照）+ 该集轨道 streamdetails。
 			// 解析不出集号的集文件跳过（tvshow.nfo 与海报仍正常生成）
 			for _, v := range videos {
@@ -757,7 +758,7 @@ func dateYear(d string) string {
 
 // movieNFONames 影片目录里每个视频对应的 NFO 文件名。
 //
-// 与视频同名（xxx.mkv.strm → xxx.mkv.nfo），口径与集级 NFO 以及 Emby 自己
+// 与 STRM 同基名（xxx.strm → xxx.nfo），口径与集级 NFO 以及 Emby 自己
 // 刮削出来的产物完全一致。固定名 movie.nfo 虽然 Emby 也认，但一个片目里放了
 // 两个版本时两份元数据会打架，而且与 Emby 写出来的文件名对不上，
 // 用户一眼看不出哪份是谁写的。
@@ -799,7 +800,8 @@ func scrapeDirVideoRows(key string) []model.SyncedFile {
 		if sf.PickCode == "" || !strings.HasSuffix(strings.ToLower(sf.RelPath), ".strm") {
 			continue
 		}
-		if videoExts[strings.ToLower(pathExt(strings.TrimSuffix(path.Base(sf.RelPath), ".strm")))] {
+		// STRM 名不再带视频扩展名（strmname.go），认视频看台账的 kind；旧写法的行仍按扩展名认
+		if sf.Kind == "video" || videoExts[strings.ToLower(pathExt(strings.TrimSuffix(path.Base(sf.RelPath), ".strm")))] {
 			out = append(out, sf)
 		}
 	}
