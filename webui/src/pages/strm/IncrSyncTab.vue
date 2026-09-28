@@ -12,6 +12,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import IncrHelp from './IncrHelp.vue'
 import { syncApi } from '@/api'
+import { fullTime } from '@/utils/time'
 import type { FullSetting } from './fullSetting'
 import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
 import { useQueueStore } from '@/stores/queue'
@@ -228,7 +229,7 @@ const helpVisible = ref(false)
 
         <FieldRow label="上一轮" tip="每一轮都会记录，包括没找到任何变动的空转轮次。轮次号与日志里的 [同步#N] 对应。">
           <template v-if="status.last_round.at">
-            <span class="st-note">{{ status.last_round.at }}</span>
+            <span class="st-note">{{ fullTime(status.last_round.at) }}</span>
             <span v-if="status.last_round.summary" class="st-dim">#{{ status.last_round.summary.round }}</span>
             <span v-if="status.last_round.error" class="st-err">{{ status.last_round.error }}</span>
             <template v-else-if="status.last_round.summary">

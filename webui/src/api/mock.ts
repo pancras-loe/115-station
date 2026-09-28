@@ -310,7 +310,7 @@ const ROUTES: Record<string, Route> = {
     endpoint: '主通道（life_list）',
     cursor: {},
     last_round: {
-      at: '09-24 09:41:30',
+      at: '2026-09-24T09:41:30+08:00',
       summary: {
         round: 1873, events_total: 4, events_fresh: 4, events_pending: 0, relevant: 2, structural: 0, deleted: 0,
         moved: 1, dirs: 1, videos: 2, strm_created: 2, strm_existing: 0, assets_total: 3, assets_downloaded: 3,

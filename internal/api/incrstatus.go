@@ -74,7 +74,9 @@ func (h *Handler) IncrStatus(c *gin.Context) {
 	lastRoundMu.Lock()
 	round := gin.H{}
 	if !lastRoundAt.IsZero() {
-		round["at"] = lastRoundAt.Format("01-02 15:04:05")
+		// 必须带年份和时区：前端要 new Date() 解析，"09-28 15:04:05" 这种
+		// 缺年份的串 Chrome 会补成 2001 年，任务中心就一直显示 2001-9-28
+		round["at"] = lastRoundAt.Format(time.RFC3339)
 		round["error"] = lastRoundErr
 		if lastRoundSum != nil {
 			round["summary"] = lastRoundSum
