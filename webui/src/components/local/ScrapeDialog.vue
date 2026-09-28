@@ -6,21 +6,23 @@ import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import TmdbPicker from './TmdbPicker.vue'
-import { configApi, filesApi, organizeApi } from '@/api'
-import type { FileJobBody, ScrapeOptions } from '@/api/files'
+import TmdbPicker from '@/components/files/TmdbPicker.vue'
+import { configApi, localApi, organizeApi } from '@/api'
+import type { LocalTitle, ScrapeOptions } from '@/api/local'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
 /**
- * 刮削所选条目。选项默认取「自动整理 → 影视刮削」里保存的配置、「上传到网盘」默认取监控上传总开关，
+ * 刮削本地媒体库里所选的片目。选项默认取「自动整理 → 影视刮削」里保存的配置，
  * 在这里改的只对这一次生效，不回写配置。
  *
- * inLibrary=false（待整理 / 冗余 / 任意目录）时本地没有对应片目，产物只能直接写进网盘，
- * 所以上传锁定为开。
+ * 「上传到网盘」默认关：不勾时只写本地，回不回传网盘照常由「监控上传」决定；
+ * 勾了就这一次当场传进网盘对应目录（不看监控上传开关）。
+ *
+ * preset：卡片菜单的「强制重刮」「改指定 TMDB」直接把弹窗开在对应的选项上。
  */
-const props = defineProps<{ body: FileJobBody | null; inLibrary: boolean }>()
+const props = defineProps<{ targets: LocalTitle[]; preset?: 'auto' | 'force' | 'pick' }>()
 const show = defineModel<boolean>('show', { required: true })
 
 const { message } = useFeedback()
@@ -29,17 +31,19 @@ const queue = useQueueStore()
 const opts = ref<ScrapeOptions>({ write_nfo: true, write_images: true, force: false, upload: false })
 /** 已保存的配置（对照显示「与已保存不同」） */
 const saved = ref<ScrapeOptions>({ ...opts.value })
+const monitorOn = ref(false)
 const loading = ref(false)
 const submitting = ref(false)
 const mode = ref<'auto' | 'pick'>('auto')
 const picked = ref<TmdbCandidate | null>(null)
 
-const single = computed(() => (props.body?.items.length ?? 0) === 1)
-const firstName = computed(() => props.body?.items[0]?.name ?? '')
+const single = computed(() => props.targets.length === 1)
+const first = computed(() => props.targets[0])
+const pickInitial = computed(() => (first.value ? `${first.value.title} ${first.value.year ?? ''}`.trim() : ''))
 
 watch(show, async (v) => {
   if (!v) return
-  mode.value = 'auto'
+  mode.value = props.preset === 'pick' && single.value ? 'pick' : 'auto'
   picked.value = null
   loading.value = true
   try {
@@ -48,17 +52,13 @@ watch(show, async (v) => {
       configApi.getSetting<{ enabled: boolean }>('monitor', { enabled: false }),
     ])
     const c = sc.cfg ?? {}
-    saved.value = {
-      // 这两项后端缺省视为开启
-      write_nfo: c.write_nfo !== false,
-      write_images: c.write_images !== false,
-      force: !!c.force,
-      upload: !!mon.enabled,
-    }
+    // 这两项后端缺省视为开启
+    saved.value = { write_nfo: c.write_nfo !== false, write_images: c.write_images !== false, force: !!c.force, upload: false }
+    monitorOn.value = !!mon.enabled
   } catch {
     saved.value = { write_nfo: true, write_images: true, force: false, upload: false }
   } finally {
-    opts.value = { ...saved.value, upload: saved.value.upload || !props.inLibrary }
+    opts.value = { ...saved.value, force: saved.value.force || props.preset === 'force' || props.preset === 'pick' }
     loading.value = false
   }
 })
@@ -67,19 +67,25 @@ const changed = computed(() => (Object.keys(saved.value) as (keyof ScrapeOptions
 
 const canSubmit = computed(
   () =>
-    !!props.body &&
+    props.targets.length > 0 &&
     (opts.value.write_nfo || opts.value.write_images) &&
     (mode.value === 'auto' || !!picked.value) &&
     !loading.value,
 )
 
+const uploadHint = computed(() =>
+  opts.value.upload
+    ? '这一次生成的文件写入本地后，直接传进网盘里对应的片目目录（不看监控上传开关）。'
+    : `只写本地媒体库；回不回传网盘由「监控上传」决定（当前${monitorOn.value ? '已开启，会随后自动上传' : '未开启，不会上传'}）。`,
+)
+
 async function submit() {
-  if (!props.body || !canSubmit.value) return
+  if (!canSubmit.value) return
   submitting.value = true
   try {
     const pick = mode.value === 'pick' ? picked.value : null
-    const d = await filesApi.scrape({
-      ...props.body,
+    const d = await localApi.scrape({
+      keys: props.targets.map((t) => t.key),
       scrape: opts.value,
       ...(pick ? { tmdb_id: pick.id, media_type: pick.media_type, label: `${pick.title} (${pick.year ?? ''})` } : {}),
     })
@@ -98,24 +104,27 @@ async function submit() {
   <HModal v-model:show="show" title="刮削" width="620px">
     <div class="body">
       <p class="src">
-        所选：<b>{{ firstName }}</b>
-        <span v-if="!single"> 等 {{ body?.items.length }} 项</span>
+        所选：<b>{{ first?.title }}<template v-if="first?.year"> ({{ first.year }})</template></b>
+        <span v-if="!single"> 等 {{ targets.length }} 部</span>
       </p>
 
       <FieldRow label="识别方式">
         <HSegmented
           v-model="mode"
           :options="[
-            { label: '自动识别', value: 'auto' },
+            { label: '按目录名', value: 'auto' },
             { label: '指定 TMDB 条目', value: 'pick', disabled: !single },
           ]"
         />
       </FieldRow>
       <p v-if="mode === 'auto'" class="note">
-        媒体库里的片目按目录名里的 TMDB 编号（如 <code>{tmdbid=编号}</code>）取条目，没有编号的按片名识别；
-        不在媒体库里的文件夹按一部影片识别。<template v-if="!single">指定条目只能单选一项。</template>
+        按片目目录名里的 TMDB 编号（如 <code>{tmdbid=编号}</code>）取条目，没有编号的按片名识别。
+        <template v-if="!single">指定条目只能单选一部。</template>
       </p>
-      <TmdbPicker v-else v-model="picked" :initial="firstName" />
+      <template v-else>
+        <TmdbPicker v-model="picked" :initial="pickInitial" />
+        <p class="note">只换这一次刮削用的条目，不改目录名；目录名里的编号对不上时，建议到整理记录里「重新整理」。</p>
+      </template>
 
       <div class="opts" :aria-busy="loading">
         <FieldRow label="NFO 元数据">
@@ -127,19 +136,15 @@ async function submit() {
         <FieldRow label="覆盖模式">
           <HSegmented v-model="opts.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
         </FieldRow>
-        <FieldRow
-          label="上传到网盘"
-          :hint="
-            inLibrary
-              ? '写入本地媒体库后，把这一次生成的文件直接传进网盘对应目录；不勾则只写本地，监控上传也不会再传它们。'
-              : '所选不在媒体库里，本地没有对应片目：产物只能直接写进网盘里的这个目录。'
-          "
-        >
-          <HSwitch v-model="opts.upload" :disabled="!inLibrary" aria-label="上传到网盘" />
+        <FieldRow label="上传到网盘" :hint="uploadHint">
+          <HSwitch v-model="opts.upload" aria-label="上传到网盘" />
         </FieldRow>
       </div>
 
       <HAlert v-if="!opts.write_nfo && !opts.write_images" status="warning">NFO 与图片至少要生成一项。</HAlert>
+      <HAlert v-else-if="mode === 'pick' && !opts.force" status="warning">
+        换了 TMDB 条目却只补缺失：已有的 NFO / 海报不会被替换。
+      </HAlert>
       <HAlert v-else-if="opts.force && opts.upload" status="warning">
         强制覆盖会把网盘里同名的旧 NFO / 图片先送进回收站，再上传新的。
       </HAlert>

@@ -70,8 +70,10 @@ type jobParams struct {
 	Sync *syncJobParams `json:"sync,omitempty"`
 	// Scheduled 定时整理（cron 触发）：独立增量轮询关着时顺带跑一轮增量（逃生门下的老行为）
 	Scheduled bool `json:"scheduled,omitempty"`
-	// Files 网盘文件页勾选的条目（刮削 / 整理所选，filebrowser.go）
+	// Files 网盘文件页勾选的条目（整理所选 / 移动，filebrowser.go）
 	Files *fileJobParams `json:"files,omitempty"`
+	// Local 本地文件页勾选的片目（刮削，localscrape.go）
+	Local *localScrapeParams `json:"local,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

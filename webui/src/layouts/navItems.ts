@@ -5,6 +5,7 @@ import {
   RefreshCcw,
   Wand2,
   FolderTree,
+  LayoutGrid,
   ArrowDownUp,
   Download,
   Settings,
@@ -34,6 +35,7 @@ export const navItems: NavItem[] = [
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
   { name: 'files', label: '网盘文件', icon: FolderTree },
+  { name: 'local', label: '本地文件', icon: LayoutGrid },
   // 任务中心看的是整理 / 同步 / 刮削这些媒体库任务的进度与记录，跟它们放在一组。
   // 图标与顶栏的任务弹层入口一致
   { name: 'tasks', label: '任务中心', icon: ListChecks },

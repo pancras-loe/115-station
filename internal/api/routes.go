@@ -242,6 +242,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		r.GET("/embyimg", func(c *gin.Context) { h.EmbyImageProxy(c) })
 		// TMDB 海报代理（影视转存选片弹窗；<img> 标签带不了登录态，须挂公开路由）
 		r.GET("/tmdb/img", h.TmdbImg)
+		// 本地片目海报缩略图（<img> 带不了登录态；靠列表接口签发的 sig 校验，见 locallib.go）
+		r.GET("/local/poster", h.LocalPoster)
 		// 封面预览（img 加载，无鉴权；仅读本地生成的封面文件）
 		r.GET("/covergen/preview", h.CoverGenPreview)
 		// QQ OneBot 事件回调（NapCat 等推送事件；token 鉴权，私聊管理 QQ 触发指令）
@@ -288,7 +290,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 网盘文件页：浏览 115 目录，对勾选的条目刮削 / 整理（都入任务队列）
 		protected.GET("/files/115", h.ListFiles115)
-		protected.POST("/files/scrape", h.ScrapeFiles)
+		// 本地文件页：本地媒体库的片目卡片 + 刮削（入任务队列，locallib.go / localscrape.go）
+		protected.GET("/local/titles", h.ListLocalTitles)
+		protected.POST("/local/scrape", h.ScrapeLocalTitles)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)

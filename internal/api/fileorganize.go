@@ -62,7 +62,7 @@ func (h *Handler) OrganizeFiles(c *gin.Context) {
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
 	}
 	fp := req.fileJobParams
-	fp.Scrape, fp.Target = nil, ""
+	fp.Target = ""
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind: "orgpick", Title: title, DedupeKey: fileJobDedupe(fp),
 		Source: "web", Priority: jobPriorityManual,

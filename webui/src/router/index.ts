@@ -59,7 +59,13 @@ const routes: RouteRecordRaw[] = [
         path: 'files',
         name: 'files',
         component: () => import('@/pages/FilesPage.vue'),
-        meta: { title: '网盘文件', desc: '浏览 115 网盘 / 手动刮削与整理', icon: 'files' },
+        meta: { title: '网盘文件', desc: '浏览 115 网盘 / 手动整理与移动', icon: 'files' },
+      },
+      {
+        path: 'local',
+        name: 'local',
+        component: () => import('@/pages/LocalFilesPage.vue'),
+        meta: { title: '本地文件', desc: '本地媒体库的影片与剧集 / 手动刮削', icon: 'local' },
       },
       {
         path: 'upload-download',

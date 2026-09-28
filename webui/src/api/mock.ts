@@ -347,6 +347,30 @@ const ROUTES: Record<string, Route> = {
     const cid = q.get('cid') ?? '0'
     return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS, categories: ['电影/科幻电影', '电影/动画电影'] }
   },
+  '/local/titles': (q: URLSearchParams) => {
+    const all = TITLES.map(([title, year, cat], i) => {
+      const tv = cat.endsWith('剧集')
+      const status = (['ok', 'ok', 'partial', 'miss'] as const)[i % 4]
+      return {
+        key: `影视/${tv ? '剧集' : '电影'}/${cat}/${title} (${year})`,
+        title, year, tmdb_id: i % 5 === 4 ? 0 : 1000 + i, media_type: tv ? 'tv' : 'movie', category: cat,
+        videos: tv ? 8 + i : 1, has_nfo: status !== 'miss', has_poster: status === 'ok', status,
+        last_at: new Date(Date.now() - i * 3_600_000).toISOString(),
+      }
+    })
+    const type = q.get('type') ?? ''
+    const status = q.get('status') ?? ''
+    const items = all.filter((t) => (!type || t.media_type === type) && (!status || t.status === status))
+    const inType = all.filter((t) => !type || t.media_type === type)
+    return {
+      configured: true, root: '/strm', items, total: items.length, missing: 0,
+      stats: {
+        all: inType.length, ok: inType.filter((t) => t.status === 'ok').length,
+        partial: inType.filter((t) => t.status === 'partial').length, miss: inType.filter((t) => t.status === 'miss').length,
+        movie: all.filter((t) => t.media_type === 'movie').length, tv: all.filter((t) => t.media_type === 'tv').length,
+      },
+    }
+  },
   '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true } },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },

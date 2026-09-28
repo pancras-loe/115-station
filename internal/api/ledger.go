@@ -18,7 +18,10 @@ type ledgerTitleEntry struct {
 	TmdbID    int
 	MediaType string
 	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）
-	LastAt    time.Time
+	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它
+	LibName string
+	Videos  int // 台账里的视频数（本地文件页的卡片显示）
+	LastAt  time.Time
 }
 
 // 台账扫描缓存：刮削共享同一份结果（30 秒 TTL），
@@ -133,6 +136,10 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 				Key: key, Title: title, Year: year, TmdbID: tmdb,
 				MediaType: mediaType, Category: category,
 			}
+			// key = [库名/]分类/标题：段数比分类多两段说明带着库名
+			if segs := strings.Split(key, "/"); len(segs) == strings.Count(category, "/")+3 {
+				e.LibName = segs[0]
+			}
 			out[key] = e
 			if mediaType == "" {
 				e.MediaType = "movie"
@@ -143,6 +150,7 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 			e.MediaType = "tv"
 			delete(undecided, key)
 		}
+		e.Videos++
 		if sf.UpdatedAt.After(e.LastAt) {
 			e.LastAt = sf.UpdatedAt
 		}

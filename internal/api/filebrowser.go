@@ -15,10 +15,11 @@ import (
 
 // ==================== 网盘文件页（115 目录树） ====================
 //
-// 前端 /files 页：逐级浏览 115 网盘，勾选文件 / 文件夹后「刮削」或「整理」。
-// 两个动作都入任务队列（filescrape.go / fileorganize.go），这里只管列目录与定位。
+// 前端 /files 页：逐级浏览 115 网盘，勾选文件 / 文件夹后「整理」或「移动」。
+// 两个动作都入任务队列（fileorganize.go / filelibrary.go），这里只管列目录与定位。
+// 刮削已挪到本地文件页（locallib.go / localscrape.go）：只刮本地媒体库里已有的片目。
 //
-// 形态参考 MoviePilot 的文件管理（对存储里任意条目发起刮削 / 手动整理），
+// 形态参考 MoviePilot 的文件管理（对存储里任意条目发起手动整理），
 // 列目录走 pan115Ops（OpenAPI 优先、Cookie 回退，统一过 throttle115）。
 
 // browseCrumb 面包屑的一级（网盘根不在链里）
@@ -304,16 +305,15 @@ type fileJobItem struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	IsDir bool   `json:"is_dir"`
-	// PickCode 文件的 pickcode（刮削散文件时探测轨道用；目录没有）
+	// PickCode 文件的 pickcode（目录没有）
 	PickCode string `json:"pickcode,omitempty"`
 }
 
-// fileJobParams 网盘文件页发起的任务参数（刮削 / 整理共用）
+// fileJobParams 网盘文件页发起的任务参数（整理 / 移动共用）
 type fileJobParams struct {
-	Cid    string          `json:"cid"`             // 所选条目所在目录
-	Chain  []browseCrumb   `json:"chain,omitempty"` // 前端面包屑：Cookie 通道取不到祖先链时兜底
-	Items  []fileJobItem   `json:"items"`
-	Scrape *fileScrapeOpts `json:"scrape,omitempty"`
+	Cid   string        `json:"cid"`             // 所选条目所在目录
+	Chain []browseCrumb `json:"chain,omitempty"` // 前端面包屑：Cookie 通道取不到祖先链时兜底
+	Items []fileJobItem `json:"items"`
 	// Target 移动的目标工作区（redundant / existing / pending，filelibrary.go）
 	Target string `json:"target,omitempty"`
 }

@@ -20,7 +20,7 @@ import (
 // ==================== 网盘文件页：媒体库内的片目（整理 / 移出） ====================
 //
 // 媒体库里只有「片目目录」（分类目录的下一层，见 ledger.go 的 libCategoryLayout）能整理和移动，
-// 更深的季目录、单集只能刮削，更浅的库根 / 分类目录什么都不能动 —— 一点就是整个分类。
+// 更深的季目录、单集与更浅的库根 / 分类目录什么都不能动 —— 后者一点就是整个分类。
 //
 // 整理：不走新文件的整理流水线（洗版查重会撞上它自己、把它搬进「已存在」，旧 STRM 也没人收拾），
 // 而是现场列出片目里的文件、建一条整理记录，交给「重新整理」（redoOrganize）：
@@ -60,6 +60,20 @@ func (l libCategoryLayout) isTitleRel(rel string) bool {
 		return false
 	}
 	return !l.isCategoryOrAncestor(rel)
+}
+
+// itemLibRel 条目在媒体库里的位置：库名（本地媒体树第一层）与库内相对路径（库根本身为空）。
+// idx 是媒体库根在面包屑上的下标，-1 表示条目就是媒体库根目录本身
+func itemLibRel(chain []browseCrumb, idx int, it fileJobItem) (libName, rel string) {
+	if idx == -1 {
+		return it.Name, ""
+	}
+	parts := make([]string, 0, len(chain)-idx)
+	for _, c := range chain[idx+1:] {
+		parts = append(parts, c.Name)
+	}
+	parts = append(parts, it.Name)
+	return chain[idx].Name, strings.Join(parts, "/")
 }
 
 // libTitleOf 勾选的条目是不是媒体库里的片目目录：是则返回库名与库内相对路径（不含库名）
@@ -104,7 +118,7 @@ func (h *Handler) enqueueLibRedo(c *gin.Context, req fileJobRequest, roles map[s
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
 	}
 	fp := req.fileJobParams
-	fp.Scrape, fp.Target = nil, ""
+	fp.Target = ""
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind: "libredo", Title: title, DedupeKey: "libtitle:" + it.ID,
 		Source: "web", Priority: jobPriorityManual,
@@ -260,7 +274,6 @@ func (h *Handler) MoveFiles(c *gin.Context) {
 		}
 	}
 	fp := req.fileJobParams
-	fp.Scrape = nil
 	job, err := enqueueJob(h.DB, jobSpec{
 		Kind:      "filemove",
 		Title:     "移动" + fileJobTitle(req.Items) + " → " + workspaceRoleText(req.Target),

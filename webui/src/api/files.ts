@@ -1,7 +1,7 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
 
-/** 网盘文件页（后端 internal/api/filebrowser.go / filescrape.go / fileorganize.go） */
+/** 网盘文件页（后端 internal/api/filebrowser.go / fileorganize.go / filelibrary.go）。刮削在本地文件页（local.ts） */
 
 /** 工作区根目录的角色 */
 export type WorkspaceRole = 'library' | 'pending' | 'share' | 'existing' | 'redundant'
@@ -50,16 +50,6 @@ export interface FileJobBody {
   media_type?: 'movie' | 'tv'
   label?: string
 }
-
-/** 本次刮削选项：只对这一次生效，不改已保存的刮削配置 */
-export interface ScrapeOptions {
-  write_nfo: boolean
-  write_images: boolean
-  force: boolean
-  upload: boolean
-}
-
-export const scrape = (body: FileJobBody & { scrape: ScrapeOptions }) => http.post<QueuedReply>('/files/scrape', body)
 
 export const organize = (body: FileJobBody) => http.post<QueuedReply>('/files/organize', body)
 

@@ -10,7 +10,6 @@ import {
   Folder,
   FolderInput,
   House,
-  Images,
   RefreshCw,
   Wand2,
 } from '@lucide/vue'
@@ -23,7 +22,6 @@ import HSearchField from '@/components/hero/HSearchField.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import ScrapeDialog from '@/components/files/ScrapeDialog.vue'
 import OrganizeDialog from '@/components/files/OrganizeDialog.vue'
 import MoveDialog from '@/components/files/MoveDialog.vue'
 import { filesApi } from '@/api'
@@ -31,11 +29,12 @@ import type { Crumb, FileItem, FileJobBody, WorkspaceRole } from '@/api/files'
 import { useQueueStore } from '@/stores/queue'
 
 /**
- * 网盘文件：逐级浏览 115 网盘，对条目「刮削 / 整理 / 移动」（都进任务队列）。
+ * 网盘文件：逐级浏览 115 网盘，对条目「整理 / 移动」（都进任务队列）。
  *
- * 每行最右侧是这一行能做的操作；勾选后只有批量刮削与批量移动（整理一次只做一项）。
- * 媒体库里只有「片目目录」（当前二级分类目录的下一层）能整理和移动，片目里的季目录 / 视频只能刮削，
- * 库根与分类目录什么都不能动。媒体库外只能整理和移动，不能刮削（还没整理的内容刮了也白刮）。哪一行是片目目录按后端给的分类目录列表算，执行时后端会再判一次。
+ * 每行最右侧是这一行能做的操作；勾选后只有批量移动（整理一次只做一项）。
+ * 媒体库里只有「片目目录」（当前二级分类目录的下一层）能整理和移动，片目里的季目录 / 视频、
+ * 库根与分类目录什么都不能动。哪一行是片目目录按后端给的分类目录列表算，执行时后端会再判一次。
+ * 刮削在本地文件页（LocalFilesPage）：只刮本地媒体库里已有的片目。
  *
  * 115 只有 cid 没有父目录概念，面包屑就是一路点进来的栈；提交时连同面包屑一起交给后端，
  * 后端优先用 Cookie 通道查真实祖先链，查不到（OpenAPI 独立模式）才用它定位。
@@ -180,14 +179,6 @@ function isTitleRel(rel: string) {
   if (i <= 0) return false
   return categories.value.has(rel.slice(0, i)) && !isCategoryOrAncestor(rel)
 }
-/** 当前目录在某个片目目录里面（季目录那一层，或更深） */
-const insideTitle = computed(() => {
-  const rel = libRel.value
-  if (!rel) return false
-  const segs = rel.split('/')
-  for (let n = 2; n <= segs.length; n++) if (isTitleRel(segs.slice(0, n).join('/'))) return true
-  return false
-})
 
 const VIDEO_RE = /\.(mkv|mp4|avi|ts|m2ts|mov|wmv|flv|rmvb|iso|webm|mpg|mpeg|m4v|3gp|vob|strm)$/i
 function isVideo(it: FileItem) {
@@ -195,7 +186,6 @@ function isVideo(it: FileItem) {
 }
 
 interface RowActions {
-  scrape: boolean
   organize: boolean
   move: boolean
   /** 媒体库里的片目目录：整理走重新整理，移动是移出媒体库 */
@@ -203,22 +193,18 @@ interface RowActions {
 }
 
 function actionsOf(it: FileItem): RowActions {
-  const none = { scrape: false, organize: false, move: false, title: false }
+  const none = { organize: false, move: false, title: false }
   if (it.root) return none // 工作区根目录本身
   const media = it.is_dir || isVideo(it)
   if (libRel.value !== null) {
     const title = it.is_dir && isTitleRel(libRel.value ? `${libRel.value}/${it.name}` : it.name)
-    if (title) return { scrape: true, organize: true, move: true, title: true }
-    return { ...none, scrape: insideTitle.value && media }
+    return title ? { organize: true, move: true, title: true } : none
   }
-  // 媒体库外不刮削：那里的内容还没整理，片名 / 目录结构都不规整，刮出来的元数据
-  // 随整理搬走、改名就作废了；要刮先整理进媒体库
-  return { scrape: false, organize: media, move: true, title: false }
+  return { organize: media, move: true, title: false }
 }
 
 const rowMenu = (a: RowActions) =>
   [
-    a.scrape && { key: 'scrape', label: '刮削', icon: Images },
     a.organize && { key: 'organize', label: '整理', icon: Wand2 },
     a.move && { key: 'move', label: '移动', icon: FolderInput },
   ].filter((o) => !!o)
@@ -259,14 +245,6 @@ function bodyOf(list: FileItem[]): FileJobBody {
   }
 }
 
-/** 批量刮削为什么不能点（空 = 能点）；媒体库外整个按钮不显示 */
-const batchScrapeBlock = computed(() => {
-  const list = selectedItems.value
-  if (!list.length) return '先勾选要刮削的条目'
-  const bad = list.find((it) => !actionsOf(it).scrape)
-  return bad ? `「${bad.name}」不能刮削：媒体库里只有片目目录与片目里的季目录、视频能刮削` : ''
-})
-
 /** 批量移动为什么不能点（空 = 能点） */
 const batchMoveBlock = computed(() => {
   const list = selectedItems.value
@@ -284,22 +262,10 @@ const batchMoveBlock = computed(() => {
 // ---- 弹窗 ----
 
 const dialogBody = ref<FileJobBody | null>(null)
-const scrapeInLibrary = ref(false)
 const organizeInLibrary = ref(false)
-const showScrape = ref(false)
 const showOrganize = ref(false)
 const showMove = ref(false)
 
-/** 刮削：所选是否都在媒体库里（本地有对应片目，可以只写本地） */
-function inLibrary(list: FileItem[]) {
-  return libRel.value !== null || (list.length > 0 && list.every((it) => it.root === 'library'))
-}
-
-function openScrape(list: FileItem[]) {
-  dialogBody.value = bodyOf(list)
-  scrapeInLibrary.value = inLibrary(list)
-  showScrape.value = true
-}
 function openOrganize(it: FileItem) {
   dialogBody.value = bodyOf([it])
   organizeInLibrary.value = actionsOf(it).title
@@ -311,8 +277,7 @@ function openMove(list: FileItem[]) {
 }
 
 function onRowAction(it: FileItem, key: string) {
-  if (key === 'scrape') openScrape([it])
-  else if (key === 'organize') openOrganize(it)
+  if (key === 'organize') openOrganize(it)
   else if (key === 'move') openMove([it])
 }
 
@@ -329,7 +294,7 @@ function humanSize(n?: number) {
 }
 
 // 本页发起的任务跑完：网盘内容变了，重新列一次（跳过缓存），并清掉已经处理掉的勾选
-const PAGE_KINDS = new Set(['scrape', 'orgpick', 'libredo', 'filemove'])
+const PAGE_KINDS = new Set(['orgpick', 'libredo', 'filemove'])
 const offFinished = queue.onFinished((j) => {
   if (PAGE_KINDS.has(j.kind)) {
     selected.value = new Set()
@@ -343,7 +308,7 @@ onMounted(() => load())
 
 <template>
   <div class="page">
-    <SectionCard title="网盘文件" hint="浏览 115 网盘，对文件 / 文件夹刮削、整理或移动">
+    <SectionCard title="网盘文件" hint="浏览 115 网盘，对文件 / 文件夹整理或移动">
       <template #extra>
         <HButton variant="ghost" size="sm" :loading="loading" @click="load(true)">
           <RefreshCw :size="14" />刷新
@@ -376,16 +341,6 @@ onMounted(() => load())
           <span class="sel-count">已选 {{ selectedItems.length }} 项</span>
           <HButton variant="tertiary" size="sm" :disabled="!selectedItems.length" @click="selected = new Set()">清除</HButton>
           <HButton
-            v-if="libRel !== null"
-            variant="secondary"
-            size="sm"
-            :disabled="!!batchScrapeBlock"
-            :title="selectedItems.length ? batchScrapeBlock || undefined : undefined"
-            @click="openScrape(selectedItems)"
-          >
-            <Images :size="14" />批量刮削
-          </HButton>
-          <HButton
             variant="secondary"
             size="sm"
             :disabled="!!batchMoveBlock"
@@ -398,9 +353,10 @@ onMounted(() => load())
       </div>
 
       <HAlert v-if="libRel !== null" status="accent" class="tip">
-        媒体库里只有分类目录下的片目目录能整理（按当前模板与分类规则重新规整）和移动（移出媒体库）；
-        片目里的季目录与视频只能刮削。
+        媒体库里只有分类目录下的片目目录能整理（按当前模板与分类规则重新规整）和移动（移出媒体库）。
+        刮削请到「本地文件」。
         <template #actions>
+          <HButton variant="tertiary" size="sm" @click="router.push({ name: 'local' })">打开本地文件</HButton>
           <HButton variant="tertiary" size="sm" @click="router.push({ name: 'tasks', query: { tab: 'records' } })">打开整理记录</HButton>
         </template>
       </HAlert>
@@ -491,7 +447,6 @@ onMounted(() => load())
       </div>
     </SectionCard>
 
-    <ScrapeDialog v-model:show="showScrape" :body="dialogBody" :in-library="scrapeInLibrary" />
     <OrganizeDialog v-model:show="showOrganize" :body="dialogBody" :library="organizeInLibrary" />
     <MoveDialog v-model:show="showMove" :body="dialogBody" :zone="zone" :configured="configured" />
   </div>
