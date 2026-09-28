@@ -399,6 +399,7 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	if err := h.DB.Save(rec).Error; err != nil {
 		return fmt.Errorf("整理已完成但记录更新失败: %w", err)
 	}
+	dropRetryLeftovers(h.DB, rec.SourceFid, rec.ID)
 	log.Printf("[整理] ✅ 重新整理完成：%s (%s) → %s（本地根 %s），视频 %d 个，生成 STRM %d 个",
 		media.Title, media.Year, rootRel, sink.localRoot, videoTotal, strmTotal)
 	// 选了和原来不同的条目 = 自动识别在这个名字上错了，记下人工结论

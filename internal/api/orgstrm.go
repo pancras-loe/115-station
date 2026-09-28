@@ -457,12 +457,6 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		rec.ID, rec.CreatedAt = ref.id, ref.created
 		rec.ManualTmdb = rec.ManualTmdb || ref.manual
 		err = model.DB.Save(rec).Error
-	} else if id := retryLeftover(model.DB, rec.SourceFid); id != 0 {
-		// 上一轮的临时失败（TMDB 不可达 / 读目录失败）内容留在原地等重试，
-		// 这一轮的结果写回那一条：否则网络抖一阵、守望者重试几轮，
-		// 同一个文件就在记录页刷出好几条「失败」，成功之后旧的失败行还挂着
-		rec.ID, rec.CreatedAt = id, time.Now()
-		err = model.DB.Save(rec).Error
 	} else {
 		err = model.DB.Create(rec).Error
 	}
@@ -470,27 +464,38 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		log.Printf("[整理] ○ 整理记录写入失败（不影响整理本身）: %v", err)
 		return
 	}
+	dropRetryLeftovers(model.DB, rec.SourceFid, rec.ID)
 	s.mu.Lock()
 	s.records = append(s.records, rec)
 	s.mu.Unlock()
 }
 
-// retryLeftover 找同一个源条目上一轮留下的「临时失败」记录，返回其 id（没有为 0）。
+// dropRetryLeftovers 删掉同一个源条目此前留下的「临时失败」记录（keep 这条除外）。
 // 只认 status=failed 且 stage=recognize：这一组合只有 TMDB 不可达与读目录失败两处会写，
-// 两者都是内容原地不动、下轮重试；其他失败（搬移失败等）现场已变，各留各的
-func retryLeftover(db *gorm.DB, fid string) uint {
+// 两者都是内容原地不动、下轮重试，有了更新的结果就没有留着的意义；
+// 不删的话网络抖一阵、守望者重试几轮，同一个文件在记录页刷出好几条「失败」，
+// 成功之后（自动重试或手动重新整理）旧的失败行还挂着。其他失败（搬移失败等）现场已变，各留各的
+func dropRetryLeftovers(db *gorm.DB, fid string, keep uint) {
 	if fid == "" || db == nil {
-		return 0
+		return
 	}
-	var prev model.OrganizeRecord
-	if db.Select("id", "status", "stage").Where("source_fid = ?", fid).
-		Order("id DESC").Limit(1).Take(&prev).Error != nil {
-		return 0
+	db.Where("source_fid = ? AND id <> ? AND status = ? AND stage = ?", fid, keep, "failed", "recognize").
+		Delete(&model.OrganizeRecord{})
+}
+
+// sweepRetryLeftovers 启动时收拾一遍存量：同一源条目已有更新的记录、或已有任何非临时失败的记录
+// （重新整理是原地改写被点的那条，可能正是 id 更小的那条），临时失败行就删掉
+func sweepRetryLeftovers(db *gorm.DB) {
+	if db == nil {
+		return
 	}
-	if prev.Status != "failed" || prev.Stage != "recognize" {
-		return 0
+	res := db.Where("status = ? AND stage = ? AND source_fid <> '' AND EXISTS ("+
+		"SELECT 1 FROM organize_records n WHERE n.source_fid = organize_records.source_fid AND n.id <> organize_records.id "+
+		"AND (n.id > organize_records.id OR n.status <> ? OR n.stage <> ?))",
+		"failed", "recognize", "failed", "recognize").Delete(&model.OrganizeRecord{})
+	if res.Error == nil && res.RowsAffected > 0 {
+		log.Printf("[整理] ○ 清理 %d 条已有后续结果的临时失败记录", res.RowsAffected)
 	}
-	return prev.ID
 }
 
 // noteFail 失败/未识别的快捷登记
