@@ -188,8 +188,9 @@ type ensurePathEntry struct {
 	at  time.Time
 }
 
-// ensure115Path 在 parentCid 下逐级创建目录路径（如 "电影/华语电影/A"），返回最终目录 cid
-func ensure115Path(cookie, parentCid, dirPath string) (string, error) {
+// ensure115Path 在 parentCid 下逐级创建目录路径（如 "电影/华语电影/A"），返回最终目录 cid。
+// onCreate（可为 nil）收到每一个真正新建出来的目录 cid
+func ensure115Path(cookie, parentCid, dirPath string, onCreate func(cid string)) (string, error) {
 	cacheKey := parentCid + "|" + dirPath
 	ensurePathMu.Lock()
 	if e, ok := ensurePathCache[cacheKey]; ok && time.Since(e.at) < 10*time.Minute {
@@ -199,7 +200,7 @@ func ensure115Path(cookie, parentCid, dirPath string) (string, error) {
 	}
 	ensurePathMu.Unlock()
 
-	cid, err := ensure115PathUncached(cookie, parentCid, dirPath)
+	cid, err := ensure115PathUncached(cookie, parentCid, dirPath, onCreate)
 	if err == nil && cid != "" {
 		ensurePathMu.Lock()
 		ensurePathCache[cacheKey] = ensurePathEntry{cid: cid, at: time.Now()}
@@ -208,7 +209,7 @@ func ensure115Path(cookie, parentCid, dirPath string) (string, error) {
 	return cid, err
 }
 
-func ensure115PathUncached(cookie, parentCid, dirPath string) (string, error) {
+func ensure115PathUncached(cookie, parentCid, dirPath string, onCreate func(cid string)) (string, error) {
 	parts := strings.Split(dirPath, "/")
 	currentCid := parentCid
 	for _, part := range parts {
@@ -229,6 +230,9 @@ func ensure115PathUncached(cookie, parentCid, dirPath string) (string, error) {
 		newCid, err := mkdir115(cookie, currentCid, part)
 		if err != nil {
 			return "", err
+		}
+		if onCreate != nil {
+			onCreate(newCid)
 		}
 		currentCid = newCid
 	}

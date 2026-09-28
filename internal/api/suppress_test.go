@@ -82,6 +82,21 @@ func TestPruneEventSuppress(t *testing.T) {
 	}
 }
 
+// 整理新建的目录也要登记：new_folder 事件绕回来会递归遍历整个新目录。
+// 没开 suppress 的通道（工作目录初始化、分享转存）建的目录照常交给增量
+func TestMkdirSuppressed(t *testing.T) {
+	newTestDB(t, "suppress_mkdir.db")
+
+	(&pan115Ops{suppress: true}).markCreated("dir-org")
+	(&pan115Ops{}).markCreated("dir-other")
+	if !peekSuppressed("dir-org") {
+		t.Fatal("整理通道新建的目录应被抑制")
+	}
+	if peekSuppressed("dir-other") {
+		t.Fatal("没开 suppress 的通道不该登记")
+	}
+}
+
 // 整理没能自己落盘时必须撤销抑制，否则文件两头落空：
 // 整理没写 STRM、增量又把它的事件跳过了
 func TestUnmarkSuppressed(t *testing.T) {

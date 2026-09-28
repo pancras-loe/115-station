@@ -217,7 +217,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
    冲突。用户更新走 `docker compose pull && docker compose up -d`，**不要再把它加回来**。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刷 Emby → 本轮片目入刮削队列），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
-   自己做的每一次 move/rename 都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
+   自己做的每一次 move/rename/delete 以及新建目录（`mkdir` / `ensurePath`，否则 `new_folder` 会触发整目录递归遍历）都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过
    （对齐 p115strmhelper 的 `pantransfercacher`）。
    - 新增任何在整理链路里改网盘的代码，都要走 `ops.moveFiles` / `ops.rename` / `ops.renameBatch`，
      绕过它们就绕过了抑制登记，增量会把同一份变更再处理一遍。
@@ -374,6 +374,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 与整理并行的冲突**靠刮削自己收拾，不加锁**：刮削不建目录（`fileScrapeWriter.put` 遇到不存在的目录返回 `errMetaDirGone`，
       别再加 `MkdirAll`，那会在旧位置造出只有 NFO 的空壳）；每刮完一部 `scrapeCompensate` 核对 STRM 还在不在，
       不在就收回这次写下的文件并收空目录。没用片目锁是因为删改本地的入口有十几处（增量拿着 `taskMu` 删），让它们等刮削又会卡住主队列。
+    - **整理后要刮的，Emby 刷新交给刮削任务**（`flushScrape` 先于 `flushRefresh`，参数 `EmbyRefresh` / `EmbyVerify`）：刮完只刷一次，
+      刮削出错 / 被停 / 什么都没写也照刷（`execScrapeJob` 开头的 defer）。只在刮削队列空闲时交接（`scrapeLaneIdle`），前面排着全库刮削就整理当场刷。
+      2026-09-28 现场：整理刷一次、11 秒后刮完又刷一次，两分钟后 Emby 连目录条目都没建。
     - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
     - ffprobe 默认关（`scrape.probe_streams`）：Emby / Jellyfin 导入 NFO 一般不读 streamdetails。探测结果按 pickcode 落 `ProbeCache`
       （整理补全也写它，`probeCached`），ffprobe 有 60 秒超时。

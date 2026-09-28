@@ -47,6 +47,17 @@ func TestApplyTemplateStringExpressions(t *testing.T) {
 	}
 }
 
+// 英文名里「点 + 空格」经 replace('.', ' ') 会变成两个空格，要压成一个
+func TestApplyTemplateCollapsesSpaces(t *testing.T) {
+	media := &TmdbMedia{TmdbID: 82703, Title: "天才眼镜狗", OriginalTitle: "Mr. Peabody & Sherman", Year: "2014", MediaType: "movie"}
+	parsed := &ParsedName{Title: "天才眼镜狗", Year: "2014"}
+	ctx := buildRenameContext(media, parsed, "天才眼镜狗.2014.mkv")
+
+	if got, want := ctx.ApplyTemplate("{title}<.{en_title.replace('.', ' ')}>.{year}{ext}"), "天才眼镜狗.Mr Peabody & Sherman.2014.mkv"; got != want {
+		t.Fatalf("得到 %q，预期 %q", got, want)
+	}
+}
+
 func TestDefaultRenameConfig(t *testing.T) {
 	cfg := defaultRenameConfig()
 	if cfg.MovieFolder != "{title}.{year}<.[[tmdbid={tmdb_id}]]>" {

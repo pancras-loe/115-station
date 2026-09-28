@@ -62,6 +62,8 @@ type orgSink struct {
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次
 	refreshDirs []string             // 本轮动过的库内目录（含库名前缀）
 	landed      []string             // 本轮真正写出的 .strm 本地绝对路径（抽样，回查用）
+	// refreshHandedOff 本轮的 Emby 刷新已经交给整理后刮削任务（flushScrape），flushRefresh 不再刷
+	refreshHandedOff bool
 	records     []*model.OrganizeRecord
 	// recog 当前条目的识别信息，写记录时顺手带上（识别记忆的键、AI 判定的标注）。
 	// 整理是逐条串行的：每个条目开始识别时重设
@@ -220,17 +222,27 @@ func (s *orgSink) flushScrape() {
 		return
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Key < jobs[j].Key })
-	enqueueAutoScrape(s.h.DB, jobs, s.scrapeCfg)
+	// Emby 刷新尽量交给刮削：刮完只刷一次，Emby 第一次扫到这部片时 NFO 已经在了
+	var refresh []string
+	target, landed := s.refreshTarget()
+	if target != "" {
+		refresh = []string{target}
+	}
+	if enqueueAutoScrape(s.h.DB, jobs, s.scrapeCfg, refresh, landed) {
+		s.mu.Lock()
+		s.refreshHandedOff = true
+		s.mu.Unlock()
+	}
 }
 
-// flushRefresh 通知 Emby 刷新：只传本轮受影响的最浅目录（传库根等于全刷）
-func (s *orgSink) flushRefresh() {
+// refreshTarget 本轮要刷的 Emby 目标：受影响的最浅目录（传库根等于全刷）与回查样本
+func (s *orgSink) refreshTarget() (dir string, landed []string) {
 	s.mu.Lock()
 	dirs := append([]string(nil), s.refreshDirs...)
-	landed := append([]string(nil), s.landed...)
+	landed = append([]string(nil), s.landed...)
 	s.mu.Unlock()
 	if len(dirs) == 0 {
-		return
+		return "", nil
 	}
 	shallowest := dirs[0]
 	for _, d := range dirs[1:] {
@@ -238,7 +250,20 @@ func (s *orgSink) flushRefresh() {
 			shallowest = d
 		}
 	}
-	s.h.notifyEmbyRefresh(filepath.Join(s.localRoot, filepath.FromSlash(shallowest)), landed...)
+	return filepath.Join(s.localRoot, filepath.FromSlash(shallowest)), landed
+}
+
+// flushRefresh 通知 Emby 刷新。必须排在 flushScrape 之后：刷新交给了刮削任务的话这里不再刷
+func (s *orgSink) flushRefresh() {
+	s.mu.Lock()
+	handedOff := s.refreshHandedOff
+	s.mu.Unlock()
+	if handedOff {
+		return
+	}
+	if dir, landed := s.refreshTarget(); dir != "" {
+		s.h.notifyEmbyRefresh(dir, landed...)
+	}
 }
 
 // dropLocalByFids 按 fid 删除本地已落盘的 strm / 附属文件及台账行，

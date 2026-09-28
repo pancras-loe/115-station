@@ -83,8 +83,8 @@ func TestQueueLanesSeparate(t *testing.T) {
 func TestEnqueueAutoScrapeMerges(t *testing.T) {
 	newTestDB(t, "scrape_auto.db")
 	cfg := scrapeCfg{WriteNFO: true, WriteImages: true, SkipSharedStills: true}
-	enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/剧集/甲", Kind: "tv", Title: "甲", TmdbID: 1}}, cfg)
-	enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/乙", Kind: "movie", Title: "乙", TmdbID: 2}}, cfg)
+	enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/剧集/甲", Kind: "tv", Title: "甲", TmdbID: 1}}, cfg, nil, nil)
+	enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/乙", Kind: "movie", Title: "乙", TmdbID: 2}}, cfg, nil, nil)
 
 	var jobs []model.TaskJob
 	model.DB.Where("kind = ?", jobKindScrape).Find(&jobs)
@@ -100,6 +100,61 @@ func TestEnqueueAutoScrapeMerges(t *testing.T) {
 	}
 	if jobs[0].Priority != jobPriorityBackground || jobs[0].Title != "整理后刮削《甲》等 2 部" {
 		t.Fatalf("优先级 / 标题不对：%d %q", jobs[0].Priority, jobs[0].Title)
+	}
+}
+
+// 整理把 Emby 刷新交给刮削：刮削队列空闲才接，排着的几轮合并时刷新目标一个不丢
+func TestEnqueueAutoScrapeEmbyHandoff(t *testing.T) {
+	newTestDB(t, "scrape_handoff.db")
+	cfg := scrapeCfg{WriteNFO: true}
+
+	if !enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/甲", Kind: "movie", TmdbID: 1}}, cfg,
+		[]string{"/media/库/电影/甲"}, []string{"/media/库/电影/甲/甲.strm"}) {
+		t.Fatal("刮削队列空闲时应接下 Emby 刷新")
+	}
+	if !enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/乙", Kind: "movie", TmdbID: 2}}, cfg,
+		[]string{"/media/库/电影/乙"}, []string{"/media/库/电影/乙/乙.strm"}) {
+		t.Fatal("排着的整理后刮削不算占着队列")
+	}
+	var jobs []model.TaskJob
+	model.DB.Where("kind = ?", jobKindScrape).Find(&jobs)
+	if len(jobs) != 1 {
+		t.Fatalf("应并成一个任务，实际 %d 个", len(jobs))
+	}
+	lp := decodeJobParams(&jobs[0]).Local
+	if !reflect.DeepEqual(lp.EmbyRefresh, []string{"/media/库/电影/甲", "/media/库/电影/乙"}) ||
+		!reflect.DeepEqual(lp.EmbyVerify, []string{"/media/库/电影/甲/甲.strm", "/media/库/电影/乙/乙.strm"}) {
+		t.Fatalf("合并时刷新目标要取并集：%+v / %+v", lp.EmbyRefresh, lp.EmbyVerify)
+	}
+
+	// 前面排着手动刮削：整理自己刷，不交接
+	enqueueJob(model.DB, jobSpec{Kind: jobKindScrape, Title: "全库刮削", DedupeKey: scrapeAllDedupe, Priority: jobPriorityManual})
+	if enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/丙", Kind: "movie", TmdbID: 3}}, cfg,
+		[]string{"/media/库/电影/丙"}, nil) {
+		t.Fatal("刮削队列前面还有别的任务时不该接")
+	}
+}
+
+// 整理交过来的刷新：刮削什么都没写也要刷；本地已经不在的目录不刷
+func TestScrapeEmbyRefreshTargets(t *testing.T) {
+	root := t.TempDir()
+	alive := filepath.Join(root, "甲")
+	if err := os.MkdirAll(alive, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	prev := scrapeEmbyNotify
+	scrapeEmbyNotify = func(dirs []string, verify ...string) { got = dirs }
+	t.Cleanup(func() { scrapeEmbyNotify = prev })
+
+	scrapeEmbyRefresh(&localScrapeParams{EmbyRefresh: []string{alive, filepath.Join(root, "没了")}}, nil)
+	if !reflect.DeepEqual(got, []string{alive}) {
+		t.Fatalf("应只刷还在的目录：%v", got)
+	}
+	got = nil
+	scrapeEmbyRefresh(&localScrapeParams{}, map[string]bool{})
+	if got != nil {
+		t.Fatalf("没有交接、也没写东西就不该刷：%v", got)
 	}
 }
 

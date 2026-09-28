@@ -95,6 +95,11 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 	for strings.Contains(result, "--") {
 		result = strings.ReplaceAll(result, "--", "-")
 	}
+	// 连续空格同样压缩：默认模板的 en_title.replace('.', ' ') 会把
+	// 「Mr. Peabody & Sherman」里的「点 + 空格」变成两个空格
+	for strings.Contains(result, "  ") {
+		result = strings.ReplaceAll(result, "  ", " ")
+	}
 	result = strings.Trim(result, ".-")
 	result = strings.TrimSpace(result)
 

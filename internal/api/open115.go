@@ -874,7 +874,7 @@ func openParseDownloadURL(raw json.RawMessage) string {
 type pan115Ops struct {
 	open   *open115Client // OpenAPI 通道（nil 表示走 cookie）
 	cookie string         // Cookie 通道
-	// suppress 打开后，本通道做的每一次 move/rename 都登记进事件抑制表。
+	// suppress 打开后，本通道做的每一次 move/rename/delete/mkdir 都登记进事件抑制表。
 	// 只有整理链路会打开（executeOrganize / redoOrganize 构造后立即置位）：
 	// 整理已经自己落了 STRM，绕一圈回来的生活事件不该再被增量处理一遍
 	suppress bool
@@ -946,10 +946,28 @@ func (o *pan115Ops) listDirs(cid string) ([]gin.H, int, string, error) {
 
 // mkdir 创建目录
 func (o *pan115Ops) mkdir(parent, name string) (string, error) {
+	var (
+		cid string
+		err error
+	)
 	if o.open != nil {
-		return o.open.mkdir(parent, name)
+		cid, err = o.open.mkdir(parent, name)
+	} else {
+		cid, err = mkdir115(o.cookie, parent, name)
 	}
-	return mkdir115(o.cookie, parent, name)
+	if err == nil {
+		o.markCreated(cid)
+	}
+	return cid, err
+}
+
+// markCreated 整理新建的目录同样登记抑制。它会产生 new_folder 事件，
+// 增量对目录级事件是**递归**遍历的：新剧的剧名目录绕回来就是把刚整理好的
+// 各季整棵重列一遍（每列一次还要等节流），而 STRM 整理早就写好了
+func (o *pan115Ops) markCreated(cid string) {
+	if o.suppress && cid != "" {
+		markSuppressed("mkdir", []string{cid})
+	}
 }
 
 // ensurePath 逐级创建目录路径
@@ -957,7 +975,7 @@ func (o *pan115Ops) ensurePath(parent, dirPath string) (string, error) {
 	if o.open != nil {
 		return o.openEnsurePath(parent, dirPath)
 	}
-	return ensure115Path(o.cookie, parent, dirPath)
+	return ensure115Path(o.cookie, parent, dirPath, o.markCreated)
 }
 
 // openEnsurePath OpenAPI 版逐级建目录
@@ -995,6 +1013,7 @@ func (o *pan115Ops) openEnsurePath(parent, dirPath string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		o.markCreated(newID)
 		current = newID
 	}
 	return current, nil

@@ -234,7 +234,6 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 		}
 	}
 
-	var refreshed []string
 	var verify []string // 入库场景提交完回查用（只读，不改变 Emby 行为）
 	// 调用方点名了落盘文件就只回查它们：刷新目标是标题目录，而标题目录上
 	// 早就挂着 Series 条目，拿它回查等于自问自答，永远是 ✓
@@ -273,7 +272,6 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 				}
 			}
 			if len(rest) == 0 {
-				refreshed = append(refreshed, lib.Name)
 				continue
 			}
 			if kind == embyRefreshAdded {
@@ -283,7 +281,6 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 			}
 		}
 		if embyRefreshItem(cfg, lib.ID) {
-			refreshed = append(refreshed, lib.Name)
 			log.Printf("[Emby] ○ 已提交媒体库刷新（%s）：%s", kind.label(), lib.Name)
 			continue
 		}
@@ -308,10 +305,8 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 
 	// 「已刷新媒体库：电影」这条消息不发了：它说的是「我让 Emby 去扫了一下」，
 	// 对用户没有任何信息量，却每轮入库都要占一条推送。入库本身有卡片，
-	// 刷新提交与回查结论都在日志里（MoviePilot / p115strmhelper 也都不推这个）
-	if kind == embyRefreshAdded && len(refreshed) > 0 {
-		log.Printf("[Emby] ○ 已提交刷新（入库）：%s", strings.Join(dedupeStrings(refreshed), "、"))
-	}
+	// 刷新提交与回查结论都在日志里（MoviePilot / p115strmhelper 也都不推这个）。
+	// 汇总日志「已提交刷新（入库）：电影」也删了：上面逐库 / 逐条目都已经打过一行
 }
 
 // embyVerifyDelays 入库回查的时间点（相对提交刷新的时刻）。

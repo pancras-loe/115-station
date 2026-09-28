@@ -57,6 +57,12 @@ type localScrapeParams struct {
 	// Hints 整理后刮削：整理当时识别到的条目。重命名模板不带 {tmdbid} 时目录名里没有编号，
 	// 光看台账认不出来，而整理手上明明有
 	Hints map[string]scrapeHint `json:"hints,omitempty"`
+	// EmbyRefresh / EmbyVerify 整理交过来的 Emby 刷新（本地绝对路径）与回查样本（落盘的 .strm）。
+	// 整理后紧接着就要刮，整理自己刷一次、刮完再刷一次，等于十几秒里两次整库刷新，
+	// 刮削期间写 NFO / 图片还一直推后 Emby 文件监控的静默期（2026-09-28 现场：
+	// 两次刷新之后两分钟 Emby 连目录条目都没建）。所以交给刮削，写完元数据只刷一次
+	EmbyRefresh []string `json:"emby_refresh,omitempty"`
+	EmbyVerify  []string `json:"emby_verify,omitempty"`
 }
 
 // scrapeHint 整理时识别到的片目信息
@@ -478,6 +484,9 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		// 老版本网盘文件页入队的刮削任务（参数在 Files 里）：那条入口已经移除
 		return jobOutcome{}, errors.New("任务参数错误（网盘文件页的刮削已移到本地文件页，请在那里重新提交）")
 	}
+	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
+	var wrote map[string]bool
+	defer func() { scrapeEmbyRefresh(lp, wrote) }()
 	o := lp.Scrape
 	localRoot := localMediaRoot()
 	if localRoot == "" {
@@ -527,6 +536,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 
 	w := newFileScrapeWriter(cloud, o.Force, o.Upload)
+	wrote = w.localDirs
 	w.markHandled = func(p string) {
 		if st, ok := stampOfPath(p); ok {
 			markUploadedStamp(h.DB, p, st)
@@ -610,27 +620,14 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		}
 	}
 
-	// 本地写了新的元数据：通知 Emby 按路径刷新。整理那边落盘后已经刷过一次，
-	// 但那时刮削还没开始（它排在刮削队列里），元数据要靠这一次才进得去
-	if len(w.localDirs) > 0 {
-		dirs := make([]string, 0, len(w.localDirs))
-		for d := range w.localDirs {
-			if st, err := os.Stat(d); err == nil && st.IsDir() {
-				dirs = append(dirs, d)
-			}
-		}
-		sort.Strings(dirs)
-		if len(dirs) > 0 {
-			notifyEmbyPaths(dirs, embyRefreshAdded)
-		}
-		if !o.Upload {
-			// 这一次没勾上传：交给监控上传（它看自己的开关）
-			go func() {
-				time.Sleep(2 * time.Second) // 等最后写入落盘
-				monitorOnce(h)
-				h.uploadMetadataOnce()
-			}()
-		}
+	// Emby 刷新在开头的 defer 里（scrapeEmbyRefresh）
+	if len(w.localDirs) > 0 && !o.Upload {
+		// 这一次没勾上传：交给监控上传（它看自己的开关）
+		go func() {
+			time.Sleep(2 * time.Second) // 等最后写入落盘
+			monitorOnce(h)
+			h.uploadMetadataOnce()
+		}()
 	}
 
 	msg := fmt.Sprintf("刮削 %d 个片目：写入本地 %d 个、上传网盘 %d 个、已存在跳过 %d 个",
@@ -735,14 +732,21 @@ func scrapeCompensate(t scrapeTitle, written []string, localRoot string) int {
 const scrapeAutoDedupe = "auto"
 
 // enqueueAutoScrape 整理完成后把本轮动过的片目丢进刮削队列就返回。
-// 此前在整理任务里当场刮，一部几百集的综艺刮完才放 taskMu，这段时间整理 / 同步全在排队
-func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg) {
+// 此前在整理任务里当场刮，一部几百集的综艺刮完才放 taskMu，这段时间整理 / 同步全在排队。
+//
+// refresh / verify 非空表示整理想把 Emby 刷新交给这个刮削任务；返回 true 才算交接成功，
+// 否则调用方自己刷。只在刮削队列空闲时接：前面排着全库刮削的话，
+// 等它跑完新片要晚几个小时才进 Emby，不如整理当场刷
+func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg, refresh, verify []string) (handedOff bool) {
 	p := &localScrapeParams{Scrape: cfg.opts(), Hints: map[string]scrapeHint{}}
 	for _, j := range jobs {
 		p.Keys = append(p.Keys, j.Key)
 		p.Hints[j.Key] = scrapeHint{Kind: j.Kind, Title: j.Title, Year: j.Year, TmdbID: j.TmdbID}
 	}
 	p.Keys = normalizeTitleKeys(p.Keys)
+	if len(refresh) > 0 && scrapeLaneIdle(db) {
+		p.EmbyRefresh, p.EmbyVerify = refresh, verify
+	}
 	job, err := enqueueJob(db, jobSpec{
 		Kind: jobKindScrape, Title: autoScrapeTitle(p), DedupeKey: scrapeAutoDedupe,
 		Source: "organize", Priority: jobPriorityBackground,
@@ -750,10 +754,62 @@ func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg) {
 	})
 	if err != nil {
 		log.Printf("[影视刮削] ✗ 整理后刮削入队失败: %v", err)
+		return false
+	}
+	tail := ""
+	if len(p.EmbyRefresh) > 0 {
+		tail = "，刮完再刷 Emby"
+	}
+	log.Printf("[影视刮削] ○ 整理完成，%d 个片目加入刮削队列（任务 #%d，与整理分开执行，不占任务锁%s）", len(p.Keys), job.ID, tail)
+	wakeJobWorker()
+	return len(p.EmbyRefresh) > 0
+}
+
+// scrapeLaneIdle 刮削队列上没有正在跑的任务，也没有排在整理后刮削前面的
+// （手动刮削优先级更高，会插到它前面）
+func scrapeLaneIdle(db *gorm.DB) bool {
+	if id, _ := scrapeLane.current(); id != 0 {
+		return false
+	}
+	var n int64
+	db.Model(&model.TaskJob{}).
+		Where("kind = ? AND status = ? AND dedupe_key <> ?", jobKindScrape, jobQueued, scrapeAutoDedupe).
+		Count(&n)
+	return n == 0
+}
+
+// scrapeEmbyRefresh 刮削收尾刷 Emby：这次写过元数据的目录，加上整理交过来的。
+// 整理交过来的那部分整理自己没刷，所以刮削出错、被停下、什么都没写都得刷
+func scrapeEmbyRefresh(lp *localScrapeParams, wrote map[string]bool) {
+	set := map[string]bool{}
+	for d := range wrote {
+		set[d] = true
+	}
+	if lp != nil {
+		for _, d := range lp.EmbyRefresh {
+			set[d] = true
+		}
+	}
+	dirs := make([]string, 0, len(set))
+	for d := range set {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			dirs = append(dirs, d)
+		}
+	}
+	if len(dirs) == 0 {
 		return
 	}
-	log.Printf("[影视刮削] ○ 整理完成，%d 个片目加入刮削队列（任务 #%d，与整理分开执行，不占任务锁）", len(p.Keys), job.ID)
-	wakeJobWorker()
+	sort.Strings(dirs)
+	var verify []string
+	if lp != nil {
+		verify = lp.EmbyVerify
+	}
+	scrapeEmbyNotify(dirs, verify...)
+}
+
+// scrapeEmbyNotify 测试替身的缝
+var scrapeEmbyNotify = func(dirs []string, verify ...string) {
+	notifyEmbyPaths(dirs, embyRefreshAdded, verify...)
 }
 
 // mergeAutoScrape 排着的整理后刮削还没开始，又来一轮：片目取并集，选项以新的为准
@@ -771,6 +827,9 @@ func mergeAutoScrape(prev, next jobParams) (jobParams, string) {
 	for k, v := range next.Local.Hints {
 		lp.Hints[k] = v
 	}
+	// 上一轮交过来的 Emby 刷新不能丢：那一轮整理没自己刷
+	lp.EmbyRefresh = dedupeStrings(append(append([]string{}, prev.Local.EmbyRefresh...), next.Local.EmbyRefresh...))
+	lp.EmbyVerify = dedupeStrings(append(append([]string{}, prev.Local.EmbyVerify...), next.Local.EmbyVerify...))
 	out.Local = &lp
 	return out, autoScrapeTitle(&lp)
 }
