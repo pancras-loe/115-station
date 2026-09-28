@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"115-station/internal/model"
+	"gorm.io/gorm"
 )
 
 // ==================== 整理落盘（一条龙） ====================
@@ -456,6 +457,12 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		rec.ID, rec.CreatedAt = ref.id, ref.created
 		rec.ManualTmdb = rec.ManualTmdb || ref.manual
 		err = model.DB.Save(rec).Error
+	} else if id := retryLeftover(model.DB, rec.SourceFid); id != 0 {
+		// 上一轮的临时失败（TMDB 不可达 / 读目录失败）内容留在原地等重试，
+		// 这一轮的结果写回那一条：否则网络抖一阵、守望者重试几轮，
+		// 同一个文件就在记录页刷出好几条「失败」，成功之后旧的失败行还挂着
+		rec.ID, rec.CreatedAt = id, time.Now()
+		err = model.DB.Save(rec).Error
 	} else {
 		err = model.DB.Create(rec).Error
 	}
@@ -466,6 +473,24 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	s.mu.Lock()
 	s.records = append(s.records, rec)
 	s.mu.Unlock()
+}
+
+// retryLeftover 找同一个源条目上一轮留下的「临时失败」记录，返回其 id（没有为 0）。
+// 只认 status=failed 且 stage=recognize：这一组合只有 TMDB 不可达与读目录失败两处会写，
+// 两者都是内容原地不动、下轮重试；其他失败（搬移失败等）现场已变，各留各的
+func retryLeftover(db *gorm.DB, fid string) uint {
+	if fid == "" || db == nil {
+		return 0
+	}
+	var prev model.OrganizeRecord
+	if db.Select("id", "status", "stage").Where("source_fid = ?", fid).
+		Order("id DESC").Limit(1).Take(&prev).Error != nil {
+		return 0
+	}
+	if prev.Status != "failed" || prev.Stage != "recognize" {
+		return 0
+	}
+	return prev.ID
 }
 
 // noteFail 失败/未识别的快捷登记

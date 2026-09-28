@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"io"
@@ -107,6 +108,23 @@ func normalizeTMDBBase(u string) string {
 	return u
 }
 
+// redactTmdbErr 抹掉错误里请求地址上的 api_key：*url.Error 会把完整 URL 带进
+// 错误文本，一路进日志、整理记录与通知
+func redactTmdbErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if u, perr := url.Parse(ue.URL); perr == nil {
+			q := u.Query()
+			if q.Has("api_key") {
+				q.Set("api_key", "REDACTED")
+				u.RawQuery = q.Encode()
+			}
+			return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
+		}
+	}
+	return err
+}
+
 // get 发送 GET 请求到 TMDB API
 func (tc *TmdbClient) get(endpoint string, params map[string]string) ([]byte, error) {
 	u := tc.APIURL + endpoint
@@ -118,15 +136,24 @@ func (tc *TmdbClient) get(endpoint string, params map[string]string) ([]byte, er
 	}
 	fullURL := u + "?" + v.Encode()
 
-	req, err := http.NewRequest("GET", fullURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := tc.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequest("GET", fullURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err = tc.httpClient.Do(req)
+		if err == nil {
+			break
+		}
+		// 网络层失败（代理/跨境链路偶发 EOF、连接被重置）隔一会儿重试一次：
+		// 一次抖动就让整条整理判失败、等守望者下轮再来，太贵了。只重试一次，
+		// 真断网时不至于把一轮整理拖得太长
+		if attempt >= 1 {
+			return nil, redactTmdbErr(err)
+		}
+		time.Sleep(2 * time.Second)
 	}
 	defer resp.Body.Close()
 
