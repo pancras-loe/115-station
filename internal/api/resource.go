@@ -41,7 +41,8 @@ var (
 	reSource  = regexp.MustCompile(`(?i)\b(NF|NETFLIX|DSNP|DISNEY|AMZN|AMAZON|ATVP|APPLE.?TV|MAX|HBO|HULU|PMTP|PARAMOUNT|PCOK|PEACOCK|BGLOBAL|B.?GLOBAL|CR|CRUNCHYROLL|IQ|IQIYI|YOUKU|TENCENT|MGTV|BILI|UHD|WEB)\b`)
 	reType    = regexp.MustCompile(`(?i)\b(BLURAY|BLU.?RAY|BLU.?R|WEB.?DL|WEB.?RIP|HDTV|DVDRIP|DVDSCR|CAM|TS|TC|R5|REMUX|PROPER|REPACK)\b`)
 	reEffect  = regexp.MustCompile(`(?i)\b(DV|DOLBY.?VISION|DOVI|HDR10\+?|HDR\+?|HDR|SDR|SL.?HDR|DOLBY)(?:[.\s_+-]|$)`)
-	reVideo   = regexp.MustCompile(`(?i)\b(H\.?26[45]|X26[45]|HEVC|AVC|XVID|DIVX|AV1|VP9)\b`)
+	// VC-1 / MPEG-2 是老蓝光 REMUX 的常见编码，漏了的话改名后整段编码消失（2026-09-28 史酷比）
+	reVideo   = regexp.MustCompile(`(?i)\b(H\.?26[45]|X26[45]|HEVC|AVC|XVID|DIVX|AV1|VP9|VC-?1|MPEG-?2)\b`)
 	reBit     = regexp.MustCompile(`(?i)\b(10bit|8bit|12bit)\b`)
 	reAudio   = regexp.MustCompile(`(?i)\b(AAC[\d.]*|AC3|EAC3|DD[P+]?[\d.]*|DD[\d.]*|DTS.?HD.?MA[\d.]*|DTS.?HD[\d.]*|DTS.?X[\d.]*|DTS[\d.]*|TRUEHD[\d.]*|ATMOS|FLAC|PCM|LPCM|LPCM[\d.]*|[\d]\.[\d])\b`)
 	reFPS     = regexp.MustCompile(`(?i)\b([\d.]+)\s*FPS\b`)
@@ -326,6 +327,10 @@ func normalizeVideoEncode(s string) string {
 		return "AV1"
 	case strings.Contains(upper, "VP9"):
 		return "VP9"
+	case strings.Contains(upper, "VC1"), strings.Contains(upper, "VC-1"):
+		return "VC1"
+	case strings.Contains(upper, "MPEG2"), strings.Contains(upper, "MPEG-2"):
+		return "MPEG2"
 	case strings.Contains(upper, "XVID"):
 		return "XviD"
 	default:

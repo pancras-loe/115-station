@@ -21,6 +21,20 @@ func TestMovieRenamePreservesVideoCodecs(t *testing.T) {
 	}
 }
 
+// 老蓝光 REMUX 的 VC-1 / MPEG-2 编码：此前不认，改名后编码整段丢失
+func TestResourceParseLegacyBluRayCodecs(t *testing.T) {
+	for name, want := range map[string]string{
+		"史酷比.ScoobyDoo.2002.Bluray.REMUX.1080p.VC-1.DD.2.0.10Audios-LGNB@oSpecialCN.mkv": "VC1.REMUX",
+		"Example.1999.BluRay.1080p.VC1.DTS-HD.MA.5.1.mkv":                                   "VC1",
+		"Example.1999.BluRay.REMUX.1080i.MPEG-2.LPCM.2.0.mkv":                                "MPEG2.REMUX",
+		"Example.1999.DVD.MPEG2.AC3.mkv":                                                     "MPEG2",
+	} {
+		if got := ParseResourceInfo(name).VideoEncode; got != want {
+			t.Errorf("%s: VideoEncode = %q，期望 %q", name, got, want)
+		}
+	}
+}
+
 // 回归：iTunes WEB-DL HDR10+ Atmos 命名（曾出现 WEB.WEB-DL 重复、ATMOS 重复、
 // 7.1 丢失、HDR10+ 丢加号、iTunes 被丢弃等解析缺陷）
 func TestResourceParseiTunesWEBDL(t *testing.T) {
