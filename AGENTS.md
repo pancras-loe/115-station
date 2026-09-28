@@ -357,9 +357,13 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       同一批写入由 `applySyncResults` 的 `claimed` 去重）；已落盘的沿用台账里的名字，不会来回变。
       因此**台账视频行剥掉 `.strm` 不一定带视频扩展名**，认视频看 `Kind == "video"`，别用 `classifyFile`。
     - 按名兜底删除时，新写法的路径可能属于同基名的另一个视频，删前过 `strmOwnedByOther`。
-    - 存量由 `strmmigrate.go` 在 `SetupRoutes` 里、任何后台任务启动之前一次性迁移（Setting `migrate.strm_noext`）：
-      先改文件再改台账、失败回滚、有失败不打标记下次重试；本地一个 STRM 都看不到（挂载未就绪）时拒绝迁移。
+    - 存量由 `strmmigrate.go` 在 `SetupRoutes` 里、任何后台任务启动之前一次性迁移（Setting `migrate.strm_noext.v2`；
+      v1 只改台账，本地从备份拷回旧名文件后就迁不动了）：先把台账旧名行改新名，再**以台账为准对账本地**
+      （`reconcileStrmArtifacts`）——旧名 STRM / 配套文件改新名，新名已有就删旧名那份；台账里有的（网盘镜像）不碰。
+      有失败不打标记下次重试；本地一个 STRM 都看不到（挂载未就绪）时拒绝迁移。迁完一小时再对账一遍：
+      Emby 会替还没清掉的旧条目按旧路径补存 `xxx.mkv-thumb.jpg`（2026-09-28 现场）。
       迁完 6 小时内，迁移动过的路径的 Emby 入库 / 原生删除事件按回声处理（`strmMigrateEcho`：不推通知、不深删）。
+    - 附属文件跟着视频改名时，名字里残留的视频扩展名段要去掉（`trimVideoExtLead`：`xxx.mkv-thumb.jpg` → `新名-thumb.jpg`）。
     - 测试：`strmname_test.go`、`strmmigrate_test.go`、`strmwrite_test.go`。
 
 ---

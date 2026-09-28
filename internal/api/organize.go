@@ -275,7 +275,7 @@ func moveSiblingAttachments(ops *pan115Ops, pendingCid, videoOldBase, videoNewBa
 		// 重命名对齐视频新名（仅成功入库场景；冗余/已存在保持原名；
 		// 标准元数据命名保持固定名）
 		if rename && !metaFixed && videoNewBase != "" && base != videoNewBase {
-			newName := videoNewBase + strings.TrimPrefix(base, videoOldBase) + ext
+			newName := videoNewBase + trimVideoExtLead(strings.TrimPrefix(base, videoOldBase)) + ext
 			if err := ops.rename(fid, newName); err != nil {
 				onLog(fmt.Sprintf("○ 附件随行 %s（重命名失败保持原名: %v）", name, err))
 			} else {
@@ -380,7 +380,7 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 		}
 		// 「集名.chs.ass」「集名.nfo」「集名-thumb.jpg」都跟着改；对得上多集时取基名最长的
 		if i := assetOwner(fb, oldBases); i >= 0 {
-			newSubName := newBases[i] + strings.TrimPrefix(fb, oldBases[i]) + ext
+			newSubName := newBases[i] + trimVideoExtLead(strings.TrimPrefix(fb, oldBases[i])) + ext
 			if newSubName != f.Name {
 				names[f.Fid] = newSubName
 			}

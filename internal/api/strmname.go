@@ -114,3 +114,18 @@ func localRelOrEmpty(root, full string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
+// trimVideoExtLead 附属文件名在视频基名之后的部分，若以视频扩展名开头（按旧命名留下的
+// xxx.mkv.nfo / xxx.mkv-thumb.jpg / xxx.mkv.chs.ass），把这段扩展名去掉：
+// 跟着视频改名后应叫 新名.nfo / 新名-thumb.jpg，留着 .mkv 就又和 新名.strm 配不上了
+func trimVideoExtLead(suffix string) string {
+	if !strings.HasPrefix(suffix, ".") {
+		return suffix
+	}
+	rest := suffix[1:]
+	i := strings.IndexAny(rest, ".-")
+	if i <= 0 || !videoExts["."+strings.ToLower(rest[:i])] {
+		return suffix
+	}
+	return rest[i:]
+}

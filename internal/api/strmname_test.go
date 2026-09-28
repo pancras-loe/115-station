@@ -63,3 +63,21 @@ func TestApplySyncResultsSameStemInBatch(t *testing.T) {
 		}
 	}
 }
+
+// 资源包里按旧命名带来的 视频全名.mkv-thumb.jpg：跟着视频改名时要去掉 .mkv，否则和 新名.strm 配不上
+func TestTrimVideoExtLead(t *testing.T) {
+	for in, want := range map[string]string{
+		".mkv-thumb": "-thumb",
+		".mkv":       ".mkv", // 就是视频自己的扩展名段、后面没东西：不动（调用方拿不到这种）
+		".MP4.nfo":   ".nfo",
+		".mkv.chs":   ".chs",
+		".chs":       ".chs",
+		"-thumb":     "-thumb",
+		".1080p.chs": ".1080p.chs",
+		"":           "",
+	} {
+		if got := trimVideoExtLead(in); got != want {
+			t.Errorf("trimVideoExtLead(%q) = %q，预期 %q", in, got, want)
+		}
+	}
+}

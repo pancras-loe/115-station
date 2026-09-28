@@ -596,7 +596,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 			fb := baseName(f.Name)
 			for oldB, newB := range newBaseOf {
 				if fb == oldB || strings.HasPrefix(fb, oldB+".") {
-					if n := newB + strings.TrimPrefix(fb, oldB) + pathExt(f.Name); n != f.Name {
+					if n := newB + trimVideoExtLead(strings.TrimPrefix(fb, oldB)) + pathExt(f.Name); n != f.Name {
 						nf.Name = n
 						out.renames[f.Fid] = n
 					}
@@ -639,7 +639,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 			fb := baseName(f.Name)
 			for oldB, newB := range newBaseOf {
 				if fb == oldB || strings.HasPrefix(fb, oldB+".") || strings.HasPrefix(fb, oldB+"-") {
-					if n := newB + strings.TrimPrefix(fb, oldB) + pathExt(f.Name); n != f.Name {
+					if n := newB + trimVideoExtLead(strings.TrimPrefix(fb, oldB)) + pathExt(f.Name); n != f.Name {
 						nf.Name = n
 						out.renames[f.Fid] = n
 					}
