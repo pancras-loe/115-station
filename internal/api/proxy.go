@@ -139,7 +139,9 @@ func servePickcodeDirect(c *gin.Context, db *gorm.DB, cfg *config.Config, pickco
 		c.String(http.StatusBadGateway, "无法获取可直接播放的地址，请检查账号、播放器 UA 与直链通道")
 		return
 	}
-	vlog("[播放] ✓ 返回 CDN 302")
+	// 带上来源 IP 与 UA：入库后紧跟着的 302 多半是神医助手 / Emby 用 ffprobe 探测 STRM，
+	// 不看 UA 分不清是真播放还是探测
+	vlog("[播放] ✓ 返回 CDN 302（%s，UA=%q）", c.ClientIP(), c.Request.UserAgent())
 	playbackRedirect(c.Writer, c.Request, u)
 }
 
