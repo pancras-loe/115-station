@@ -151,3 +151,17 @@ func TestMetaSkipper(t *testing.T) {
 		t.Error("只有网盘落点时交给 put 判断")
 	}
 }
+
+// 图床配置的几种写法都拼得出正确地址
+func TestTmdbImageURL(t *testing.T) {
+	want := "https://image.tmdb.org/t/p/original/a.jpg"
+	for _, base := range []string{"", "https://image.tmdb.org", "https://image.tmdb.org/",
+		"https://image.tmdb.org/t/p", "https://image.tmdb.org/t/p/w500", " https://image.tmdb.org/t/p/original/ "} {
+		if got := tmdbImageURL(base, "original", "/a.jpg"); got != want {
+			t.Errorf("base %q → %s", base, got)
+		}
+	}
+	if got := tmdbImageURL("https://img.example.com/tmdb", "w780", "/b.jpg"); got != "https://img.example.com/tmdb/t/p/w780/b.jpg" {
+		t.Errorf("自建镜像带路径前缀：%s", got)
+	}
+}

@@ -83,7 +83,9 @@ func scrapeStatusSnapshot() scrapeStatus {
 	return st
 }
 
+// scrapeAddErr 错误进刮削状态，同时打日志（状态面板上限 20 条，日志是唯一完整的记录）
 func scrapeAddErr(format string, args ...any) {
+	log.Printf("[影视刮削] ✗ "+format, args...)
 	scrapeMu.Lock()
 	defer scrapeMu.Unlock()
 	scrapeSt.Failed++
@@ -101,15 +103,14 @@ func tmdbFetchImageBytes(imgPath string) ([]byte, error) {
 // 集剧照一部剧就是几十上百张，原图单张常见 0.5–1MB，列表缩略图用不着那么大
 func tmdbFetchImageSized(imgPath, size string) ([]byte, error) {
 	var cfg model.TmdbConfig
-	if err := model.DB.First(&cfg).Error; err != nil || cfg.ImageApiUrl == "" {
-		return nil, fmt.Errorf("TMDB 图床未配置")
+	_ = model.DB.First(&cfg).Error // 没有配置行时 cfg 为零值：图床走默认官方，代理走全局
+	imgURL := tmdbImageURL(cfg.ImageApiUrl, size, imgPath)
+	req, err := http.NewRequest(http.MethodGet, imgURL, nil)
+	if err != nil {
+		return nil, err
 	}
-	base := strings.TrimRight(cfg.ImageApiUrl, "/")
-	if !strings.HasSuffix(base, "/t/p") {
-		base += "/t/p"
-	}
-	req, _ := http.NewRequest(http.MethodGet, base+"/"+size+imgPath, nil)
-	client := &http.Client{Timeout: 20 * time.Second}
+	// 原图背景常见几 MB，走代理时 20 秒不够读完
+	client := &http.Client{Timeout: 60 * time.Second}
 	proxyURL := getProxyURL()
 	if cfg.EnableProxy && cfg.ProxyUrl != "" {
 		proxyURL = cfg.ProxyUrl
@@ -125,9 +126,23 @@ func tmdbFetchImageSized(imgPath, size string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d（%s）", resp.StatusCode, imgURL)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+}
+
+// tmdbImageURL 拼图片地址。图床配置里常见三种写法都要认：只填域名、填到 /t/p、
+// 连尺寸一起填（照抄别的工具的 https://image.tmdb.org/t/p/w500）——
+// 最后一种此前被拼成 …/t/p/w500/t/p/original/xx.jpg，每张图都是 404
+func tmdbImageURL(base, size, imgPath string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		base = "https://image.tmdb.org"
+	}
+	if i := strings.Index(base, "/t/p"); i >= 0 {
+		base = base[:i]
+	}
+	return base + "/t/p/" + size + imgPath
 }
 
 // ---- NFO 结构（Kodi/Emby 标准） ----
@@ -505,10 +520,65 @@ type scrapeReporter interface {
 	stopped() bool
 }
 
-type globalScrapeReporter struct{}
+// globalScrapeReporter 错误进刮削状态（scrapeAddErr 顺带打日志）：此前只进状态，而刮削页并不展示它，
+// 整理后自动刮削拉图失败（图床不通、配置写错）在界面和日志里都看不到任何痕迹
+type globalScrapeReporter struct{ n *int }
 
-func (globalScrapeReporter) errf(format string, args ...any) { scrapeAddErr(format, args...) }
-func (globalScrapeReporter) stopped() bool                   { return scrapeStopRequested() }
+func (r globalScrapeReporter) errf(format string, args ...any) {
+	scrapeAddErr(format, args...)
+	if r.n != nil {
+		*r.n++
+	}
+}
+func (globalScrapeReporter) stopped() bool { return scrapeStopRequested() }
+
+// tallyMetaWriter 记下这一个片目写了什么、跳过了几个，刮完打一行账单
+type tallyMetaWriter struct {
+	inner   metaWriter
+	wrote   []string
+	skipped int
+}
+
+func (w *tallyMetaWriter) put(d metaDest, name string, data []byte) (bool, error) {
+	ok, err := w.inner.put(d, name, data)
+	if ok {
+		w.wrote = append(w.wrote, name)
+	} else if err == nil {
+		w.skipped++
+	}
+	return ok, err
+}
+
+func (w *tallyMetaWriter) skip(d metaDest, name string) bool {
+	if s, ok := w.inner.(metaSkipper); ok && s.skip(d, name) {
+		w.skipped++
+		return true
+	}
+	return false
+}
+
+// summary 写入的文件名：集 NFO / 集剧照成批出现，按类归并成计数，免得一部剧刷一整屏
+func (w *tallyMetaWriter) summary() string {
+	var fixed []string
+	epNFO, epThumb := 0, 0
+	for _, n := range w.wrote {
+		switch {
+		case strings.HasSuffix(n, "-thumb.jpg"):
+			epThumb++
+		case strings.HasSuffix(n, ".nfo") && n != "tvshow.nfo" && n != "season.nfo" && n != "movie.nfo":
+			epNFO++
+		default:
+			fixed = append(fixed, n)
+		}
+	}
+	if epNFO > 0 {
+		fixed = append(fixed, fmt.Sprintf("视频 NFO×%d", epNFO))
+	}
+	if epThumb > 0 {
+		fixed = append(fixed, fmt.Sprintf("集剧照×%d", epThumb))
+	}
+	return strings.Join(fixed, " ")
+}
 
 // scrapeOne 单个已入库片目（台账标题目录）：详情 → NFO + 图片，只写本地
 func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title, year string, tmdbID int) {
@@ -520,7 +590,22 @@ func (h *Handler) scrapeOne(tc *TmdbClient, cfg scrapeCfg, dir, key, kind, title
 			Dir:      metaDest{Local: filepath.Join(cfg.LocalRoot, filepath.FromSlash(path.Dir(sf.RelPath)))},
 		})
 	}
-	scrapeTitleMeta(tc, cfg, t, localMetaWriter{force: cfg.Force}, globalScrapeReporter{})
+	w := &tallyMetaWriter{inner: localMetaWriter{force: cfg.Force}}
+	var nErr int
+	scrapeTitleMeta(tc, cfg, t, w, globalScrapeReporter{n: &nErr})
+	mark := "✓"
+	if nErr > 0 {
+		mark = "○"
+	}
+	log.Printf("[影视刮削] %s %s：写入 %d 个 [%s]，已有跳过 %d，失败 %d（NFO %s · 图片 %s）→ %s",
+		mark, title, len(w.wrote), w.summary(), w.skipped, nErr, onOff(cfg.WriteNFO), onOff(cfg.WriteImages), dir)
+}
+
+func onOff(b bool) string {
+	if b {
+		return "开"
+	}
+	return "关"
 }
 
 // scrapeTitleMeta 刮削核心：详情 → NFO + 图片，产物交给 w。
