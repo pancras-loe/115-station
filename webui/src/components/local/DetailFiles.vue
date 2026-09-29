@@ -120,6 +120,12 @@ function toggle(k: string) {
   open.value = s
 }
 
+/** 图例挂在哪张分集表下面：最后一张展开且有行的表。电影没有这种表，不显示 */
+const legendKey = computed(() => {
+  const shown = shownGroups.value.filter((g) => open.value.has(g.key) && shownEntries(g).length)
+  return shown.length ? shown[shown.length - 1].key : ''
+})
+
 function epLabel(e: LocalEntry) {
   if (!e.episode) return '—'
   return `E${String(e.episode).padStart(2, '0')}`
@@ -229,15 +235,15 @@ function epLabel(e: LocalEntry) {
               <template v-if="e.subtitles?.length">{{ e.subtitles.length }}</template><Minus v-else :size="14" />
             </span>
           </div>
+          <!-- 图例只给这张只有图标的表用；展开了几季也只在最后一张表下面出一次 -->
+          <p v-if="g.key === legendKey" class="legend">
+            <span class="is-ok"><Check :size="12" />已有</span>
+            <span class="is-miss"><X :size="12" />缺失，刮削会补</span>
+            <span class="is-none"><Minus :size="12" />没有（剧照：TMDB 无图或判为占位；字幕：无同名外挂字幕）</span>
+          </p>
         </div>
       </div>
     </section>
-
-    <p class="legend">
-      <span class="is-ok"><Check :size="12" />已有</span>
-      <span class="is-miss"><X :size="12" />缺失，刮削会补</span>
-      <span class="is-none"><Minus :size="12" />未生成 / 不适用（TMDB 上可能没有，或判为占位剧照）</span>
-    </p>
 
     <section class="sec">
       <h4 class="sec-title">本地目录</h4>
@@ -502,9 +508,11 @@ function epLabel(e: LocalEntry) {
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin: -6px 0 0;
-  font-size: 11.5px;
+  gap: 2px 12px;
+  margin: 6px 6px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--separator);
+  font-size: 11px;
 }
 .legend span {
   display: inline-flex;
