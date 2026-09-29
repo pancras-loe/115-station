@@ -23,7 +23,7 @@ package api
 //   {season_num}        季号
 //   {episode_num}       集号
 //   {disc_num}          盘号
-//   {season_name}       季名（TMDB 季信息，可能为空）
+//   {season_name}       季名（TMDB 季信息，可能为空；查询失败时也为空，用在目录模板里要留意）
 //   {season_year}       季年份（可能为空）
 //   {episode_name}      集名（TMDB 集信息，可能为空；双集文件两集用 & 连接）
 //   {custom_regex_match} 自定义正则匹配结果
@@ -75,6 +75,9 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 	// 集名要打一次 TMDB，只有模板真的用到才去取（默认模板不用）
 	if strings.Contains(template, "{episode_name") {
 		ctx.fillEpisodeName()
+	}
+	if strings.Contains(template, "{season_name") || strings.Contains(template, "{season_year") {
+		ctx.fillSeasonInfo()
 	}
 	replacements := ctx.allReplacements()
 	addExpressionReplacements(template, replacements)
@@ -290,7 +293,63 @@ func (ctx *RenameContext) fillEpisodeName() {
 	ctx.EpisodeName = name
 }
 
-// 集名查询失败的季记一会儿：tmdbSeasonEpisodes 失败不缓存，一季几十集挨个撞超时会把整理拖住
+// seasonInfoLookup 取某一季的 TMDB 季名与首播日期，取不到返回空。包级变量是给测试换假数据用的
+var seasonInfoLookup = tmdbSeasonInfo
+
+// fillSeasonInfo 按解析出的季号填 {season_name} / {season_year}。
+// 季名不过滤「第 N 季」：它本来就是合格的季目录名，集名的占位名才没有信息量
+func (ctx *RenameContext) fillSeasonInfo() {
+	m, p := ctx.Media, ctx.Parsed
+	if ctx.SeasonName != "" || ctx.SeasonYear != "" || m == nil || p == nil || m.MediaType != "tv" || m.TmdbID <= 0 || p.Season < 0 {
+		return
+	}
+	if p.Season == 0 && p.Episode == 0 {
+		return // 季号没解析出来（0 是缺省值，不是特别篇）
+	}
+	name, air := seasonInfoLookup(m.TmdbID, p.Season)
+	ctx.SeasonName = strings.TrimSpace(name)
+	ctx.SeasonYear = dateYear(air)
+}
+
+// tmdbSeasonInfo 季名与首播日期取自剧的详情（识别校验时多半已缓存 30 分钟），不单独按季请求
+func tmdbSeasonInfo(tvID, season int) (name, airDate string) {
+	if model.DB == nil {
+		return "", ""
+	}
+	key := fmt.Sprintf("tv:%d", tvID)
+	if episodeNameRecentlyFailed(key) {
+		return "", ""
+	}
+	tc, err := loadTmdbClient()
+	if err != nil {
+		return "", ""
+	}
+	d, err := tc.detailOf("tv", tvID)
+	if err != nil {
+		episodeNameMarkFailed(key)
+		log.Printf("[重命名] ✗ 取 TMDB 季信息失败 tv=%d: %v（{season_name} / {season_year} 留空）", tvID, err)
+		return "", ""
+	}
+	if d == nil {
+		return "", "" // 条目已不存在（404）
+	}
+	return d.SeasonNames[season], d.Seasons[season]
+}
+
+func episodeNameRecentlyFailed(key string) bool {
+	episodeNameFailMu.Lock()
+	defer episodeNameFailMu.Unlock()
+	at, ok := episodeNameFail[key]
+	return ok && time.Since(at) < episodeNameFailTTL
+}
+
+func episodeNameMarkFailed(key string) {
+	episodeNameFailMu.Lock()
+	episodeNameFail[key] = time.Now()
+	episodeNameFailMu.Unlock()
+}
+
+// 集名 / 季信息查询失败的记一会儿：tmdbSeasonEpisodes 失败不缓存，一季几十集挨个撞超时会把整理拖住
 var (
 	episodeNameFailMu sync.Mutex
 	episodeNameFail   = map[string]time.Time{}
@@ -304,10 +363,7 @@ func tmdbEpisodeName(tvID, season, ep int) string {
 		return ""
 	}
 	key := fmt.Sprintf("%d:%d", tvID, season)
-	episodeNameFailMu.Lock()
-	failedAt, failed := episodeNameFail[key]
-	episodeNameFailMu.Unlock()
-	if failed && time.Since(failedAt) < episodeNameFailTTL {
+	if episodeNameRecentlyFailed(key) {
 		return ""
 	}
 	tc, err := loadTmdbClient()
@@ -316,9 +372,7 @@ func tmdbEpisodeName(tvID, season, ep int) string {
 	}
 	eps, _, err := tc.tmdbSeasonEpisodes(tvID, season)
 	if err != nil {
-		episodeNameFailMu.Lock()
-		episodeNameFail[key] = time.Now()
-		episodeNameFailMu.Unlock()
+		episodeNameMarkFailed(key)
 		log.Printf("[重命名] ✗ 取 TMDB 集名失败 tv=%d 第 %d 季: %v（{episode_name} 留空）", tvID, season, err)
 		return ""
 	}

@@ -147,3 +147,35 @@ func TestEpisodeNameFromTMDB(t *testing.T) {
 		t.Errorf("模板不含 {episode_name} 却查了 %d 次", calls)
 	}
 }
+
+func TestSeasonInfoFromTMDB(t *testing.T) {
+	calls := 0
+	old := seasonInfoLookup
+	seasonInfoLookup = func(tvID, season int) (string, string) {
+		calls++
+		if tvID == 37854 && season == 1 {
+			return "东海篇", "1999-10-20"
+		}
+		return "", ""
+	}
+	defer func() { seasonInfoLookup = old }()
+	media := &TmdbMedia{Title: "海贼王", MediaType: "tv", TmdbID: 37854}
+	tpl := "{title}/Season {season_num}<.{season_name}><.{season_year}>"
+
+	if got := buildRenameContext(media, parseFileName("One.Piece.S01E05.mkv"), "One.Piece.S01E05.mkv").ApplyTemplate(tpl); got != "海贼王/Season 1.东海篇.1999" {
+		t.Errorf("得到 %q", got)
+	}
+	// 季目录名（只有季号、没有集号）同样能取
+	if got := buildRenameContext(media, parseFileName("One Piece Season 1"), "One Piece Season 1").ApplyTemplate(tpl); got != "海贼王/Season 1.东海篇.1999" {
+		t.Errorf("季目录得到 %q", got)
+	}
+	if got := buildRenameContext(media, parseFileName("One.Piece.S02E01.mkv"), "x.mkv").ApplyTemplate(tpl); got != "海贼王/Season 2" {
+		t.Errorf("取不到时应留空，得到 %q", got)
+	}
+	calls = 0
+	buildRenameContext(media, parseFileName("One.Piece.S01E05.mkv"), "x.mkv").ApplyTemplate("{title}.{season_episode}{ext}")
+	buildRenameContext(&TmdbMedia{Title: "电影", MediaType: "movie", TmdbID: 1}, parseFileName("m.mkv"), "m.mkv").ApplyTemplate(tpl)
+	if calls != 0 {
+		t.Errorf("模板不含季变量 / 电影不该查，却查了 %d 次", calls)
+	}
+}
