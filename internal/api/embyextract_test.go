@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // fakeExtractEmby 假 Emby：片目目录上是 Folder 条目，下面若干集。
@@ -241,5 +244,38 @@ func TestQueueEmbyExtractDedupe(t *testing.T) {
 	}
 	if len(got) != 3 || got[0] != "/a" || got[1] != "/b" || got[2] != "/c" {
 		t.Fatalf("排队应去重保序，得到 %v", got)
+	}
+}
+
+// 入库确认的路径归到片目目录：样本 .strm → 整部；片目之上的目录（同步根 / 媒体库 / 分类）一律不自动探
+func TestExtractTitleTargets(t *testing.T) {
+	layout := buildLibCategoryLayout([]model.CategoryRule{
+		{MediaType: "movie", Name: "电影"},
+		{MediaType: "tv", Name: "剧集/国产剧"},
+	})
+	id := func(s string) string { return s }
+	got := extractTitleTargets([]string{
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E01.strm",
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm", // 同一部：只排一次
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 02",                // 季目录：归到片目
+		"/strm/媒体库/电影/某片 (2020)/某片.strm",
+		"/strm/媒体库/电影/散文件.strm", // 不属于任何片目：只探它自己
+		"/strm",                 // 同步根
+		"/strm/媒体库",             // 媒体库
+		"/strm/媒体库/剧集/国产剧",      // 分类
+		"/strm/媒体库/剧集",          // 分类的上级
+	}, "/strm", layout, id, filepath.ToSlash) // 真实的 embyPathOf 收本地原生路径；测试在 Windows 上也要跑
+	want := []string{
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)",
+		"/strm/媒体库/电影/某片 (2020)",
+		"/strm/媒体库/电影/散文件.strm",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("得到 %v，预期 %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("第 %d 个：%s，预期 %s（全部 %v）", i, got[i], want[i], got)
+		}
 	}
 }

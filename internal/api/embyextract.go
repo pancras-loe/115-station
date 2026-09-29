@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ import (
 //
 // 开关复用影视刮削的「轨道探测」（scrape.probe_streams / 刮削任务的 Probe）。入口分两类，规则不同：
 //   - 自动：入库确认之后（embyVerifyIngest 查到条目的那一刻），全局开关，整理 / 增量 / 全量进来的都算
+//     排的是所在片目目录（整部探），片目之上的目录不探，见 embyExtractTitleTargets
 //   - 手动：用户这一次明确要探 —— 片目详情点「提前探测」、本地文件页刮削勾了「轨道探测」、
 //     重新整理（带刮削且开着探测）。手动的一律建一个「Emby 提前探测」任务（kind=probe，
 //     单独一条探测队列，embyprobejob.go），任务中心看得到进度、能停、失败了能重试
@@ -701,6 +703,63 @@ func embyExtractTargets(cfg embyRefreshCfg, embyPath string) (todo []embyExtract
 		}
 	}
 	return todo, true, nil
+}
+
+// embyExtractTitleTargets 入库确认到的路径 → 自动探测的目标：一律归到所在的片目目录，整部探。
+//
+// 入库确认拿来回查的路径有两种，直接排进探测队列两种都不对：
+//   - 整理点名的落盘样本（每轮最多 embyVerifySample 个 .strm）：一部 20 集的剧只会探到 3 集，
+//     其余的第一次播放还得 Emby 现场探；
+//   - 没点名时的刷新目标（全量同步的同步根、迁移时的整个媒体库）：直接排进去就是递归探整片库，
+//     一次全量就是成千上万次 115 直链请求。
+//
+// 所以按当前分类规则（libCategoryLayout.titleOf，与本地文件页的片目同口径）归到片目目录；
+// 在片目之上的目录（分类 / 媒体库 / 同步根）一律不自动探；不属于任何片目的单个 .strm（手机上传直接丢进分类目录）只探它自己
+func embyExtractTitleTargets(cfg embyRefreshCfg, embyPaths []string) []string {
+	return extractTitleTargets(embyPaths, localMediaRoot(), loadLibCategoryLayout(),
+		func(p string) string { return embyPathToLocal(cfg.PathMapping, p) },
+		func(local string) string { return embyPathOf(cfg, local) })
+}
+
+// extractTitleTargets 纯函数部分（测试用假映射）
+func extractTitleTargets(embyPaths []string, localRoot string, layout libCategoryLayout,
+	toLocal, toEmby func(string) string) (out []string) {
+	root := ""
+	if localRoot != "" {
+		root = strings.TrimRight(filepath.ToSlash(filepath.Clean(localRoot)), "/")
+	}
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	var skipped []string
+	for _, p := range embyPaths {
+		local := strings.TrimRight(filepath.ToSlash(toLocal(p)), "/")
+		isFile := strings.EqualFold(path.Ext(local), ".strm")
+		if root != "" && strings.HasPrefix(local, root+"/") {
+			probe := local[len(root)+1:]
+			if !isFile {
+				probe += "/_" // titleOf 要求标题目录之下还有一段
+			}
+			if key, _, _, _, ok := layout.titleOf(probe); ok {
+				add(toEmby(filepath.FromSlash(root + "/" + key)))
+				continue
+			}
+		}
+		if isFile {
+			add(p)
+			continue
+		}
+		skipped = append(skipped, p)
+	}
+	if len(skipped) > 0 {
+		log.Printf("[Emby探测] ○ %d 个入库确认的目录在片目之上（分类 / 媒体库 / 同步根），不自动探测整片库：%s",
+			len(skipped), truncateStr(strings.Join(skipped, "、"), 200))
+	}
+	return out
 }
 
 // embyExtractTargetByID 点名一个 Emby 条目（失败清单里重试）：found = Emby 里还有它；

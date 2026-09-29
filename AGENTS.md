@@ -394,7 +394,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       目录与 `.strm` 两种路径），只靠「已有媒体信息就跳过」挡不住失败 / 超时的。所以按 Emby 条目 id 落库记账（`EmbyExtractMark`）：
       **发请求前**先记一次（手动的也记），成功删账；连续 3 个失败熔断暂停 30 分钟（手动的也等）。规则按入口分两种（`embyExtractAllowed` 的 `manual`）：
       **自动**（入库确认）同一条目最多 2 次、间隔 ≥24 小时，用完**永远**不再自动探（2026-09-29 起不再 30 天清账重来，维护者认为多此一举）；
-      **手动**不看次数与 24 小时，只防抖 `embyExtractDebounce`（5 分钟）。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
+      **手动**不看次数与 24 小时，只防抖 `embyExtractDebounce`（5 分钟）。
+      自动入口排的一律是**片目目录**（`embyExtractTitleTargets`，按 `libCategoryLayout.titleOf` 归）：入库确认的样本只有 3 个 `.strm`，
+      直接排就只探 3 集；没点名时回查的是刷新目标（全量的同步根、迁移时的整个媒体库），直接排就是递归探整片库 ——
+      所以片目之上的目录**不自动探**，不属于任何片目的单个 `.strm` 只探它自己。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
       新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
     - **手动探测一律是任务**（`embyprobejob.go`，kind=`probe`，第三条队列 `probeLane`，不拿 `taskMu`、不占刮削队列）：片目详情「提前探测」、
       本地文件页刮削勾「轨道探测」（刮完另建任务，不再挂在刮削任务上）、重新整理（带刮削且开着探测：`registerRedoProbe` 登记片目，
