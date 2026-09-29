@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, Clapperboard, Ellipsis, Images, Info, RefreshCw, Search, Sparkles, Tv, X } from '@lucide/vue'
+import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
@@ -128,6 +128,34 @@ const SORTS: { label: string; value: LocalTitleSort }[] = [
   { label: '年份（新→旧）', value: 'year_desc' },
   { label: '年份（旧→新）', value: 'year_asc' },
 ]
+
+// ---- 显示方案：大 / 中 / 小卡片、列表。记在本浏览器（只是个人偏好，读不到就用默认的中） ----
+
+type ViewMode = 'lg' | 'md' | 'sm' | 'list'
+const VIEW_KEY = 'local.view'
+const VIEWS: { label: string; value: ViewMode; icon: typeof Square }[] = [
+  { label: '大卡片', value: 'lg', icon: Square },
+  { label: '中卡片', value: 'md', icon: LayoutGrid },
+  { label: '小卡片', value: 'sm', icon: Grid3x3 },
+  { label: '列表', value: 'list', icon: List },
+]
+function readView(): ViewMode {
+  try {
+    const v = localStorage.getItem(VIEW_KEY)
+    if (VIEWS.some((o) => o.value === v)) return v as ViewMode
+  } catch {
+    // 隐私模式 / 禁用站点数据：用默认
+  }
+  return 'md'
+}
+const view = ref<ViewMode>(readView())
+watch(view, (v) => {
+  try {
+    localStorage.setItem(VIEW_KEY, v)
+  } catch {
+    // 存不下就只在这次生效
+  }
+})
 
 const STATUS_TEXT: Record<LocalTitleStatus, string> = { ok: '已刮削', partial: '缺一项', miss: '未刮削' }
 const STATUS_TONE: Record<LocalTitleStatus, 'success' | 'warning' | 'danger'> = { ok: 'success', partial: 'warning', miss: 'danger' }
@@ -301,7 +329,10 @@ onBeforeUnmount(() => {
               <HSegmented v-model="type" :options="typeOptions" size="sm" aria-label="类型" />
               <HSegmented v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />
             </div>
-            <HSelect v-model="sort" :options="SORTS" aria-label="排序" class="sort" />
+            <div class="view-sort">
+              <HSegmented v-model="view" :options="VIEWS" size="sm" aria-label="显示方案" />
+              <HSelect v-model="sort" :options="SORTS" aria-label="排序" class="sort" />
+            </div>
           </div>
 
           <div class="batch" :class="{ active: selecting }">
@@ -327,7 +358,7 @@ onBeforeUnmount(() => {
 
         <!-- 滚动区：海报墙 -->
         <div ref="scroller" class="scroller">
-          <div v-if="loading && !loaded" class="grid" aria-busy="true">
+          <div v-if="loading && !loaded" class="grid" :class="`v-${view}`" aria-busy="true">
             <div v-for="i in 12" :key="i" class="card-sk">
               <HSkeleton width="100%" height="auto" radius="10px" class="sk-poster" />
               <HSkeleton width="70%" height="13px" radius="999px" />
@@ -338,7 +369,7 @@ onBeforeUnmount(() => {
             v-else-if="!items.length"
             :text="keyword || type || status ? '没有符合条件的片目' : '台账里还没有片目：先跑一次全量同步或自动整理'"
           />
-          <div v-else class="grid" :class="{ dim: loading, selecting }">
+          <div v-else class="grid" :class="[`v-${view}`, { dim: loading, selecting }]">
             <article
               v-for="t in items"
               :key="t.key"
@@ -358,7 +389,7 @@ onBeforeUnmount(() => {
                     <Clapperboard v-else :size="28" />
                   </div>
                   <img v-if="t.poster" :src="localApi.posterUrl(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
-                  <HChip :color="STATUS_TONE[t.status]" variant="primary" size="sm" class="badge">
+                  <HChip :color="STATUS_TONE[t.status]" variant="primary" size="sm" class="badge" :title="STATUS_TEXT[t.status]">
                     {{ t.status === 'partial' ? partialText(t) : STATUS_TEXT[t.status] }}
                   </HChip>
                 </button>
@@ -381,8 +412,13 @@ onBeforeUnmount(() => {
                     <span v-if="!t.tmdb_id" class="no-id" title="目录名里没有 TMDB 编号：刮削时按片名识别">
                       <Sparkles :size="11" />无编号
                     </span>
+                    <span class="list-only cat">{{ t.category }}</span>
                   </p>
                 </button>
+                <!-- 列表里海报太小放不下角标，状态挪到这一行 -->
+                <HChip :color="STATUS_TONE[t.status]" size="sm" class="list-only row-status">
+                  {{ t.status === 'partial' ? partialText(t) : STATUS_TEXT[t.status] }}
+                </HChip>
                 <HDropdown :options="CARD_MENU" align="end" @select="(k) => onCardAction(t, k)">
                   <HButton variant="ghost" size="sm" icon-only :aria-label="`${t.title} 的操作`"><Ellipsis :size="16" /></HButton>
                 </HDropdown>
@@ -462,9 +498,14 @@ onBeforeUnmount(() => {
   min-width: 0;
   max-width: 320px;
 }
+.view-sort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
 .sort {
   width: 150px;
-  margin-left: auto;
 }
 .tip {
   margin: 0;
@@ -514,11 +555,24 @@ onBeforeUnmount(() => {
   scrollbar-gutter: stable;
 }
 
+/* 卡片最小宽度按显示方案变，列数由容器宽度自己算 */
 .grid {
+  --col: 132px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--col), 1fr));
+  gap: 14px;
   transition: opacity 0.15s;
+}
+.grid.v-lg {
+  --col: 176px;
+  gap: 18px;
+}
+.grid.v-sm {
+  --col: 100px;
+  gap: 10px;
+}
+.list-only {
+  display: none;
 }
 .grid.dim {
   opacity: 0.6;
@@ -678,6 +732,119 @@ onBeforeUnmount(() => {
   gap: 2px;
   color: var(--warning);
 }
+/* ---- 中卡片：字号收一点 ---- */
+.v-md .name {
+  font-size: 13px;
+}
+.v-md .meta {
+  flex-wrap: nowrap;
+  overflow: hidden;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* ---- 小卡片：只留片名，角标缩成色点（悬停看文字） ---- */
+.v-sm .info {
+  padding: 6px 2px 6px 8px;
+}
+.v-sm .name {
+  font-size: 12px;
+}
+.v-sm .meta {
+  display: none;
+}
+.v-sm .badge {
+  top: 6px;
+  right: 6px;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--background) 60%, transparent);
+}
+.v-sm .badge :deep(.chip__label) {
+  display: none;
+}
+.v-sm .info :deep(.button) {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+}
+
+/* ---- 列表：一行一部，勾选圈在最左，小海报 + 片名 + 分类 + 状态 ---- */
+.grid.v-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.v-list .title-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 2px;
+  border-radius: var(--r-sm);
+  background: transparent;
+}
+.v-list .title-card:hover {
+  background: var(--surface-secondary);
+}
+.v-list .title-card.checked {
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+.v-list .poster-wrap {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.v-list .check {
+  position: static;
+  order: -1;
+}
+.v-list .check-dot {
+  opacity: 1;
+}
+.v-list .poster {
+  width: 40px;
+  border-radius: 6px;
+}
+.v-list .poster-none :deep(svg) {
+  width: 16px;
+  height: 16px;
+}
+.v-list .badge {
+  display: none;
+}
+.v-list .info {
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 0 0 8px;
+}
+.v-list .list-only {
+  display: inline-flex;
+}
+.v-list .cat {
+  color: var(--muted);
+}
+.v-list .cat::before {
+  content: '·';
+  margin-right: 6px;
+}
+.v-list .row-status {
+  flex: none;
+}
+.v-list.grid .card-sk {
+  flex-direction: row;
+  align-items: center;
+}
+.v-list .sk-poster {
+  width: 40px !important;
+  flex: none;
+}
+
 .more {
   display: flex;
   justify-content: center;
@@ -707,8 +874,25 @@ onBeforeUnmount(() => {
     overflow: visible;
   }
   .grid {
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    --col: 100px;
     gap: 10px;
+  }
+  .grid.v-lg {
+    --col: 150px;
+  }
+  .v-md .info {
+    padding: 6px 0 8px 8px;
+  }
+  .v-md .info :deep(.button) {
+    width: 28px;
+    min-width: 28px;
+  }
+  .v-md .no-id {
+    display: none; /* 一行放不下，详情里有 */
+  }
+  .grid.v-sm {
+    --col: 76px;
+    gap: 8px;
   }
   .filter {
     max-width: none;
@@ -720,9 +904,13 @@ onBeforeUnmount(() => {
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .sort {
+  .view-sort {
     width: 100%;
     margin-left: 0;
+  }
+  .sort {
+    flex: 1;
+    width: auto;
   }
   .sel-tip {
     display: none;

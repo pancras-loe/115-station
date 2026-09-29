@@ -1,5 +1,5 @@
 <script setup lang="ts" generic="V extends string | number | boolean">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 import { RadioGroupItem, RadioGroupRoot } from 'reka-ui'
 
 /**
@@ -13,6 +13,8 @@ export interface SegmentOption<T> {
   label: string
   value: T
   disabled?: boolean
+  /** 只显示图标（label 进 aria-label 与悬浮提示）：视图切换这类一看图标就懂的选项 */
+  icon?: Component
 }
 
 const props = withDefaults(
@@ -55,8 +57,11 @@ const inner = computed({
         :disabled="o.disabled"
         class="tabs__tab h-seg-item"
         :data-selected="String(o.value) === inner || undefined"
+        :aria-label="o.icon ? o.label : undefined"
+        :title="o.icon ? o.label : undefined"
       >
-        {{ o.label }}
+        <component :is="o.icon" v-if="o.icon" :size="15" />
+        <template v-else>{{ o.label }}</template>
       </RadioGroupItem>
     </RadioGroupRoot>
   </div>
