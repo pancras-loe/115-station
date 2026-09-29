@@ -186,22 +186,48 @@ type nfoTVShow struct {
 // 播放器/媒体库据此显示内嵌音轨与字幕，无需对 strm 远端 URL 做探测——
 // 对 strm 媒体库（探测常超时/不全）尤其重要
 
+// 字段与顺序照 Emby 回写 NFO 时的写法（2026-09-29 维护者现场拿到的 Emby NFO 对照）：
+// codec / micodec 同值，scantype 音轨也写，default / forced 写成 True / False，
+// duration 是整分钟（向下取整）、durationinseconds 是秒。
+// scantype / default / forced 只有探测带了扩展字段（probeTrack.Ext）才写，老缓存里没有就不猜
+
 type nfoStreamVideo struct {
 	Codec             string `xml:"codec,omitempty"`
+	MiCodec           string `xml:"micodec,omitempty"`
+	Bitrate           int    `xml:"bitrate,omitempty"`
 	Width             int    `xml:"width,omitempty"`
 	Height            int    `xml:"height,omitempty"`
+	Aspect            string `xml:"aspect,omitempty"`
+	AspectRatio       string `xml:"aspectratio,omitempty"`
+	FrameRate         string `xml:"framerate,omitempty"`
+	Language          string `xml:"language,omitempty"`
+	ScanType          string `xml:"scantype,omitempty"`
+	Default           string `xml:"default,omitempty"`
+	Forced            string `xml:"forced,omitempty"`
+	Duration          int    `xml:"duration,omitempty"`
 	DurationInSeconds int    `xml:"durationinseconds,omitempty"`
 }
 
 type nfoStreamAudio struct {
-	Codec    string `xml:"codec,omitempty"`
-	Language string `xml:"language,omitempty"`
-	Channels int    `xml:"channels,omitempty"`
+	Codec        string `xml:"codec,omitempty"`
+	MiCodec      string `xml:"micodec,omitempty"`
+	Bitrate      int    `xml:"bitrate,omitempty"`
+	Language     string `xml:"language,omitempty"`
+	ScanType     string `xml:"scantype,omitempty"`
+	Channels     int    `xml:"channels,omitempty"`
+	SamplingRate int    `xml:"samplingrate,omitempty"`
+	Default      string `xml:"default,omitempty"`
+	Forced       string `xml:"forced,omitempty"`
 }
 
 type nfoStreamSubtitle struct {
+	Codec    string `xml:"codec,omitempty"`
+	MiCodec  string `xml:"micodec,omitempty"`
 	Language string `xml:"language,omitempty"`
 	Name     string `xml:"name,omitempty"`
+	ScanType string `xml:"scantype,omitempty"`
+	Default  string `xml:"default,omitempty"`
+	Forced   string `xml:"forced,omitempty"`
 }
 
 type nfoStreamDetails struct {
@@ -214,6 +240,24 @@ type nfoFileInfo struct {
 	StreamDetails *nfoStreamDetails `xml:"streamdetails"`
 }
 
+// nfoFlags 一条轨道的 scantype / default / forced（没有扩展字段时三个都空，omitempty 不输出）
+func nfoFlags(t probeTrack) (scan, def, forced string) {
+	if !t.Ext {
+		return "", "", ""
+	}
+	scan = "progressive"
+	if t.Interlaced {
+		scan = "interlaced"
+	}
+	tf := func(b bool) string {
+		if b {
+			return "True"
+		}
+		return "False"
+	}
+	return scan, tf(t.Default), tf(t.Forced)
+}
+
 // nfoFileInfoFrom 探测结果 → streamdetails（无有效轨道时返回 nil）
 func nfoFileInfoFrom(probe *probeResult) *nfoFileInfo {
 	if probe == nil {
@@ -221,15 +265,22 @@ func nfoFileInfoFrom(probe *probeResult) *nfoFileInfo {
 	}
 	sd := &nfoStreamDetails{}
 	for _, s := range probe.Streams {
+		scan, def, forced := nfoFlags(s)
 		switch s.Kind {
 		case "video":
 			if sd.Video == nil {
-				sd.Video = &nfoStreamVideo{Codec: s.Codec, Width: s.Width, Height: s.Height, DurationInSeconds: probe.Duration}
+				sd.Video = &nfoStreamVideo{Codec: s.Codec, MiCodec: s.Codec, Bitrate: s.Bitrate,
+					Width: s.Width, Height: s.Height, Aspect: s.Aspect, AspectRatio: s.Aspect,
+					FrameRate: s.FrameRate, Language: s.Language, ScanType: scan, Default: def, Forced: forced,
+					Duration: probe.Duration / 60, DurationInSeconds: probe.Duration}
 			}
 		case "audio":
-			sd.Audio = append(sd.Audio, nfoStreamAudio{Codec: s.Codec, Language: s.Language, Channels: s.Channels})
+			sd.Audio = append(sd.Audio, nfoStreamAudio{Codec: s.Codec, MiCodec: s.Codec, Bitrate: s.Bitrate,
+				Language: s.Language, ScanType: scan, Channels: s.Channels, SamplingRate: s.SampleRate,
+				Default: def, Forced: forced})
 		case "subtitle":
-			sd.Subtitle = append(sd.Subtitle, nfoStreamSubtitle{Language: s.Language, Name: s.Title})
+			sd.Subtitle = append(sd.Subtitle, nfoStreamSubtitle{Codec: s.Codec, MiCodec: s.Codec,
+				Language: s.Language, Name: s.Title, ScanType: scan, Default: def, Forced: forced})
 		}
 	}
 	if sd.Video == nil && len(sd.Audio) == 0 && len(sd.Subtitle) == 0 {

@@ -114,3 +114,85 @@ func TestNfoFileInfoFromAndMarshal(t *testing.T) {
 		t.Error("empty streams should yield nil fileinfo")
 	}
 }
+
+// 对齐 Emby 回写的 streamdetails（2026-09-29 维护者贴的仙剑三 S01E05.nfo）：字段、顺序、取值口径都照它
+func TestNfoStreamsMatchEmby(t *testing.T) {
+	const js = `{
+ "streams": [
+  {"codec_type":"video","codec_name":"hevc","width":3840,"height":2160,"display_aspect_ratio":"16:9",
+   "avg_frame_rate":"25/1","r_frame_rate":"25/1","field_order":"progressive",
+   "disposition":{"default":1,"forced":0},"tags":{"BPS-eng":"5286370"}},
+  {"codec_type":"audio","codec_name":"aac","channels":2,"sample_rate":"48000","bit_rate":"192000",
+   "disposition":{"default":1,"forced":0}},
+  {"codec_type":"subtitle","codec_name":"ass","disposition":{"default":0,"forced":1},"tags":{"language":"chi"}}
+ ],
+ "format": {"duration":"1294.3"}
+}`
+	res, err := parseProbeOutput([]byte(js))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := xml.MarshalIndent(nfoFileInfoFrom(res), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<nfoFileInfo>
+  <streamdetails>
+    <video>
+      <codec>hevc</codec>
+      <micodec>hevc</micodec>
+      <bitrate>5286370</bitrate>
+      <width>3840</width>
+      <height>2160</height>
+      <aspect>16:9</aspect>
+      <aspectratio>16:9</aspectratio>
+      <framerate>25</framerate>
+      <scantype>progressive</scantype>
+      <default>True</default>
+      <forced>False</forced>
+      <duration>21</duration>
+      <durationinseconds>1294</durationinseconds>
+    </video>
+    <audio>
+      <codec>aac</codec>
+      <micodec>aac</micodec>
+      <bitrate>192000</bitrate>
+      <scantype>progressive</scantype>
+      <channels>2</channels>
+      <samplingrate>48000</samplingrate>
+      <default>True</default>
+      <forced>False</forced>
+    </audio>
+    <subtitle>
+      <codec>ass</codec>
+      <micodec>ass</micodec>
+      <language>chi</language>
+      <scantype>progressive</scantype>
+      <default>False</default>
+      <forced>True</forced>
+    </subtitle>
+  </streamdetails>
+</nfoFileInfo>`
+	if string(b) != want {
+		t.Fatalf("与 Emby 的写法不一致:\n%s", b)
+	}
+}
+
+func TestProbeFrameRate(t *testing.T) {
+	for in, want := range map[[2]string]string{
+		{"24000/1001", ""}: "23.976", {"25/1", ""}: "25", {"0/0", "30000/1001"}: "29.97", {"0/0", "0/0"}: "",
+	} {
+		if got := probeFrameRate(in[0], in[1]); got != want {
+			t.Errorf("probeFrameRate(%q,%q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}
+
+// 老缓存（没有扩展字段）：不猜 scantype / default / forced
+func TestNfoStreamsOldCache(t *testing.T) {
+	fi := nfoFileInfoFrom(&probeResult{Streams: []probeTrack{{Kind: "audio", Codec: "aac", Channels: 2}}})
+	a := fi.StreamDetails.Audio[0]
+	if a.ScanType != "" || a.Default != "" || a.Forced != "" {
+		t.Fatalf("老缓存不该写 scantype/default/forced: %+v", a)
+	}
+}

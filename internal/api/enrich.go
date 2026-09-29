@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +37,16 @@ type probeTrack struct {
 	Channels int
 	Language string // ISO 639 轨道语言（可能为空）
 	Title    string // 轨道名（内嵌字幕常带，如"简体中文"）
+	// 以下是对齐 Emby 回写 NFO 的 streamdetails 补的字段（2026-09-29）。
+	// 此前探测的缓存里没有它们，Ext=false 时写 NFO 不输出 scantype / default / forced，免得把没探测过的写成 False
+	Ext        bool   `json:",omitempty"`
+	Bitrate    int    `json:",omitempty"` // bps；mkv 的流上常没有 bit_rate，取 tags 里 mkvmerge 写的 BPS
+	Aspect     string `json:",omitempty"` // 显示宽高比 16:9
+	FrameRate  string `json:",omitempty"` // 25 / 23.976
+	Interlaced bool   `json:",omitempty"`
+	SampleRate int    `json:",omitempty"`
+	Default    bool   `json:",omitempty"`
+	Forced     bool   `json:",omitempty"`
 }
 
 type probeResult struct {
@@ -142,8 +154,16 @@ func parseProbeOutput(out []byte) (*probeResult, error) {
 			Height      int    `json:"height"`
 			Channels    int    `json:"channels"`
 			Duration    string `json:"duration"`
+			BitRate     string `json:"bit_rate"`
+			DAR         string `json:"display_aspect_ratio"`
+			AvgFPS      string `json:"avg_frame_rate"`
+			RFPS        string `json:"r_frame_rate"`
+			FieldOrder  string `json:"field_order"`
+			SampleRate  string `json:"sample_rate"`
 			Disposition struct {
 				AttachedPic int `json:"attached_pic"`
+				Default     int `json:"default"`
+				Forced      int `json:"forced"`
 			} `json:"disposition"`
 			Tags         map[string]string `json:"tags"`
 			SideDataList []struct {
@@ -173,6 +193,14 @@ func parseProbeOutput(out []byte) (*probeResult, error) {
 			Kind: st.CodecType, Codec: st.CodecName,
 			Width: st.Width, Height: st.Height, Channels: st.Channels,
 			Language: lang, Title: probeTag(st.Tags, "title"),
+			Ext:        true,
+			Bitrate:    probeBitrate(st.BitRate, st.Tags),
+			Aspect:     probeAspect(st.DAR),
+			FrameRate:  probeFrameRate(st.AvgFPS, st.RFPS),
+			Interlaced: st.FieldOrder != "" && st.FieldOrder != "progressive" && st.FieldOrder != "unknown",
+			SampleRate: atoiSafe(st.SampleRate),
+			Default:    st.Disposition.Default == 1,
+			Forced:     st.Disposition.Forced == 1,
 		})
 		if st.CodecType == "video" && !videoFound {
 			videoFound = true
@@ -207,6 +235,59 @@ func parseProbeOutput(out []byte) (*probeResult, error) {
 		res.Duration = int(d)
 	}
 	return res, nil
+}
+
+// probeBitrate 流码率：ffprobe 的 bit_rate，没有就取 mkvmerge 写进 tags 的 BPS（带语言后缀的也认）
+func probeBitrate(raw string, tags map[string]string) int {
+	if n := atoiSafe(raw); n > 0 {
+		return n
+	}
+	if n := atoiSafe(probeTag(tags, "BPS")); n > 0 {
+		return n
+	}
+	for k, v := range tags {
+		if strings.HasPrefix(strings.ToUpper(k), "BPS-") {
+			if n := atoiSafe(v); n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// probeAspect 显示宽高比；ffprobe 拿不准时给 0:1 / N/A，当作没有
+func probeAspect(dar string) string {
+	if dar == "" || dar == "N/A" || strings.HasPrefix(dar, "0:") {
+		return ""
+	}
+	return dar
+}
+
+// probeFrameRate ffprobe 的帧率是分数（25/1、24000/1001），化成 Emby NFO 里那样的小数，
+// 最多三位（23.976）。平均帧率为 0/0 时退回 r_frame_rate
+func probeFrameRate(avg, r string) string {
+	for _, fr := range []string{avg, r} {
+		num, den, ok := strings.Cut(fr, "/")
+		n, d := parseFloatSafe(num), 1.0
+		if ok {
+			d = parseFloatSafe(den)
+		}
+		if n <= 0 || d <= 0 {
+			continue
+		}
+		return strconv.FormatFloat(math.Round(n/d*1000)/1000, 'f', -1, 64)
+	}
+	return ""
+}
+
+func atoiSafe(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	return n
+}
+
+func parseFloatSafe(s string) float64 {
+	f, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return f
 }
 
 // probeTag 取流 tag（大小写两种键名 ffprobe 都可能给）
