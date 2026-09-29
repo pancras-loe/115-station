@@ -33,7 +33,6 @@ const cfg = ref<ScrapeConfig>({
   skip_shared_stills: true,
 })
 const saving = ref(false)
-const starting = ref(false)
 
 async function load() {
   try {
@@ -68,26 +67,6 @@ async function save() {
     toastError(e, '保存失败')
   } finally {
     saving.value = false
-  }
-}
-
-async function run() {
-  if (!media.model.value.local_path) {
-    message.warning('请先到「账号与媒体库」配置本地媒体库根目录')
-    return
-  }
-  starting.value = true
-  try {
-    cfg.value.local_root = media.model.value.local_path
-    // 先存再跑：后端跑的是已保存的配置，不是请求体
-    await organizeApi.saveScrapeConfig(cfg.value)
-    const d = await organizeApi.runScrape()
-    message.success(d.message || '全库刮削已加入刮削队列')
-    await queue.submitted(d.job_id)
-  } catch (e) {
-    toastError(e, '启动失败')
-  } finally {
-    starting.value = false
   }
 }
 
@@ -171,17 +150,15 @@ onMounted(load)
 
     <FieldRow
       label="轨道探测"
-      hint="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行，刮削时也会给刮到的片目补上；Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「EMBY管理」配好服务器地址与 API 密钥。"
+      hint="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行；在「本地文件」手动刮削时也可以给所选片目补上（所选视频超过 100 个要确认两次）。Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「EMBY管理」配好服务器地址与 API 密钥。"
     >
       <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
     </FieldRow>
 
     <!-- 用户反馈过「未识别的文件手动刮削没用」：刮削只认已入库的片目，这里把范围说清楚，并给出正确入口 -->
-    <HAlert status="warning" class="note" title="「开始刮削」只处理已入库的片目">
-      按本地媒体库里的片目逐个刮削，且只认标题目录名里带 TMDB 编号的片目（默认模板的
-      <code>{tmdbid=编号}</code>、Emby 风格的 <code>[tmdbid=编号]</code> 等写法都认；
-      重命名规则的目录模板不含编号时，库里的条目刮不到）。
-      未识别、整理失败的文件还在网盘的待整理 / 冗余目录里，本地没有 STRM，这里刮不到它们 ——
+    <HAlert status="warning" class="note" title="手动刮削在「本地文件」页，只处理已入库的片目">
+      这里只是刮削的默认配置。要手动刮削，到「本地文件」页勾选片目后点「刮削」（不再提供全库刮削）。
+      未识别、整理失败的文件还在网盘的待整理 / 冗余目录里，本地没有 STRM，刮不到它们 ——
       请到「任务中心 → 整理记录」对它们「重新整理」并指定 TMDB 条目，入库时会自动刮削。
       <template #actions>
         <HButton variant="tertiary" size="sm" @click="router.push({ name: 'tasks', query: { tab: 'records', status: 'problem' } })">
@@ -192,8 +169,7 @@ onMounted(load)
 
     <FormActions>
       <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
-      <HButton variant="secondary" :loading="starting" @click="run">开始刮削</HButton>
-      <HButton variant="tertiary" @click="stop">停止</HButton>
+      <HButton variant="tertiary" @click="stop">停止当前刮削</HButton>
     </FormActions>
   </SectionCard>
 </template>

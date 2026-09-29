@@ -20,7 +20,7 @@ import (
 
 // ==================== 本地文件页：刮削所选片目 ====================
 //
-// 刮削对象是台账里的片目（库名/<分类>/<标题目录>），产物写本地媒体库，与「开始刮削」同一份。
+// 刮削对象是台账里的片目（库名/<分类>/<标题目录>），产物写本地媒体库。手动刮削只有这一个入口（全库刮削已删）。
 // 原来挂在网盘文件页上（按 115 目录勾选、台账里没有的直接写网盘），2026-09 起挪到本地文件页：
 // 刮削只认本地已经有的片目，不再有「只写网盘」这条路。
 //
@@ -29,8 +29,8 @@ import (
 // 不看监控上传总开关）；没勾就只写本地，传不传交给监控上传 —— 它开着会照常把新文件传上去。
 
 //
-// 整理后自动刮削与「开始刮削」全库也走这里的执行器（execScrapeJob），只是参数不同：
-// 前者带整理当时识别到的条目（Hints），后者 All=true 执行时现取台账。三者都在刮削队列上跑，不拿 taskMu。
+// 整理后自动刮削也走这里的执行器（execScrapeJob），参数里多带整理当时识别到的条目（Hints）。
+// 两者都在刮削队列上跑，不拿 taskMu。
 
 func init() {
 	jobExecutors[jobKindScrape] = execScrapeJob
@@ -53,8 +53,6 @@ type fileScrapeOpts struct {
 type localScrapeParams struct {
 	Keys   []string       `json:"keys,omitempty"`
 	Scrape fileScrapeOpts `json:"scrape"`
-	// All 全库：执行时现取台账里带 TMDB 编号的片目（排队期间入库的也算上）
-	All bool `json:"all,omitempty"`
 	// Hints 整理后刮削：整理当时识别到的条目。重命名模板不带 {tmdbid} 时目录名里没有编号，
 	// 光看台账认不出来，而整理手上明明有
 	Hints map[string]scrapeHint `json:"hints,omitempty"`
@@ -74,8 +72,11 @@ type scrapeHint struct {
 	TmdbID int    `json:"tmdb_id"`
 }
 
-// localScrapeMax 一次最多刮多少部：再多就该用「开始刮削」跑全库
+// localScrapeMax 一次最多刮多少部
 const localScrapeMax = 500
+
+// localProbeConfirmVideos 开着 Emby 提前探测时，所选视频总数超过它就要用户确认（两次）
+const localProbeConfirmVideos = 100
 
 // ScrapeLocalTitles POST /local/scrape → 入队，202
 // body: {keys:[...], scrape:{write_nfo,write_images,force,upload}, tmdb_id?, media_type?, label?}
@@ -86,6 +87,9 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		TmdbID    int             `json:"tmdb_id"`
 		MediaType string          `json:"media_type"`
 		Label     string          `json:"label"`
+		// ConfirmProbe 开着 Emby 提前探测、所选片目视频总数超过 localProbeConfirmVideos 时，
+		// 前端要让用户确认两次才带上它
+		ConfirmProbe bool `json:"confirm_probe"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -97,7 +101,7 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有选择片目"})
 		return
 	case len(keys) > localScrapeMax:
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多刮削 %d 部，全库请用「自动整理 → 刮削」里的开始刮削", localScrapeMax)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多刮削 %d 部，请分批选择", localScrapeMax)})
 		return
 	case req.Scrape == nil || (!req.Scrape.WriteNFO && !req.Scrape.WriteImages):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "NFO 与图片至少要生成一项"})
@@ -125,6 +129,14 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		}
 	}
 
+	// 开着 Emby 提前探测时，每个还没有媒体信息的视频都是一次 115 直链请求：量大就得用户明确点头。
+	// 前端确认两次后才带 confirm_probe；这里再守一道，别的调用方绕不过去
+	if videos, need := probeConfirmNeeded(ledger, keys, *req.Scrape, req.ConfirmProbe); need {
+		c.JSON(http.StatusConflict, gin.H{"need_confirm": true, "videos": videos,
+			"error": fmt.Sprintf("所选片目共 %d 个视频，开着「轨道探测」需要先确认", videos)})
+		return
+	}
+
 	title := "刮削" + localScrapeJobTitle(ledger, keys)
 	if req.TmdbID > 0 {
 		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
@@ -140,6 +152,19 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		return
 	}
 	h.queuedReply(c, job, "刮削")
+}
+
+// probeConfirmNeeded 这次刮削要不要先让用户确认：开着 Emby 提前探测、没确认过、所选片目视频总数超过门槛
+func probeConfirmNeeded(ledger map[string]*ledgerTitleEntry, keys []string, o fileScrapeOpts, confirmed bool) (videos int, need bool) {
+	if !o.Probe || confirmed {
+		return 0, false
+	}
+	for _, k := range keys {
+		if e := ledger[k]; e != nil {
+			videos += e.Videos
+		}
+	}
+	return videos, videos > localProbeConfirmVideos
 }
 
 // normalizeTitleKeys 去空、去首尾斜杠、去重并排序（去重键稳定）
@@ -179,7 +204,7 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 	case pick != nil:
 		t.Kind, t.TmdbID, t.Title, t.Year = pick.MediaType, pick.TmdbID, pick.Title, pick.Year
 	case t.TmdbID <= 0:
-		// 目录名里没有 {tmdbid=…}：「开始刮削」会跳过这种片目，这里是用户点名要刮的，按目录名识别一次
+		// 目录名里没有 {tmdbid=…}：用户点名要刮的，按目录名识别一次
 		parsed := parseFileName(path.Base(e.Key))
 		parsed.IsTV = parsed.IsTV || e.MediaType == "tv"
 		media, err := tc.recognize(parsed)
@@ -441,19 +466,8 @@ type scrapeTarget struct {
 	hint *scrapeHint
 }
 
-// scrapeTargets 按任务参数列出要刮的片目。All = 台账里带 TMDB 编号的全部片目
-func scrapeTargets(lp *localScrapeParams, ledger map[string]*ledgerTitleEntry) (targets []scrapeTarget, problems []string, noID int) {
-	if lp.All {
-		for k, e := range ledger {
-			if e.TmdbID <= 0 {
-				noID++ // 全库刮削只刮带编号的（与改造前一致），按片名猜太容易刮错
-				continue
-			}
-			targets = append(targets, scrapeTarget{key: k, e: e})
-		}
-		sort.Slice(targets, func(i, j int) bool { return targets[i].key < targets[j].key })
-		return targets, nil, noID
-	}
+// scrapeTargets 按任务参数列出要刮的片目
+func scrapeTargets(lp *localScrapeParams, ledger map[string]*ledgerTitleEntry) (targets []scrapeTarget, problems []string) {
 	for _, k := range lp.Keys {
 		var hint *scrapeHint
 		if h, ok := lp.Hints[k]; ok && h.TmdbID > 0 {
@@ -473,13 +487,13 @@ func scrapeTargets(lp *localScrapeParams, ledger map[string]*ledgerTitleEntry) (
 		}
 		targets = append(targets, scrapeTarget{key: k, e: e, hint: hint})
 	}
-	return targets, problems, 0
+	return targets, problems
 }
 
 func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	p := decodeJobParams(job)
 	lp := p.Local
-	if lp == nil || (len(lp.Keys) == 0 && !lp.All) {
+	if lp == nil || len(lp.Keys) == 0 {
 		// 老版本网盘文件页入队的刮削任务（参数在 Files 里）：那条入口已经移除
 		return jobOutcome{}, errors.New("任务参数错误（网盘文件页的刮削已移到本地文件页，请在那里重新提交）")
 	}
@@ -538,10 +552,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		defer resetFileListCache()
 	}
 
-	targets, problems, noID := scrapeTargets(lp, scanLedgerTitles())
-	if noID > 0 {
-		log.Printf("[影视刮削] ○ %d 个片目的目录名里没有 TMDB 编号，全库刮削跳过（可在本地文件页逐个指定条目刮削）", noID)
-	}
+	targets, problems := scrapeTargets(lp, scanLedgerTitles())
 
 	w := newFileScrapeWriter(cloud, o.Force, o.Upload)
 	wrote = w.localDirs
@@ -744,8 +755,8 @@ const scrapeAutoDedupe = "auto"
 // 此前在整理任务里当场刮，一部几百集的综艺刮完才放 taskMu，这段时间整理 / 同步全在排队。
 //
 // refresh / verify 非空表示整理想把 Emby 刷新交给这个刮削任务；返回 true 才算交接成功，
-// 否则调用方自己刷。只在刮削队列空闲时接：前面排着全库刮削的话，
-// 等它跑完新片要晚几个小时才进 Emby，不如整理当场刷
+// 否则调用方自己刷。只在刮削队列空闲时接：前面排着一大批手动刮削的话，
+// 等它跑完新片要晚很久才进 Emby，不如整理当场刷
 func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg, refresh, verify []string) (handedOff bool) {
 	p := &localScrapeParams{Scrape: cfg.opts(), Hints: map[string]scrapeHint{}}
 	for _, j := range jobs {

@@ -128,7 +128,7 @@ func TestEnqueueAutoScrapeEmbyHandoff(t *testing.T) {
 	}
 
 	// 前面排着手动刮削：整理自己刷，不交接
-	enqueueJob(model.DB, jobSpec{Kind: jobKindScrape, Title: "全库刮削", DedupeKey: scrapeAllDedupe, Priority: jobPriorityManual})
+	enqueueJob(model.DB, jobSpec{Kind: jobKindScrape, Title: "手动刮削", DedupeKey: "local:库/电影/丁", Priority: jobPriorityManual})
 	if enqueueAutoScrape(model.DB, []scrapeJob{{Key: "库/电影/丙", Kind: "movie", TmdbID: 3}}, cfg,
 		[]string{"/media/库/电影/丙"}, nil) {
 		t.Fatal("刮削队列前面还有别的任务时不该接")
@@ -168,7 +168,7 @@ func TestScrapeTargetsHints(t *testing.T) {
 		Keys:  []string{"库/剧集/甲", "库/电影/新来的", "库/电影/不见了"},
 		Hints: map[string]scrapeHint{"库/剧集/甲": {Kind: "tv", Title: "甲", TmdbID: 1}, "库/电影/新来的": {Kind: "movie", Title: "新来的", TmdbID: 2}},
 	}
-	targets, problems, _ := scrapeTargets(lp, ledger)
+	targets, problems := scrapeTargets(lp, ledger)
 	if len(targets) != 2 || targets[0].hint == nil || targets[0].hint.TmdbID != 1 {
 		t.Fatalf("甲应带上整理时的识别结果：%+v", targets)
 	}
@@ -177,11 +177,6 @@ func TestScrapeTargetsHints(t *testing.T) {
 	}
 	if len(problems) != 1 {
 		t.Fatalf("既不在台账也没有识别结果的要报出来：%v", problems)
-	}
-	// 全库：只刮带编号的
-	all, _, noID := scrapeTargets(&localScrapeParams{All: true}, ledger)
-	if len(all) != 1 || all[0].key != "库/电影/有编号" || noID != 1 {
-		t.Fatalf("全库刮削只刮带编号的：%+v noID=%d", all, noID)
 	}
 }
 

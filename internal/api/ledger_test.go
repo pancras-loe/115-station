@@ -158,7 +158,7 @@ func TestScanLedgerTitlesLayoutEdges(t *testing.T) {
 }
 
 // 标题目录名 → 片名 / 年份 / 编号。默认重命名模板渲染出来的是 {tmdbid=…}，
-// 此前只认 [tmdb=…]，用默认模板的库「开始刮削」一个片目都找不到
+// 此前只认 [tmdb=…]，用默认模板的库刮削时一个片目都找不到
 func TestParseTitleDir(t *testing.T) {
 	cases := []struct {
 		dir, title, year string

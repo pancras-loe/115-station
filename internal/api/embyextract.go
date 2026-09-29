@@ -35,7 +35,8 @@ import (
 //
 // 开关复用影视刮削的「轨道探测」（scrape.probe_streams / 刮削任务的 Probe）。两个入口：
 //   - 入库确认之后（embyVerifyIngest 查到条目的那一刻）：全局开关，整理 / 增量 / 全量进来的都算
-//   - 刮削任务结束时（execScrapeJob）：这一次任务的开关，对刮到的片目补探 —— 全库刮削即存量补全
+//   - 本地文件页手动刮削结束时（execScrapeJob）：这一次任务的开关，对刮到的片目补探；
+//     所选视频超过 100 个时要用户确认两次（ScrapeLocalTitles）
 // 已经有媒体信息的条目一律不碰：每次探测都是一次 115 直链请求
 //
 // ⚠️ 防重复探测（2026-09-29 维护者明确要求：重复探测等于重复取 115 直链，有风控风险）。
@@ -67,7 +68,7 @@ const embyExtractBreakAfter = 3
 
 var embyExtractBreakPause = 30 * time.Minute // var：测试里调短
 
-// embyExtractQueueMax 排队上限。全库刮削一次能排进几千个片目，积压太多说明 Emby 那边出了问题，
+// embyExtractQueueMax 排队上限。一次手动刮削最多 500 部，积压太多说明 Emby 那边出了问题，
 // 超出的丢掉（下次刮削还会再排），免得内存里挂着一条永远跑不完的队列
 const embyExtractQueueMax = 5000
 

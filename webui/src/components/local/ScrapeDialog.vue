@@ -25,7 +25,10 @@ import { useQueueStore } from '@/stores/queue'
 const props = defineProps<{ targets: LocalTitle[]; preset?: 'auto' | 'force' | 'pick' }>()
 const show = defineModel<boolean>('show', { required: true })
 
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
+
+/** 开着轨道探测时，所选视频超过这个数要确认两次（与后端 localProbeConfirmVideos 一致） */
+const PROBE_CONFIRM_VIDEOS = 100
 const queue = useQueueStore()
 
 const DEFAULT_OPTS: ScrapeOptions = {
@@ -94,8 +97,38 @@ const uploadHint = computed(() =>
     : `只写本地媒体库；回不回传网盘由「监控上传」决定（当前${monitorOn.value ? '已开启，会随后自动上传' : '未开启，不会上传'}）。`,
 )
 
+const totalVideos = computed(() => props.targets.reduce((n, t) => n + (t.videos || 0), 0))
+
+/**
+ * 轨道探测 = 让 Emby 逐个探测还没有媒体信息的视频，每个都是一次 115 直链请求。
+ * 量大时确认两次：第一次说清数量与代价，第二次再问一遍，免得顺手点过去
+ */
+async function confirmProbe(): Promise<boolean> {
+  const n = totalVideos.value
+  const first = await dialog.confirm({
+    title: '确认开启轨道探测？',
+    content: `所选 ${props.targets.length} 部共 ${n} 个视频。刮完后会让 Emby 逐个探测其中还没有媒体信息的视频，每个都会产生一次 115 直链请求，后台一次一个、间隔 3 秒，最多要 ${Math.ceil((n * 3) / 60)} 分钟以上。请求过多有触发 115 风控的风险。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '继续', value: true, variant: 'primary' },
+    ],
+  })
+  if (!first) return false
+  const second = await dialog.confirm({
+    title: '再次确认',
+    content: `确定要对这 ${n} 个视频请求 Emby 提前探测吗？不需要的话可以取消，把「轨道探测」关掉再刮削。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '确定探测', value: true, variant: 'danger' },
+    ],
+  })
+  return !!second
+}
+
 async function submit() {
   if (!canSubmit.value) return
+  const needConfirm = opts.value.probe && totalVideos.value > PROBE_CONFIRM_VIDEOS
+  if (needConfirm && !(await confirmProbe())) return
   submitting.value = true
   try {
     const pick = mode.value === 'pick' ? picked.value : null
@@ -103,6 +136,7 @@ async function submit() {
       keys: props.targets.map((t) => t.key),
       scrape: opts.value,
       ...(pick ? { tmdb_id: pick.id, media_type: pick.media_type, label: `${pick.title} (${pick.year ?? ''})` } : {}),
+      ...(needConfirm ? { confirm_probe: true } : {}),
     })
     message.success(d.message || '刮削已加入任务队列')
     await queue.submitted(d.job_id)
@@ -159,7 +193,7 @@ async function submit() {
         </FieldRow>
         <FieldRow
           label="轨道探测"
-          hint="刮完让 Emby 给这些片目里还没有媒体信息的条目提前探测，第一次播放更快。后台逐个进行，每个条目一次 115 直链请求。"
+          :hint="`刮完让 Emby 给这些片目里还没有媒体信息的条目提前探测，第一次播放更快。后台逐个进行，每个条目一次 115 直链请求。所选共 ${totalVideos} 个视频${totalVideos > PROBE_CONFIRM_VIDEOS ? '，提交时需要确认两次' : ''}。`"
         >
           <HSegmented v-model="opts.probe" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
         </FieldRow>

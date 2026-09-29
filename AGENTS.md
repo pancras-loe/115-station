@@ -373,13 +373,15 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 
 16. **刮削单独一条队列，不拿 `taskMu`**（`taskqueue.go` 的 `scrapeLane`、`localscrape.go`、`scrapecore.go`，2026-09-28 起）：
     此前整理后刮削在整理任务里当场跑，一部几百集的综艺刮完才放锁（每集剧照），整理 / 同步全在排队。
-    - 三个入口（整理后 `flushScrape`、「开始刮削」全库、本地文件页勾选）都是 `scrape` 任务，执行器只有 `execScrapeJob` 一个。
+    - 两个入口（整理后 `flushScrape`、本地文件页勾选）都是 `scrape` 任务，执行器只有 `execScrapeJob` 一个。
+      「开始刮削」全库（`/scrape/run`）已于 2026-09-29 删除，**别加回来**：开着 Emby 提前探测时一次全库就是成千上万次 115 直链请求。
+      本地文件页开着「轨道探测」且所选视频 > 100 个时，前端确认两次后带 `confirm_probe`，后端 `probeConfirmNeeded` 再守一道（409）。
       整理后刮削去重键 `auto`，还没开始的几轮用 `jobSpec.Merge` 取并集（默认的「同键覆盖」会丢掉上一轮的片目）。
     - 与整理并行的冲突**靠刮削自己收拾，不加锁**：刮削不建目录（`fileScrapeWriter.put` 遇到不存在的目录返回 `errMetaDirGone`，
       别再加 `MkdirAll`，那会在旧位置造出只有 NFO 的空壳）；每刮完一部 `scrapeCompensate` 核对 STRM 还在不在，
       不在就收回这次写下的文件并收空目录。没用片目锁是因为删改本地的入口有十几处（增量拿着 `taskMu` 删），让它们等刮削又会卡住主队列。
     - **整理后要刮的，Emby 刷新交给刮削任务**（`flushScrape` 先于 `flushRefresh`，参数 `EmbyRefresh` / `EmbyVerify`）：刮完只刷一次，
-      刮削出错 / 被停 / 什么都没写也照刷（`execScrapeJob` 开头的 defer）。只在刮削队列空闲时交接（`scrapeLaneIdle`），前面排着全库刮削就整理当场刷。
+      刮削出错 / 被停 / 什么都没写也照刷（`execScrapeJob` 开头的 defer）。只在刮削队列空闲时交接（`scrapeLaneIdle`），前面排着别的刮削就整理当场刷。
       2026-09-28 现场：整理刷一次、11 秒后刮完又刷一次，两分钟后 Emby 连目录条目都没建。
     - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
     - 刮削不探测轨道、NFO 不写 streamdetails：Emby / Jellyfin 导入 NFO 不读它，播放时自己探测、还会把 NFO 整份重写。

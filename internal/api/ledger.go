@@ -188,7 +188,7 @@ func titleDirYearAt(s string) (int, int) {
 //
 // 编号标签交给识别环节同一个 takeTags 摘（[tmdbid=…] / [tmdb=…] / {tmdb-…} / {[tmdbid=…;type=tv]} 都认）。
 // 此前只认 [tmdb=…]，而默认模板渲染出来的是 {tmdbid=…}：用默认模板的库，
-// 「开始刮削」一个片目都找不到（它只刮带编号的），年份也不认括号
+// 刮削一个片目都找不到（它只刮带编号的），年份也不认括号
 func parseTitleDir(dir string) (title, year string, tmdb int) {
 	tag, rest := takeTags(dir)
 	tmdb = tag.TmdbID

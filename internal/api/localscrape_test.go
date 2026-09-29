@@ -110,3 +110,21 @@ func TestFileScrapeWriterMissingCloudDir(t *testing.T) {
 		t.Fatal("不该上传")
 	}
 }
+
+// 开着 Emby 提前探测、所选视频超过 100 个：没确认过就拦下
+func TestProbeConfirmNeeded(t *testing.T) {
+	ledger := map[string]*ledgerTitleEntry{"a": {Videos: 60}, "b": {Videos: 41}, "c": {Videos: 40}}
+	on := fileScrapeOpts{Probe: true}
+	if n, need := probeConfirmNeeded(ledger, []string{"a", "b"}, on, false); !need || n != 101 {
+		t.Fatalf("101 个视频应要求确认，得到 %d %v", n, need)
+	}
+	if _, need := probeConfirmNeeded(ledger, []string{"a", "c"}, on, false); need {
+		t.Fatal("正好 100 个不用确认")
+	}
+	if _, need := probeConfirmNeeded(ledger, []string{"a", "b"}, on, true); need {
+		t.Fatal("确认过就放行")
+	}
+	if _, need := probeConfirmNeeded(ledger, []string{"a", "b"}, fileScrapeOpts{}, false); need {
+		t.Fatal("没开探测不用确认")
+	}
+}

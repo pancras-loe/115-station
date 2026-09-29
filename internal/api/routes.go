@@ -362,7 +362,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 影视刮削（原生 NFO + 海报到本地媒体库）
 		protected.GET("/scrape/config", h.ScrapeGetConfig)
 		protected.POST("/scrape/config", h.ScrapeSaveConfig)
-		protected.POST("/scrape/run", h.ScrapeRun)
 		protected.GET("/scrape/status", h.ScrapeStatus)
 		protected.POST("/scrape/stop", h.ScrapeStop)
 

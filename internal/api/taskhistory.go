@@ -149,11 +149,7 @@ func jobParamsSummary(p jobParams) []string {
 		out = append(out, "定时触发")
 	}
 	if l := p.Local; l != nil {
-		if l.All {
-			out = append(out, "全库（执行时取台账里带 TMDB 编号的片目）")
-		} else {
-			out = append(out, fmt.Sprintf("片目 %d 部", len(l.Keys)))
-		}
+		out = append(out, fmt.Sprintf("片目 %d 部", len(l.Keys)))
 		o := l.Scrape
 		mode := map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force]
 		out = append(out, fmt.Sprintf("NFO %s · 图片 %s · %s · Emby 提前探测 %s · 占位剧照 %s",

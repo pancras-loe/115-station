@@ -33,7 +33,6 @@ export interface ScrapeConfig {
 export const getScrapeConfig = () =>
   http.get<{ cfg?: Partial<ScrapeConfig>; status?: { running?: boolean } }>('/scrape/config')
 export const saveScrapeConfig = (cfg: ScrapeConfig) => http.post('/scrape/config', cfg)
-export const runScrape = () => http.post<{ message?: string; job_id?: number }>('/scrape/run')
 export const stopScrape = () => http.post<{ message?: string }>('/scrape/stop')
 export const scrapeStatus = () =>
   http.get<{ running?: boolean; progress?: string }>('/scrape/status', { timeoutMs: 15_000 })

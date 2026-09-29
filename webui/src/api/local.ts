@@ -96,6 +96,8 @@ export interface LocalScrapeBody {
   tmdb_id?: number
   media_type?: 'movie' | 'tv'
   label?: string
+  /** 开着轨道探测（Emby 提前探测）且所选视频超过 100 个时，用户确认过两次才带 */
+  confirm_probe?: boolean
 }
 
 export const scrape = (body: LocalScrapeBody) => http.post<QueuedReply>('/local/scrape', body)

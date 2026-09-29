@@ -9,11 +9,12 @@ package api
 //   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
 //
-// 三个入口（整理后自动刮削、「开始刮削」全库、本地文件页勾选）全部是刮削队列里的 scrape 任务，
-// 执行器只有一个（localscrape.go 的 execScrapeJob），核心在 scrapecore.go。
+// 两个入口（整理后自动刮削、本地文件页勾选）都是刮削队列里的 scrape 任务。
+// 「开始刮削」全库已于 2026-09-29 删除：手动刮削只在本地文件页按片目点名（开着 Emby 提前探测时
+// 一次全库就是成千上万次 115 直链请求）。执行器只有一个（localscrape.go 的 execScrapeJob），核心在 scrapecore.go。
 // 刮削队列不拿 taskMu（taskqueue.go），几百集的综艺刮半小时也不挡整理与同步。
 //
-// 接口：GET/POST /scrape/config、POST /scrape/run、GET /scrape/status、POST /scrape/stop
+// 接口：GET/POST /scrape/config、GET /scrape/status、POST /scrape/stop
 
 import (
 	"encoding/json"
@@ -70,7 +71,7 @@ func saveScrapeCfg(c scrapeCfg) error {
 	return notifyConfigSource.SaveSetting("scrape", string(b))
 }
 
-// opts 全局配置 → 一次刮削任务的选项（整理后刮削、全库刮削用）
+// opts 全局配置 → 一次刮削任务的选项（整理后刮削用）
 func (c scrapeCfg) opts() fileScrapeOpts {
 	return fileScrapeOpts{WriteNFO: c.WriteNFO, WriteImages: c.WriteImages, Force: c.Force,
 		Probe: c.ProbeStreams, SkipSharedStills: c.SkipSharedStills}
@@ -270,42 +271,6 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
-// scrapeAllDedupe 全库刮削的去重键：排着或跑着一个就不再收第二个
-const scrapeAllDedupe = "all"
-
-// ScrapeRun POST /scrape/run → 全库刮削入刮削队列（按已保存的配置）
-func (h *Handler) ScrapeRun(c *gin.Context) {
-	cfg := loadScrapeCfg()
-	if cfg.LocalRoot == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "未配置本地媒体库根目录"})
-		return
-	}
-	if !cfg.WriteNFO && !cfg.WriteImages {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "NFO 与图片至少要生成一项"})
-		return
-	}
-	if _, err := loadTmdbClient(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	var n int64
-	h.DB.Model(&model.TaskJob{}).Where("kind = ? AND dedupe_key = ? AND status IN ?",
-		jobKindScrape, scrapeAllDedupe, []string{jobQueued, jobRunning}).Count(&n)
-	if n > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "全库刮削已在刮削队列里"})
-		return
-	}
-	job, err := enqueueJob(h.DB, jobSpec{
-		Kind: jobKindScrape, Title: "全库刮削", DedupeKey: scrapeAllDedupe, Source: "web", Priority: jobPriorityManual,
-		Params: jobParams{Local: &localScrapeParams{All: true, Scrape: cfg.opts()}},
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	h.queuedReply(c, job, "全库刮削")
-}
-
 // ScrapeStatus GET /scrape/status
 func (h *Handler) ScrapeStatus(c *gin.Context) {
 	running, progress := scrapeLaneStatus()
@@ -313,14 +278,14 @@ func (h *Handler) ScrapeStatus(c *gin.Context) {
 }
 
 // ScrapeStop POST /scrape/stop → 停掉正在跑的刮削（当前文件写完即退出），
-// 并取消排着的全库刮削与整理后刮削。本地文件页手动提交的留着：那是用户点名要刮的，要取消去任务队列
+// 并取消排着的整理后刮削。本地文件页手动提交的留着：那是用户点名要刮的，要取消去任务队列
 func (h *Handler) ScrapeStop(c *gin.Context) {
 	stopped := false
 	if id, _ := scrapeLane.current(); id != 0 {
 		stopped = scrapeLane.requestStop(id)
 	}
 	res := h.DB.Model(&model.TaskJob{}).
-		Where("kind = ? AND status = ? AND (dedupe_key = ? OR priority = ?)", jobKindScrape, jobQueued, scrapeAllDedupe, jobPriorityBackground).
+		Where("kind = ? AND status = ? AND priority = ?", jobKindScrape, jobQueued, jobPriorityBackground).
 		Updates(map[string]interface{}{"status": jobCanceled, "message": "已取消（未执行）", "finished_at": time.Now()})
 	msg := "没有正在进行的刮削"
 	switch {
