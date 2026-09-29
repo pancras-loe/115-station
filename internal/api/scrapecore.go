@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,7 @@ type titleScrapeStat struct {
 	Placeholder int      // 判为占位剧照、没写的集
 	Probed      int      // 实际探测（不含缓存命中）
 	ProbeCached int
+	TracksKept  int // 已有 NFO 的轨道信息完整，没再探测
 	Failed      int
 	Gone        bool // 写入时发现目录已不在（片目刚被移走 / 删掉）
 }
@@ -242,7 +244,7 @@ func (r *titleRun) probe(v scrapeVideo) *probeResult {
 	return p
 }
 
-// patchStreams 开了轨道探测、视频 NFO 却因「只补缺失」要跳过时：已有的 NFO 里没有轨道信息，
+// patchStreams 开了轨道探测、视频 NFO 却因「只补缺失」要跳过时：已有的 NFO 里没有完整的轨道信息，
 // 就探测一次、只把 <fileinfo> 补进去写回，NFO 里其余内容原样保留。
 // 此前这种情况直接跳过、连探测都不做，用户勾了探测却什么都没发生，日志里也看不出来（2026-09-29 现场）。
 // 返回 true 表示已补上（调用方不再走跳过 / 整份重写）；false 时调用方照原样处理
@@ -255,10 +257,17 @@ func (r *titleRun) patchStreams(d metaDest, name, root string, v scrapeVideo) bo
 		return false
 	}
 	old, ok := pw.existing(d, name)
-	if !ok || bytes.Contains(old, []byte("<fileinfo")) {
-		// 已经带着轨道信息（或至少有 fileinfo 段）的不动：不重复探测，也不往里塞第二份
+	if !ok {
 		return false
 	}
+	if nfoHasTracks(old) {
+		r.st.TracksKept++
+		return false
+	}
+	// 没有 fileinfo，或者有但是空壳 / 残缺：Emby 开着「NFO 保存到媒体目录」时会把 NFO 回写一遍，
+	// STRM 没播过它手里没有流信息，写出来的是空的 <streamdetails/> 或只有视频没音轨。
+	// 只认标签的话这种 NFO 永远补不上（2026-09-29 现场），所以按内容判断，残缺的整段换掉
+	old = stripNFOFileinfo(old)
 	p := r.probe(v)
 	if p == nil {
 		return false
@@ -276,6 +285,29 @@ func (r *titleRun) patchStreams(d metaDest, name, root string, v scrapeVideo) bo
 	wrote, err := pw.replace(d, name, patched)
 	r.recordPut(d, name, "（已有 NFO，补轨道信息）", wrote, err)
 	return true
+}
+
+var nfoFileinfoRe = regexp.MustCompile(`(?s)[ \t]*<fileinfo\b[^>]*?(?:/>|>.*?</fileinfo>)[ \t]*\r?\n?`)
+
+// nfoHasTracks 已有 NFO 的轨道信息是否完整：视频与音轨都带编码才算。
+// 字幕不要求 —— 没有内嵌字幕的片子多得是
+func nfoHasTracks(nfo []byte) bool {
+	for _, blk := range nfoFileinfoRe.FindAll(nfo, -1) {
+		var fi nfoFileInfo
+		if xml.Unmarshal(bytes.TrimSpace(blk), &fi) != nil || fi.StreamDetails == nil {
+			continue
+		}
+		sd := fi.StreamDetails
+		if sd.Video != nil && sd.Video.Codec != "" && len(sd.Audio) > 0 && sd.Audio[0].Codec != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// stripNFOFileinfo 去掉已有的（残缺的）fileinfo 段，连同它所在那一行
+func stripNFOFileinfo(nfo []byte) []byte {
+	return nfoFileinfoRe.ReplaceAll(nfo, nil)
 }
 
 // insertNFOFileinfo 把 <fileinfo> 插到已有 NFO 最后一个 </root> 前面。

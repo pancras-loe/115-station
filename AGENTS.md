@@ -385,7 +385,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - ffprobe 默认关（`scrape.probe_streams`）：Emby / Jellyfin 导入 NFO 一般不读 streamdetails。探测结果按 pickcode 落 `ProbeCache`
       （整理补全也写它，`probeCached`），ffprobe 有 60 秒超时。
       「只补缺失」时已有的视频 NFO 若没有 `<fileinfo>`，开着探测就只把 streamdetails 插进去写回（`patchStreams`，其余内容原样保留），
-      不整份重写、也不重拉图；已有 `<fileinfo>` 的不再探测。
+      不整份重写、也不重拉图；按内容判断完整与否（视频与音轨都带编码，`nfoHasTracks`），Emby 回写的空壳 / 残缺 `<fileinfo>` 整段换掉，完整的不再探测。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 

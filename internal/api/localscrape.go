@@ -626,6 +626,9 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		if st.Probed+st.ProbeCached > 0 {
 			line += fmt.Sprintf("，探测 %d（缓存 %d）", st.Probed+st.ProbeCached, st.ProbeCached)
 		}
+		if st.TracksKept > 0 {
+			line += fmt.Sprintf("，NFO 已带轨道信息 %d 个未探测", st.TracksKept)
+		}
 		line += fmt.Sprintf("，失败 %d，用时 %s", st.Failed, time.Since(start).Round(time.Second))
 		log.Print(line)
 		if reclaimed > 0 {
