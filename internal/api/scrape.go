@@ -90,18 +90,11 @@ func tmdbFetchImageSized(imgPath, size string) ([]byte, string, error) {
 	if err != nil {
 		return nil, imgURL, err
 	}
-	// 原图背景常见几 MB，走代理时 20 秒不够读完
-	client := &http.Client{Timeout: 60 * time.Second}
 	proxyURL := getProxyURL()
 	if cfg.EnableProxy && cfg.ProxyUrl != "" {
 		proxyURL = cfg.ProxyUrl
 	}
-	if proxyURL != "" {
-		if pu, perr := parseProxyURL(proxyURL); perr == nil {
-			client.Transport = &http.Transport{Proxy: pu}
-		}
-	}
-	resp, err := client.Do(req)
+	resp, err := scrapeImgClient(proxyURL).Do(req)
 	if err != nil {
 		return nil, imgURL, err
 	}
@@ -111,6 +104,34 @@ func tmdbFetchImageSized(imgPath, size string) ([]byte, string, error) {
 	}
 	data, err := readImageBody(resp.Body, scrapeImageMax)
 	return data, imgURL, err
+}
+
+var (
+	scrapeImgClientMu sync.Mutex
+	scrapeImgClients  = map[string]*http.Client{}
+)
+
+// scrapeImgClient 刮削拉图的 HTTP 客户端，按代理地址复用。
+// 此前每张图新建一个 Client + Transport，连接用完即弃，一部剧几百张剧照张张重新握手
+// （走代理还要再建一次隧道）；片目内改成并发拉图之后更要复用连接。
+// 没配代理时沿用默认 Transport 的环境变量代理（与改动前一致）
+func scrapeImgClient(proxyURL string) *http.Client {
+	scrapeImgClientMu.Lock()
+	defer scrapeImgClientMu.Unlock()
+	if c := scrapeImgClients[proxyURL]; c != nil {
+		return c
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConnsPerHost = scrapeImgWorkers
+	if proxyURL != "" {
+		if pu, err := parseProxyURL(proxyURL); err == nil {
+			tr.Proxy = pu
+		}
+	}
+	// 原图背景常见几 MB，走代理时 20 秒不够读完
+	c := &http.Client{Timeout: 60 * time.Second, Transport: tr}
+	scrapeImgClients[proxyURL] = c
+	return c
 }
 
 // scrapeImageMax 单张图的大小上限。TMDB 原图背景常见几 MB，碰到上限多半是图床返回了别的东西

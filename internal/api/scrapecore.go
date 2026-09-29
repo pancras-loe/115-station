@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,13 @@ import (
 // 逐个产物的行走 vlog（跟「详细日志」开关），片目开头与结尾的汇总走 log。
 // 已存在跳过的不逐个打：重刮一部两百集的剧就是四百行「已存在」，汇总里给个数足够。
 
+// scrapeImgWorkers 一个片目内同时拉几张图。
+// 此前逐张串行，一部两百集的综艺光集剧照就要几分钟。图床是 TMDB 的 CDN（或用户配的反代），
+// 不碰 115，没有风控顾虑；参考项目都没对图床限速（qmediasync 是 5 个片目并行、片目内串行）。
+// 不开更多：走代理时一窝蜂打出去容易被限流，反而更慢（imgcache.go 同一个考虑，上限 6）。
+// 只在片目内并行，片目之间仍一个一个来：事后收拾（scrapeCompensate）与进度都按片目算
+const scrapeImgWorkers = 4
+
 // sharedStillMin 同一季里至少几集共用一张剧照才算占位图。
 // 上下集共用一张（前后篇）是正常的，三集起才像是上传者拿同一张图糊弄过去
 const sharedStillMin = 3
@@ -34,8 +42,9 @@ type scrapeSession struct {
 	rep  scrapeReporter
 	// imgs 这次任务已下载过的图（尺寸 + 路径 → 内容）：季海报与主海报撞图、
 	// 关掉占位剧照判定时几十集共用一张剧照，都只下一次
-	imgs map[string]*fetchedImage
-	// fetch 拉图的实现（测试换成桩）
+	imgs   map[string]*fetchedImage
+	imgsMu sync.Mutex // 片目内并发拉图时护着 imgs
+	// fetch 拉图的实现（测试换成桩）；会被并发调用
 	fetch func(imgPath, size string) ([]byte, string, error)
 }
 
@@ -169,42 +178,103 @@ func metaDestText(d metaDest) string {
 	return "网盘 " + d.CloudRel
 }
 
-// fetchImage 拉一张图，同一次任务里同尺寸同路径只下一次
-func (r *titleRun) fetchImage(imgPath, size string) (img *fetchedImage, reused bool, took time.Duration) {
-	key := size + imgPath
-	if img, ok := r.s.imgs[key]; ok {
-		return img, true, 0
-	}
-	start := time.Now()
-	data, url, err := r.s.fetch(imgPath, size)
-	img = &fetchedImage{data: data, url: url, err: err}
-	if err == nil {
-		// 只缓存成功的：失败多半是图床临时不通，下一个片目遇到同一张图该再试
-		r.s.imgs[key] = img
-	}
-	return img, false, time.Since(start)
+// imgReq 要拉的一张图（TMDB 路径 + 尺寸档）
+type imgReq struct{ path, size string }
+
+func (q imgReq) key() string { return q.size + q.path }
+
+// imgGot 一张图的拉取结果。img 为 nil 表示任务被停、没去拉
+type imgGot struct {
+	img    *fetchedImage
+	reused bool
+	took   time.Duration
 }
 
-// fetchPut 先问 writer 要不要，再拉图写入；已有的不拉
-func (r *titleRun) fetchPut(d metaDest, imgPath, size, name string) {
-	if imgPath == "" {
-		r.logv("○ %s：TMDB 上没有这张图", name)
-		return
+// fetchImages 并发拉一批图（至多 scrapeImgWorkers 张同时），结果与 reqs 一一对应。
+// 同一次任务里同尺寸同路径只下一次：本任务早先下过的直接复用，这一批里重复的只下第一张。
+// 只管下载，不写文件、不记错 —— 写入与日志由调用方按原顺序串行做，writer 与账单都不是并发安全的，
+// 日志顺序也跟着稳定
+func (r *titleRun) fetchImages(phase string, reqs []imgReq, labels []string) []imgGot {
+	out := make([]imgGot, len(reqs))
+	first := map[string]int{} // key → 这一批里第一次出现的下标
+	var jobs []int
+	var dups [][2]int // {重复的下标, 第一次出现的下标}
+	r.s.imgsMu.Lock()
+	for i, q := range reqs {
+		if img, ok := r.s.imgs[q.key()]; ok {
+			out[i] = imgGot{img: img, reused: true}
+			continue
+		}
+		if j, ok := first[q.key()]; ok {
+			dups = append(dups, [2]int{i, j})
+			continue
+		}
+		first[q.key()] = i
+		jobs = append(jobs, i)
 	}
-	if r.skip(d, name) {
-		return
+	r.s.imgsMu.Unlock()
+
+	done := len(reqs) - len(jobs)
+	var progMu sync.Mutex
+	if len(jobs) > 0 {
+		r.s.rep.sub(phase, done, len(reqs), "")
 	}
-	img, reused, took := r.fetchImage(imgPath, size)
-	if img.err != nil {
-		r.fail("拉图失败 %s ← %s：%v", name, img.url, img.err)
-		return
+	ch := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < min(scrapeImgWorkers, len(jobs)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range ch {
+				if r.s.rep.stopped() {
+					continue // 排空队列，不再发请求
+				}
+				q := reqs[i]
+				start := time.Now()
+				data, url, err := r.s.fetch(q.path, q.size)
+				img := &fetchedImage{data: data, url: url, err: err}
+				if err == nil {
+					// 只缓存成功的：失败多半是图床临时不通，下一个片目遇到同一张图该再试
+					r.s.imgsMu.Lock()
+					r.s.imgs[q.key()] = img
+					r.s.imgsMu.Unlock()
+				}
+				out[i] = imgGot{img: img, took: time.Since(start)}
+				progMu.Lock()
+				done++
+				r.s.rep.sub(phase, done, len(reqs), labels[i])
+				progMu.Unlock()
+			}
+		}()
 	}
-	how := fmt.Sprintf(" ← %s（%s，%s）", img.url, humanBytes(len(img.data)), took.Round(100*time.Millisecond))
-	if reused {
+	for _, i := range jobs {
+		ch <- i
+	}
+	close(ch)
+	wg.Wait()
+
+	for _, d := range dups {
+		if g := out[d[1]]; g.img != nil {
+			// 第一张拉失败的，重复的那几张跟着算失败（各记一处错），不算复用
+			out[d[0]] = imgGot{img: g.img, reused: g.img.err == nil}
+		}
+	}
+	return out
+}
+
+// settleImage 一张图拉完之后：失败记一处错误；成功返回日志里「怎么来的」那一截
+func (r *titleRun) settleImage(name string, g imgGot) (how string, ok bool) {
+	switch {
+	case g.img == nil:
+		return "", false
+	case g.img.err != nil:
+		r.fail("拉图失败 %s ← %s：%v", name, g.img.url, g.img.err)
+		return "", false
+	case g.reused:
 		r.st.Reused++
-		how = fmt.Sprintf(" ← 复用本次已下载的 %s", img.url)
+		return fmt.Sprintf(" ← 复用本次已下载的 %s", g.img.url), true
 	}
-	r.put(d, name, img.data, how)
+	return fmt.Sprintf(" ← %s（%s，%s）", g.img.url, humanBytes(len(g.img.data)), g.took.Round(100*time.Millisecond)), true
 }
 
 // season 某季的集信息（每个片目每季只打一次 TMDB，结果带日志）
@@ -508,12 +578,31 @@ func (r *titleRun) images(body []byte) {
 			images = append(images, [2]string{sn.PosterPath, fmt.Sprintf("season%02d-poster.jpg", sn.SeasonNumber)})
 		}
 	}
-	for i, img := range images {
+	// 先问 writer 要不要（已有的不拉），要的一起并发拉，再按原顺序写
+	var reqs []imgReq
+	var names []string
+	for _, img := range images {
+		if img[0] == "" {
+			r.logv("○ %s：TMDB 上没有这张图", img[1])
+			continue
+		}
+		if r.skip(t.Dir, img[1]) {
+			continue
+		}
+		reqs = append(reqs, imgReq{path: img[0], size: "original"})
+		names = append(names, img[1])
+	}
+	got := r.fetchImages("图片", reqs, names)
+	for i, g := range got {
 		if r.s.rep.stopped() || r.st.Gone {
 			return
 		}
-		r.s.rep.sub("图片", i, len(images), img[1])
-		r.fetchPut(t.Dir, img[0], "original", img[1])
+		if how, ok := r.settleImage(names[i], g); ok {
+			r.put(t.Dir, names[i], g.img.data, how)
+		}
+	}
+	if r.s.rep.stopped() {
+		return
 	}
 	if t.Kind == "tv" {
 		r.episodeStills()
@@ -575,22 +664,18 @@ func (r *titleRun) episodeStills() {
 		}
 	}
 
-	// 先把要写的都下下来，判定二要看内容；一季几百张 w780 剧照几十 MB，放得下
+	// 先把要写的都下下来（并发），判定二要看内容；一季几百张 w780 剧照几十 MB，放得下
 	type got struct {
 		e    *scrapeEp
 		img  *fetchedImage
 		how  string
 		hash string
 	}
-	var fetched []got
-	n := 0
+	var want []*scrapeEp
+	var reqs []imgReq
+	var names []string
 	for _, e := range todo {
-		n++
-		if r.s.rep.stopped() || r.st.Gone {
-			return
-		}
 		name := e.v.Name + "-thumb.jpg"
-		r.s.rep.sub("集剧照", n-1, len(todo), name)
 		if e.placeholder {
 			r.st.Placeholder++
 			continue
@@ -600,17 +685,21 @@ func (r *titleRun) episodeStills() {
 			r.logv("○ %s：TMDB 上这一集没有剧照", name)
 			continue
 		}
-		img, reused, took := r.fetchImage(still, "w780")
-		if img.err != nil {
-			r.fail("拉图失败 %s ← %s：%v", name, img.url, img.err)
+		want = append(want, e)
+		reqs = append(reqs, imgReq{path: still, size: "w780"})
+		names = append(names, name)
+	}
+	res := r.fetchImages("集剧照", reqs, names)
+	if r.s.rep.stopped() || r.st.Gone {
+		return
+	}
+	var fetched []got
+	for i, g := range res {
+		how, ok := r.settleImage(names[i], g)
+		if !ok {
 			continue
 		}
-		how := fmt.Sprintf(" ← %s（%s，%s）", img.url, humanBytes(len(img.data)), took.Round(100*time.Millisecond))
-		if reused {
-			r.st.Reused++
-			how = fmt.Sprintf(" ← 复用本次已下载的 %s", img.url)
-		}
-		fetched = append(fetched, got{e: e, img: img, how: how, hash: fmt.Sprintf("%x", sha1.Sum(img.data))})
+		fetched = append(fetched, got{e: want[i], img: g.img, how: how, hash: fmt.Sprintf("%x", sha1.Sum(g.img.data))})
 	}
 
 	// 判定二：同一季内容相同的

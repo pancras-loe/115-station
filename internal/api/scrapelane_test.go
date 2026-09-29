@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,6 +280,7 @@ func TestEpisodeStillsPlaceholderPerSeason(t *testing.T) {
 		videos = append(videos, scrapeVideo{Name: n, Dir: metaDest{Local: dir}})
 	}
 	fetches := map[string]int{}
+	var fetchMu sync.Mutex // fetch 在片目内是并发调用的
 	content := map[string]string{"/a.jpg": "dup", "/b.jpg": "dup", "/c.jpg": "dup"}
 	run := func(skipShared bool) (*titleScrapeStat, []string) {
 		for _, v := range videos {
@@ -287,7 +290,9 @@ func TestEpisodeStillsPlaceholderPerSeason(t *testing.T) {
 		w := newFileScrapeWriter(nil, false, false)
 		sess := newScrapeSession(&TmdbClient{}, fileScrapeOpts{WriteImages: true, SkipSharedStills: skipShared}, w, &fakeScrapeReporter{})
 		sess.fetch = func(p, size string) ([]byte, string, error) {
+			fetchMu.Lock()
 			fetches[p]++
+			fetchMu.Unlock()
 			data := content[p]
 			if data == "" {
 				data = "img" + p
@@ -330,6 +335,101 @@ func TestEpisodeStillsPlaceholderPerSeason(t *testing.T) {
 	}
 	if fetches["/same.jpg"] != 1 || st.Reused != 3 {
 		t.Fatalf("同一张图应只下一次、其余复用：下载 %d 次、复用 %d", fetches["/same.jpg"], st.Reused)
+	}
+}
+
+// ---- 片目内并发拉图 ----
+
+// stopAfterReporter 拉到第 n 张图后报告「已停止」
+type stopAfterReporter struct {
+	fakeScrapeReporter
+	stop atomic.Bool
+}
+
+func (r *stopAfterReporter) stopped() bool { return r.stop.Load() }
+
+// 集剧照并发拉（不超过 scrapeImgWorkers），拉失败的那一集记错不写，其余照写
+func TestScrapeStillsFetchInParallel(t *testing.T) {
+	const tvID = 990002
+	eps := map[int]string{}
+	for n := 1; n <= 12; n++ {
+		eps[n] = fmt.Sprintf("/e%02d.jpg", n)
+	}
+	seedSeason(t, tvID, 1, eps)
+
+	dir := t.TempDir()
+	var videos []scrapeVideo
+	for n := 1; n <= 12; n++ {
+		name := fmt.Sprintf("S01E%02d", n)
+		must(t, os.WriteFile(filepath.Join(dir, name+".strm"), []byte("x"), 0o644))
+		videos = append(videos, scrapeVideo{Name: name, Dir: metaDest{Local: dir}})
+	}
+	newRun := func(rep scrapeReporter, fetch func(p, size string) ([]byte, string, error)) *titleRun {
+		w := newFileScrapeWriter(nil, false, false)
+		sess := newScrapeSession(&TmdbClient{}, fileScrapeOpts{WriteImages: true, SkipSharedStills: true}, w, rep)
+		sess.fetch = fetch
+		r := &titleRun{s: sess, t: scrapeTitle{Kind: "tv", Title: "某剧", Dir: metaDest{Local: dir}, Videos: videos},
+			st: &titleScrapeStat{}, tmdbID: tvID, seasons: map[int]map[int]tmdbEpisodeInfo{}}
+		for _, v := range videos {
+			s, e := scrapeEpisodeNo(v.Name)
+			r.eps = append(r.eps, scrapeEp{v: v, season: s, ep: e})
+		}
+		return r
+	}
+
+	var inFlight, peak atomic.Int32
+	rep := &fakeScrapeReporter{}
+	r := newRun(rep, func(p, size string) ([]byte, string, error) {
+		n := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			old := peak.Load()
+			if n <= old || peak.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		if p == "/e05.jpg" {
+			return nil, "https://img.test" + p, errors.New("HTTP 502")
+		}
+		return []byte("img" + p), "https://img.test" + p, nil
+	})
+	r.episodeStills()
+	if pk := peak.Load(); pk < 2 || pk > scrapeImgWorkers {
+		t.Fatalf("同时在拉的图应在 2..%d 之间，实际峰值 %d", scrapeImgWorkers, pk)
+	}
+	if r.st.Failed != 1 || len(rep.errs) != 1 {
+		t.Fatalf("E05 拉失败应记一处错：failed=%d errs=%v", r.st.Failed, rep.errs)
+	}
+	for _, v := range videos {
+		has := fileExists(filepath.Join(dir, v.Name+"-thumb.jpg"))
+		if has == (v.Name == "S01E05") {
+			t.Fatalf("%s 剧照写入状态不对：%v", v.Name, has)
+		}
+	}
+	if len(r.st.Wrote) != 11 {
+		t.Fatalf("应写 11 张，实际 %d", len(r.st.Wrote))
+	}
+
+	// 中途停止：不再发新请求，已拉到的也不写
+	for _, v := range videos {
+		os.Remove(filepath.Join(dir, v.Name+"-thumb.jpg"))
+	}
+	stopRep := &stopAfterReporter{}
+	var calls atomic.Int32
+	r = newRun(stopRep, func(p, size string) ([]byte, string, error) {
+		if calls.Add(1) >= 2 {
+			stopRep.stop.Store(true)
+		}
+		time.Sleep(10 * time.Millisecond)
+		return []byte("img" + p), "https://img.test" + p, nil
+	})
+	r.episodeStills()
+	if c := calls.Load(); c > scrapeImgWorkers+1 {
+		t.Fatalf("停止后不该再发新请求，实际拉了 %d 张", c)
+	}
+	if len(r.st.Wrote) != 0 {
+		t.Fatalf("停止后不该再写：%v", r.st.Wrote)
 	}
 }
 
