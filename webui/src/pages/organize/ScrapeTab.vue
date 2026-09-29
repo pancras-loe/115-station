@@ -171,7 +171,7 @@ onMounted(load)
 
     <FieldRow
       label="轨道探测"
-      hint="逐个视频读取网盘文件头部（经 115 直链），把分辨率、编码、音轨、内嵌字幕写进 NFO 的 streamdetails。每个视频多 2–10 秒，几百集的剧会多出十几到几十分钟，并产生同样数量的 115 直链请求。Emby / Jellyfin 导入 NFO 一般不读这一段，主要对 Kodi 有用。探测结果按文件缓存，重刮不会再探一遍。"
+      hint="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行，刮削时也会给刮到的片目补上；Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「EMBY管理」配好服务器地址与 API 密钥。"
     >
       <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
     </FieldRow>

@@ -370,6 +370,14 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 	start := time.Now()
 	pending := append([]string(nil), paths...)
 	lastType := map[string]string{}
+	// 入库确认了的路径交给提前探测（影视刮削「轨道探测」开着时），见 embyextract.go。
+	// 放在 defer 里：三轮回查中途 return 的那几种出口都要把已确认的交出去
+	var extract []string
+	defer func() {
+		if len(extract) > 0 && embyExtractEnabled() {
+			queueEmbyExtract(extract...)
+		}
+	}()
 	for _, d := range embyVerifyDelays {
 		select {
 		case <-stopCh:
@@ -396,6 +404,7 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 			}
 			log.Printf("[Emby] ✓ 入库确认：%s（%s，用时 %s）—— %s",
 				hit.Name, hit.Type, time.Since(start).Truncate(time.Second), p)
+			extract = append(extract, p)
 		}
 		if pending = rest; len(pending) == 0 {
 			return

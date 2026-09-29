@@ -159,7 +159,7 @@ async function submit() {
         </FieldRow>
         <FieldRow
           label="轨道探测"
-          hint="逐个视频经 115 直链读文件头，把音轨 / 字幕写进 NFO。每个视频多 2–10 秒，几百集的剧会多出几十分钟；主要对 Kodi 有用。"
+          hint="刮完让 Emby 给这些片目里还没有媒体信息的条目提前探测，第一次播放更快。后台逐个进行，每个条目一次 115 直链请求。"
         >
           <HSegmented v-model="opts.probe" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
         </FieldRow>

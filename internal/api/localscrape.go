@@ -42,7 +42,8 @@ type fileScrapeOpts struct {
 	WriteImages bool `json:"write_images"`
 	Force       bool `json:"force"`  // 覆盖已存在的元数据
 	Upload      bool `json:"upload"` // 这一次把产物写进网盘
-	// Probe 逐个视频 ffprobe 写 NFO 的 streamdetails（scrapeCfg.ProbeStreams）
+	// Probe 刮完让 Emby 对这些片目里还没有媒体信息的条目提前探测（scrapeCfg.ProbeStreams，界面叫「轨道探测」），
+	// 见 embyextract.go。字段名沿用：它原来是本站自己 ffprobe 写 NFO streamdetails 的开关，那条已删
 	Probe bool `json:"probe"`
 	// SkipSharedStills 同一季多集共用的剧照判为占位图，不写（scrapeCfg.SkipSharedStills）
 	SkipSharedStills bool `json:"skip_shared_stills"`
@@ -484,6 +485,14 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
 	var wrote map[string]bool
+	// 刮到的片目交给 Emby 提前探测。defer 在刷新之前注册、因此在它之后执行；
+	// 新入库的片目 Emby 这时多半还没建条目，会被跳过 —— 它们由入库确认那条入口接手
+	var extract []string
+	defer func() {
+		if len(extract) > 0 {
+			queueEmbyExtract(extract...)
+		}
+	}()
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
 	o := lp.Scrape
 	localRoot := localMediaRoot()
@@ -506,7 +515,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		pick = media
 	}
 
-	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求（开了轨道探测除外，那要取直链），没配账号也能刮
+	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求，没配账号也能刮
 	var cloud cloudMetaOps
 	libCid := ""
 	if o.Upload {
@@ -546,7 +555,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if o.Upload {
 		where += "，并上传网盘"
 	}
-	log.Printf("[影视刮削] ▶ %s：%d 个片目（%s，%s，NFO %s · 图片 %s · 轨道探测 %s · 占位剧照 %s）",
+	log.Printf("[影视刮削] ▶ %s：%d 个片目（%s，%s，NFO %s · 图片 %s · Emby 提前探测 %s · 占位剧照 %s）",
 		job.Title, len(targets), where, map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force],
 		onOff(o.WriteNFO), onOff(o.WriteImages), onOff(o.Probe), map[bool]string{true: "不写", false: "照写"}[o.SkipSharedStills])
 
@@ -580,6 +589,11 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		log.Printf("[影视刮削] ▶ 《%s》(%s) [tmdb=%d] %s，视频 %d 个 → %s",
 			t.Title, t.Year, t.TmdbID, map[string]string{"tv": "剧集", "movie": "电影"}[t.Kind], len(t.Videos), t.Dir.Local)
 		st := sess.scrapeTitleMeta(t)
+		if o.Probe {
+			if cfg, ok := loadEmbyRefreshCfg(); ok {
+				extract = append(extract, embyPathOf(cfg, t.Dir.Local))
+			}
+		}
 		reclaimed := scrapeCompensate(t, st.written, localRoot)
 		res.Reused += st.Reused
 		res.Placeholder += st.Placeholder

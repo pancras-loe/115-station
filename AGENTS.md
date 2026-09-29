@@ -98,7 +98,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` `taskhistory.go` | **两条队列**：主队列（下面这些）串行在 `taskMu` 上；**刮削队列**只跑 `kind=scrape`、不拿 `taskMu`（见 §6.16）。进度按队列各存一份（`jobLane`，主队列沿用 `setJobProgress` 等包级函数，刮削显式用 `scrapeLane`），刮削还有第二级进度 `progress.sub`。**所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**；**后台任务**（定时整理 / 定时全量 / 转存与离线完成触发的 `transfer` / 转存守望者）也只入队，优先级 1（排队中手动优先，运行中不抢占），同类去重（`organize` / `full` / `transfer`），空转轮次（`jobOutcome.Idle`）跑完删行、同因重复失败只留最新一条。常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（仍不进队列的只剩增量轮询与 Emby 事件深删，后者在 `endTask` 时补一行 `kind=background`；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue`（只看当前）+ `stores/queue.ts`，完整的历史、筛选与任务详情在**任务中心** `/tasks`（`taskhistory.go` 的 `GET /tasks/history` 与扩充后的 `GET /tasks/:id`；`OrganizeRecord.JobID` 记「最近一次处理它的任务」，任务与记录据此互相跳转，老记录为 0 不回填）。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **网盘文件页** | `filebrowser.go` `fileorganize.go` `filelibrary.go` | 浏览 115 目录树（`GET /files/115`），每行「整理 / 移动」，勾选后批量移动，都入任务队列（`orgpick` / `libredo` / `filemove`）。**媒体库里只有片目目录（当前二级分类目录的下一层，`libCategoryLayout.isTitleRel`）能整理和移动**：整理不走新文件流水线（洗版会撞上自己），而是现场列文件建一条记录交给 `redoOrganize`（`libredo`）；移动只能到 冗余 / 已存在 / 待整理，移出媒体库时 `cleanupMovedTitle` **先删台账再删本地、最后通知 Emby**（反过来深度删除会按台账把刚移走的网盘文件删掉），并清空记录的 `target_cid`（否则之后重新整理被判原地刷新）。整理复用 `processEntry`，媒体库内的条目拒收（走重新整理）。**刮削不在这一页**（2026-09 挪到本地文件页）。测试 `filebrowser_test.go` |
 | **本地文件页** | `locallib.go` `localscrape.go` | 本地媒体库的片目卡片墙（`GET /local/titles`）：一张卡片 = 台账里一个片目（`scanLedgerTitles`），状态只看本地标题目录里有没有 NFO / 海报，**零 115 请求**，列表 30 秒缓存（刮削任务结束时 `forgetLocalTitles`）。海报缩略图走公开路由 `GET /local/poster`（`<img>` 带不了登录态）：列表按 key 签 HMAC（JWT 密钥），`underRoot` 防 `../`，缩成 400px 宽 JPEG 放内存缓存。刮削 `POST /local/scrape` 入队（`scrape`，参数在 `jobParams.Local`），核心是 `scrape.go` 的 `scrapeTitleMeta` + `fileScrapeWriter`，产物写本地媒体库。「上传到网盘」只管这一次，走 `upload115FileConsented`（不看监控上传总开关）；**没勾时不登记上传指纹**，传不传照常由监控上传决定。形态参考 LitePan 的海报墙（PolyForm Noncommercial，只看思路），但片目边界与类型取台账，不在目录里写标记文件。测试 `locallib_test.go` / `localscrape_test.go` |
-| **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` | 302 代理、Emby 反代与建库 |
+| **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` `embyextract.go` | 302 代理、Emby 反代与建库、入库后让 Emby 提前探测媒体信息 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
 | **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到 |
@@ -384,6 +384,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
     - 刮削不探测轨道、NFO 不写 streamdetails：Emby / Jellyfin 导入 NFO 不读它，播放时自己探测、还会把 NFO 整份重写。
       原来的 ffprobe「媒体补全」（缺画质信息时探测改名）与 NFO 轨道探测已于 2026-09-29 一并删除，镜像也不再带 ffmpeg，别加回来。
+      界面上的「轨道探测」（`scrape.probe_streams` / 刮削任务的 `Probe`）现在控制 **Emby 提前探测**（`embyextract.go`）：
+      入库确认（`embyVerifyIngest`）后与刮削任务结束时，把路径排进单 worker 队列，对 Emby 里还缺媒体信息（视频 + 音轨不足两条，LitePan 同判据）
+      的 Movie / Episode / Video 逐个 `POST /Items/{id}/PlaybackInfo`，一次一个、间隔 3 秒 —— 每次都经 302 取一次 115 直链。
+      直接打 Emby 本身，别走本站反代（会被直连改写 / 直链预取拦下）。测试 `embyextract_test.go`。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 

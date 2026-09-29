@@ -783,6 +783,14 @@ tv:
     <tr><td>6086 Emby 反代</td><td>客户端有限速需求 / 需要 Emby 转码 / 外网播放受限</td><td>把 Emby 客户端的服务器地址填 <code>http://服务器IP:6086/emby</code>——反代会注入 DirectPlay 直链信息；不兼容编码由 Emby 服务端转码</td></tr>
   </table>
 
+  <h3>第一次播放提速（可选）</h3>
+  <p>STRM 第一次播放时，Emby 手里还没有这个文件的媒体信息，要当场探测一遍远端文件（常常好几秒）。打开「自动整理 → 影视刮削 → 轨道探测」后，入库确认时本站会替你调一次 Emby 的 <code>PlaybackInfo</code>，让 Emby 提前探测好并存下来，第一次播放就和第二次一样快；手动刮削勾上同名选项，会给刮到的片目补上（全库刮削即补全存量）。</p>
+  <ul>
+    <li>只处理 Emby 里还没有媒体信息的电影 / 单集，已探测过的不碰；ISO / 原盘目录跳过</li>
+    <li>后台一次探一个、间隔 3 秒；每个条目会产生一次 115 直链请求</li>
+    <li>日志前缀 <code>[Emby探测]</code>：<code>✓ 某剧 S01E02：视频 1 · 音轨 2 · 字幕 1（6.2s）</code></li>
+  </ul>
+
   <h3>播放通知（可选）</h3>
   <ol class="steps">
     <li>Emby 装 <strong>Webhooks</strong> 插件，新建 Generic webhook</li>

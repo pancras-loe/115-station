@@ -44,10 +44,9 @@ type scrapeCfg struct {
 	// 此前挂在增量同步末尾且扫全台账——新增一部片也要全库过一遍
 	AutoAfterOrganize bool `json:"auto_after_organize"`
 
-	// ProbeStreams 刮削时逐个视频 ffprobe，把轨道写进 NFO 的 fileinfo/streamdetails。默认关：
-	// 每个视频要取一次 115 直链再读十来 MB，几百集的剧多出几十分钟；Emby / Jellyfin 导入 NFO
-	// 一般不读这一段，主要是 Kodi 用得上。此前是无条件探测，剧集的探测失败还被静默吞掉，
-	// 维护者的 NFO 里一直没有 streamdetails 也没人发现（2026-09-28）
+	// ProbeStreams 界面上的「轨道探测」：入库后让 Emby 提前探测媒体信息，第一次播放不用现场探测（embyextract.go）。
+	// 默认关：每个条目探测一次就是一次 115 直链请求。
+	// 2026-09-29 之前它控制的是本站自己 ffprobe 写 NFO streamdetails —— Emby 导入 NFO 不读那一段，已删，key 沿用
 	ProbeStreams bool `json:"probe_streams"`
 
 	// SkipSharedStills 同一季里多集共用同一张剧照（综艺常见）时判为占位图，这些集不写 -thumb.jpg。
@@ -266,7 +265,7 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[影视刮削] ✓ 配置已保存（根目录 %s，轨道探测 %s，占位剧照 %s）",
+	log.Printf("[影视刮削] ✓ 配置已保存（根目录 %s，Emby 提前探测 %s，占位剧照 %s）",
 		req.LocalRoot, onOff(req.ProbeStreams), map[bool]string{true: "不写", false: "照写"}[req.SkipSharedStills])
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }

@@ -156,7 +156,7 @@ func jobParamsSummary(p jobParams) []string {
 		}
 		o := l.Scrape
 		mode := map[bool]string{true: "强制覆盖", false: "只补缺失"}[o.Force]
-		out = append(out, fmt.Sprintf("NFO %s · 图片 %s · %s · 轨道探测 %s · 占位剧照 %s",
+		out = append(out, fmt.Sprintf("NFO %s · 图片 %s · %s · Emby 提前探测 %s · 占位剧照 %s",
 			onOff(o.WriteNFO), onOff(o.WriteImages), mode, onOff(o.Probe),
 			map[bool]string{true: "不写", false: "照写"}[o.SkipSharedStills]))
 		if o.Upload {
