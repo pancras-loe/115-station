@@ -72,37 +72,70 @@ var embyExtractBreakPause = 30 * time.Minute // var：测试里调短
 // 超出的丢掉（下次刮削还会再排），免得内存里挂着一条永远跑不完的队列
 const embyExtractQueueMax = 5000
 
+// embyExtractEntry 队列里的一条：一个 Emby 路径（片目目录或单个 .strm）+ 排它进来的任务
+// （手动刮削；入库确认等没有任务的为空）。同一路径被几个任务排过就挂几个，结果逐个写回（embyprobereport.go）
+type embyExtractEntry struct {
+	path string
+	jobs []uint
+}
+
 var embyExtractQ = struct {
 	mu     sync.Mutex
-	queue  []string        // Emby 路径（片目目录或单个 .strm），先进先出
-	queued map[string]bool // 排着的路径，去重用
+	queue  []*embyExtractEntry          // 先进先出
+	queued map[string]*embyExtractEntry // 排着的路径，去重用
 	wake   chan struct{}
 	once   sync.Once
-}{queued: map[string]bool{}, wake: make(chan struct{}, 1)}
+}{queued: map[string]*embyExtractEntry{}, wake: make(chan struct{}, 1)}
 
 // embyExtractEnabled 入库确认后要不要提前探测（全局开关：影视刮削「轨道探测」）
 func embyExtractEnabled() bool { return loadScrapeCfg().ProbeStreams }
 
 // queueEmbyExtract 把一批 Emby 路径排进提前探测队列（去重），worker 第一次用到时才起
-func queueEmbyExtract(embyPaths ...string) {
+func queueEmbyExtract(embyPaths ...string) { queueEmbyExtractFor(0, embyPaths...) }
+
+// queueEmbyExtractFor 同上，探测结果写回任务 jobID（0 = 不写回）。
+// 路径已经在排的，把任务挂到那一条上，不另排
+func queueEmbyExtractFor(jobID uint, embyPaths ...string) {
 	q := &embyExtractQ
 	q.mu.Lock()
-	added, dropped := 0, 0
+	added, forJob, dropped := 0, 0, 0
 	for _, p := range embyPaths {
-		if p == "" || q.queued[p] {
+		if p == "" {
+			continue
+		}
+		if e := q.queued[p]; e != nil {
+			if jobID != 0 && !containsUint(e.jobs, jobID) {
+				e.jobs = append(e.jobs, jobID)
+				forJob++
+			}
 			continue
 		}
 		if len(q.queue) >= embyExtractQueueMax {
 			dropped++
 			continue
 		}
-		q.queued[p] = true
-		q.queue = append(q.queue, p)
+		e := &embyExtractEntry{path: p}
+		if jobID != 0 {
+			e.jobs = []uint{jobID}
+			forJob++
+		}
+		q.queued[p] = e
+		q.queue = append(q.queue, e)
 		added++
+	}
+	// 路径数在解锁前记上：否则 worker 可能先探完一条，报告里「已处理」比「总数」还多
+	if forJob > 0 {
+		probeReportQueued(jobID, forJob)
 	}
 	q.mu.Unlock()
 	if dropped > 0 {
 		log.Printf("[Emby探测] ⚠ 队列已满（%d），丢弃 %d 个路径 —— 下次入库 / 刮削时会再排", embyExtractQueueMax, dropped)
+		if jobID != 0 {
+			probeReportQueued(jobID, 1)
+			probeReportItem([]uint{jobID}, jobProbeItem{Kind: probeItemError,
+				Err: fmt.Sprintf("探测队列已满，%d 个片目没排进去（下次刮削会再排）", dropped)})
+			probeReportPathDone([]uint{jobID})
+		}
 	}
 	if added == 0 {
 		return
@@ -115,22 +148,67 @@ func queueEmbyExtract(embyPaths ...string) {
 }
 
 // embyExtractRunning 正在处理的路径与正在探测的 Emby 条目 id（片目详情显示「排队中 / 探测中」用）。
-// 路径出队后要逐个探完底下的条目才算完，这期间它的其余条目仍算排队中
+// 路径出队后要逐个探完底下的条目才算完，这期间它的其余条目仍算排队中。
+// jobs / label 给任务中心：哪些任务的探测正在进行、正在探哪一集
 var embyExtractRunning struct {
 	sync.Mutex
-	path, id string
+	path, id, label string
+	jobs            []uint
 }
 
-func setEmbyExtractRunning(id string) {
+func setEmbyExtractRunning(id, label string) {
 	embyExtractRunning.Lock()
-	embyExtractRunning.id = id
+	embyExtractRunning.id, embyExtractRunning.label = id, label
 	embyExtractRunning.Unlock()
 }
 
-func setEmbyExtractRunningPath(p string) {
+func setEmbyExtractRunningPath(p string, jobs []uint) {
 	embyExtractRunning.Lock()
-	embyExtractRunning.path = p
+	embyExtractRunning.path, embyExtractRunning.jobs = p, jobs
 	embyExtractRunning.Unlock()
+}
+
+func embyExtractRunningLabel() string {
+	embyExtractRunning.Lock()
+	defer embyExtractRunning.Unlock()
+	return embyExtractRunning.label
+}
+
+func containsUint(xs []uint, x uint) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// embyExtractJobState 任务的探测还在不在进行：running 正在探它的路径、queued 还有路径在排、
+// "" 都不在了（探完了，或者服务重启过、内存里的队列没了）
+func embyExtractJobState(jobID uint) string {
+	embyExtractRunning.Lock()
+	running := containsUint(embyExtractRunning.jobs, jobID)
+	embyExtractRunning.Unlock()
+	if running {
+		return "running"
+	}
+	q := &embyExtractQ
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, e := range q.queue {
+		if containsUint(e.jobs, jobID) {
+			return "queued"
+		}
+	}
+	return ""
+}
+
+// embyExtractQueueLen 排着的路径数（任务中心显示）
+func embyExtractQueueLen() int {
+	q := &embyExtractQ
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.queue)
 }
 
 func embyExtractRunningID() string {
@@ -156,31 +234,31 @@ func embyExtractQueuedFor(embyPath string) bool {
 	q := &embyExtractQ
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for _, p := range q.queue {
-		if embyPathRelated(norm(p), want) {
+	for _, e := range q.queue {
+		if embyPathRelated(norm(e.path), want) {
 			return true
 		}
 	}
 	return false
 }
 
-func embyExtractPop() (string, bool) {
+func embyExtractPop() (*embyExtractEntry, bool) {
 	q := &embyExtractQ
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.queue) == 0 {
-		return "", false
+		return nil, false
 	}
-	p := q.queue[0]
+	e := q.queue[0]
 	q.queue = q.queue[1:]
-	delete(q.queued, p)
-	return p, true
+	delete(q.queued, e.path)
+	return e, true
 }
 
 // embyExtractWorker 串行消费队列：一次只探一个条目，条目之间隔 embyExtractGap
 func embyExtractWorker() {
 	for {
-		p, ok := embyExtractPop()
+		e, ok := embyExtractPop()
 		if !ok {
 			select {
 			case <-stopCh:
@@ -191,28 +269,41 @@ func embyExtractWorker() {
 		}
 		cfg, ok := loadEmbyRefreshCfg()
 		if !ok {
+			probeReportItem(e.jobs, jobProbeItem{Label: embyPathBase(e.path), Kind: probeItemError, Err: "没有配置 Emby"})
+			probeReportPathDone(e.jobs)
 			continue
 		}
-		if !embyExtractPath(cfg, p) {
+		if !embyExtractPath(cfg, e.path, e.jobs...) {
 			return
 		}
 	}
 }
 
 // embyExtractPath 探测一条路径下缺媒体信息的条目；返回 false 表示服务要退出了。
-// 单条出错（含 panic）只丢这一条，worker 不能死：它只在第一次排队时拉起
-func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
+// 单条出错（含 panic）只丢这一条，worker 不能死：它只在第一次排队时拉起。
+// jobs 是排它进来的任务：每个条目的结果（成功 / 失败 / 近期请求过 / 还没入库）写回它们
+func embyExtractPath(cfg embyRefreshCfg, p string, jobs ...uint) (alive bool) {
 	alive = true
-	setEmbyExtractRunningPath(p)
-	defer setEmbyExtractRunningPath("")
+	setEmbyExtractRunningPath(p, jobs)
+	defer setEmbyExtractRunningPath("", nil)
+	// 先于 recover 注册、因此在它之后执行：panic 了这条路径也算处理完，报告不会一直挂在「探测中」
+	defer probeReportPathDone(jobs)
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Emby探测] ✗ 处理 %s 异常: %v", p, r)
+			probeReportItem(jobs, jobProbeItem{Label: embyPathBase(p), Kind: probeItemError, Err: fmt.Sprintf("处理异常: %v", r)})
 		}
 	}()
-	items, err := embyExtractTargets(cfg, p)
+	items, found, err := embyExtractTargets(cfg, p)
 	if err != nil {
-		vlog("[Emby探测] 查 %s 的条目失败: %v", p, err)
+		// 以前只进详细日志：用户只看到「已排进提前探测」，之后再没下文
+		log.Printf("[Emby探测] ✗ 查 %s 的条目失败: %v", p, err)
+		probeReportItem(jobs, jobProbeItem{Label: embyPathBase(p), Kind: probeItemError, Err: "查询 Emby 条目失败: " + err.Error()})
+		return
+	}
+	if !found {
+		probeReportItem(jobs, jobProbeItem{Label: embyPathBase(p), Kind: probeItemMissing,
+			Err: "Emby 里查不到这个片目（还没扫描入库、路径映射不对，或 Emby 连不上）；入库确认后会自动再排"})
 		return
 	}
 	var todo []embyExtractItem
@@ -221,6 +312,7 @@ func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 		if ok, why := embyExtractAllowed(it.ID, time.Now()); !ok {
 			held++
 			vlog("[Emby探测] 跳过 %s：%s", it.label(), why)
+			probeReportItem(jobs, probeHeldItem(it))
 			continue
 		}
 		todo = append(todo, it)
@@ -238,13 +330,21 @@ func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 	log.Printf("[Emby探测] ▶ %s：%d 个条目还没有媒体信息，逐个提前探测%s", embyPathBase(p), len(todo), note)
 	for _, it := range todo {
 		// 记账在发请求之前：请求发出去就算一次，哪怕随后超时、进程被杀
-		if ok, _ := embyExtractClaim(it.ID, time.Now()); !ok {
+		if ok, _ := embyExtractClaim(it.ID, it.label(), time.Now()); !ok {
+			probeReportItem(jobs, probeHeldItem(it))
 			continue
 		}
-		setEmbyExtractRunning(it.ID)
+		setEmbyExtractRunning(it.ID, it.label())
 		ok, errMsg := embyExtractOne(cfg, it)
-		setEmbyExtractRunning("")
+		setEmbyExtractRunning("", "")
 		embyExtractSettle(it.ID, ok, errMsg)
+		if ok {
+			probeReportOK(jobs)
+		} else {
+			item := probeHeldItem(it) // 记账刚写过：带上失败原因与下次什么时候能再试
+			item.Kind = probeItemFailed
+			probeReportItem(jobs, item)
+		}
 		pause := embyExtractGap
 		if ok {
 			embyExtractFails = 0
@@ -253,18 +353,39 @@ func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 				embyExtractFails, embyExtractBreakPause)
 			embyExtractFails = 0
 			pause = embyExtractBreakPause
+			setEmbyExtractPausedUntil(time.Now().Add(pause))
 		}
 		select {
 		case <-stopCh:
 			return false
 		case <-time.After(pause):
 		}
+		setEmbyExtractPausedUntil(time.Time{})
 	}
 	return
 }
 
 // embyExtractFails 连续失败的条目数（只有 worker 一个 goroutine 读写）
 var embyExtractFails int
+
+// embyExtractPaused 熔断暂停到什么时候（零值 = 没暂停）：任务中心显示「暂停至 HH:MM」
+var embyExtractPaused struct {
+	sync.Mutex
+	until time.Time
+}
+
+func setEmbyExtractPausedUntil(t time.Time) {
+	embyExtractPaused.Lock()
+	embyExtractPaused.until = t
+	embyExtractPaused.Unlock()
+}
+
+func embyExtractPausedUntil() (time.Time, bool) {
+	embyExtractPaused.Lock()
+	defer embyExtractPaused.Unlock()
+	t := embyExtractPaused.until
+	return t, !t.IsZero() && time.Now().Before(t)
+}
 
 // ---- 按条目记账 ----
 
@@ -299,8 +420,8 @@ func embyExtractAllowed(id string, now time.Time) (bool, string) {
 }
 
 // embyExtractClaim 发请求前记一次尝试；不允许时返回 false。
-// 只有 worker 一个 goroutine 调它，查与写之间不会插进别人
-func embyExtractClaim(id string, now time.Time) (bool, string) {
+// label 是条目的称呼，任务中心列失败清单用。只有 worker 一个 goroutine 调它，查与写之间不会插进别人
+func embyExtractClaim(id, label string, now time.Time) (bool, string) {
 	if model.DB == nil {
 		return false, "数据库未就绪，记不了账就不探测"
 	}
@@ -309,6 +430,9 @@ func embyExtractClaim(id string, now time.Time) (bool, string) {
 	}
 	m, _ := embyExtractLoad(id)
 	m.ItemID, m.Attempts, m.LastAt, m.LastErr = id, m.Attempts+1, now, "请求中"
+	if label != "" {
+		m.Label = truncateStr(label, 250)
+	}
 	embyExtractStore(m)
 	return true, ""
 }
@@ -427,24 +551,23 @@ func (it embyExtractItem) extractable() bool {
 
 // embyExtractTargets 一条 Emby 路径下还缺媒体信息的影视条目。
 // 路径可能是单个 .strm（整理落盘点名回查的就是它，条目是 Episode / Movie），
-// 也可能是片目目录（条目是 Folder / Series，要往下找）
-func embyExtractTargets(cfg embyRefreshCfg, embyPath string) ([]embyExtractItem, error) {
+// 也可能是片目目录（条目是 Folder / Series，要往下找）。found = Emby 里有这条路径的条目
+func embyExtractTargets(cfg embyRefreshCfg, embyPath string) (todo []embyExtractItem, found bool, err error) {
 	found, items, err := embyMediaItemsAt(cfg, embyPath)
 	if err != nil {
-		return nil, err
+		return nil, found, err
 	}
 	if !found {
 		// 还没入库：刮削结束时排进来的新片目常见，入库确认那条入口会再排一次
 		vlog("[Emby探测] %s 在 Emby 里还没有条目，跳过", embyPath)
-		return nil, nil
+		return nil, false, nil
 	}
-	var todo []embyExtractItem
 	for _, it := range items {
 		if it.ID != "" && !it.hasMediaInfo() && it.extractable() {
 			todo = append(todo, it)
 		}
 	}
-	return todo, nil
+	return todo, true, nil
 }
 
 // embyMediaItemsAt 一条 Emby 路径下的全部影视条目（Movie / Episode / Video），带轨道信息。

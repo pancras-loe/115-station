@@ -11,10 +11,14 @@ import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 import {
   JOB_STATUS,
+  PROBE_ITEM_KIND,
+  PROBE_REPORT_STATE,
   elapsed,
   jobKindText,
   jobSourceText,
+  msgTone,
   pct,
+  probeRetryText,
   resultIssues,
   resultSummary,
   retryable,
@@ -83,6 +87,38 @@ const RECORD_STATUS: Record<string, { text: string; color: 'default' | 'accent' 
   failed: { text: '失败', color: 'danger' },
 }
 
+/** 探测报告的计数行：「成功 3 · 失败 1 · 跳过 2 · 未入库 1」 */
+const probeCounts = computed(() => {
+  const p = job.value?.probe
+  if (!p) return ''
+  const parts: string[] = [`片目 ${p.finished}/${p.paths}`]
+  if (p.ok) parts.push(`成功 ${p.ok}`)
+  if (p.failed) parts.push(`失败 ${p.failed}`)
+  if (p.errors) parts.push(`出错 ${p.errors}`)
+  if (p.held) parts.push(`跳过 ${p.held}`)
+  if (p.missing) parts.push(`未入库 ${p.missing}`)
+  return parts.join(' · ')
+})
+
+// 探测在任务结束后才跑：还没跑完时详情每 10 秒重拉一次（顶栏轮询只管队列里的任务）
+let probeTimer: number | undefined
+watch(
+  () => job.value?.probe?.state,
+  (st) => {
+    if (probeTimer !== undefined) clearInterval(probeTimer)
+    probeTimer = undefined
+    if ((st === 'queued' || st === 'running') && props.jobId != null) {
+      const id = props.jobId
+      probeTimer = window.setInterval(() => {
+        if (props.jobId === id) void load(id)
+      }, 10_000)
+    }
+  },
+)
+onUnmounted(() => {
+  if (probeTimer !== undefined) clearInterval(probeTimer)
+})
+
 async function retry() {
   if (!job.value) return
   await queue.retry(job.value.id)
@@ -105,7 +141,7 @@ async function retry() {
         <span class="id">#{{ job.id }}</span>
       </div>
 
-      <p v-if="job.message" class="msg" :class="{ err: job.status === 'failed' || job.status === 'interrupted' }">
+      <p v-if="job.message" class="msg" :class="msgTone(job)">
         {{ job.message }}
       </p>
 
@@ -158,6 +194,32 @@ async function retry() {
           <li v-for="(s, i) in resultIssues(job)" :key="i">{{ s }}</li>
         </ul>
         <p class="dim">最多列 50 条，完整的在实时日志里（搜「[影视刮削]」）。</p>
+      </section>
+
+      <section v-if="job.probe" class="block">
+        <h3>Emby 提前探测 · {{ PROBE_REPORT_STATE[job.probe.state] ?? job.probe.state }}</h3>
+        <p class="line">{{ probeCounts }}</p>
+        <p v-if="job.probe.paused_until" class="line warn">
+          连续失败，已暂停到 {{ fullTime(job.probe.paused_until) }}（可能是 115 风控或 Emby 异常），之后接着探
+        </p>
+        <ul v-if="job.probe.items?.length" class="probe-items">
+          <li v-for="(it, i) in job.probe.items" :key="i" class="probe-item">
+            <div class="pi-head">
+              <HChip size="sm" :color="PROBE_ITEM_KIND[it.kind]?.color ?? 'default'">
+                {{ PROBE_ITEM_KIND[it.kind]?.text ?? it.kind }}
+              </HChip>
+              <span class="pi-label">{{ it.label || '—' }}</span>
+              <span v-if="it.attempts" class="dim">已请求 {{ it.attempts }} 次</span>
+            </div>
+            <p v-if="it.err" class="pi-line">{{ it.kind === 'held' ? `上次：${it.err}` : it.err }}</p>
+            <p v-if="it.kind !== 'error'" class="pi-line dim">{{ probeRetryText(it) }}</p>
+          </li>
+        </ul>
+        <p v-if="job.probe.more" class="dim">另有 {{ job.probe.more }} 条没列出，见实时日志（搜「[Emby探测]」）。</p>
+        <p class="dim">
+          每个视频最多请求 2 次、两次至少隔 24 小时（每次都要取一次 115 直链），冷却期内的会跳过。
+          每集的状态也可以在「本地文件」的片目详情里看。
+        </p>
       </section>
 
       <section v-if="job.params_summary?.length" class="block">
@@ -239,6 +301,49 @@ async function retry() {
 .msg.err {
   color: var(--danger);
   background: var(--danger-soft);
+}
+.msg.warn {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.line.warn {
+  color: var(--warning);
+}
+.probe-items {
+  list-style: none;
+  margin: 8px 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.probe-item {
+  min-width: 0;
+}
+.pi-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pi-label {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pi-line {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--foreground);
+  word-break: break-all;
+}
+.pi-line.dim {
+  color: var(--muted);
 }
 .block h3 {
   margin: 0 0 6px;

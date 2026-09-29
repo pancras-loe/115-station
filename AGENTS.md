@@ -394,6 +394,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       目录与 `.strm` 两种路径），只靠「已有媒体信息就跳过」挡不住失败 / 超时的。所以按 Emby 条目 id 落库记账（`EmbyExtractMark`）：
       **发请求前**先记一次，同一条目最多 2 次、间隔 ≥24 小时，成功删账；连续 3 个失败熔断暂停 30 分钟；
       整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
+    - **结果要让用户看得到**（`embyprobereport.go`，2026-09-29）：手动刮削排的探测挂在任务结束回调上（`onJobDone` → `queueEmbyExtractFor`），
+      每个条目的结果（成功 / 失败 / 冷却中跳过 / Emby 里还没有）写回那个任务的 `TaskJob.Probe`（单独一列，别并进 `Result`：结束时写 `Result` 会把它盖掉），
+      有失败就把任务从 `success` 改成 `partial`。「下次最早能再试」一律用 `embyProbeStateOf` 按记账算。**没有定时重试**：冷却过了要等再次入库 / 刮削 / 片目详情里手动探测，文案别写成「会自动重试」。
+      入库确认排的探测没有任务可挂，靠任务中心的全局卡片（`GET /tasks/probe`，列记账里所有没成功的条目）。
+    - 任务状态 `partial`（部分失败）：执行器返回 `jobOutcome.Partial`。刮削有出错的产物或没刮成的片目（含中途片目被挪走）就是部分失败；停止优先于它。可重试，保留 30 天。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 

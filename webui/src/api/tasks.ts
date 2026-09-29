@@ -1,7 +1,8 @@
 import { http } from './client'
 
 /** 任务队列（后端 internal/api/taskqueue.go） */
-export type TaskJobStatus = 'queued' | 'running' | 'success' | 'failed' | 'canceled' | 'interrupted'
+/** partial = 跑完了但有一部分没做成（刮削有片目 / 产物失败，或之后的 Emby 提前探测有条目失败） */
+export type TaskJobStatus = 'queued' | 'running' | 'success' | 'partial' | 'failed' | 'canceled' | 'interrupted'
 
 export interface TaskJobProgress {
   phase?: string
@@ -25,6 +26,60 @@ export interface QueuedReply {
   job_id: number
   position: number
   eta_sec: number
+}
+
+/** 一个没探成的条目（后端 embyprobereport.go 的 jobProbeItem） */
+export interface TaskProbeItem {
+  label: string
+  /** failed 这次请求失败 / held 近期请求过或次数用完、这次没请求 / missing Emby 里还没有 / error 整条路径没法处理 */
+  kind: 'failed' | 'held' | 'missing' | 'error'
+  err?: string
+  attempts?: number
+  /** 最早什么时候允许再探；final 时是记账过期、再给一次机会的时间 */
+  retry_at?: string
+  /** 次数用完，不再自动探测 */
+  final?: boolean
+}
+
+/** 任务结束后排进 Emby 提前探测的结果 */
+export interface TaskProbeReport {
+  paths: number
+  finished: number
+  ok: number
+  failed: number
+  held: number
+  missing: number
+  errors: number
+  items?: TaskProbeItem[]
+  more?: number
+  updated_at: string
+  /** lost = 没探完服务就重启了，内存里的队列丢了 */
+  state: 'queued' | 'running' | 'done' | 'lost'
+  /** 连续失败熔断，暂停到这个时间 */
+  paused_until?: string
+}
+
+/** Emby 提前探测的全局状态（GET /tasks/probe） */
+export interface ProbeFailRow {
+  item_id: string
+  label: string
+  attempts: number
+  last_err: string
+  last_at: string
+  retry_at?: string
+  final?: boolean
+  running?: boolean
+}
+
+export interface ProbeStatus {
+  enabled: boolean
+  emby: boolean
+  queue: number
+  running: string
+  paused_until?: string
+  limits: { max_attempts: number; retry_hours: number; prune_days: number }
+  fails: ProbeFailRow[]
+  fail_total: number
 }
 
 export interface TaskJob {
@@ -63,6 +118,8 @@ export interface TaskJob {
   progress?: TaskJobProgress
   /** 结构化结果（整理：{ success, exists, failed, awaiting }） */
   result?: Record<string, unknown>
+  /** 结束后排进 Emby 提前探测的结果（手动刮削勾了「轨道探测」时才有），探测跑完前会继续更新 */
+  probe?: TaskProbeReport
   /** 排队中可取消 / 运行中可停止（逐条处理的任务才能在两条之间停） */
   stoppable?: boolean
   /** 排队中：第几位（从 1 起）与预计多少秒后跑完 */
@@ -120,4 +177,5 @@ export const clear = () => http.post<{ message: string }>('/tasks/clear')
 /** 已结束任务的历史（任务中心）；顶栏轮询仍走 list，别混用 */
 export const history = (params: TaskHistoryQuery) =>
   http.get<TaskHistoryPage>('/tasks/history', { params, timeoutMs: 15_000 })
+export const probeStatus = () => http.get<ProbeStatus>('/tasks/probe')
 export const detail = (id: number) => http.get<{ data: TaskJobDetail }>(`/tasks/${id}`, { timeoutMs: 15_000 })

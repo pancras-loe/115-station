@@ -493,13 +493,16 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
 	var wrote map[string]bool
-	// 刮到的片目交给 Emby 提前探测。defer 在刷新之前注册、因此在它之后执行。
+	// 刮到的片目交给 Emby 提前探测，结果写回这个任务（embyprobereport.go）。
+	// 挂在任务结束回调上、而不是直接排：要等任务行写完「完成」，探测失败时才改得成「部分失败」，
+	// 也不会被结束时那一下写回盖掉。
 	// 整理后自动刮削（scrapeAutoDedupe）不排：那些片目刚入库，入库确认那条入口会排，
 	// 这里再排一次就是同一批条目进两次队列（防重复探测，见 embyextract.go 文件头）
 	var extract []string
 	defer func() {
 		if len(extract) > 0 {
-			queueEmbyExtract(extract...)
+			paths, id := extract, job.ID
+			onJobDone(id, func(model.TaskJob) { queueEmbyExtractFor(id, paths...) })
 		}
 	}()
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
@@ -624,6 +627,10 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		if reclaimed > 0 {
 			log.Printf("[影视刮削] ○ 《%s》刮削期间片目（或其中几集）被移走 / 删除，已收回这次写下的 %d 个文件", t.Title, reclaimed)
 		}
+		if st.Gone {
+			// 此前只进详细日志：任务显示完成，这部片其实只刮了一半
+			problems = append(problems, fmt.Sprintf("%s：刮削中途片目目录不见了（被整理挪走或删除），剩下的产物没写", t.Title))
+		}
 		done = i + 1
 		time.Sleep(150 * time.Millisecond) // TMDB 限速保护
 	}
@@ -651,7 +658,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	if len(extract) > 0 {
 		// 探测与入库确认共用记账（embyextract.go）：说清楚不是每一集都会探，免得用户以为漏了
-		msg += fmt.Sprintf("；%d 个片目已排进 Emby 提前探测（已有媒体信息、近期请求过的条目会跳过，片目详情里可看每集状态）", len(extract))
+		msg += fmt.Sprintf("；%d 个片目已排进 Emby 提前探测（已有媒体信息的跳过，结果在任务详情里）", len(extract))
 	} else if o.Probe && job.DedupeKey != scrapeAutoDedupe && done > 0 {
 		if _, ok := loadEmbyRefreshCfg(); !ok {
 			msg += "；没有配置 Emby，跳过提前探测"
@@ -674,9 +681,12 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if w.stat.Local+w.stat.Uploaded+w.stat.Skipped == 0 && rep.n > 0 && !canceled {
 		return jobOutcome{Result: res}, errors.New(msg)
 	}
-	// 整理后刮削什么都没写（全都已有）：后台任务不留行，免得每轮整理都添一条「跳过 N 个」
-	idle := job.Priority == jobPriorityBackground && w.stat.Local+w.stat.Uploaded == 0 && rep.n == 0 && len(problems) == 0
-	return jobOutcome{Message: msg, Result: res, Canceled: canceled, Idle: idle}, nil
+	// 整理后刮削什么都没写（全都已有）：后台任务不留行，免得每轮整理都添一条「跳过 N 个」。
+	// 排了探测的要留：探测结果写回这一行
+	idle := job.Priority == jobPriorityBackground && w.stat.Local+w.stat.Uploaded == 0 && rep.n == 0 && len(problems) == 0 && len(extract) == 0
+	// 有出错或没刮成的片目：记「部分失败」，不再和全部成功一样显示「完成」
+	partial := rep.n > 0 || len(problems) > 0
+	return jobOutcome{Message: msg, Result: res, Canceled: canceled, Idle: idle, Partial: partial}, nil
 }
 
 // localHasStrm 本地目录（含子目录）里还有没有 STRM：片目还在不在原位的判据

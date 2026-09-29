@@ -39,6 +39,7 @@ const (
 	jobQueued      = "queued"
 	jobRunning     = "running"
 	jobSuccess     = "success"
+	jobPartial     = "partial" // 跑完了，但有一部分没做成（刮削有片目 / 产物失败、提前探测有条目失败）
 	jobFailed      = "failed"
 	jobCanceled    = "canceled"
 	jobInterrupted = "interrupted"
@@ -51,7 +52,7 @@ const (
 )
 
 // jobFinishedStatuses 已结束的状态（清理、重试用）
-var jobFinishedStatuses = []string{jobSuccess, jobFailed, jobCanceled, jobInterrupted}
+var jobFinishedStatuses = []string{jobSuccess, jobPartial, jobFailed, jobCanceled, jobInterrupted}
 
 // 做成变量只为让测试不必真等，生产行为不变
 var (
@@ -118,6 +119,9 @@ type jobOutcome struct {
 	// Idle 这一轮什么都没干（定时整理 10 分钟一轮、多数空转）：跑完直接删行，不进历史。
 	// 失败的不算空转，照样留下原因
 	Idle bool
+	// Partial 跑完了但有一部分失败：记成「部分失败」而不是「完成」，原因放在 Result 里。
+	// 此前刮削错了几十处也显示「完成」，用户不点开详情根本不知道
+	Partial bool
 }
 
 // jobKindBackground 后台任务（定时整理、转存触发 …）跑完留下的历史行。
@@ -433,6 +437,8 @@ func (h *Handler) runJob(job *model.TaskJob, l *jobLane) {
 		status, msg = jobFailed, err.Error()
 	case out.Canceled:
 		status = jobCanceled
+	case out.Partial:
+		status = jobPartial
 	}
 	progJSON, _ := json.Marshal(prog)
 	upd := map[string]interface{}{
@@ -461,6 +467,8 @@ func (h *Handler) runJob(job *model.TaskJob, l *jobLane) {
 	switch status {
 	case jobSuccess:
 		log.Printf("[队列] ✓ 完成（%s）：%s", elapsed, job.Title)
+	case jobPartial:
+		log.Printf("[队列] ⚠ 部分失败（%s）：%s - %s", elapsed, job.Title, msg)
 	case jobCanceled:
 		log.Printf("[队列] ○ 已停止（%s）：%s - %s", elapsed, job.Title, msg)
 	default:
@@ -517,7 +525,7 @@ func waitIncrWindow(interval time.Duration) {
 	}
 }
 
-// pruneTaskJobs 清理已结束的任务（随每日清理一次）：成功 / 取消留 7 天，失败 / 中断留 30 天
+// pruneTaskJobs 清理已结束的任务（随每日清理一次）：成功 / 取消留 7 天，部分失败 / 失败 / 中断留 30 天
 func pruneTaskJobs() {
 	if model.DB == nil {
 		return
@@ -525,7 +533,7 @@ func pruneTaskJobs() {
 	now := time.Now()
 	res1 := model.DB.Where("status IN ? AND created_at < ?", []string{jobSuccess, jobCanceled}, now.AddDate(0, 0, -7)).
 		Delete(&model.TaskJob{})
-	res2 := model.DB.Where("status IN ? AND created_at < ?", []string{jobFailed, jobInterrupted}, now.AddDate(0, 0, -30)).
+	res2 := model.DB.Where("status IN ? AND created_at < ?", []string{jobPartial, jobFailed, jobInterrupted}, now.AddDate(0, 0, -30)).
 		Delete(&model.TaskJob{})
 	if n := res1.RowsAffected + res2.RowsAffected; n > 0 {
 		log.Printf("[系统] ○ 清理 %d 条已结束的队列任务", n)
@@ -539,6 +547,7 @@ type taskJobDTO struct {
 	model.TaskJob
 	RecordIDs []uint          `json:"record_ids,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
+	Probe     *jobProbeReport `json:"probe,omitempty"` // 任务结束后排进 Emby 提前探测的结果（embyprobereport.go）
 	Stoppable bool            `json:"stoppable,omitempty"`
 	Progress  *jobProgress    `json:"progress,omitempty"`
 	Position  int             `json:"position,omitempty"`
@@ -550,6 +559,7 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 	if job.Result != "" && json.Valid([]byte(job.Result)) {
 		d.Result = json.RawMessage(job.Result)
 	}
+	d.Probe = probeReportOf(&job)
 	d.Stoppable = job.Status == jobQueued || (job.Status == jobRunning && jobStoppable(&job))
 	switch job.Status {
 	case jobRunning:
@@ -664,7 +674,8 @@ func (h *Handler) CancelTaskJob(c *gin.Context) {
 	}
 }
 
-// RetryTaskJob POST /tasks/:id/retry：失败 / 中断 / 取消的按原参数重新入队
+// RetryTaskJob POST /tasks/:id/retry：部分失败 / 失败 / 中断 / 取消的按原参数重新入队。
+// 部分失败的刮削重试一遍只会补上缺的（除非当初勾了强制覆盖）
 func (h *Handler) RetryTaskJob(c *gin.Context) {
 	var job model.TaskJob
 	if h.DB.First(&job, c.Param("id")).Error != nil {
@@ -672,7 +683,7 @@ func (h *Handler) RetryTaskJob(c *gin.Context) {
 		return
 	}
 	if job.Status == jobQueued || job.Status == jobRunning || job.Status == jobSuccess {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "只有失败、中断或已取消的任务可以重试"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "只有部分失败、失败、中断或已取消的任务可以重试"})
 		return
 	}
 	if jobExecutors[job.Kind] == nil {

@@ -1,10 +1,12 @@
-import type { TaskJob } from '@/api/tasks'
+import type { TaskJob, TaskProbeItem } from '@/api/tasks'
+import { fullTime } from '@/utils/time'
 
 /** 任务状态 → 文案与 chip 颜色。顶栏弹层与任务中心共用 */
 export const JOB_STATUS: Record<string, { text: string; color: 'default' | 'accent' | 'success' | 'warning' | 'danger' }> = {
   running: { text: '执行中', color: 'accent' },
   queued: { text: '排队中', color: 'default' },
   success: { text: '完成', color: 'success' },
+  partial: { text: '部分失败', color: 'warning' },
   failed: { text: '失败', color: 'danger' },
   canceled: { text: '已取消', color: 'warning' },
   interrupted: { text: '中断', color: 'danger' },
@@ -76,7 +78,17 @@ export function pct(j: TaskJob) {
 
 /** 后台任务（Emby 事件深删留下的历史行）不在队列里执行，没法重试，等它下一轮自动跑 */
 export function retryable(j: TaskJob) {
-  return j.kind !== 'background' && (j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled')
+  return (
+    j.kind !== 'background' &&
+    (j.status === 'partial' || j.status === 'failed' || j.status === 'interrupted' || j.status === 'canceled')
+  )
+}
+
+/** 结果说明该用什么色：失败 / 中断红、部分失败黄 */
+export function msgTone(j: TaskJob): '' | 'err' | 'warn' {
+  if (j.status === 'failed' || j.status === 'interrupted') return 'err'
+  if (j.status === 'partial') return 'warn'
+  return ''
 }
 
 /** 结构化结果里认得的计数字段（整理：success / exists / failed / awaiting；全量：orphans） */
@@ -113,7 +125,42 @@ export function resultSummary(j: TaskJob) {
       if (typeof stat[k] === 'number' && (stat[k] as number) > 0) parts.push(`${label} ${stat[k]}`)
     }
   }
+  const p = j.probe
+  if (p) {
+    if (p.state === 'queued' || p.state === 'running') parts.push('Emby 探测进行中')
+    if (p.ok) parts.push(`探测成功 ${p.ok}`)
+    if (p.failed + p.errors) parts.push(`探测失败 ${p.failed + p.errors}`)
+    if (p.held) parts.push(`探测跳过 ${p.held}`)
+  }
   return parts.join(' · ')
+}
+
+/** 探测报告的整体状态文案 */
+export const PROBE_REPORT_STATE: Record<string, string> = {
+  queued: '排队中',
+  running: '探测中',
+  done: '已结束',
+  lost: '中断（服务重启过，没探完的没有继续）',
+}
+
+/** 没探成的条目归类 */
+export const PROBE_ITEM_KIND: Record<TaskProbeItem['kind'], { text: string; color: 'warning' | 'danger' | 'default' }> = {
+  failed: { text: '失败', color: 'danger' },
+  error: { text: '出错', color: 'danger' },
+  held: { text: '跳过', color: 'warning' },
+  missing: { text: '未入库', color: 'default' },
+}
+
+/**
+ * 一个没探成的条目「接下来会怎样」。
+ * 注意没有定时重试：冷却期过了之后，要等这个片目再次入库确认、再刮削一次，或在片目详情里点「提前探测」才会再请求
+ */
+export function probeRetryText(it: { retry_at?: string; final?: boolean; kind?: string }) {
+  if (it.kind === 'missing') return 'Emby 入库确认后会自动再排'
+  if (it.final) return `次数已用完，不再自动探测${it.retry_at ? `；${fullTime(it.retry_at)} 记录过期后才会再给一次机会` : ''}`
+  if (!it.retry_at) return '已过冷却时间，下次入库或刮削时会再试'
+  if (new Date(it.retry_at).getTime() <= Date.now()) return '已过冷却时间，下次入库或刮削时会再试'
+  return `${fullTime(it.retry_at)} 之后才允许再探（不会自动重试，到时再刮削或在片目详情里点「提前探测」）`
 }
 
 /** 结果里的问题清单（刮削：未能刮削的片目 problems + 出错明细 errors） */

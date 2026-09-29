@@ -228,6 +228,8 @@ type EmbyExtractMark struct {
 	Attempts int       `json:"attempts"`
 	LastAt   time.Time `json:"last_at" gorm:"index"`
 	LastErr  string    `json:"last_err" gorm:"size:255"`
+	// Label 条目怎么称呼（剧名 S01E02 / 片名）：任务中心列失败清单用，老记账为空
+	Label string `json:"label" gorm:"size:255"`
 }
 
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
@@ -312,12 +314,15 @@ type TaskJob struct {
 	DedupeKey string `json:"-" gorm:"index;size:64"`
 	// Priority 0 = 手动，1 = 后台；排队中按 Priority, ID 取，运行中的任务不抢占
 	Priority int    `json:"priority" gorm:"index"`
-	Status   string `json:"status" gorm:"index;size:16"` // queued / running / success / failed / canceled / interrupted
+	Status   string `json:"status" gorm:"index;size:16"` // queued / running / success / partial / failed / canceled / interrupted
 	Source   string `json:"source" gorm:"size:16"`       // web / wecom / cron / offline
 	// Progress 结束时的进度快照 JSON；运行中以内存为准
-	Progress   string     `json:"-" gorm:"type:text"`
-	Message    string     `json:"message" gorm:"size:500"`
-	Result     string     `json:"-" gorm:"type:text"`
+	Progress string `json:"-" gorm:"type:text"`
+	Message  string `json:"message" gorm:"size:500"`
+	Result   string `json:"-" gorm:"type:text"`
+	// Probe 这次任务排进 Emby 提前探测的结果 JSON（jobProbeReport）。探测在任务结束后才跑，
+	// 单独一列：结束时写 Result 的那一下不会把探测已经写回的结果盖掉
+	Probe      string     `json:"-" gorm:"type:text"`
 	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
 	StartedAt  *time.Time `json:"started_at"`
 	FinishedAt *time.Time `json:"finished_at"`

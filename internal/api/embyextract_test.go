@@ -105,8 +105,8 @@ func resetExtractState(t *testing.T) {
 
 func TestEmbyExtractTargetsOnlyMissing(t *testing.T) {
 	f := newFakeExtractEmby(t, true, "ep1")
-	items, err := embyExtractTargets(f.cfg(), "/media/某剧")
-	if err != nil {
+	items, found, err := embyExtractTargets(f.cfg(), "/media/某剧")
+	if err != nil || !found {
 		t.Fatal(err)
 	}
 	// 已有音视频的不碰、ISO 不碰，只剩缺媒体信息的那一集
@@ -149,24 +149,24 @@ func TestEmbyExtractFailureNotRepeated(t *testing.T) {
 func TestEmbyExtractLedgerWindowAndCap(t *testing.T) {
 	resetExtractState(t)
 	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.Local)
-	if ok, _ := embyExtractClaim("x", t0); !ok {
+	if ok, _ := embyExtractClaim("x", "", t0); !ok {
 		t.Fatal("第一次应允许")
 	}
 	embyExtractSettle("x", false, "超时")
-	if ok, _ := embyExtractClaim("x", t0.Add(time.Hour)); ok {
+	if ok, _ := embyExtractClaim("x", "", t0.Add(time.Hour)); ok {
 		t.Fatal("24 小时内不许再试")
 	}
-	if ok, _ := embyExtractClaim("x", t0.Add(25*time.Hour)); !ok {
+	if ok, _ := embyExtractClaim("x", "", t0.Add(25*time.Hour)); !ok {
 		t.Fatal("过了间隔应允许第二次")
 	}
 	embyExtractSettle("x", false, "超时")
-	if ok, why := embyExtractClaim("x", t0.Add(30*24*time.Hour)); ok {
+	if ok, why := embyExtractClaim("x", "", t0.Add(30*24*time.Hour)); ok {
 		t.Fatal("试满两次不再自动探测")
 	} else if why == "" {
 		t.Fatal("拒绝要说明原因")
 	}
 	// 成功即删账
-	embyExtractClaim("y", t0)
+	embyExtractClaim("y", "", t0)
 	embyExtractSettle("y", true, "")
 	if _, ok := embyExtractLoad("y"); ok {
 		t.Fatal("成功后应删账")
@@ -216,11 +216,11 @@ func TestQueueEmbyExtractDedupe(t *testing.T) {
 	queueEmbyExtract("/b", "/c")
 	var got []string
 	for {
-		p, ok := embyExtractPop()
+		e, ok := embyExtractPop()
 		if !ok {
 			break
 		}
-		got = append(got, p)
+		got = append(got, e.path)
 	}
 	if len(got) != 3 || got[0] != "/a" || got[1] != "/b" || got[2] != "/c" {
 		t.Fatalf("排队应去重保序，得到 %v", got)

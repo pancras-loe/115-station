@@ -14,7 +14,7 @@ import { useFeedback } from '@/composables/useFeedback'
  *
  * 任务结束时弹一条提示，并通知订阅者（整理记录页据此刷新列表）。
  */
-const FINISHED = new Set(['success', 'failed', 'canceled', 'interrupted'])
+const FINISHED = new Set(['success', 'partial', 'failed', 'canceled', 'interrupted'])
 const ACTIVE_MS = 2000
 const IDLE_MS = 15000
 
@@ -66,6 +66,7 @@ export const useQueueStore = defineStore('queue', () => {
     if (j.priority !== 0 && !tracked.has(j.id)) return
     const { message } = useFeedback()
     if (j.status === 'success') message.success(`✓ ${j.title}${j.message ? `：${j.message}` : ''}`)
+    else if (j.status === 'partial') message.warning(`部分失败：${j.title}${j.message ? `：${j.message}` : ''}（详情在任务中心）`)
     else if (j.status === 'canceled') message.warning(`已停止：${j.title}${j.message ? `（${j.message}）` : ''}`)
     else message.error(`✗ ${j.title}：${j.message || '失败'}`)
   }

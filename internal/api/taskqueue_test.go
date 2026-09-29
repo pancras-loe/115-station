@@ -94,8 +94,16 @@ func TestRunJobOutcomes(t *testing.T) {
 		"half": func(*Handler, *model.TaskJob) (jobOutcome, error) {
 			return jobOutcome{Message: "停了", Canceled: true}, nil
 		},
+		"part": func(*Handler, *model.TaskJob) (jobOutcome, error) {
+			return jobOutcome{Message: "3 处出错", Partial: true}, nil
+		},
+		// 停止优先于部分失败：用户叫停的，别显示成出错
+		"halfpart": func(*Handler, *model.TaskJob) (jobOutcome, error) {
+			return jobOutcome{Message: "停了", Canceled: true, Partial: true}, nil
+		},
 	})
-	cases := map[string]string{"ok": jobSuccess, "bad": jobFailed, "boom": jobFailed, "half": jobCanceled}
+	cases := map[string]string{"ok": jobSuccess, "bad": jobFailed, "boom": jobFailed, "half": jobCanceled,
+		"part": jobPartial, "halfpart": jobCanceled}
 	for kind, want := range cases {
 		job, _ := enqueueJob(model.DB, jobSpec{Kind: kind, Title: kind})
 		h.runJob(&job, mainLane)

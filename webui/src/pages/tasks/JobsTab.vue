@@ -16,6 +16,7 @@ import type { IncrStatus } from '@/api/sync'
 import type { TaskJob } from '@/api/tasks'
 import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
+import ProbeStatusCard from './ProbeStatusCard.vue'
 import {
   JOB_KIND,
   JOB_SOURCE,
@@ -24,6 +25,7 @@ import {
   elapsed,
   jobKindText,
   jobSourceText,
+  msgTone,
   pct,
   resultSummary,
   retryable,
@@ -88,13 +90,18 @@ const source = ref('')
 const keyword = ref('')
 const loading = ref(false)
 
-const STATUS_TABS = ['all', 'success', 'failed', 'interrupted', 'canceled'] as const
+const STATUS_TABS = ['all', 'success', 'partial', 'failed', 'interrupted', 'canceled'] as const
 const statusTabs = computed(() =>
   STATUS_TABS.map((k) => ({
     value: k,
     label: k === 'all' ? '全部' : JOB_STATUS[k].text,
     count: counts.value[k] ?? 0,
-    countTone: k === 'failed' || k === 'interrupted' ? ('danger' as const) : ('accent' as const),
+    countTone:
+      k === 'failed' || k === 'interrupted'
+        ? ('danger' as const)
+        : k === 'partial'
+          ? ('warning' as const)
+          : ('accent' as const),
   })),
 )
 const KIND_OPTIONS = [{ label: '全部类型', value: '' }, ...Object.entries(JOB_KIND).map(([value, label]) => ({ label, value }))]
@@ -199,6 +206,8 @@ onUnmounted(() => {
       </dl>
     </SectionCard>
 
+    <ProbeStatusCard />
+
     <SectionCard title="进行中" :hint="`执行中 ${queue.running} · 排队 ${queue.queued}`">
       <EmptyState
         v-if="!running.length && !queued.length && !outside"
@@ -299,7 +308,7 @@ onUnmounted(() => {
                 <button type="button" class="title link" :title="j.title" @click="emit('open', j.id)">{{ j.title }}</button>
                 <span class="meta">{{ jobKindText(j.kind) }} · {{ jobSourceText(j.source) }}</span>
               </div>
-              <p class="sub" :class="{ err: j.status === 'failed' || j.status === 'interrupted' }">
+              <p class="sub" :class="msgTone(j)">
                 <span v-if="resultSummary(j)" class="result">{{ resultSummary(j) }}</span>
                 <span v-if="resultSummary(j) && j.message"> · </span>
                 <span class="msg">{{ j.message || (resultSummary(j) ? '' : '—') }}</span>
@@ -457,6 +466,9 @@ onUnmounted(() => {
 }
 .sub.err .msg {
   color: var(--danger);
+}
+.sub.warn .msg {
+  color: var(--warning);
 }
 .result {
   color: var(--foreground);

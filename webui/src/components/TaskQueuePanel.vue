@@ -146,7 +146,11 @@ const background = computed(() => {
               <span v-if="j.position === 1 && j.kind !== 'scrape' && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
             </p>
 
-            <p v-else class="qp-sub" :class="{ 'qp-err': j.status === 'failed' || j.status === 'interrupted' }">
+            <p
+              v-else
+              class="qp-sub"
+              :class="{ 'qp-err': j.status === 'failed' || j.status === 'interrupted', 'qp-warn': j.status === 'partial' }"
+            >
               {{ j.message || '—' }}
               <span v-if="j.started_at" class="qp-dim"> · 用时 {{ elapsed(j) }}</span>
             </p>
@@ -263,6 +267,9 @@ const background = computed(() => {
 }
 .qp-err {
   color: var(--danger);
+}
+.qp-warn {
+  color: var(--warning);
 }
 .qp-bar {
   margin-top: 6px;

@@ -300,7 +300,11 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			lines = append(lines, "最近任务：")
 			for _, r := range runs {
 				mark := "✓"
-				if r.Status != jobSuccess {
+				switch r.Status {
+				case jobSuccess:
+				case jobPartial:
+					mark = "⚠"
+				default:
 					mark = "✗"
 				}
 				when, took := r.CreatedAt.Format("01-02 15:04:05"), ""
@@ -498,6 +502,8 @@ func (h *Handler) wecomEnqueue(spec jobSpec, what string, reply func(lines ...st
 		switch j.Status {
 		case jobSuccess:
 			reply("✓ " + what + "完成：" + orDash(j.Message))
+		case jobPartial:
+			reply("⚠ " + what + "部分失败：" + orDash(j.Message))
 		case jobCanceled:
 			reply("○ " + what + "已取消：" + orDash(j.Message))
 		default:
