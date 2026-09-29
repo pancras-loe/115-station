@@ -166,9 +166,11 @@ function partialText(t: LocalTitle) {
 }
 
 function metaLine(t: LocalTitle) {
-  const parts = [t.media_type === 'tv' ? '剧集' : '电影']
+  // 剧集有「N 集」就不再写「剧集」：中卡片一行只放得下十来个字，三段全写集数会被截掉
+  const tvWithCount = t.media_type === 'tv' && t.videos > 0
+  const parts: string[] = tvWithCount ? [] : [t.media_type === 'tv' ? '剧集' : '电影']
   if (t.year) parts.push(t.year)
-  if (t.media_type === 'tv') parts.push(`${t.videos} 集`)
+  if (tvWithCount) parts.push(`${t.videos} 集`)
   else if (t.videos > 1) parts.push(`${t.videos} 个视频`)
   return parts.join(' · ')
 }
@@ -439,7 +441,7 @@ onBeforeUnmount(() => {
                 <button type="button" class="info-text" @click="openDetail(t)">
                   <h3 class="name" :title="t.title">{{ t.title }}</h3>
                   <p class="meta">
-                    {{ metaLine(t) }}
+                    <span class="meta-text">{{ metaLine(t) }}</span>
                     <span v-if="!t.tmdb_id" class="no-id" title="目录名里没有 TMDB 编号：刮削时按片名识别">
                       <Sparkles :size="11" />无编号
                     </span>
@@ -757,7 +759,15 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--muted);
 }
+/* 放不下时出省略号，而不是把最后一个字切掉半个 */
+.meta-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .no-id {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 2px;
