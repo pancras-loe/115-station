@@ -40,18 +40,29 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "webhook 未配置鉴权 token：请到 消息配置 里生成，并更新 Emby 的 webhook URL（加 &token=xxx）"})
 		return
 	}
-	if c.Query("token") != wantToken {
+	if got := c.Query("token"); got != wantToken {
+		// 此前这里不留日志，token 对不上与「Emby 根本没推」在本站看起来一模一样。
+		// 只说带没带、对不对，不打明文：日志页谁都可能截图外传
+		why := "URL 未带 token"
+		if got != "" {
+			why = "token 与消息配置里的不一致（重新生成过 token 的话，Emby 里的 URL 要一起更新）"
+		}
+		webhookRejectLog("token", "[Emby Webhook] ✗ 拒绝来自 %s 的推送：%s", c.ClientIP(), why)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "token 无效"})
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 	if err != nil {
+		webhookRejectLog("read", "[Emby Webhook] ✗ 读取来自 %s 的请求体失败: %v", c.ClientIP(), err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "读取请求失败"})
 		return
 	}
 	var payload map[string]interface{}
-	if json.Unmarshal(body, &payload) != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
+		// Emby 通知里内容类型选成 form 时会走到这里，把开头打出来一眼就能看出来
+		webhookRejectLog("json", "[Emby Webhook] ✗ 来自 %s 的请求体不是 JSON（Content-Type=%q）: %v，开头: %q",
+			c.ClientIP(), c.ContentType(), err, truncateStr(string(body), 200))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 JSON"})
 		return
 	}
@@ -156,6 +167,38 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	log.Printf("[Emby Webhook] %s %s", title, content)
 	go NotifyMessage(title, content)
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
+}
+
+// ---- 拒收日志节流 ----
+//
+// webhook 端点不需要登录，拒收日志不节流的话，谁都能拿错 token 刷请求把实时日志页淹掉。
+// 同一类原因每分钟最多打一行，压下去的次数并进下一行里。
+var webhookReject = struct {
+	sync.Mutex
+	last       map[string]time.Time
+	suppressed map[string]int
+}{last: map[string]time.Time{}, suppressed: map[string]int{}}
+
+const webhookRejectEvery = time.Minute
+
+func webhookRejectLog(kind, format string, args ...any) {
+	webhookReject.Lock()
+	now := time.Now()
+	if t, ok := webhookReject.last[kind]; ok && now.Sub(t) < webhookRejectEvery {
+		webhookReject.suppressed[kind]++
+		webhookReject.Unlock()
+		return
+	}
+	n := webhookReject.suppressed[kind]
+	webhookReject.last[kind] = now
+	webhookReject.suppressed[kind] = 0
+	webhookReject.Unlock()
+
+	msg := fmt.Sprintf(format, args...)
+	if n > 0 {
+		msg += fmt.Sprintf("（此前一分钟内同类拒收另有 %d 次未记录）", n)
+	}
+	log.Print(msg)
 }
 
 // embyEventCategory webhook 事件 → 归类 + 通知标题（event 已转小写）。
