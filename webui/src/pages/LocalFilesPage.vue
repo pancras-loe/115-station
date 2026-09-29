@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HDropdown from '@/components/hero/HDropdown.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
@@ -61,6 +62,7 @@ const scroller = ref<HTMLElement | null>(null)
 let seq = 0
 async function load(refresh = false) {
   const my = ++seq
+  matched.value = null // 筛选变了，上次全选拿到的那一批不再代表当前结果
   loading.value = true
   try {
     const d = await localApi.listTitles({
@@ -178,7 +180,6 @@ function metaLine(t: LocalTitle) {
 // ---- 勾选 ----
 
 const selectedList = computed(() => [...selected.value.values()])
-const pageAllChecked = computed(() => items.value.length > 0 && items.value.every((t) => selected.value.has(t.key)))
 const selecting = computed(() => selected.value.size > 0)
 
 function toggle(t: LocalTitle) {
@@ -187,21 +188,42 @@ function toggle(t: LocalTitle) {
   else m.set(t.key, t)
   selected.value = m
 }
-function toggleShown() {
-  const m = new Map(selected.value)
-  const all = pageAllChecked.value
-  for (const t of items.value) {
-    if (all) m.delete(t.key)
-    else m.set(t.key, t)
-  }
-  selected.value = m
-}
+
 /**
- * 全选当前筛选结果：海报墙一次只加载 60 部，「勾选已显示」要一路滚到底才勾得全，
- * 所以按当前筛选条件向后端要一次全量（内存快照，零 115 请求）再并进勾选
+ * 全选框：只有一个，对象永远是「当前筛选下的全部片目」，与海报墙加载了多少无关。
+ *
+ * 原来并排两颗「勾选已显示（60）」「全选筛选结果（820）」：「已显示」是分页加载的实现细节，
+ * 用户分不清两者差在哪、点了前者以为勾全了。现在海报墙没加载完时按当前筛选向后端要一次全量
+ * （内存快照，零 115 请求）；matchedKeys 记住那一批，用来判断全选框是勾满 / 半选 / 空。
+ * 换了筛选（load 重新开始）这份记录就作废。
  */
+const matched = ref<{ keys: string[] } | null>(null)
+const matchedKeys = computed<string[] | null>(() => {
+  if (total.value <= items.value.length) return items.value.map((t) => t.key) // 已全部加载，眼前这批就是全部
+  return matched.value?.keys ?? null
+})
+const allChecked = computed(() => {
+  const keys = matchedKeys.value
+  return !!keys && keys.length > 0 && keys.every((k) => selected.value.has(k))
+})
+/** 半选：勾了一部分（包括别的筛选下勾的），但当前筛选没勾满 */
+const someChecked = computed(() => selecting.value && !allChecked.value)
+
 const selectingAll = ref(false)
-async function selectAllMatched() {
+async function toggleAll() {
+  if (allChecked.value) {
+    // 只取消当前筛选下的；别的筛选下勾的保留（要全清用「清空」）
+    const m = new Map(selected.value)
+    for (const k of matchedKeys.value ?? []) m.delete(k)
+    selected.value = m
+    return
+  }
+  if (total.value <= items.value.length) {
+    const m = new Map(selected.value)
+    for (const t of items.value) m.set(t.key, t)
+    selected.value = m
+    return
+  }
   const my = seq
   selectingAll.value = true
   try {
@@ -209,15 +231,26 @@ async function selectAllMatched() {
       q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value, all: true,
     })
     if (my !== seq) return // 等的时候换了筛选：这份结果已经不是用户眼前那一批
+    const list = d.items ?? []
     const m = new Map(selected.value)
-    for (const t of d.items ?? []) m.set(t.key, t)
+    for (const t of list) m.set(t.key, t)
     selected.value = m
+    matched.value = { keys: list.map((t) => t.key) }
   } catch (e) {
     toastError(e, '读取本地媒体库失败')
   } finally {
     selectingAll.value = false
   }
 }
+/** 已选里有多少不在当前筛选下（知道全集时才算得出） */
+const selectedOutside = computed(() => {
+  const keys = matchedKeys.value
+  if (!keys || !selecting.value) return 0
+  const inView = new Set(keys)
+  let n = 0
+  for (const k of selected.value.keys()) if (!inView.has(k)) n++
+  return n
+})
 function clearSelection() {
   selected.value = new Map()
 }
@@ -359,26 +392,27 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="batch" :class="{ active: selecting }">
-            <span class="sel-count">
-              <template v-if="selecting">已选 <b>{{ selected.size }}</b> 部</template>
-              <template v-else>共 {{ total }} 部<span class="sel-tip">，勾选后可批量刮削</span></template>
-            </span>
+            <HCheckbox
+              class="sel-all"
+              :checked="allChecked"
+              :indeterminate="someChecked"
+              :disabled="!total || selectingAll"
+              @update:checked="toggleAll"
+            >
+              <span class="sel-count">
+                <template v-if="!selecting">全选 {{ total }} 部</template>
+                <template v-else-if="allChecked && !selectedOutside">已全选 <b>{{ selected.size }}</b> 部</template>
+                <template v-else>
+                  已选 <b>{{ selected.size }}</b> 部
+                  <span v-if="selectedOutside" class="sel-tip">（{{ selectedOutside }} 部不在当前筛选里）</span>
+                </template>
+              </span>
+            </HCheckbox>
+            <span v-if="!selecting" class="sel-tip">勾选后可批量刮削</span>
             <div class="batch-btns">
-              <HButton variant="tertiary" size="sm" :disabled="!items.length" @click="toggleShown">
-                {{ pageAllChecked ? '取消勾选已显示' : `勾选已显示（${items.length}）` }}
-              </HButton>
-              <HButton
-                v-if="total > items.length"
-                variant="tertiary"
-                size="sm"
-                :loading="selectingAll"
-                @click="selectAllMatched"
-              >
-                全选筛选结果（{{ total }}）
-              </HButton>
-              <HButton variant="tertiary" size="sm" :disabled="!selecting" @click="clearSelection">清除</HButton>
+              <HButton v-if="selecting" variant="ghost" size="sm" @click="clearSelection">清空</HButton>
               <HButton variant="primary" size="sm" :disabled="!selecting" @click="openScrape(selectedList)">
-                <Images :size="14" />批量刮削
+                <Images :size="14" />批量刮削<template v-if="selecting">（{{ selected.size }}）</template>
               </HButton>
             </div>
           </div>
@@ -560,18 +594,25 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--accent) 8%, var(--surface-secondary));
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent);
 }
+.sel-all {
+  flex: none;
+}
 .sel-count {
-  margin-right: auto;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
 }
 .sel-count b {
   color: var(--accent);
   font-size: 15px;
-  font-variant-numeric: tabular-nums;
+}
+.sel-tip {
+  font-size: 12.5px;
+  color: var(--muted);
 }
 .batch-btns {
   display: flex;
+  margin-left: auto;
   flex-wrap: wrap;
   gap: 8px;
 }
@@ -952,11 +993,12 @@ onBeforeUnmount(() => {
     flex: 1;
     width: auto;
   }
-  .sel-tip {
-    display: none;
+  .sel-tip,
+  .batch-btns {
+    display: none; /* 清空 / 批量刮削交给勾选后浮出的底部浮条 */
   }
-  .batch.active .batch-btns > :not(:first-child) {
-    display: none; /* 清除 / 批量刮削交给底部浮条 */
+  .batch {
+    min-height: 44px;
   }
   /* 手机上没有悬停：勾选圈常显 */
   .check-dot {

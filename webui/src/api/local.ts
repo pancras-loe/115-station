@@ -58,7 +58,7 @@ export interface LocalTitleQuery {
   limit?: number
   /** 跳过后端 30 秒的列表缓存 */
   refresh?: boolean
-  /** 一次返回全部筛选结果（忽略 offset / limit），「全选筛选结果」用 */
+  /** 一次返回全部筛选结果（忽略 offset / limit），批量栏的全选框用 */
   all?: boolean
 }
 
