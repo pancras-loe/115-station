@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
@@ -143,6 +145,11 @@ func (r *titleRun) skip(d metaDest, name string) bool {
 // put 写一个产物；how 是日志里「怎么来的」那一截
 func (r *titleRun) put(d metaDest, name string, data []byte, how string) bool {
 	wrote, err := r.s.w.put(d, name, data)
+	return r.recordPut(d, name, how, wrote, err)
+}
+
+// recordPut 把一次写入的结果记进账单、打日志
+func (r *titleRun) recordPut(d metaDest, name, how string, wrote bool, err error) bool {
 	switch {
 	case errors.Is(err, errMetaDirGone):
 		if !r.st.Gone {
@@ -233,6 +240,71 @@ func (r *titleRun) probe(v scrapeVideo) *probeResult {
 		r.logv("▣ 探测 %s：%s（%s）", v.Name, probeBrief(p), time.Since(start).Round(100*time.Millisecond))
 	}
 	return p
+}
+
+// patchStreams 开了轨道探测、视频 NFO 却因「只补缺失」要跳过时：已有的 NFO 里没有轨道信息，
+// 就探测一次、只把 <fileinfo> 补进去写回，NFO 里其余内容原样保留。
+// 此前这种情况直接跳过、连探测都不做，用户勾了探测却什么都没发生，日志里也看不出来（2026-09-29 现场）。
+// 返回 true 表示已补上（调用方不再走跳过 / 整份重写）；false 时调用方照原样处理
+func (r *titleRun) patchStreams(d metaDest, name, root string, v scrapeVideo) bool {
+	if !r.s.opts.Probe {
+		return false
+	}
+	pw, ok := r.s.w.(metaPatcher)
+	if !ok {
+		return false
+	}
+	old, ok := pw.existing(d, name)
+	if !ok || bytes.Contains(old, []byte("<fileinfo")) {
+		// 已经带着轨道信息（或至少有 fileinfo 段）的不动：不重复探测，也不往里塞第二份
+		return false
+	}
+	p := r.probe(v)
+	if p == nil {
+		return false
+	}
+	fi := nfoFileInfoFrom(p)
+	if fi == nil {
+		r.logv("○ 探测 %s：没有可写的轨道，%s 不补", v.Name, name)
+		return false
+	}
+	patched, err := insertNFOFileinfo(old, root, fi)
+	if err != nil {
+		r.logv("○ %s 结构认不出（%v），不补轨道信息", name, err)
+		return false
+	}
+	wrote, err := pw.replace(d, name, patched)
+	r.recordPut(d, name, "（已有 NFO，补轨道信息）", wrote, err)
+	return true
+}
+
+// insertNFOFileinfo 把 <fileinfo> 插到已有 NFO 最后一个 </root> 前面。
+// 找最后一个而不是第一个：多集合一的 NFO 是几段 <episodedetails> 连着写的，
+// 末尾还可能跟着 Kodi 认的刮削 URL 行，按根元素的闭合标签定位最稳
+func insertNFOFileinfo(nfo []byte, root string, fi *nfoFileInfo) ([]byte, error) {
+	closeTag := []byte("</" + root + ">")
+	at := bytes.LastIndex(nfo, closeTag)
+	if at < 0 {
+		return nil, fmt.Errorf("没有 %s", closeTag)
+	}
+	b, err := xml.MarshalIndent(struct {
+		XMLName       xml.Name          `xml:"fileinfo"`
+		StreamDetails *nfoStreamDetails `xml:"streamdetails"`
+	}{StreamDetails: fi.StreamDetails}, "  ", "  ")
+	if err != nil {
+		return nil, err
+	}
+	// 插入段自带两格缩进，自成一行；闭合标签前的空白去掉，免得插进来的段落前面多一截缩进
+	head := bytes.TrimRight(nfo[:at], " \t")
+	out := make([]byte, 0, len(nfo)+len(b)+4)
+	out = append(out, head...)
+	if len(head) > 0 && head[len(head)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, b...)
+	out = append(out, '\n')
+	out = append(out, nfo[at:]...)
+	return out, nil
 }
 
 // season 某季的集信息（每个片目每季只打一次 TMDB，结果带日志）
@@ -373,6 +445,9 @@ func (r *titleRun) movieNFO(body []byte) {
 		if i < len(t.Videos) {
 			dest = t.Videos[i].Dir
 		}
+		if i < len(t.Videos) && r.patchStreams(dest, name, "movie", t.Videos[i]) {
+			continue
+		}
 		if r.skip(dest, name) {
 			continue
 		}
@@ -470,6 +545,9 @@ func (r *titleRun) tvNFO(body []byte) {
 		}
 		name := e.v.Name + ".nfo"
 		r.s.rep.sub("集 NFO", i, len(r.eps), name)
+		if r.patchStreams(e.v.Dir, name, "episodedetails", e.v) {
+			continue
+		}
 		if r.skip(e.v.Dir, name) {
 			continue
 		}

@@ -280,12 +280,33 @@ func (w *fileScrapeWriter) skip(d metaDest, name string) bool {
 var errMetaDirGone = errors.New("本地目录已不在")
 
 func (w *fileScrapeWriter) put(d metaDest, name string, data []byte) (bool, error) {
+	return w.write(d, name, data, w.force)
+}
+
+// existing 这个产物「只补缺失」会跳过时，读出本地已有的内容（给 replace 改一处再写回）
+func (w *fileScrapeWriter) existing(d metaDest, name string) ([]byte, bool) {
+	if w.force || d.Local == "" {
+		return nil, false
+	}
+	b, err := os.ReadFile(filepath.Join(d.Local, name))
+	if err != nil || len(b) == 0 {
+		return nil, false
+	}
+	return b, true
+}
+
+// replace 不看「只补缺失」照写：已有的 NFO 就地补了一段，本地与网盘（勾了上传时）都得换成新的
+func (w *fileScrapeWriter) replace(d metaDest, name string, data []byte) (bool, error) {
+	return w.write(d, name, data, true)
+}
+
+func (w *fileScrapeWriter) write(d metaDest, name string, data []byte, force bool) (bool, error) {
 	localPath := ""
 	if d.Local != "" {
 		if st, err := os.Stat(d.Local); err != nil || !st.IsDir() {
 			return false, errMetaDirGone
 		}
-		wrote, err := writeMetaFile(d.Local, name, data, w.force)
+		wrote, err := writeMetaFile(d.Local, name, data, force)
 		if err != nil {
 			return false, err
 		}
@@ -310,7 +331,7 @@ func (w *fileScrapeWriter) put(d metaDest, name string, data []byte) (bool, erro
 		return localPath != "", fmt.Errorf("读取网盘目录失败: %w", err)
 	}
 	if fid, ok := existing[name]; ok {
-		if !w.force {
+		if !force {
 			if localPath == "" {
 				w.stat.Skipped++
 			} else if w.markHandled != nil {

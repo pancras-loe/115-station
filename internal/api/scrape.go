@@ -445,6 +445,14 @@ type metaSkipper interface {
 	skip(d metaDest, name string) bool
 }
 
+// metaPatcher writer 可选实现：「只补缺失」要跳过的产物，读出已有内容改一处再写回。
+// 用在开了轨道探测、而视频 NFO 早就有了的时候：整份重写会冲掉 NFO 里别处来的内容
+// （网盘上带过来的、用户手改的），只往里补 streamdetails
+type metaPatcher interface {
+	existing(d metaDest, name string) (data []byte, ok bool)
+	replace(d metaDest, name string, data []byte) (wrote bool, err error)
+}
+
 func localMetaExists(dir, name string) bool {
 	st, err := os.Stat(filepath.Join(dir, name))
 	return err == nil && st.Size() > 0
