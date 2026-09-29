@@ -254,15 +254,23 @@ var washEpisodeRange = regexp.MustCompile(`(?i)(?:s\d{1,2})?ep?\d{1,3}(?:-e?\d{1
 
 func sameWashEpisode(newName, oldName string) bool {
 	// 合集文件不能被仅含第一集的新版顶掉；范围不同一律保留旧文件。
-	if strings.ToLower(washEpisodeRange.FindString(newName)) != strings.ToLower(washEpisodeRange.FindString(oldName)) {
+	// 区间按集号比，不按写法比：源文件的 S04E01-02 与改名后的 S04E01-E02 是同一个双集文件
+	if washRangeKey(newName) != washRangeKey(oldName) {
 		return false
 	}
 	n, o := parseFileName(newName), parseFileName(oldName)
-	if n.Episode <= 0 || n.Episode != o.Episode {
+	if n.Episode <= 0 || n.Episode != o.Episode || n.EpisodeEnd != o.EpisodeEnd {
 		return false
 	}
 	return n.Season == o.Season || n.Season == 0 || o.Season == 0
 }
+
+// washRangeKey 名字里集号区间的规范形：只留数字序列（s01e01-e02 / s01e01-02 / s01e01e02 都是 1,1,2）
+func washRangeKey(name string) string {
+	return strings.Join(reDigitRun.FindAllString(washEpisodeRange.FindString(name), -1), ",")
+}
+
+var reDigitRun = regexp.MustCompile(`\d+`)
 
 // filterLedger 按文件名条件筛台账行（不复用底层数组，避免改到调用方的切片）
 func filterLedger(rows []model.SyncedFile, keep func(name string) bool) []model.SyncedFile {

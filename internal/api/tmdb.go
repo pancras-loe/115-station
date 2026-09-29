@@ -386,6 +386,9 @@ type ParsedName struct {
 	Year       string
 	Season     int
 	Episode    int
+	// EpisodeEnd 一个文件装两集（S04E01-02 / E01-E02 / 第1-2集）时的结束集号，单集为 0。
+	// 只认相邻两集：跨度更大的多半是合集包的目录名，按 MoviePilot 的口径退回单集
+	EpisodeEnd int
 	IsTV       bool
 	Resolution string // 1080p, 2160p 等
 	Quality    string // 完整画质串（1080p.WEB-DL.AAC2.0.H.264 等，由调用方填充）
@@ -494,14 +497,19 @@ func parseFileName(filename string) *ParsedName {
 	if loc := reSeasonEpisode.FindStringSubmatchIndex(name); loc != nil {
 		result.Season, _ = strconv.Atoi(name[loc[2]:loc[3]])
 		result.Episode, _ = strconv.Atoi(name[loc[4]:loc[5]])
+		result.EpisodeEnd = episodeRangeEnd(result.Episode, reEpisodeTail, name[loc[1]:])
 		mark(loc[0])
 	} else {
 		if s, at := findSeason(name); s > 0 {
 			result.Season = s
 			mark(at)
 		}
-		if e, at := findEpisode(name); e > 0 {
-			result.Episode = e
+		e, end, at := findEpisodePair(name)
+		if e == 0 {
+			e, at = findEpisode(name)
+		}
+		if e > 0 {
+			result.Episode, result.EpisodeEnd = e, end
 			mark(at)
 			if result.Season == 0 {
 				// 没写季号：缺省第 1 季，但记下是猜的 —— 目录名上写了「第二季」时要让目录名说了算
@@ -554,6 +562,9 @@ func applyNameTag(p *ParsedName, t nameTag) {
 	}
 	if t.EpOffset != 0 && p.Episode > 0 && p.Episode+t.EpOffset > 0 {
 		p.Episode += t.EpOffset
+		if p.EpisodeEnd > 0 {
+			p.EpisodeEnd += t.EpOffset
+		}
 	}
 	if t.Kind == "tv" {
 		p.IsTV = true
@@ -584,6 +595,69 @@ var (
 	// 裸数字紧跟在日期后面（快乐大本营.2019.03.15）不是集号
 	reDateBefore = regexp.MustCompile(`\d{4}[\s._\-](?:\d{1,2}[\s._\-])?$`)
 )
+
+// 双集文件（MoviePilot metavideo.py 的 begin_episode / end_episode，文件只认跨度 ≤ 2）。
+// 结束集号后面必须是分隔符或结尾：S01E01-1080p、S01E05-2008 的数字不是集号
+var (
+	// 紧跟在 S04E01 后面的另一集：-02 / -E02 / E02
+	reEpisodeTail = regexp.MustCompile(`(?i)^(?:\s*[-~～]\s*E?|E)(\d{1,3})(?:$|[\s._\-\[\]()（）【】])`)
+	// 没写季号的 E01-E02 / EP01-EP02
+	reEpisodePairEn = regexp.MustCompile(`(?i)(?:^|[\s._\-])EP?(\d{1,3})\s*[-~～]\s*EP?(\d{1,3})(?:$|[\s._\-\[\]()（）【】])`)
+	// 第1-2集 / 第1集-第2集
+	reEpisodePairCn = regexp.MustCompile(`第\s*(\d{1,3})\s*(?:[集话話回]\s*)?[-~～至到]\s*(?:第\s*)?(\d{1,3})\s*[集话話回]`)
+)
+
+// episodeRangeEnd tail 开头紧跟着的结束集号；不是开始集号的下一集就当单集（返回 0）
+func episodeRangeEnd(begin int, re *regexp.Regexp, tail string) int {
+	m := re.FindStringSubmatch(tail)
+	if m == nil {
+		return 0
+	}
+	end, _ := strconv.Atoi(m[1])
+	if end != begin+1 {
+		return 0
+	}
+	return end
+}
+
+// findEpisodePair 没写季号的双集写法。跨度不是 2 的区间不在这里认，交还给 findEpisode 照旧处理
+func findEpisodePair(name string) (begin, end, at int) {
+	for _, re := range []*regexp.Regexp{reEpisodePairEn, reEpisodePairCn} {
+		loc := re.FindStringSubmatchIndex(name)
+		if loc == nil {
+			continue
+		}
+		b, _ := strconv.Atoi(name[loc[2]:loc[3]])
+		e, _ := strconv.Atoi(name[loc[4]:loc[5]])
+		if b > 0 && e == b+1 {
+			return b, e, loc[0]
+		}
+	}
+	return 0, 0, -1
+}
+
+// episodeList 这个文件包含的集号：单集是 [E]，双集是 [E, E+1]
+func (p *ParsedName) episodeList() []int {
+	if p == nil || p.Episode <= 0 {
+		return nil
+	}
+	if p.EpisodeEnd > p.Episode {
+		out := make([]int, 0, p.EpisodeEnd-p.Episode+1)
+		for e := p.Episode; e <= p.EpisodeEnd; e++ {
+			out = append(out, e)
+		}
+		return out
+	}
+	return []int{p.Episode}
+}
+
+// episodeTag Emby / Jellyfin 认的集号写法：E01，双集写成 E01-E02
+func (p *ParsedName) episodeTag() string {
+	if p.EpisodeEnd > p.Episode {
+		return fmt.Sprintf("E%02d-E%02d", p.Episode, p.EpisodeEnd)
+	}
+	return fmt.Sprintf("E%02d", p.Episode)
+}
 
 // findSeason 季号及其位置：第二季 → Season 2 → S02（没写集号的季包）
 func findSeason(name string) (int, int) {

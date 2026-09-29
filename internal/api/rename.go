@@ -19,7 +19,7 @@ package api
 //   {audio_encode}      音频编码（TrueHD.7.1/AAC2.0等）
 //   {resource_team}     发布组
 //   {fps}               帧率
-//   {season_episode}    季集 SxxExx
+//   {season_episode}    季集 SxxExx（双集文件 SxxExx-Exx）
 //   {season_num}        季号
 //   {episode_num}       集号
 //   {disc_num}          盘号
@@ -240,10 +240,11 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 	}
 }
 
-// seasonEpisode 返回 SxxExx 格式
+// seasonEpisode 返回 SxxExx 格式；一个文件装两集时是 SxxExx-Exx（Emby 的多集文件写法），
+// 只写开始集的话第二集在 Emby 里就成了缺集
 func (ctx *RenameContext) seasonEpisode() string {
 	if ctx.Parsed.Season > 0 && ctx.Parsed.Episode > 0 {
-		return fmt.Sprintf("S%02dE%02d", ctx.Parsed.Season, ctx.Parsed.Episode)
+		return fmt.Sprintf("S%02d%s", ctx.Parsed.Season, ctx.Parsed.episodeTag())
 	}
 	if ctx.Parsed.Season > 0 {
 		return fmt.Sprintf("S%02d", ctx.Parsed.Season)

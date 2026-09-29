@@ -455,12 +455,35 @@ func pickTMDBImage(imgs []tmdbImage, langs []string, ext string) string {
 
 // scrapeEpisodeNo 刮削用的季集号：文件名没写季号按第 1 季。集号为 0 = 解析不出
 func scrapeEpisodeNo(name string) (season, episode int) {
+	season, episode, _ = scrapeEpisodeSpan(name)
+	return
+}
+
+// scrapeEpisodeSpan 同 scrapeEpisodeNo，另给出双集文件（S04E01-E02）的结束集号，单集为 0
+func scrapeEpisodeSpan(name string) (season, episode, end int) {
 	fp := parseFileName(name)
 	season = fp.Season
 	if season == 0 {
 		season = 1
 	}
-	return season, fp.Episode
+	return season, fp.Episode, fp.EpisodeEnd
+}
+
+// marshalEpisodeNFO 集 NFO。双集文件按 Kodi / Emby 的多集约定，同一个文件里依次放几段
+// <episodedetails>（只有一个 XML 声明），Emby 据此把一个文件挂到两集上
+func marshalEpisodeNFO(eps []nfoEpisode) ([]byte, error) {
+	out := []byte(xml.Header)
+	for i, e := range eps {
+		b, err := xml.MarshalIndent(e, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			out = append(out, '\n')
+		}
+		out = append(out, b...)
+	}
+	return out, nil
 }
 
 // scrapeSeasonDirs 季号 → 季目录（season.nfo 的落点）。

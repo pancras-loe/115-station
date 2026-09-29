@@ -760,7 +760,7 @@ func buildNewName(media *TmdbMedia, parsed *ParsedName, ext string) string {
 	if parsed.Season > 0 {
 		subFolder := fmt.Sprintf("Season %02d", parsed.Season)
 		if parsed.Episode > 0 {
-			file := fmt.Sprintf("%s - S%02dE%02d", media.Title, parsed.Season, parsed.Episode)
+			file := fmt.Sprintf("%s - S%02d%s", media.Title, parsed.Season, parsed.episodeTag())
 
 			file += ext
 			return folder + "/" + subFolder + "/" + file
@@ -3199,12 +3199,12 @@ func episodeRangeStr(videoFiles []remoteFile) string {
 	var eps []epRec
 	for _, vf := range videoFiles {
 		p := parseVideoInDir(vf, nil, nil)
-		if p.Episode > 0 {
-			s := p.Season
-			if s == 0 {
-				s = 1
-			}
-			eps = append(eps, epRec{s, p.Episode})
+		s := p.Season
+		if s == 0 {
+			s = 1
+		}
+		for _, e := range p.episodeList() { // 双集文件两集都算有
+			eps = append(eps, epRec{s, e})
 		}
 	}
 	if len(eps) == 0 {
@@ -3226,6 +3226,9 @@ func episodeRangeStr(videoFiles []remoteFile) string {
 		var segs [][2]int
 		start, prev := list[0], list[0]
 		for _, e := range list[1:] {
+			if e == prev { // 双集文件与单集文件重叠（E01-E02 + E02）
+				continue
+			}
 			if e == prev+1 {
 				prev = e
 				continue
@@ -3259,15 +3262,15 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 	var eps []epRec
 	for _, vf := range videoFiles {
 		p := parseVideoInDir(vf, nil, nil)
-		if p.Episode > 0 {
-			s := p.Season
-			if s == 0 {
-				s = 1
-			}
-			if media.SeasonNum > 0 {
-				s = media.SeasonNum
-			}
-			eps = append(eps, epRec{s, p.Episode})
+		s := p.Season
+		if s == 0 {
+			s = 1
+		}
+		if media.SeasonNum > 0 {
+			s = media.SeasonNum
+		}
+		for _, e := range p.episodeList() {
+			eps = append(eps, epRec{s, e})
 		}
 	}
 	if len(eps) == 0 {

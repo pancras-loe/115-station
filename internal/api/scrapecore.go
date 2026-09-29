@@ -99,6 +99,7 @@ type titleRun struct {
 type scrapeEp struct {
 	v           scrapeVideo
 	season, ep  int
+	end         int  // 双集文件的结束集号，单集为 0（剧照只取开始那集）
 	placeholder bool // 占位剧照：不写 -thumb.jpg
 }
 
@@ -107,8 +108,8 @@ func (s *scrapeSession) scrapeTitleMeta(t scrapeTitle) *titleScrapeStat {
 	r := &titleRun{s: s, t: t, st: &titleScrapeStat{}, tmdbID: t.TmdbID, seasons: map[int]map[int]tmdbEpisodeInfo{}}
 	if t.Kind == "tv" {
 		for _, v := range t.Videos {
-			if season, ep := scrapeEpisodeNo(v.Name); ep > 0 {
-				r.eps = append(r.eps, scrapeEp{v: v, season: season, ep: ep})
+			if season, ep, end := scrapeEpisodeSpan(v.Name); ep > 0 {
+				r.eps = append(r.eps, scrapeEp{v: v, season: season, ep: ep, end: end})
 			}
 		}
 	}
@@ -436,19 +437,31 @@ func (r *titleRun) tvNFO(body []byte) {
 		if r.skip(e.v.Dir, name) {
 			continue
 		}
-		ep := r.season(e.season)[e.ep]
-		epNFO := nfoEpisode{
-			Season: e.season, Episode: e.ep, Title: ep.Name, Aired: ep.AirDate, Plot: ep.Overview,
-			UniqueIDs: []nfoUniqueID{{Type: "tmdb", Default: true, Value: strconv.Itoa(r.tmdbID)}},
+		var nfos []nfoEpisode
+		var titles []string
+		for n := e.ep; n == e.ep || n <= e.end; n++ {
+			ep := r.season(e.season)[n]
+			epNFO := nfoEpisode{
+				Season: e.season, Episode: n, Title: ep.Name, Aired: ep.AirDate, Plot: ep.Overview,
+				UniqueIDs: []nfoUniqueID{{Type: "tmdb", Default: true, Value: strconv.Itoa(r.tmdbID)}},
+			}
+			if ep.VoteAverage > 0 {
+				epNFO.Ratings = []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: ep.VoteAverage}}
+			}
+			if ep.StillPath != "" {
+				epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
+			}
+			nfos = append(nfos, epNFO)
+			if ep.Name != "" {
+				titles = append(titles, ep.Name)
+			}
 		}
-		if ep.VoteAverage > 0 {
-			epNFO.Ratings = []nfoRating{{Name: "tmdb", Max: 10, Default: true, Value: ep.VoteAverage}}
+		tag := fmt.Sprintf("E%02d", e.ep)
+		if e.end > e.ep {
+			tag += fmt.Sprintf("-E%02d", e.end)
 		}
-		if ep.StillPath != "" {
-			epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
-		}
-		how := fmt.Sprintf("（S%02dE%02d %s）", e.season, e.ep, ep.Name)
-		if b, err := marshalNFO(epNFO); err == nil {
+		how := fmt.Sprintf("（S%02d%s %s）", e.season, tag, strings.Join(titles, " / "))
+		if b, err := marshalEpisodeNFO(nfos); err == nil {
 			r.put(e.v.Dir, name, b, how)
 		}
 	}

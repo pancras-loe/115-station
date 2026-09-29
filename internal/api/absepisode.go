@@ -79,7 +79,7 @@ func remapAbsEpisodes(eps map[string]*ParsedName, counts map[int]int,
 	for s, ps := range bySeason {
 		seasons = append(seasons, s)
 		for _, p := range ps {
-			orig[s] = append(orig[s], p.Episode)
+			orig[s] = append(orig[s], p.episodeList()...) // 双集文件的结束集号同样参与判定
 		}
 		sort.Ints(orig[s])
 	}
@@ -120,6 +120,9 @@ func remapAbsEpisodes(eps map[string]*ParsedName, counts map[int]int,
 		}
 		for _, p := range bySeason[s] {
 			p.Episode -= r.Offset
+			if p.EpisodeEnd > 0 {
+				p.EpisodeEnd -= r.Offset
+			}
 		}
 		out = append(out, r)
 	}
@@ -148,8 +151,8 @@ func remapAbsEpisodesTmdb(tc *TmdbClient, media *TmdbMedia, eps map[string]*Pars
 	}
 	maxEp := 0
 	for _, p := range eps {
-		if p != nil && p.Season >= 2 && p.Episode > maxEp {
-			maxEp = p.Episode
+		if p != nil && p.Season >= 2 && max(p.Episode, p.EpisodeEnd) > maxEp {
+			maxEp = max(p.Episode, p.EpisodeEnd)
 		}
 	}
 	if maxEp == 0 {
