@@ -58,6 +58,8 @@ export interface LocalTitleQuery {
   limit?: number
   /** 跳过后端 30 秒的列表缓存 */
   refresh?: boolean
+  /** 一次返回全部筛选结果（忽略 offset / limit），「全选筛选结果」用 */
+  all?: boolean
 }
 
 export const listTitles = (q: LocalTitleQuery) =>
@@ -70,6 +72,7 @@ export const listTitles = (q: LocalTitleQuery) =>
       offset: q.offset || undefined,
       limit: q.limit || undefined,
       refresh: q.refresh ? 1 : undefined,
+      all: q.all ? 1 : undefined,
     },
   })
 

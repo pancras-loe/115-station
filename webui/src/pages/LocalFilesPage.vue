@@ -194,6 +194,28 @@ function toggleShown() {
   }
   selected.value = m
 }
+/**
+ * 全选当前筛选结果：海报墙一次只加载 60 部，「勾选已显示」要一路滚到底才勾得全，
+ * 所以按当前筛选条件向后端要一次全量（内存快照，零 115 请求）再并进勾选
+ */
+const selectingAll = ref(false)
+async function selectAllMatched() {
+  const my = seq
+  selectingAll.value = true
+  try {
+    const d = await localApi.listTitles({
+      q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value, all: true,
+    })
+    if (my !== seq) return // 等的时候换了筛选：这份结果已经不是用户眼前那一批
+    const m = new Map(selected.value)
+    for (const t of d.items ?? []) m.set(t.key, t)
+    selected.value = m
+  } catch (e) {
+    toastError(e, '读取本地媒体库失败')
+  } finally {
+    selectingAll.value = false
+  }
+}
 function clearSelection() {
   selected.value = new Map()
 }
@@ -343,6 +365,15 @@ onBeforeUnmount(() => {
             <div class="batch-btns">
               <HButton variant="tertiary" size="sm" :disabled="!items.length" @click="toggleShown">
                 {{ pageAllChecked ? '取消勾选已显示' : `勾选已显示（${items.length}）` }}
+              </HButton>
+              <HButton
+                v-if="total > items.length"
+                variant="tertiary"
+                size="sm"
+                :loading="selectingAll"
+                @click="selectAllMatched"
+              >
+                全选筛选结果（{{ total }}）
               </HButton>
               <HButton variant="tertiary" size="sm" :disabled="!selecting" @click="clearSelection">清除</HButton>
               <HButton variant="primary" size="sm" :disabled="!selecting" @click="openScrape(selectedList)">

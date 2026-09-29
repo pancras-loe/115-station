@@ -234,7 +234,10 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 	return out, st
 }
 
-// ListLocalTitles GET /local/titles?q=&type=&status=&sort=&offset=&limit=&refresh=
+// ListLocalTitles GET /local/titles?q=&type=&status=&sort=&offset=&limit=&refresh=&all=
+//
+// all=1 一次返回全部筛选结果：给「全选筛选结果」用。列表本来就在内存快照里（零 115 请求），
+// 一次给全比让前端按 200 一页循环拉省事，也不会翻页途中快照过期导致前后对不上
 func (h *Handler) ListLocalTitles(c *gin.Context) {
 	root := localMediaRoot()
 	if root == "" {
@@ -249,6 +252,9 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 	if limit <= 0 || limit > 200 {
 		limit = 60
+	}
+	if c.Query("all") == "1" {
+		offset, limit = 0, len(list)
 	}
 	offset = max(0, min(offset, len(list)))
 	end := min(offset+limit, len(list))
