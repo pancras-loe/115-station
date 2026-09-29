@@ -101,7 +101,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **播放链路** | `proxy.go` `embyproxy.go` `embylibrary.go` `emby_notify.go` `embyextract.go` | 302 代理、Emby 反代与建库、入库后让 Emby 提前探测媒体信息 |
 | **资源站** | `guanying.go` `pansou.go` `mukaku.go` `re0.go` `tgsearch.go` `tgsub.go` | 四个转存页签 + TG 抓取与关键词订阅 |
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
-| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到 |
+| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` `imgcache.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到、**界面图片缓存**（`/tmdb/img` `/poster` `/embyimg` `/local/poster` 共用：落盘 `DATA_DIR/imgcache`、同图并发合并、失败记 5 分钟、60 天未用自动清；拉不到图回 404 让前端 `PosterImage.vue` 显示占位，别再回透明 GIF。界面上的海报一律用 `PosterImage`，TMDB 尺寸按显示宽度约两倍挑） |
 
 ### 数据模型（`internal/model/model.go`）
 

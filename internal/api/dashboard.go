@@ -5,7 +5,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -434,48 +433,45 @@ func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 	return out
 }
 
-// placeholderGIF 1x1 透明像素（图片代理失败时的占位，避免 <img> 裂图）
-var placeholderGIF = []byte("GIF89aÿÿÿ!ù,D;")
+// embyImagePathRe 仅放行图片端点（此前 Items/ 前缀下任意子路径可打：可借本代理枚举
+// Emby 全库元数据）。仪表盘只用 Items/{id}/Images/{type} 形态
+var embyImagePathRe = regexp.MustCompile(`^Items/\d+/Images/[A-Za-z]{2,20}(?:/\d+)?$`)
+
+// embyImgTTL Emby 封面会被用户换掉，服务端只缓存一天（浏览器那头也是一天）
+const embyImgTTL = 24 * time.Hour
 
 // EmbyImageProxy Emby 图片代理：服务端注入 api_key（封面 URL 带密钥会泄露，
-// 此前已从通知里移除）。仅放行 Items/…/Images 路径，浏览器缓存 1 天
+// 此前已从通知里移除）。服务端落盘缓存一天，缓存与合并见 imgcache.go
 // GET /embyimg?path=Items/{Id}/Images/Primary&maxWidth=300
 func (h *Handler) EmbyImageProxy(c *gin.Context) {
 	base, apiKey, ok := h.embyServerInfo()
 	if !ok {
-		c.Status(http.StatusNotFound)
+		imgMissing(c)
 		return
 	}
 	path := strings.Trim(c.Query("path"), "/")
-	// 仅放行图片端点（此前 Items/ 前缀下任意子路径可打：可借本代理枚举
-	// Emby 全库元数据）。仪表盘只用 Items/{id}/Images/{type} 形态
-	if !regexp.MustCompile(`^Items/\d+/Images/[A-Za-z]{2,20}(?:/\d+)?$`).MatchString(path) {
+	if !embyImagePathRe.MatchString(path) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
 	q := url.Values{}
-	if mw := c.Query("maxWidth"); mw != "" {
-		q.Set("maxWidth", mw)
+	if mw, err := strconv.Atoi(c.Query("maxWidth")); err == nil && mw > 0 && mw <= 2000 {
+		q.Set("maxWidth", strconv.Itoa(mw))
 	}
+	// Emby 默认按 90 质量出 JPEG；界面上的小图 80 看不出差别，体积小三成
+	q.Set("quality", "80")
+	key := base + "|" + path + "?" + q.Encode()
 	q.Set("api_key", apiKey)
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(strings.TrimRight(base, "/") + "/" + path + "?" + q.Encode())
-	if err == nil {
-		defer resp.Body.Close()
-	}
-	if err != nil || resp.StatusCode != 200 {
-		// 1x1 透明占位，避免 <img> 裂图
-		c.Header("Cache-Control", "no-store")
-		c.Data(http.StatusOK, "image/gif", placeholderGIF)
+	u := strings.TrimRight(base, "/") + "/" + path + "?" + q.Encode()
+	// Emby 多在内网，不走代理
+	data, err := cachedImage(h.Config.DataDir, "emby", key, embyImgTTL, func() ([]byte, error) {
+		return imgGet(imgHTTPClient(""), u)
+	})
+	if err != nil {
+		imgMissing(c)
 		return
 	}
-	c.Header("Cache-Control", "public, max-age=86400")
-	ct := resp.Header.Get("Content-Type")
-	if ct == "" {
-		ct = "image/jpeg"
-	}
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	c.Data(http.StatusOK, ct, data)
+	serveImage(c, data, "public, max-age=86400")
 }
 
 // DashboardEnhanced 仪表盘（真实数据版）

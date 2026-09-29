@@ -28,6 +28,7 @@ import HTooltip from '@/components/hero/HTooltip.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
+import PosterImage from '@/components/PosterImage.vue'
 import { organizeApi, resourcesApi } from '@/api'
 import type { OrganizeRecord } from '@/api/organize'
 import type { TmdbCandidate } from '@/api/resources'
@@ -514,17 +515,13 @@ async function clearAll() {
               />
             </div>
 
-            <img
-              v-if="r.poster_path"
-              :src="resourcesApi.tmdbImageUrl(r.poster_path)"
+            <PosterImage
               class="poster"
-              loading="lazy"
+              :src="r.poster_path ? resourcesApi.tmdbImageUrl(r.poster_path, 'w92') : null"
               :alt="r.title"
+              :icon="r.source_kind === 'dir' ? Folder : FileIcon"
+              :icon-size="18"
             />
-            <div v-else class="poster poster-none">
-              <Folder v-if="r.source_kind === 'dir'" :size="18" />
-              <FileIcon v-else :size="18" />
-            </div>
 
             <div class="main">
               <div class="head">
@@ -834,15 +831,7 @@ async function clearAll() {
 .poster {
   width: 46px;
   height: 69px;
-  flex: none;
-  object-fit: cover;
   border-radius: 10px;
-  background: var(--default);
-}
-.poster-none {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
 }
 
 .main {

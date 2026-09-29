@@ -10,6 +10,7 @@ import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
 import TmdbPicker from '@/components/transfer/TmdbPicker.vue'
+import PosterImage from '@/components/PosterImage.vue'
 import ResourceRow from '@/components/transfer/ResourceRow.vue'
 import { resourcesApi, transferApi } from '@/api'
 import { plainProps } from '@/utils/autofill'
@@ -252,8 +253,7 @@ onMounted(load)
 
         <template v-else-if="stage === 'videos'">
           <button v-for="v in videos" :key="v.id" class="video" @click="openResources(v)">
-            <img v-if="v.image" :src="v.image" class="video-poster" loading="lazy" :alt="v.title" />
-            <div v-else class="video-poster" />
+            <PosterImage class="video-poster" :src="v.image" :alt="v.title" :icon-size="18" no-referrer />
             <div class="video-body">
               <div class="video-title">{{ v.title }}</div>
               <div class="video-meta">{{ [v.year, v.note].filter(Boolean).join(' · ') }}</div>
@@ -358,10 +358,6 @@ onMounted(load)
 .video-poster {
   width: 52px;
   height: 78px;
-  flex: none;
-  object-fit: cover;
-  border-radius: var(--r-sm);
-  background: var(--c-bg-hover);
 }
 .video-body {
   min-width: 0;

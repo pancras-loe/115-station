@@ -1191,48 +1191,18 @@ var regexpPureDigits = regexp.MustCompile(`^\d{1,8}$`)
 // 搜索接口本体（TmdbSearchMulti）在 tmdbsearch.go
 
 // TmdbImg GET /tmdb/img?path=/xx.jpg&size=w154
-// 海报代理：走 TMDB 配置的代理设置拉图（国内直连 image.tmdb.org 常不通）
+// 海报代理：国内直连 image.tmdb.org 常不通。磁盘缓存、多级回退、并发合并见 imgcache.go
 func (h *Handler) TmdbImg(c *gin.Context) {
 	p := c.Query("path")
-	if !strings.HasPrefix(p, "/") {
+	size := c.DefaultQuery("size", "w154")
+	if !validTMDBPath(p) || !tmdbImageSizes[size] {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	size := c.Query("size")
-	if size == "" {
-		size = "w154"
-	}
-	var cfg model.TmdbConfig
-	if err := model.DB.First(&cfg).Error; err != nil || cfg.ImageApiUrl == "" {
-		c.Status(http.StatusNotFound)
-		return
-	}
-	base := strings.TrimRight(cfg.ImageApiUrl, "/")
-	if !strings.HasSuffix(base, "/t/p") {
-		base += "/t/p" // 配置里一般只填到域名，海报尺寸挂在 /t/p 下
-	}
-	req, _ := http.NewRequest(http.MethodGet, base+"/"+size+p, nil)
-	client := &http.Client{Timeout: 15 * time.Second}
-	// 优先 TMDB 配置的代理，其次全局代理（与海报抓取同策略）
-	proxyURL := getProxyURL()
-	if cfg.EnableProxy && cfg.ProxyUrl != "" {
-		proxyURL = cfg.ProxyUrl
-	}
-	if proxyURL != "" {
-		if pu, perr := parseProxyURL(proxyURL); perr == nil {
-			client.Transport = &http.Transport{Proxy: pu}
-		}
-	}
-	resp, err := client.Do(req)
+	data, err := cachedTMDBImage(h.Config.DataDir, size, p)
 	if err != nil {
-		c.Status(http.StatusBadGateway)
+		imgMissing(c)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		c.Status(http.StatusNotFound)
-		return
-	}
-	c.Header("Cache-Control", "public, max-age=86400")
-	c.DataFromReader(http.StatusOK, resp.ContentLength, resp.Header.Get("Content-Type"), resp.Body, nil)
+	serveImage(c, data, tmdbImgCacheControl)
 }

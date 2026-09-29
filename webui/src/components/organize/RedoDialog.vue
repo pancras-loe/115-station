@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Clapperboard, Star } from '@lucide/vue'
+import { Star } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
+import PosterImage from '@/components/PosterImage.vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OrganizeRecord } from '@/api/organize'
@@ -128,14 +129,12 @@ async function search() {
             :class="{ picked: picked?.id === it.id && picked?.media_type === it.media_type }"
             @click="picked = it"
           >
-            <img
-              v-if="it.poster"
-              :src="resourcesApi.tmdbImageUrl(it.poster)"
+            <PosterImage
               class="poster"
-              loading="lazy"
+              :src="it.poster ? resourcesApi.tmdbImageUrl(it.poster) : null"
               :alt="it.title"
+              :icon-size="18"
             />
-            <div v-else class="poster poster-none"><Clapperboard :size="18" /></div>
 
             <div class="cand-body">
               <div class="cand-head">
@@ -260,15 +259,7 @@ async function search() {
 .poster {
   width: 60px;
   height: 90px;
-  flex: none;
-  object-fit: cover;
   border-radius: 10px;
-  background: var(--default);
-}
-.poster-none {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
 }
 
 .cand-body {

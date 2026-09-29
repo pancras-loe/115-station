@@ -1,6 +1,10 @@
-/** 本地刮削海报：后端 /api/poster/*path 直接透传路径（路径已带前导斜杠） */
-export function posterUrl(path?: string | null): string | null {
-  return path ? `/api/poster${path}` : null
+/**
+ * 整理台账里的 TMDB 海报：后端 /api/poster/*path 代理并落盘缓存（路径已带前导斜杠）。
+ * size 按显示宽度挑（约两倍，给高分屏）：36px 的缩略图用 w92，拿 w342 就是白白多几倍流量
+ */
+export function posterUrl(path?: string | null, size?: 'w92' | 'w154' | 'w185' | 'w342'): string | null {
+  if (!path) return null
+  return size ? `/api/poster${path}?size=${size}` : `/api/poster${path}`
 }
 
 /**

@@ -335,8 +335,15 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 	data := posterThumbCache[ck]
 	posterThumbMu.Unlock()
 	if data == nil {
+		// 内存没有再查磁盘：内存缓存一重启就空，一屏几十张 2000px 原图重新解码，
+		// 在 NAS 的小 CPU 上要好几秒，首屏海报一张张往外蹦
 		var err error
-		if data, err = posterThumb(file, width); err != nil {
+		data, err = cachedImage(h.Config.DataDir, "localthumb", ck, 0, func() ([]byte, error) {
+			imgFetchSem <- struct{}{}
+			defer func() { <-imgFetchSem }()
+			return posterThumb(file, width)
+		})
+		if err != nil {
 			// 解不开（webp 之类）就原样给，浏览器自己会画
 			c.Header("Cache-Control", "private, max-age=604800")
 			c.File(file)
@@ -350,8 +357,7 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 		posterThumbMu.Unlock()
 	}
 	// URL 里带着 mtime（v=），换图后 URL 就变了，缓存可以放心给长
-	c.Header("Cache-Control", "private, max-age=604800")
-	c.Data(http.StatusOK, "image/jpeg", data)
+	serveImage(c, data, "private, max-age=2592000, immutable")
 }
 
 // underRoot key（/ 分隔的相对路径）拼到 root 下，并确认没有逃出 root

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Clapperboard, Star } from '@lucide/vue'
+import { Star } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
+import PosterImage from '@/components/PosterImage.vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 
@@ -76,8 +77,12 @@ const isPicked = (it: TmdbCandidate) => picked.value?.id === it.id && picked.val
         :class="{ picked: isPicked(it) }"
         @click="picked = it"
       >
-        <img v-if="it.poster" :src="resourcesApi.tmdbImageUrl(it.poster)" class="poster" loading="lazy" :alt="it.title" />
-        <div v-else class="poster poster-none"><Clapperboard :size="16" /></div>
+        <PosterImage
+          class="poster"
+          :src="it.poster ? resourcesApi.tmdbImageUrl(it.poster, 'w92') : null"
+          :alt="it.title"
+          :icon-size="16"
+        />
         <div class="cand-body">
           <div class="cand-head">
             <HChip :color="it.media_type === 'tv' ? 'accent' : 'warning'">{{ it.media_type === 'tv' ? '剧集' : '电影' }}</HChip>
@@ -154,15 +159,7 @@ const isPicked = (it: TmdbCandidate) => picked.value?.id === it.id && picked.val
 .poster {
   width: 40px;
   height: 60px;
-  flex: none;
-  object-fit: cover;
   border-radius: 8px;
-  background: var(--default);
-}
-.poster-none {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
 }
 .cand-body {
   min-width: 0;

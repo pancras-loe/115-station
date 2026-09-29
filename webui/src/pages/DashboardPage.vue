@@ -88,14 +88,14 @@ const categories = computed(() => {
       name: l.name,
       count: l.count,
       label: l.type_label ?? '',
-      posters: (l.collage ?? []).map((p) => embyImageUrl(p)),
+      posters: (l.collage ?? []).map((p) => embyImageUrl(p, 160)),
     }))
   }
   return (data.value?.categories ?? []).map((c) => ({
     name: c.name,
     count: c.count,
     label: '',
-    posters: (c.posters ?? []).map((p) => posterUrl(p) as string),
+    posters: (c.posters ?? []).map((p) => posterUrl(p, 'w154') as string),
   }))
 })
 
@@ -316,7 +316,7 @@ const strmSub = computed(() => {
       <SectionCard title="最近整理">
         <div v-if="recent.length" class="recent">
           <div v-for="(m, i) in recent" :key="m.title + '-' + i" class="recent-item">
-            <PosterImage class="recent-poster" :src="posterUrl(m.poster)" :alt="m.title" />
+            <PosterImage class="recent-poster" :src="posterUrl(m.poster, 'w92')" :alt="m.title" />
             <div class="recent-body">
               <div class="recent-title">
                 {{ m.title }} <span class="recent-year">{{ m.year }}</span>

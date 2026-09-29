@@ -5,7 +5,8 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { Clapperboard, Star } from '@lucide/vue'
+import { Star } from '@lucide/vue'
+import PosterImage from '@/components/PosterImage.vue'
 import { resourcesApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 
@@ -59,14 +60,12 @@ watch(() => props.show, (v) => v && search())
           class="cand"
           @click="emit('pick', it.title, it), emit('update:show', false)"
         >
-          <img
-            v-if="it.poster"
-            :src="resourcesApi.tmdbImageUrl(it.poster)"
+          <PosterImage
             class="poster"
-            loading="lazy"
+            :src="it.poster ? resourcesApi.tmdbImageUrl(it.poster, 'w92') : null"
             :alt="it.title"
+            :icon-size="18"
           />
-          <div v-else class="poster poster-none"><Clapperboard :size="18" /></div>
 
           <div class="cand-body">
             <div class="cand-head">
@@ -138,15 +137,7 @@ watch(() => props.show, (v) => v && search())
 .poster {
   width: 60px;
   height: 90px;
-  flex: none;
-  object-fit: cover;
   border-radius: var(--r-sm);
-  background: var(--c-bg-hover);
-}
-.poster-none {
-  display: grid;
-  place-items: center;
-  color: var(--c-text-4);
 }
 
 .cand-body {
