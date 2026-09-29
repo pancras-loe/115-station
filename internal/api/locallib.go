@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"115-station/internal/model"
+
 	"github.com/gin-gonic/gin"
 	xdraw "golang.org/x/image/draw"
 )
@@ -25,7 +27,9 @@ import (
 // ==================== 本地文件页：本地媒体库的片目卡片 ====================
 //
 // 一张卡片 = 台账里的一个片目（库名/<分类>/<标题目录>，ledger.go 的 scanLedgerTitles），
-// 状态看本地标题目录里有没有 NFO 与海报。形态参考 LitePan 的「STRM 刮削 → 海报墙」，
+// 状态与详情抽屉同一套口径（inspectLocalTitleDetail + grade）：片目级 / 季 / 每集的 NFO、海报、背景图
+// 都在才算刮全。此前只看标题目录里有没有 NFO 与海报，剧集缺集 NFO、缺背景图的一律显示「已刮削」。
+// 形态参考 LitePan 的「STRM 刮削 → 海报墙」，
 // 但 LitePan 没有台账，要从 STRM 树往上猜作品根、猜电影还是剧、在目录里放隐藏标记记状态；
 // 我们的片目边界与类型台账早就给了，这里只读目录，不写任何标记文件。
 //
@@ -42,8 +46,14 @@ type localTitle struct {
 	Videos    int    `json:"videos"`
 	HasNFO    bool   `json:"has_nfo"`
 	HasPoster bool   `json:"has_poster"`
-	// Status ok = NFO 与海报都有；partial = 缺一样；miss = 都没有
+	// Status ok = 必需产物（各级 NFO、海报、背景图）都在；partial = 缺一部分；miss = 一样都没有
 	Status string `json:"status"`
+	// Lack 缺的必需产物（「背景图」「3 集 NFO」…），卡片角标直接写它
+	Lack []string `json:"lack,omitempty"`
+	// Soft 缺的可选图片（剧照、季海报）：TMDB 上不一定有、占位剧照会被故意跳过，只提示，不影响 Status
+	Soft []string `json:"soft,omitempty"`
+	// Emby 媒体信息（打开页面时拉的 Emby 快照，localemby.go）；快照没有或 Emby 里没这个片目时为空
+	Emby *localEmbyStat `json:"emby,omitempty"`
 	// Missing 本地没有这个标题目录（台账有、本地被删了或挂载没就绪）
 	Missing bool      `json:"missing,omitempty"`
 	LastAt  time.Time `json:"last_at"`
@@ -78,16 +88,18 @@ func (h *Handler) localTitlesSnapshot(refresh bool) []localTitle {
 	if refresh {
 		ledger = scanLedgerTitles()
 	}
+	rows := ledgerVideoRowsByTitle()
 	out := make([]localTitle, 0, len(ledger))
 	for _, e := range ledger {
 		if e.Key == "" {
 			continue
 		}
-		t := inspectLocalTitle(root, e)
+		d := inspectLocalTitleDetail(root, e, rows[e.Key])
+		t := d.localTitle
 		if t.HasPoster {
-			t.Poster = h.localPosterQuery(e.Key, t.posterV)
+			t.Poster = h.localPosterQuery(e.Key, d.posterV)
 		}
-		out = append(out, t.localTitle)
+		out = append(out, t)
 	}
 	localTitlesCache, localTitlesAt = out, time.Now()
 	return out
@@ -102,7 +114,7 @@ type inspectedTitle struct {
 // 其余是 Emby / 别的刮削器常见写法
 var localPosterNames = []string{"poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg"}
 
-// inspectLocalTitle 读一次标题目录，看 NFO 与海报在不在
+// inspectLocalTitle 读一次标题目录，看片目级 NFO 与海报在不在。Status 由 inspectLocalTitleDetail 的 grade 定
 func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 	t := inspectedTitle{localTitle: localTitle{
 		Key: e.Key, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID, MediaType: e.MediaType,
@@ -145,15 +157,28 @@ func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 			}
 		}
 	}
-	switch {
-	case t.HasNFO && t.HasPoster:
-		t.Status = "ok"
-	case t.HasNFO || t.HasPoster:
-		t.Status = "partial"
-	default:
-		t.Status = "miss"
-	}
 	return t
+}
+
+// ledgerVideoRowsByTitle 台账视频行按片目分组：一次查表，代替每个片目各跑一次 scrapeDirVideoRows。
+// 分组用 scanLedgerTitles 同一个 titleOf，key 两边对得上；行的取舍与 scrapeDirVideoRows 一致
+func ledgerVideoRowsByTitle() map[string][]model.SyncedFile {
+	out := map[string][]model.SyncedFile{}
+	if model.DB == nil {
+		return out
+	}
+	layout := loadLibCategoryLayout()
+	var sfs []model.SyncedFile
+	model.DB.Where("rel_path LIKE ? AND pick_code <> ''", "%.strm").Order("rel_path").Find(&sfs)
+	for _, sf := range sfs {
+		if !scrapeVideoRow(sf) {
+			continue
+		}
+		if key, _, _, _, ok := layout.titleOf(sf.RelPath); ok {
+			out[key] = append(out[key], sf)
+		}
+	}
+	return out
 }
 
 // localTitleStats 筛选栏上的计数
@@ -164,6 +189,8 @@ type localTitleStats struct {
 	Miss    int `json:"miss"`
 	Movie   int `json:"movie"`
 	TV      int `json:"tv"`
+	// ProbeLack Emby 里还缺媒体信息的片目数（套用其余全部筛选）；没有 Emby 快照时为 0
+	ProbeLack int `json:"probe_lack"`
 }
 
 // localTitleQuery 列表筛选
@@ -172,10 +199,16 @@ type localTitleQuery struct {
 	MediaType string // movie / tv / 空
 	Status    string // ok / partial / miss / 空
 	Sort      string // added_desc（默认）/ title / year_desc / year_asc
+	// Probe lack = 只看 Emby 里还缺媒体信息的片目（要有 Emby 快照才生效）
+	Probe string
+	// Emby 片目 key → 媒体信息计数（localemby.go 的快照），挂到返回的卡片上
+	Emby map[string]localEmbyStat
 }
 
 // filterLocalTitles 纯函数：筛选 + 排序 + 计数。
-// 状态计数只套用关键词与类型，类型计数只套用关键词与状态 —— 切换一边的筛选时另一边的数字仍然有意义
+// 状态计数只套用关键词与类型，类型计数只套用关键词与状态 —— 切换一边的筛选时另一边的数字仍然有意义。
+// 「缺媒体信息」和关键词一样是收窄条件，它自己的计数套用其余全部筛选。
+// all 是缓存里的切片，只读；Emby 计数挂在复制出来的元素上
 func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, localTitleStats) {
 	kw := strings.ToLower(strings.TrimSpace(q.Keyword))
 	var st localTitleStats
@@ -185,8 +218,18 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 			(t.TmdbID == 0 || strconv.Itoa(t.TmdbID) != kw) {
 			continue
 		}
+		if es, ok := q.Emby[t.Key]; ok {
+			t.Emby = &es
+		}
 		typeOK := q.MediaType == "" || t.MediaType == q.MediaType
 		statusOK := q.Status == "" || t.Status == q.Status
+		lacking := t.Emby != nil && t.Emby.Lack > 0
+		if typeOK && statusOK && lacking {
+			st.ProbeLack++
+		}
+		if q.Probe == "lack" && len(q.Emby) > 0 && !lacking {
+			continue
+		}
 		if statusOK {
 			if t.MediaType == "tv" {
 				st.TV++
@@ -234,7 +277,7 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 	return out, st
 }
 
-// ListLocalTitles GET /local/titles?q=&type=&status=&sort=&offset=&limit=&refresh=&all=
+// ListLocalTitles GET /local/titles?q=&type=&status=&probe=&sort=&offset=&limit=&refresh=&all=
 //
 // all=1 一次返回全部筛选结果：给「全选筛选结果」用。列表本来就在内存快照里（零 115 请求），
 // 一次给全比让前端按 200 一页循环拉省事，也不会翻页途中快照过期导致前后对不上
@@ -247,6 +290,7 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	all := h.localTitlesSnapshot(c.Query("refresh") == "1")
 	list, st := filterLocalTitles(all, localTitleQuery{
 		Keyword: c.Query("q"), MediaType: c.Query("type"), Status: c.Query("status"), Sort: c.Query("sort"),
+		Probe: c.Query("probe"), Emby: localEmbyStats(),
 	})
 	offset, _ := strconv.Atoi(c.Query("offset"))
 	limit, _ := strconv.Atoi(c.Query("limit"))

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
+import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, ScanSearch, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HCheckbox from '@/components/hero/HCheckbox.vue'
@@ -11,19 +11,24 @@ import HSearchField from '@/components/hero/HSearchField.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
+import HSpinner from '@/components/hero/HSpinner.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import { localApi } from '@/api'
-import type { LocalTitle, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
+import type { LocalEmbyStats, LocalTitle, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
+import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusTitle } from '@/utils/localStatus'
 import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
 /**
  * 本地文件：本地媒体库里的片目卡片墙（一张卡片 = 台账里的一个片目），对所选片目刮削。
  *
- * 状态只看本地标题目录里有没有 NFO 与海报（后端 locallib.go），不发 115 请求。
+ * 状态看片目级 / 季 / 每集的 NFO、海报、背景图齐不齐（后端 localdetail.go 的 grade，与详情抽屉同口径），
+ * 角标直接写缺什么；只读本地，不发 115 请求。
+ * Emby 媒体信息（有没有探测过音视频轨道）是另一个维度：打开页面时向 Emby 拉一次快照（localemby.go），
+ * 拉完原地重读列表，卡片左下角标「未探测 N」，筛选栏多一个「缺媒体信息」。
  * 勾选跨筛选、跨翻页保留（按 key 记），批量刮削一次提交。
  * 刮削原来挂在网盘文件页，2026-09 挪到这里：只刮本地已经有的片目。
  *
@@ -43,11 +48,13 @@ const PAGE = 60
 const keyword = ref('')
 const type = ref<'' | 'movie' | 'tv'>('')
 const status = ref<'' | LocalTitleStatus>('')
+/** 只看 Emby 里还缺媒体信息的（有 Emby 快照才显示这个开关） */
+const probeLack = ref(false)
 const sort = ref<LocalTitleSort>('added_desc')
 
 const items = ref<LocalTitle[]>([])
 const total = ref(0)
-const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0 })
+const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0, probe_lack: 0 })
 const configured = ref(true)
 const missing = ref(0)
 const loading = ref(false)
@@ -59,22 +66,32 @@ const selected = ref(new Map<string, LocalTitle>())
 
 const scroller = ref<HTMLElement | null>(null)
 
+/** 当前筛选（列表、翻页、全选共用） */
+function filters() {
+  return {
+    q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value,
+    probe: probeLack.value ? ('lack' as const) : ('' as const),
+  }
+}
+
+function apply(d: LocalTitleList) {
+  configured.value = d.configured
+  total.value = d.total
+  stats.value = d.stats
+  missing.value = d.missing ?? 0
+  loaded.value = true
+}
+
 let seq = 0
 async function load(refresh = false) {
   const my = ++seq
   matched.value = null // 筛选变了，上次全选拿到的那一批不再代表当前结果
   loading.value = true
   try {
-    const d = await localApi.listTitles({
-      q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value, limit: PAGE, refresh,
-    })
+    const d = await localApi.listTitles({ ...filters(), limit: PAGE, refresh })
     if (my !== seq) return
-    configured.value = d.configured
     items.value = d.items ?? []
-    total.value = d.total
-    stats.value = d.stats
-    missing.value = d.missing ?? 0
-    loaded.value = true
+    apply(d)
   } catch (e) {
     if (my === seq) toastError(e, '读取本地媒体库失败')
   } finally {
@@ -86,10 +103,7 @@ async function loadMore() {
   const my = seq
   loadingMore.value = true
   try {
-    const d = await localApi.listTitles({
-      q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value,
-      offset: items.value.length, limit: PAGE,
-    })
+    const d = await localApi.listTitles({ ...filters(), offset: items.value.length, limit: PAGE })
     if (my !== seq) return
     items.value = [...items.value, ...(d.items ?? [])]
     total.value = d.total
@@ -105,7 +119,7 @@ function reload() {
   scroller.value?.scrollTo({ top: 0 })
   void load()
 }
-watch([type, status, sort], reload)
+watch([type, status, sort, probeLack], reload)
 // 打字时不必每个字都查一次：停 300ms 再查（清空立即查）
 let kwTimer: ReturnType<typeof setTimeout> | undefined
 watch(keyword, (v) => {
@@ -121,7 +135,7 @@ const typeOptions = computed(() => [
 const statusOptions = computed(() => [
   { label: `全部 ${stats.value.all}`, value: '' as const },
   { label: `已刮削 ${stats.value.ok}`, value: 'ok' as const },
-  { label: `缺一项 ${stats.value.partial}`, value: 'partial' as const },
+  { label: `不完整 ${stats.value.partial}`, value: 'partial' as const },
   { label: `未刮削 ${stats.value.miss}`, value: 'miss' as const },
 ])
 const SORTS: { label: string; value: LocalTitleSort }[] = [
@@ -159,12 +173,57 @@ watch(view, (v) => {
   }
 })
 
-const STATUS_TEXT: Record<LocalTitleStatus, string> = { ok: '已刮削', partial: '缺一项', miss: '未刮削' }
-const STATUS_TONE: Record<LocalTitleStatus, 'success' | 'warning' | 'danger'> = { ok: 'success', partial: 'warning', miss: 'danger' }
+// ---- Emby 媒体信息：打开页面（与点「刷新」）时拉一次快照，平时不拉 ----
 
-function partialText(t: LocalTitle) {
-  if (t.status !== 'partial') return ''
-  return t.has_nfo ? '缺海报' : '缺 NFO'
+const emby = ref<LocalEmbyStats | null>(null)
+const embyLoading = ref(false)
+const embyError = ref('')
+
+async function loadEmby(refresh = false) {
+  embyLoading.value = true
+  embyError.value = ''
+  try {
+    const d = await localApi.embyStats(refresh)
+    emby.value = d
+    embyError.value = d.error ?? ''
+    if (d.ready) await refreshInPlace()
+  } catch (e) {
+    embyError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    embyLoading.value = false
+  }
+}
+
+/**
+ * 原地重读已经显示的这些卡片（不回到顶部、不闪骨架）：Emby 快照到了，角标要补上。
+ * 抢一个新的 seq：正在飞的 load 结果作废（它不带 Emby 计数），loading 由这里收尾
+ */
+async function refreshInPlace() {
+  const my = ++seq
+  const want = Math.max(PAGE, items.value.length)
+  const got: LocalTitle[] = []
+  let last: LocalTitleList | undefined
+  try {
+    while (got.length < want) {
+      const d = await localApi.listTitles({ ...filters(), offset: got.length, limit: Math.min(200, want - got.length) })
+      if (my !== seq) return
+      last = d
+      got.push(...(d.items ?? []))
+      if (!d.items?.length || got.length >= d.total) break
+    }
+    if (!last) return
+    items.value = got
+    apply(last)
+  } catch (e) {
+    if (my === seq) toastError(e, '读取本地媒体库失败')
+  } finally {
+    if (my === seq) loading.value = false
+  }
+}
+
+function refreshAll() {
+  void load(true)
+  void loadEmby(true)
 }
 
 function metaLine(t: LocalTitle) {
@@ -227,9 +286,7 @@ async function toggleAll() {
   const my = seq
   selectingAll.value = true
   try {
-    const d = await localApi.listTitles({
-      q: keyword.value.trim(), type: type.value, status: status.value, sort: sort.value, all: true,
-    })
+    const d = await localApi.listTitles({ ...filters(), all: true })
     if (my !== seq) return // 等的时候换了筛选：这份结果已经不是用户眼前那一批
     const list = d.items ?? []
     const m = new Map(selected.value)
@@ -344,6 +401,7 @@ function measure() {
 let ro: ResizeObserver | undefined
 onMounted(async () => {
   void load()
+  void loadEmby()
   await nextTick()
   measure()
   setTimeout(measure, 250) // 切页动画（位移 4px）结束后再量一次
@@ -367,7 +425,7 @@ onBeforeUnmount(() => {
   <div ref="pageEl" class="page" :style="{ '--page-top': `${pageTop}px`, '--page-bottom': `${pageBottom}px` }">
     <SectionCard title="本地文件" hint="本地媒体库里的影片与剧集。点海报看详情，点左上角圆圈勾选后批量刮削" class="shell">
       <template #extra>
-        <HButton variant="ghost" size="sm" :loading="loading" @click="load(true)"><RefreshCw :size="14" />刷新</HButton>
+        <HButton variant="ghost" size="sm" :loading="loading" @click="refreshAll"><RefreshCw :size="14" />刷新</HButton>
       </template>
 
       <HAlert v-if="!configured" status="warning" class="tip">
@@ -384,6 +442,19 @@ onBeforeUnmount(() => {
             <div class="segs">
               <HSegmented v-model="type" :options="typeOptions" size="sm" aria-label="类型" />
               <HSegmented v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />
+              <HButton
+                v-if="emby?.ready"
+                size="sm"
+                :variant="probeLack ? 'primary' : 'tertiary'"
+                :aria-pressed="probeLack"
+                :loading="embyLoading"
+                title="只看 Emby 里还有条目没探测过媒体信息（音视频轨道）的片目"
+                @click="probeLack = !probeLack"
+              >
+                <ScanSearch :size="14" />缺媒体信息 {{ stats.probe_lack }}
+              </HButton>
+              <span v-else-if="embyLoading" class="emby-hint"><HSpinner size="sm" />读取 Emby 媒体信息…</span>
+              <span v-else-if="embyError" class="emby-hint" :title="embyError">Emby 媒体信息读取失败</span>
             </div>
             <div class="view-sort">
               <HSegmented v-model="view" :options="VIEWS" size="sm" aria-label="显示方案" />
@@ -417,6 +488,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <HAlert v-if="emby?.ready && emby.scanned && !emby.titles" status="warning" class="tip">
+            Emby 里读到 {{ emby.scanned }} 个影视条目，但一个都对不上本地片目，卡片上看不到媒体信息：检查 Emby 设置里的路径映射。
+          </HAlert>
           <HAlert v-if="missing" status="warning" class="tip">
             有 {{ missing }} 个片目台账里有、本地却找不到目录（被手工删掉，或挂载还没就绪）。
           </HAlert>
@@ -455,8 +529,11 @@ onBeforeUnmount(() => {
                     <Clapperboard v-else :size="28" />
                   </div>
                   <img v-if="t.poster" :src="localApi.posterUrl(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
-                  <HChip :color="STATUS_TONE[t.status]" variant="primary" size="sm" class="badge" :title="STATUS_TEXT[t.status]">
-                    {{ t.status === 'partial' ? partialText(t) : STATUS_TEXT[t.status] }}
+                  <HChip :color="STATUS_TONE[t.status]" variant="primary" size="sm" class="badge" :title="statusTitle(t)">
+                    {{ statusLabel(t) }}
+                  </HChip>
+                  <HChip v-if="probeLabel(t)" color="accent" variant="primary" size="sm" class="probe-badge" :title="probeTitle(t)">
+                    {{ probeLabel(t) }}
                   </HChip>
                 </button>
                 <button
@@ -482,8 +559,11 @@ onBeforeUnmount(() => {
                   </p>
                 </button>
                 <!-- 列表里海报太小放不下角标，状态挪到这一行 -->
-                <HChip :color="STATUS_TONE[t.status]" size="sm" class="list-only row-status">
-                  {{ t.status === 'partial' ? partialText(t) : STATUS_TEXT[t.status] }}
+                <HChip v-if="probeLabel(t)" color="accent" size="sm" class="list-only row-status" :title="probeTitle(t)">
+                  {{ probeLabel(t) }}
+                </HChip>
+                <HChip :color="STATUS_TONE[t.status]" size="sm" class="list-only row-status" :title="statusTitle(t)">
+                  {{ statusLabel(t) }}
                 </HChip>
                 <HDropdown :options="CARD_MENU" align="end" @select="(k) => onCardAction(t, k)">
                   <HButton variant="ghost" size="sm" icon-only :aria-label="`${t.title} 的操作`"><Ellipsis :size="16" /></HButton>
@@ -758,7 +838,29 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 8px;
   right: 8px;
+  max-width: calc(100% - 16px);
   pointer-events: none;
+}
+.badge :deep(.chip__label),
+.probe-badge :deep(.chip__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 媒体信息与刮削是两回事：角标分放两个角，一眼分得开 */
+.probe-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  pointer-events: none;
+}
+.emby-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .info {
   display: flex;
@@ -847,6 +949,20 @@ onBeforeUnmount(() => {
 .v-sm .badge :deep(.chip__label) {
   display: none;
 }
+/* 小卡片放不下字：媒体信息也缩成左下角一个点 */
+.v-sm .probe-badge {
+  left: 6px;
+  bottom: 6px;
+  width: 10px;
+  height: 10px;
+  min-width: 0;
+  padding: 0;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--background) 60%, transparent);
+}
+.v-sm .probe-badge :deep(.chip__label) {
+  display: none;
+}
 .v-sm .info :deep(.button) {
   width: 26px;
   min-width: 26px;
@@ -894,7 +1010,8 @@ onBeforeUnmount(() => {
   width: 16px;
   height: 16px;
 }
-.v-list .badge {
+.v-list .badge,
+.v-list .probe-badge {
   display: none;
 }
 .v-list .info {

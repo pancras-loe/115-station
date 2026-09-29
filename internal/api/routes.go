@@ -292,6 +292,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/local/scrape", h.ScrapeLocalTitles)
 		protected.GET("/local/titles/detail", h.LocalTitleDetail)
 		protected.GET("/local/titles/emby", h.LocalTitleEmby)
+		protected.GET("/local/titles/emby-stats", h.LocalEmbyStats)
 		protected.POST("/local/titles/probe", h.LocalTitleProbe)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)

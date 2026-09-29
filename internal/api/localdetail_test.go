@@ -2,6 +2,7 @@ package api
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -56,10 +57,15 @@ func TestInspectLocalTitleDetailTV(t *testing.T) {
 	if sn.Season != 1 || sn.Dir != "Season 01" || sn.NFO == nil || !sn.NFO.Exists || !sn.Poster.Exists || sn.Videos != 3 {
 		t.Fatalf("season: %+v", sn)
 	}
-	// NFO：tvshow + season + E01/E02/E03（花絮不算）→ 3/5
+	// NFO：tvshow + season + E01/E02（花絮没集号、E03 本地 STRM 不在，都不算）→ 3/4
 	s := d.Summary
-	if s.NFOHave != 3 || s.NFOTotal != 5 || s.ThumbHave != 1 || s.ThumbTotal != 3 || s.Subtitled != 1 {
+	if s.NFOHave != 3 || s.NFOTotal != 4 || s.ThumbHave != 1 || s.ThumbTotal != 2 || s.Subtitled != 1 {
 		t.Fatalf("summary: %+v", s)
+	}
+	// 卡片状态与详情同口径：根目录有 tvshow.nfo 与海报也不算刮全（此前就是这样显示成「已刮削」的）
+	if d.Status != "partial" || !reflect.DeepEqual(d.Lack, []string{"背景图", "1 集 NFO"}) ||
+		!reflect.DeepEqual(d.Soft, []string{"1 集剧照"}) {
+		t.Fatalf("grade: %s lack=%v soft=%v", d.Status, d.Lack, d.Soft)
 	}
 	// 图片：海报、背景图、Logo、横版图 + 季海报 → 2/5
 	if s.ImgHave != 2 || s.ImgTotal != 5 {
@@ -83,6 +89,21 @@ func TestInspectLocalTitleDetailMovieAndFlatSeason(t *testing.T) {
 	if d.fanartV == 0 || len(d.Entries) != 1 || !d.Entries[0].NFO.Exists || d.Entries[0].Thumb != nil || d.Seasons != nil {
 		t.Fatalf("movie: %+v", d)
 	}
+	// Logo / 横版图缺了不影响「已刮削」
+	if d.Status != "ok" || d.Lack != nil || d.Soft != nil {
+		t.Fatalf("movie grade: %s %v %v", d.Status, d.Lack, d.Soft)
+	}
+
+	// 别的刮削器写的 movie.nfo 同样算；缺背景图是 partial
+	mk2 := "影视/电影/老片 (2001)"
+	touch(t, filepath.Join(root, mk2, "老片.strm"), "u")
+	touch(t, filepath.Join(root, mk2, "movie.nfo"), "x")
+	touch(t, filepath.Join(root, mk2, "poster.jpg"), "x")
+	d = inspectLocalTitleDetail(root, &ledgerTitleEntry{Key: mk2, MediaType: "movie"},
+		[]model.SyncedFile{{Kind: "video", RelPath: mk2 + "/老片.strm"}})
+	if !d.Entries[0].NFO.Exists || d.Status != "partial" || !reflect.DeepEqual(d.Lack, []string{"背景图"}) {
+		t.Fatalf("movie.nfo: %s %v", d.Status, d.Lack)
+	}
 
 	tk := "影视/综艺/某综艺"
 	touch(t, filepath.Join(root, tk, "某综艺.S01E01.strm"), "u")
@@ -90,6 +111,9 @@ func TestInspectLocalTitleDetailMovieAndFlatSeason(t *testing.T) {
 		[]model.SyncedFile{{Kind: "video", RelPath: tk + "/某综艺.S01E01.strm"}})
 	if len(d.Seasons) != 1 || d.Seasons[0].NFO != nil || d.Seasons[0].Dir != "" {
 		t.Fatalf("平铺的集没有季目录，不该要求 season.nfo: %+v", d.Seasons)
+	}
+	if d.Status != "miss" || !reflect.DeepEqual(d.Lack, []string{"剧集 NFO", "海报", "背景图", "1 集 NFO"}) {
+		t.Fatalf("什么都没刮: %s %v", d.Status, d.Lack)
 	}
 }
 

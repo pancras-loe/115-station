@@ -43,6 +43,21 @@ func TestScanLedgerTitlesLibNameAndVideos(t *testing.T) {
 	check("电影/老片 (2001)", "", 1)
 }
 
+// 列表一次查表按片目分组台账行：key 与 scanLedgerTitles 对得上，取舍与 scrapeDirVideoRows 一致
+func TestLedgerVideoRowsByTitle(t *testing.T) {
+	ledgerTestDB(t, []model.CategoryRule{{MediaType: "tv", Name: "剧集"}}, []model.SyncedFile{
+		{FileID: "e1", Kind: "video", PickCode: "p1", RelPath: "影视/剧集/狂飙 (2023)/Season 01/狂飙.S01E01.strm"},
+		{FileID: "e2", Kind: "video", PickCode: "p2", RelPath: "影视/剧集/狂飙 (2023)/Season 01/狂飙.S01E02.strm"},
+		{FileID: "np", Kind: "video", RelPath: "影视/剧集/狂飙 (2023)/Season 01/狂飙.S01E03.strm"}, // 没 pickcode
+		{FileID: "sub", Kind: "subtitle", PickCode: "p4", RelPath: "影视/剧集/狂飙 (2023)/Season 01/狂飙.S01E01.chs.ass"},
+	})
+	got := ledgerVideoRowsByTitle()
+	rows := got["影视/剧集/狂飙 (2023)"]
+	if len(got) != 1 || len(rows) != 2 || rows[0].FileID != "e1" || rows[1].FileID != "e2" {
+		t.Fatalf("rows: %+v", got)
+	}
+}
+
 func touch(t *testing.T, p string, data string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -67,18 +82,17 @@ func TestInspectLocalTitle(t *testing.T) {
 	cases := []struct {
 		key, kind   string
 		nfo, poster bool
-		status      string
 		missing     bool
 	}{
-		{"影视/剧集/狂飙 (2023)", "tv", false, true, "partial", false},
-		{"影视/电影/流浪地球 (2019)", "movie", true, true, "ok", false},
-		{"影视/电影/空图 (2020)", "movie", false, false, "miss", false},
-		{"影视/电影/不存在 (2021)", "movie", false, false, "miss", true},
+		{"影视/剧集/狂飙 (2023)", "tv", false, true, false},
+		{"影视/电影/流浪地球 (2019)", "movie", true, true, false},
+		{"影视/电影/空图 (2020)", "movie", false, false, false},
+		{"影视/电影/不存在 (2021)", "movie", false, false, true},
 	}
 	for _, c := range cases {
 		got := inspectLocalTitle(root, &ledgerTitleEntry{Key: c.key, MediaType: c.kind})
-		if got.HasNFO != c.nfo || got.HasPoster != c.poster || got.Status != c.status || got.Missing != c.missing {
-			t.Errorf("%s: nfo=%v poster=%v status=%s missing=%v", c.key, got.HasNFO, got.HasPoster, got.Status, got.Missing)
+		if got.HasNFO != c.nfo || got.HasPoster != c.poster || got.Missing != c.missing {
+			t.Errorf("%s: nfo=%v poster=%v missing=%v", c.key, got.HasNFO, got.HasPoster, got.Missing)
 		}
 	}
 }
@@ -128,6 +142,43 @@ func TestFilterLocalTitles(t *testing.T) {
 	}
 	if got, _ = filterLocalTitles(all, localTitleQuery{Keyword: "207468"}); !reflect.DeepEqual(keys(got), []string{"a"}) {
 		t.Fatalf("tmdb keyword: %v", keys(got))
+	}
+
+	// Emby 快照：计数挂到卡片上（不改缓存里的原切片），「缺媒体信息」收窄结果
+	emby := map[string]localEmbyStat{"a": {Items: 10, Lack: 3}, "b": {Items: 1}}
+	got, st = filterLocalTitles(all, localTitleQuery{Emby: emby})
+	if st.ProbeLack != 1 || len(got) != 3 || got[1].Emby == nil || got[1].Emby.Lack != 3 || got[2].Emby != nil {
+		t.Fatalf("emby: %+v %+v", st, got)
+	}
+	if all[0].Emby != nil {
+		t.Fatalf("不能改缓存里的卡片")
+	}
+	got, st = filterLocalTitles(all, localTitleQuery{Emby: emby, Probe: "lack"})
+	if !reflect.DeepEqual(keys(got), []string{"a"}) || st.All != 1 || st.TV != 1 || st.ProbeLack != 1 {
+		t.Fatalf("probe=lack: %v %+v", keys(got), st)
+	}
+	// 还没有快照时「缺媒体信息」不生效，免得一进页面列表是空的
+	if got, _ = filterLocalTitles(all, localTitleQuery{Probe: "lack"}); len(got) != 3 {
+		t.Fatalf("无快照: %v", keys(got))
+	}
+}
+
+// Emby 条目路径映射回本地后逐级往上找片目；库外的、只到分类目录的都不算
+func TestLocalEmbyTitleKey(t *testing.T) {
+	ledger := map[string]*ledgerTitleEntry{
+		"影视/剧集/国产剧/狂飙 (2023)": {}, "影视/电影/流浪地球 (2019)": {},
+	}
+	cases := map[string]string{
+		"/media/影视/剧集/国产剧/狂飙 (2023)/Season 01/狂飙.S01E01.strm": "影视/剧集/国产剧/狂飙 (2023)",
+		"/media/影视/电影/流浪地球 (2019)/流浪地球.strm":                   "影视/电影/流浪地球 (2019)",
+		"/media/影视/电影/别的 (2020)/别的.strm":                         "",
+		"/other/影视/电影/流浪地球 (2019)/流浪地球.strm":                   "",
+		"/media2/影视/电影/流浪地球 (2019)/流浪地球.strm":                  "",
+	}
+	for in, want := range cases {
+		if got := localEmbyTitleKey(in, "/media", ledger); got != want {
+			t.Errorf("%s → %q，预期 %q", in, got, want)
+		}
 	}
 }
 

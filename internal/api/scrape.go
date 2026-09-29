@@ -574,15 +574,20 @@ func scrapeDirVideoRows(key string) []model.SyncedFile {
 	}
 	var out []model.SyncedFile
 	for _, sf := range sfs {
-		if sf.PickCode == "" {
-			continue
-		}
-		// STRM 名不再带视频扩展名（strmname.go），认视频看台账的 kind；旧写法的行仍按扩展名认
-		if sf.Kind == "video" || videoExts[strings.ToLower(pathExt(strings.TrimSuffix(path.Base(sf.RelPath), ".strm")))] {
+		if scrapeVideoRow(sf) {
 			out = append(out, sf)
 		}
 	}
 	return out
+}
+
+// scrapeVideoRow 台账里一行 .strm 是不是要刮削的视频（本地文件页按片目分组时同一口径）
+func scrapeVideoRow(sf model.SyncedFile) bool {
+	if sf.PickCode == "" {
+		return false
+	}
+	// STRM 名不再带视频扩展名（strmname.go），认视频看台账的 kind；旧写法的行仍按扩展名认
+	return sf.Kind == "video" || videoExts[strings.ToLower(pathExt(strings.TrimSuffix(path.Base(sf.RelPath), ".strm")))]
 }
 
 // ---- TMDB 集信息（按季拉取，进程内缓存）----

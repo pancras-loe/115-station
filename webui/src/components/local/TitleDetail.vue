@@ -25,6 +25,7 @@ import type { LocalTitle, LocalTitleDetail, TitleEmby } from '@/api/local'
 import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 import { relTime, fullTime } from '@/utils/time'
+import { STATUS_TEXT, STATUS_TONE, statusTitle } from '@/utils/localStatus'
 
 /**
  * 本地文件页的片目详情（右侧抽屉，手机上全屏）。卡片墙只放要紧的，细节都在这里：
@@ -119,8 +120,12 @@ const metaParts = computed(() => {
   return parts
 })
 
-const STATUS_TEXT = { ok: '已刮削', partial: '缺一项', miss: '未刮削' } as const
-const STATUS_TONE = { ok: 'success', partial: 'warning', miss: 'danger' } as const
+// 抽屉里地方够：缺什么全写出来（卡片上只写第一样）
+const statusText = computed(() => {
+  const x = d.value
+  if (!x) return ''
+  return x.status === 'partial' && x.lack?.length ? `缺${x.lack.join('、')}` : STATUS_TEXT[x.status]
+})
 
 const tmdbUrl = computed(() =>
   d.value?.tmdb_id ? `https://www.themoviedb.org/${d.value.media_type === 'tv' ? 'tv' : 'movie'}/${d.value.tmdb_id}` : '',
@@ -221,7 +226,7 @@ function onStat(key: string) {
               <h2 class="hero-title">{{ d.title }}</h2>
               <p class="hero-meta">{{ metaParts.join(' · ') }}</p>
               <div class="hero-chips">
-                <HChip :color="STATUS_TONE[d.status]" variant="primary" size="sm">{{ STATUS_TEXT[d.status] }}</HChip>
+                <HChip :color="STATUS_TONE[d.status]" variant="primary" size="sm" :title="statusTitle(d)">{{ statusText }}</HChip>
                 <a v-if="tmdbUrl" :href="tmdbUrl" target="_blank" rel="noopener noreferrer" class="tmdb">
                   TMDB {{ d.tmdb_id }}<ExternalLink :size="11" />
                 </a>

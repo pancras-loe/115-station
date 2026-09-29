@@ -1,0 +1,195 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ==================== 本地文件页：卡片上的媒体信息（Emby 快照） ====================
+//
+// 片目详情的「媒体信息」是点开才查的（按路径逐个片目问 Emby），卡片墙上几百上千部不能这么问。
+// 维护者选的做法：**打开本地文件页时**向 Emby 拉一次全库快照（分页读 Movie / Episode / Video 的媒体流），
+// 按路径归到片目，记「条目数 / 还缺媒体信息的数」。平时不拉，没有后台定时任务。
+// 只打 Emby，零 115 请求；一分钟内重复打开复用上一次。
+// 判据与提前探测同一个（hasMediaInfo / extractable）：光盘结构探测不了，不算缺。
+
+// localEmbyStat 一个片目在 Emby 里的媒体信息计数
+type localEmbyStat struct {
+	Items int `json:"items"` // Emby 里这个片目的影视条目数
+	Lack  int `json:"lack"`  // 其中还缺媒体信息、且能探测的
+}
+
+var localEmbySnap struct {
+	fetch   sync.Mutex // 同一时间只拉一份：后到的等前一个拉完直接用它的结果
+	mu      sync.Mutex
+	at      time.Time
+	stats   map[string]localEmbyStat
+	scanned int
+	err     string
+}
+
+const (
+	localEmbyTTL = time.Minute
+	// 只要 Path 与 MediaStreams，一条一两 KB；500 条一页，万集的库二十来页
+	localEmbyPage     = 500
+	localEmbyMaxItems = 200000 // 防守：Emby 不认 StartIndex 时别无限翻页
+)
+
+// localEmbyStats 当前快照（只读）；从没拉过时为 nil
+func localEmbyStats() map[string]localEmbyStat {
+	localEmbySnap.mu.Lock()
+	defer localEmbySnap.mu.Unlock()
+	return localEmbySnap.stats
+}
+
+// loadLocalEmby 拉快照（一分钟内拉过且不强制就复用）。失败时保留上一份，只记错误
+func loadLocalEmby(cfg embyRefreshCfg, root string, force bool) {
+	s := &localEmbySnap
+	s.fetch.Lock()
+	defer s.fetch.Unlock()
+	s.mu.Lock()
+	fresh := s.stats != nil && s.err == "" && time.Since(s.at) < localEmbyTTL
+	s.mu.Unlock()
+	if fresh && !force {
+		return
+	}
+	stats, scanned, err := fetchLocalEmby(cfg, root, scanLedgerTitlesCached())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.at = time.Now()
+	if err != nil {
+		s.err = err.Error()
+		log.Printf("[本地文件] ✗ 读取 Emby 媒体信息失败: %v", err)
+		return
+	}
+	s.stats, s.scanned, s.err = stats, scanned, ""
+}
+
+// fetchLocalEmby 分页读 Emby 的影视条目，按路径归到台账片目。
+// 只读本地媒体库映射得到的那几个 Emby 库；一个都对不上时（映射没配 / 版本不返回 Locations）退回全服务器
+func fetchLocalEmby(cfg embyRefreshCfg, root string, ledger map[string]*ledgerTitleEntry) (map[string]localEmbyStat, int, error) {
+	rootSlash := strings.TrimRight(filepath.ToSlash(root), "/")
+	var parents []string
+	for _, lib := range embyMediaFolders(cfg) {
+		for _, loc := range lib.Locations {
+			local := strings.TrimRight(embyPathToLocal(cfg.PathMapping, loc), "/")
+			if local == rootSlash || strings.HasPrefix(local, rootSlash+"/") || strings.HasPrefix(rootSlash, local+"/") {
+				parents = append(parents, lib.ID)
+				break
+			}
+		}
+	}
+	if len(parents) == 0 {
+		parents = []string{""}
+	}
+	out := map[string]localEmbyStat{}
+	scanned := 0
+	for _, parent := range parents {
+		for start := 0; start < localEmbyMaxItems; start += localEmbyPage {
+			items, err := fetchLocalEmbyPage(cfg, parent, start)
+			if err != nil {
+				return nil, 0, err
+			}
+			for _, it := range items {
+				scanned++
+				key := localEmbyTitleKey(embyPathToLocal(cfg.PathMapping, it.Path), rootSlash, ledger)
+				if key == "" {
+					continue
+				}
+				st := out[key]
+				st.Items++
+				if !it.hasMediaInfo() && it.extractable() {
+					st.Lack++
+				}
+				out[key] = st
+			}
+			if len(items) < localEmbyPage {
+				break
+			}
+		}
+	}
+	return out, scanned, nil
+}
+
+func fetchLocalEmbyPage(cfg embyRefreshCfg, parent string, start int) ([]embyExtractItem, error) {
+	q := url.Values{
+		"Recursive":        {"true"},
+		"IncludeItemTypes": {"Movie,Episode,Video"},
+		// 不要 MediaSources：它把媒体流再带一遍，页面体积翻倍；hasMediaInfo 先看的就是 MediaStreams
+		"Fields":                 {"Path,MediaStreams"},
+		"SortBy":                 {"DateCreated,SortName"}, // 翻页途中入库的新条目排在最后，不会挤得前面漏一条
+		"SortOrder":              {"Ascending"},
+		"StartIndex":             {strconv.Itoa(start)},
+		"Limit":                  {strconv.Itoa(localEmbyPage)},
+		"EnableTotalRecordCount": {"false"},
+		"EnableImages":           {"false"},
+		"EnableUserData":         {"false"},
+	}
+	if parent != "" {
+		q.Set("ParentId", parent)
+	}
+	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var out struct {
+		Items []embyExtractItem `json:"Items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+// localEmbyTitleKey 纯函数：Emby 条目映射回本地的路径 → 台账片目 key（逐级往上找，找不到为空）
+func localEmbyTitleKey(local, rootSlash string, ledger map[string]*ledgerTitleEntry) string {
+	local = filepath.ToSlash(local)
+	if rootSlash == "" || !strings.HasPrefix(local, rootSlash+"/") {
+		return ""
+	}
+	segs := strings.Split(strings.TrimPrefix(local, rootSlash+"/"), "/")
+	for n := 1; n < len(segs); n++ {
+		if k := strings.Join(segs[:n], "/"); ledger[k] != nil {
+			return k
+		}
+	}
+	return ""
+}
+
+// LocalEmbyStats GET /local/titles/emby-stats?refresh=1：本地文件页打开时调一次，拉完前端重读列表
+func (h *Handler) LocalEmbyStats(c *gin.Context) {
+	cfg, configured := loadEmbyRefreshCfg()
+	root := localMediaRoot()
+	if !configured || root == "" {
+		c.JSON(http.StatusOK, gin.H{"configured": false})
+		return
+	}
+	loadLocalEmby(cfg, root, c.Query("refresh") == "1")
+	s := &localEmbySnap
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lacking := 0
+	for _, st := range s.stats {
+		if st.Lack > 0 {
+			lacking++
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"configured": true, "ready": s.stats != nil, "at": s.at, "error": s.err,
+		"scanned": s.scanned, "titles": len(s.stats), "lacking": lacking,
+	})
+}

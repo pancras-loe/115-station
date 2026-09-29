@@ -3,7 +3,7 @@ import type { QueuedReply } from './tasks'
 
 /** 本地文件页（后端 internal/api/locallib.go / localscrape.go） */
 
-/** ok = NFO 与海报都有；partial = 缺一样；miss = 都没有 */
+/** ok = 必需产物（各级 NFO、海报、背景图）都在；partial = 缺一部分；miss = 一样都没有 */
 export type LocalTitleStatus = 'ok' | 'partial' | 'miss'
 
 export interface LocalTitle {
@@ -18,6 +18,12 @@ export interface LocalTitle {
   has_nfo: boolean
   has_poster: boolean
   status: LocalTitleStatus
+  /** 缺的必需产物（「背景图」「3 集 NFO」…），角标直接写它 */
+  lack?: string[]
+  /** 缺的可选图片（剧照、季海报）：只提示，不影响 status */
+  soft?: string[]
+  /** Emby 媒体信息（打开页面时拉的快照）；没有快照或 Emby 里没这个片目时为空 */
+  emby?: LocalEmbyStat
   /** 台账有、本地没有这个目录 */
   missing?: boolean
   last_at: string
@@ -32,6 +38,29 @@ export interface LocalTitleStats {
   miss: number
   movie: number
   tv: number
+  /** Emby 里还缺媒体信息的片目数（套用其余筛选）；没有 Emby 快照时为 0 */
+  probe_lack: number
+}
+
+export interface LocalEmbyStat {
+  /** Emby 里这个片目的影视条目数 */
+  items: number
+  /** 其中还缺媒体信息（没探测过）、且能探测的 */
+  lack: number
+}
+
+/** GET /local/titles/emby-stats：打开页面时向 Emby 拉一次快照（只打 Emby，零 115 请求） */
+export interface LocalEmbyStats {
+  configured: boolean
+  ready?: boolean
+  at?: string
+  error?: string
+  /** 读到的 Emby 影视条目数 */
+  scanned?: number
+  /** 对上了本地片目的片目数 */
+  titles?: number
+  /** 缺媒体信息的片目数 */
+  lacking?: number
 }
 
 export interface LocalTitleList {
@@ -53,6 +82,8 @@ export interface LocalTitleQuery {
   q?: string
   type?: '' | 'movie' | 'tv'
   status?: '' | LocalTitleStatus
+  /** lack = 只看 Emby 里还缺媒体信息的 */
+  probe?: '' | 'lack'
   sort?: LocalTitleSort
   offset?: number
   limit?: number
@@ -68,6 +99,7 @@ export const listTitles = (q: LocalTitleQuery) =>
       q: q.q || undefined,
       type: q.type || undefined,
       status: q.status || undefined,
+      probe: q.probe || undefined,
       sort: q.sort || undefined,
       offset: q.offset || undefined,
       limit: q.limit || undefined,
@@ -75,6 +107,10 @@ export const listTitles = (q: LocalTitleQuery) =>
       all: q.all ? 1 : undefined,
     },
   })
+
+export const embyStats = (refresh = false) =>
+  // 大库要翻二三十页，给足时间
+  http.get<LocalEmbyStats>('/local/titles/emby-stats', { params: { refresh: refresh ? 1 : undefined }, timeoutMs: 180_000 })
 
 /** <img> 带不了登录态：后端按 key 签了名，这条路由公开 */
 export const posterUrl = (t: LocalTitle) => (t.poster ? `/api/local/poster?${t.poster}` : '')

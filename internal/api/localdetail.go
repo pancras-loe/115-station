@@ -85,6 +85,7 @@ type localTitleDetail struct {
 	Entries []localEntry       `json:"entries"`
 	Summary localDetailSummary `json:"summary"`
 	fanartV int64
+	posterV int64
 }
 
 // localDirIndex 一个目录里的文件（小写名 → 信息），同一次详情里每个目录只读一遍
@@ -125,7 +126,7 @@ func (x localDirIndex) find(dir, label string, optional bool, names ...string) l
 func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.SyncedFile) localTitleDetail {
 	it := inspectLocalTitle(root, e)
 	titleAbs := filepath.Join(root, filepath.FromSlash(e.Key))
-	d := localTitleDetail{localTitle: it.localTitle, Dir: titleAbs, Files: []localFile{}, Entries: []localEntry{}}
+	d := localTitleDetail{localTitle: it.localTitle, Dir: titleAbs, Files: []localFile{}, Entries: []localEntry{}, posterV: it.posterV}
 	idx := localDirIndex{}
 	tv := e.MediaType == "tv"
 
@@ -156,7 +157,12 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 		dirAbs := filepath.Join(titleAbs, filepath.FromSlash(path.Dir(rel)))
 		en := localEntry{Name: name, Rel: rel, Size: sf.Size, Orphan: sf.OrphanAt != nil}
 		en.StrmMissing = !d.Missing && idx.files(dirAbs)[strings.ToLower(path.Base(rel))] == nil
-		en.NFO = idx.find(dirAbs, "NFO", false, name+".nfo")
+		if tv {
+			en.NFO = idx.find(dirAbs, "NFO", false, name+".nfo")
+		} else {
+			// 电影的 NFO 我们写成与视频同基名，别的刮削器常写 movie.nfo：Emby 两种都认
+			en.NFO = idx.find(dirAbs, "NFO", false, name+".nfo", "movie.nfo")
+		}
 		if tv {
 			en.Season, en.Episode = scrapeEpisodeNo(name)
 			if en.Episode > 0 {
@@ -231,6 +237,10 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 		}
 	}
 	for _, en := range d.Entries {
+		// 本地 STRM 不在的视频刮削也写不进去（scrapeCompensate 会收回），同样不计入
+		if en.StrmMissing {
+			continue
+		}
 		// 解析不出集号的集刮削不写 NFO，不计入分母，免得永远差几个
 		if !tv || en.Episode > 0 {
 			count(en.NFO, &s.NFOHave, &s.NFOTotal)
@@ -242,7 +252,91 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 			s.Subtitled++
 		}
 	}
+	d.grade()
 	return d
+}
+
+// grade 按详情里的产物定卡片状态：必需产物（片目级 NFO、海报、背景图、季 NFO、每集 NFO）缺一样就是 partial，
+// 一样都没有是 miss。可选的图（剧照、季海报）只记进 Soft 提示 —— TMDB 上不一定有，占位剧照还会被故意跳过，
+// 算进状态的话有些剧重刮多少遍都是「不完整」。Logo / 横版图更是常缺，只在详情里列
+func (d *localTitleDetail) grade() {
+	tv := d.MediaType == "tv"
+	have := 0
+	var lack, soft []string
+	for _, f := range d.Files {
+		switch {
+		case f.Optional:
+		case f.Exists:
+			have++
+		default:
+			lack = append(lack, f.Label)
+		}
+	}
+	seasonNFO, seasonPoster := 0, 0
+	for _, sn := range d.Seasons {
+		if sn.NFO != nil {
+			if sn.NFO.Exists {
+				have++
+			} else {
+				seasonNFO++
+			}
+		}
+		if !sn.Poster.Exists {
+			seasonPoster++
+		}
+	}
+	nfo, nfoTotal, thumb := 0, 0, 0
+	for _, en := range d.Entries {
+		if en.StrmMissing || (tv && en.Episode == 0) {
+			continue
+		}
+		nfoTotal++
+		if en.NFO.Exists {
+			have++
+		} else {
+			nfo++
+		}
+		if en.Thumb != nil && !en.Thumb.Exists {
+			thumb++
+		}
+	}
+	switch {
+	case !tv && nfoTotal == 0:
+		// 台账行不全（老数据没有 pickcode）时没有逐个视频可比，退回「标题目录里有任何 NFO」
+		if d.HasNFO {
+			have++
+		} else {
+			lack = append(lack, "NFO")
+		}
+	case nfo == 0:
+	case tv:
+		lack = append(lack, fmt.Sprintf("%d 集 NFO", nfo))
+	case nfoTotal == 1:
+		lack = append(lack, "NFO")
+	default:
+		lack = append(lack, fmt.Sprintf("%d 个 NFO", nfo))
+	}
+	switch {
+	case seasonNFO == 1 && len(d.Seasons) == 1:
+		lack = append(lack, "季 NFO")
+	case seasonNFO > 0:
+		lack = append(lack, fmt.Sprintf("%d 季 NFO", seasonNFO))
+	}
+	if thumb > 0 {
+		soft = append(soft, fmt.Sprintf("%d 集剧照", thumb))
+	}
+	if seasonPoster > 0 {
+		soft = append(soft, fmt.Sprintf("%d 张季海报", seasonPoster))
+	}
+	d.Lack, d.Soft = lack, soft
+	switch {
+	case d.Missing || have == 0:
+		d.Status = "miss"
+	case len(lack) == 0:
+		d.Status = "ok"
+	default:
+		d.Status = "partial"
+	}
 }
 
 // localDetailEntry 按 key 取台账片目；找不到时已经写好了响应
