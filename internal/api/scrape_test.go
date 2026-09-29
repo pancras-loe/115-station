@@ -1,7 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"115-station/internal/model"
@@ -157,5 +161,70 @@ func TestTmdbImageURL(t *testing.T) {
 	}
 	if got := tmdbImageURL("https://img.example.com/tmdb", "w780", "/b.jpg"); got != "https://img.example.com/tmdb/t/p/w780/b.jpg" {
 		t.Errorf("自建镜像带路径前缀：%s", got)
+	}
+}
+
+// 拉回来的图要核对：HTML 错误页、截断的 JPEG / PNG、超上限都按失败处理，
+// 否则写下去大小 > 0，「只补缺失」永远把它当成已有
+func TestReadImageBody(t *testing.T) {
+	jpeg := append([]byte{0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 'J', 'F', 'I', 'F', 0}, make([]byte, 2000)...)
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 2000)...)
+	cases := []struct {
+		name string
+		data []byte
+		ok   bool
+	}{
+		{"完整 JPEG", append(append([]byte{}, jpeg...), 0xFF, 0xD9), true},
+		{"JPEG 结束标记后带尾巴", append(append(append([]byte{}, jpeg...), 0xFF, 0xD9), make([]byte, 16)...), true},
+		{"截断的 JPEG", jpeg, false},
+		{"完整 PNG", append(append([]byte{}, png...), "\x00\x00\x00\x00IEND\xaeB`\x82"...), true},
+		{"截断的 PNG", png, false},
+		{"200 的 HTML 错误页", []byte("<!DOCTYPE html><html><body>502 Bad Gateway</body></html>"), false},
+		{"空响应", nil, false},
+	}
+	for _, c := range cases {
+		_, err := readImageBody(bytes.NewReader(c.data), 1<<20)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, 期望成功 = %v", c.name, err, c.ok)
+		}
+	}
+	// 超上限：不许被 LimitReader 悄悄截成上限大小当成功
+	big := append(append(append([]byte{}, jpeg...), make([]byte, 100)...), 0xFF, 0xD9)
+	if _, err := readImageBody(bytes.NewReader(big), len(big)-1); err == nil {
+		t.Error("超过上限应当失败")
+	}
+	if _, err := readImageBody(bytes.NewReader(big), len(big)); err != nil {
+		t.Errorf("正好到上限不该失败: %v", err)
+	}
+}
+
+// 写元数据走临时文件 + 改名：成功后不留临时文件，覆盖已有文件，权限与原来一致
+func TestWriteMetaFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := writeMetaFile(dir, "poster.jpg", []byte("old"), false); err != nil {
+		t.Fatal(err)
+	}
+	if wrote, err := writeMetaFile(dir, "poster.jpg", []byte("new"), false); err != nil || wrote {
+		t.Fatalf("不覆盖时已有文件应跳过: wrote=%v err=%v", wrote, err)
+	}
+	if wrote, err := writeMetaFile(dir, "poster.jpg", []byte("new"), true); err != nil || !wrote {
+		t.Fatalf("覆盖模式应写入: wrote=%v err=%v", wrote, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "poster.jpg"))
+	if string(b) != "new" {
+		t.Errorf("内容 = %q, 期望 new", b)
+	}
+	ents, _ := os.ReadDir(dir)
+	if len(ents) != 1 {
+		t.Errorf("目录里应只剩 poster.jpg，实际 %d 个文件", len(ents))
+	}
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(filepath.Join(dir, "poster.jpg")); st.Mode().Perm() != 0644 {
+			t.Errorf("权限 = %v, 期望 0644", st.Mode().Perm())
+		}
+	}
+	// 目录不存在：失败且不留东西
+	if _, err := writeMetaFile(filepath.Join(dir, "gone"), "x.nfo", []byte("x"), true); err == nil {
+		t.Error("目录不存在时应失败")
 	}
 }

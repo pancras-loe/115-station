@@ -17,8 +17,10 @@ package api
 // 接口：GET/POST /scrape/config、GET /scrape/status、POST /scrape/stop
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -107,8 +109,56 @@ func tmdbFetchImageSized(imgPath, size string) ([]byte, string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, imgURL, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 20<<20))
+	data, err := readImageBody(resp.Body, scrapeImageMax)
 	return data, imgURL, err
+}
+
+// scrapeImageMax 单张图的大小上限。TMDB 原图背景常见几 MB，碰到上限多半是图床返回了别的东西
+const scrapeImageMax = 20 << 20
+
+// readImageBody 读图片响应体并核对是不是一张完整的图。
+// 多读一个字节才分得清「正好到上限」和「超了被截」：LimitReader 读满就停、不报错，
+// 截断的图会被当成完整的写下去
+func readImageBody(r io.Reader, limit int) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("图片超过 %s 上限", humanBytes(limit))
+	}
+	if err := checkImageData(data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// checkImageData 拉回来的是不是一张完整的图。
+// 状态码 200 不等于拿到了图：图床 / 代理出错时会回 200 的 HTML 错误页；按连接关闭分界、
+// 不带 Content-Length 的响应断在半路，ReadAll 也不报错。这两种写下去之后大小 > 0，
+// 「只补缺失」会把它当成已有，永远不再重拉
+func checkImageData(data []byte) error {
+	if len(data) == 0 {
+		return errors.New("图片内容为空")
+	}
+	ct := http.DetectContentType(data)
+	if !strings.HasPrefix(ct, "image/") {
+		return fmt.Errorf("返回的不是图片（%s）", ct)
+	}
+	// 截断只查 TMDB 实际给的两种格式。结束标记之后允许带一点尾巴（个别编码器会补零），
+	// 所以看末尾一段里有没有，而不是要求正好落在最后
+	tail := data[max(0, len(data)-1024):]
+	switch ct {
+	case "image/jpeg":
+		if !bytes.Contains(tail, []byte{0xFF, 0xD9}) {
+			return errors.New("JPEG 不完整（缺结束标记，下载可能被截断）")
+		}
+	case "image/png":
+		if !bytes.Contains(tail, []byte("IEND")) {
+			return errors.New("PNG 不完整（缺 IEND，下载可能被截断）")
+		}
+	}
+	return nil
 }
 
 // tmdbImageURL 拼图片地址。图床配置里常见三种写法都要认：只填域名、填到 /t/p、
@@ -222,7 +272,32 @@ func writeMetaFile(dir, name string, content []byte, force bool) (bool, error) {
 			return false, nil // 已存在且不强制 → 跳过
 		}
 	}
-	return true, os.WriteFile(dst, content, 0644)
+	return true, writeFileAtomic(dst, content)
+}
+
+// writeFileAtomic 先写同目录的临时文件再改名。直接 WriteFile 写到一半进程被杀 / 磁盘满 /
+// 挂载掉线，会留下一个大小 > 0 的残缺文件，之后「只补缺失」一直把它当成已有跳过。
+// 临时名以 .tmp 结尾：监控上传只认标准图片名与 .nfo，不会把它传上网盘
+func writeFileAtomic(dst string, content []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(content)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chmod(tmp, 0644) // CreateTemp 是 0600，与原来 WriteFile 的权限对齐（Emby 可能是另一个用户）
+	}
+	if err == nil {
+		err = os.Rename(tmp, dst)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
 }
 
 // ---- 处理器 ----
