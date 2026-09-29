@@ -207,9 +207,13 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 		"{ext}":                ctx.Ext,
 		"{custom_regex_match}": ctx.CustomRegex,
 
-		// TMDB 信息
-		"{title}":        ctx.Media.Title,
-		"{en_title}":     ctx.Media.OriginalTitle,
+		// TMDB 信息。TMDB 来的文本一律先过 sanitizeName 再进模板（MoviePilot 的
+		// __convert_invalid_characters 同一时机）：标题里的「/」不洗会被当成目录分隔符
+		// 把片目拆成两层（Fate/Zero），「:」等进了文件名 Windows / SMB 客户端不认。
+		// 此前只有部分调用方洗了 Title，en_title 一直原样进文件名
+		// （2026-09-28「Scooby-Doo 2: Monsters Unleashed」）。只洗变量值，模板自己的 / 分层不受影响
+		"{title}":        sanitizeName(ctx.Media.Title),
+		"{en_title}":     sanitizeName(ctx.Media.OriginalTitle),
 		"{year}":         ctx.Media.Year,
 		"{tmdb_id}":      fmt.Sprintf("%d", ctx.Media.TmdbID),
 		"{first_letter}": titleFirstLetter(ctx.Media.Title),
@@ -230,9 +234,9 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 		"{season_episode}": ctx.seasonEpisode(),
 		"{season_num}":     fmt.Sprintf("%d", ctx.Parsed.Season),
 		"{episode_num}":    fmt.Sprintf("%d", ctx.Parsed.Episode),
-		"{season_name}":    ctx.SeasonName,
+		"{season_name}":    sanitizeName(ctx.SeasonName),
 		"{season_year}":    ctx.SeasonYear,
-		"{episode_name}":   ctx.EpisodeName,
+		"{episode_name}":   sanitizeName(ctx.EpisodeName),
 	}
 }
 

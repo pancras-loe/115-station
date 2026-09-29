@@ -58,6 +58,25 @@ func TestApplyTemplateCollapsesSpaces(t *testing.T) {
 	}
 }
 
+// TMDB 标题里的非法字符在代入模板前洗掉：「:」进文件名 Windows / SMB 不认，
+// 「/」不洗会把片目拆成两层；模板自己写的 / 分层照旧
+func TestApplyTemplateSanitizesTmdbValues(t *testing.T) {
+	media := &TmdbMedia{TmdbID: 11024, Title: "史酷比2：怪兽偷跑", OriginalTitle: "Scooby-Doo 2: Monsters Unleashed", Year: "2004", MediaType: "movie"}
+	parsed := &ParsedName{Title: "史酷比2", Year: "2004"}
+	ctx := buildRenameContext(media, parsed, "x.mkv")
+	if got, want := ctx.ApplyTemplate(defaultRenameConfig().MovieFile), "史酷比2：怪兽偷跑.Scooby-Doo 2： Monsters Unleashed.2004.mkv"; got != want {
+		t.Fatalf("得到 %q，预期 %q", got, want)
+	}
+
+	media = &TmdbMedia{TmdbID: 45845, Title: "Fate/Zero", OriginalTitle: "Fate/Zero", Year: "2011", MediaType: "tv"}
+	ctx = buildRenameContext(media, &ParsedName{Season: 1, Episode: 2}, "x.mkv")
+	ctx.EpisodeName = "召唤/英灵?"
+	if got, want := ctx.ApplyTemplate("{title}.{year}/Season {season_num}/{title} - {season_episode} - {episode_name}{ext}"),
+		"Fate Zero.2011/Season 1/Fate Zero - S01E02 - 召唤 英灵？.mkv"; got != want {
+		t.Fatalf("得到 %q，预期 %q", got, want)
+	}
+}
+
 func TestDefaultRenameConfig(t *testing.T) {
 	cfg := defaultRenameConfig()
 	if cfg.MovieFolder != "{title}.{year}<.[[tmdbid={tmdb_id}]]>" {
