@@ -208,9 +208,8 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 	for _, sf := range scrapeDirVideoRows(e.Key) {
 		dir := path.Dir(sf.RelPath)
 		t.Videos = append(t.Videos, scrapeVideo{
-			Name:     strings.TrimSuffix(path.Base(sf.RelPath), ".strm"),
-			PickCode: sf.PickCode,
-			Dir:      metaDest{Local: filepath.Join(localRoot, filepath.FromSlash(dir)), CloudBase: libCid, CloudRel: cloudRel(dir)},
+			Name: strings.TrimSuffix(path.Base(sf.RelPath), ".strm"),
+			Dir:  metaDest{Local: filepath.Join(localRoot, filepath.FromSlash(dir)), CloudBase: libCid, CloudRel: cloudRel(dir)},
 		})
 	}
 	return t, nil
@@ -280,33 +279,12 @@ func (w *fileScrapeWriter) skip(d metaDest, name string) bool {
 var errMetaDirGone = errors.New("本地目录已不在")
 
 func (w *fileScrapeWriter) put(d metaDest, name string, data []byte) (bool, error) {
-	return w.write(d, name, data, w.force)
-}
-
-// existing 这个产物「只补缺失」会跳过时，读出本地已有的内容（给 replace 改一处再写回）
-func (w *fileScrapeWriter) existing(d metaDest, name string) ([]byte, bool) {
-	if w.force || d.Local == "" {
-		return nil, false
-	}
-	b, err := os.ReadFile(filepath.Join(d.Local, name))
-	if err != nil || len(b) == 0 {
-		return nil, false
-	}
-	return b, true
-}
-
-// replace 不看「只补缺失」照写：已有的 NFO 就地补了一段，本地与网盘（勾了上传时）都得换成新的
-func (w *fileScrapeWriter) replace(d metaDest, name string, data []byte) (bool, error) {
-	return w.write(d, name, data, true)
-}
-
-func (w *fileScrapeWriter) write(d metaDest, name string, data []byte, force bool) (bool, error) {
 	localPath := ""
 	if d.Local != "" {
 		if st, err := os.Stat(d.Local); err != nil || !st.IsDir() {
 			return false, errMetaDirGone
 		}
-		wrote, err := writeMetaFile(d.Local, name, data, force)
+		wrote, err := writeMetaFile(d.Local, name, data, w.force)
 		if err != nil {
 			return false, err
 		}
@@ -331,7 +309,7 @@ func (w *fileScrapeWriter) write(d metaDest, name string, data []byte, force boo
 		return localPath != "", fmt.Errorf("读取网盘目录失败: %w", err)
 	}
 	if fid, ok := existing[name]; ok {
-		if !force {
+		if !w.force {
 			if localPath == "" {
 				w.stat.Skipped++
 			} else if w.markHandled != nil {
@@ -450,7 +428,6 @@ type fileScrapeResult struct {
 	Stat        fileScrapeStat `json:"stat"`
 	Reused      int            `json:"reused,omitempty"`      // 复用本次已下载的图
 	Placeholder int            `json:"placeholder,omitempty"` // 判为占位剧照没写的集
-	Probed      int            `json:"probed,omitempty"`      // 轨道探测（含缓存命中）
 	Reclaimed   int            `json:"reclaimed,omitempty"`   // 片目被挪走后收回的文件
 	Problems    []string       `json:"problems,omitempty"`
 	Errors      []string       `json:"errors,omitempty"`
@@ -606,7 +583,6 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		reclaimed := scrapeCompensate(t, st.written, localRoot)
 		res.Reused += st.Reused
 		res.Placeholder += st.Placeholder
-		res.Probed += st.Probed + st.ProbeCached
 		res.Reclaimed += reclaimed
 		mark := "✓"
 		if st.Failed > 0 || st.Gone {
@@ -622,12 +598,6 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		}
 		if st.Placeholder > 0 {
 			line += fmt.Sprintf("，占位剧照 %d 集未写", st.Placeholder)
-		}
-		if st.Probed+st.ProbeCached > 0 {
-			line += fmt.Sprintf("，探测 %d（缓存 %d）", st.Probed+st.ProbeCached, st.ProbeCached)
-		}
-		if st.TracksKept > 0 {
-			line += fmt.Sprintf("，NFO 已带轨道信息 %d 个未探测", st.TracksKept)
 		}
 		line += fmt.Sprintf("，失败 %d，用时 %s", st.Failed, time.Since(start).Round(time.Second))
 		log.Print(line)

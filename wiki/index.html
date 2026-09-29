@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>115-Station 使用文档 · 完整版</title>
-<meta name="description" content="115-Station 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、画质补全、Emby 对接、企微/TG 机器人——部署、配置、排障全覆盖">
+<meta name="description" content="115-Station 完整使用 Wiki：115 网盘直链、STRM 生成、TMDB 自动整理、洗版、Emby 对接、企微/TG 机器人——部署、配置、排障全覆盖">
 <style>
 :root{
   --bg:#f6f7fb; --card:#ffffff; --text:#1d2129; --text2:#4e5969; --text3:#86909c;
@@ -115,7 +115,6 @@ details[open] summary{margin-bottom:8px}
   <a href="#rename">重命名模板</a>
   <a href="#category">二级分类策略</a>
   <a href="#wash">洗版策略</a>
-  <a href="#enrich">媒体补全</a>
   <div class="sec">播放与通知</div>
   <a href="#emby">Emby 对接</a>
   <a href="#message">消息与机器人</a>
@@ -133,9 +132,9 @@ details[open] summary{margin-bottom:8px}
 
 <div class="doc-hero">
   <h1>115-Station 完整使用文档</h1>
-  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版与画质补全一条龙，Emby 秒刮削秒播，另带企微/TG 机器人。</p>
+  <p>把 115 网盘变成你的私人影视库：视频不出网盘、本地只存 STRM 直链，TMDB 自动识别重命名分类入库、洗版一条龙，Emby 秒刮削秒播，另带企微/TG 机器人。</p>
   <a class="tg" href="https://t.me/+7b_HYMltYMozZTk1" target="_blank" rel="noopener">💬 加入 Telegram 交流群</a>
-  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>画质补全</span><span>企业微信机器人</span></div>
+  <div class="tags"><span>115 网盘</span><span>STRM 302 直链</span><span>TMDB 刮削整理</span><span>洗版策略</span><span>企业微信机器人</span></div>
 </div>
 
 <!-- ============================================================ 1 -->
@@ -144,7 +143,7 @@ details[open] summary{margin-bottom:8px}
 
   <h3>解决什么问题</h3>
   <p>网盘存片有两个老矛盾：<strong>下载到本地</strong>费硬盘费带宽；<strong>网盘在线看</strong>没有海报墙、没有刮削、没有继续观看。115-Station 的答案是把两头接起来——视频留在 115 网盘，本地只生成几乎不占空间的 <code>.strm</code> 直链文件，Emby/Jellyfin 刮削这些 STRM 就像刮削本地视频一样，点开播放时由 115-Station 的 302 代理把播放器重定向到 115 直链，<strong>边下边播、零空间占用</strong>。</p>
-  <p>在此基础上，115-Station 内建了一整套自动化流水线：网盘里的「待整理目录」放入新内容后，自动 TMDB 识别 → 重命名 → 分类入库 → 云端 SHA1 去重 → 洗版 → 画质补全 → 生成 STRM → 通知你，全程无需人工。</p>
+  <p>在此基础上，115-Station 内建了一整套自动化流水线：网盘里的「待整理目录」放入新内容后，自动 TMDB 识别 → 重命名 → 分类入库 → 云端 SHA1 去重 → 洗版 → 生成 STRM → 通知你，全程无需人工。</p>
 
   <h3>功能总览</h3>
   <table class="tw">
@@ -155,7 +154,6 @@ details[open] summary{margin-bottom:8px}
     <tr><td>增量同步</td><td>115 生活事件流驱动：上传/删除/移动/改名实时映射本地；cron 定时；任务完成自动补跑</td></tr>
     <tr><td>自动整理</td><td>目录/散文件两级识别；TMDB（含 GPT 兜底提取片名）；模板重命名；二级分类；字幕跟随；广告过滤</td></tr>
     <tr><td>去重与洗版</td><td>云端目标目录 SHA1 直比（不依赖缓存表）；优先级规则洗版，旧版自动归档</td></tr>
-    <tr><td>画质补全</td><td>ffprobe 探测直链头部拿真实分辨率/编码/音轨，规范命名；八情形决策矩阵可配</td></tr>
     <tr><td>Emby 对接</td><td>入库自动刷新；路径映射；302 DirectPlay；6086 反代支持转码场景；Webhook 播放通知</td></tr>
     <tr><td>消息机器人</td><td>企微图文通知（带海报）+ 双向机器人；TG 通知；批量入库聚合防抖</td></tr>
     <tr><td>离线/转存</td><td>磁力/ed2k/HTTP 离线下载、115 分享转存，完成自动整理闭环；失败告警</td></tr>
@@ -197,7 +195,6 @@ details[open] summary{margin-bottom:8px}
     <span class="n">TMDB 识别</span><span class="a">→</span>
     <span class="n">SHA1 云端去重</span><span class="a">→</span>
     <span class="n">洗版判定</span><span class="a">→</span>
-    <span class="n">画质补全(可选)</span><span class="a">→</span>
     <span class="n">模板重命名</span><span class="a">→</span>
     <span class="n hl">媒体库(网盘内)</span><span class="a">→</span>
     <span class="n">STRM 落盘(本地)</span><span class="a">→</span>
@@ -223,10 +220,9 @@ details[open] summary{margin-bottom:8px}
     <tr><td>2. TMDB 识别</td><td>搜片 → 拿标题/年份/类型/ID；失败再用目录名重试；仍失败走 GPT 提取（可选）</td><td>搜不到 → <strong>冗余</strong>；网络错误 → <strong>留原地</strong>下轮重试</td></tr>
     <tr><td>3. 云端 SHA1 去重</td><td>按模板算出目标目录，列网盘该目录（含季子目录）比对 SHA1</td><td>相同文件 → <strong>已存在</strong></td></tr>
     <tr><td>4. 洗版判定</td><td>台账里有同片记录时，按优先级规则比较新旧版本</td><td>新版不优 → <strong>已存在</strong>；更优 → 旧版移「洗版-旧版本」</td></tr>
-    <tr><td>5. 画质补全（可选）</td><td>文件名缺分辨率/编码时 ffprobe 探测并改名</td><td>探测失败 → 保留原名继续</td></tr>
-    <tr><td>6. 模板重命名</td><td>按重命名模板改视频名，字幕/NFO 同步跟随</td><td>失败 → 保持原名</td></tr>
-    <tr><td>7. 移入媒体库</td><td>建分类目录/季目录 → 移动 → 广告与迷你视频进冗余</td><td>—</td></tr>
-    <tr><td>8. STRM + 通知</td><td>增量同步生成 STRM、刷新 Emby、推企微/TG（带海报，批量聚合）</td><td>—</td></tr>
+    <tr><td>5. 模板重命名</td><td>按重命名模板改视频名，字幕/NFO 同步跟随</td><td>失败 → 保持原名</td></tr>
+    <tr><td>6. 移入媒体库</td><td>建分类目录/季目录 → 移动 → 广告与迷你视频进冗余</td><td>—</td></tr>
+    <tr><td>7. STRM + 通知</td><td>增量同步生成 STRM、刷新 Emby、推企微/TG（带海报，批量聚合）</td><td>—</td></tr>
   </table>
 
   <h3>双通道：OpenAPI 与 Cookie</h3>
@@ -299,7 +295,7 @@ details[open] summary{margin-bottom:8px}
 │   ├── jwt.key           # 登录令牌密钥（自动生成）
 │   └── 115-cookie.txt    # Cookie 通道凭据（扫码登录后生成）
 ├── data/
-│   └── 115-station.db        # SQLite：同步台账 / 媒体库记录 / 生活事件 / 补全队列
+│   └── 115-station.db        # SQLite：同步台账 / 媒体库记录 / 生活事件
 ├── media/                # STRM 与附属文件（Emby 挂载这里建库）
 └── logs/
     └── app.log           # 运行日志（日志页看的尾 500 行）</code><button class="copy-btn" onclick="cp(this)">复制</button></pre>
@@ -535,7 +531,6 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
   <ul>
     <li><strong>三个工作区目录</strong>：见首次配置第 3 步；不能覆盖媒体库根（有熔断保护）</li>
     <li><strong>自动整理 Cron</strong>：标准 5 段 <code>分 时 日 月 周</code>，默认 <code>*/10 8-23 * * *</code>（8~23 点每 10 分钟），输入框下方实时预览接下来几次触发。命中时跑一遍完整流水线：识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 → 写 STRM → 刮削 → 刷 Emby。<strong>留空 = 整理不再定时执行</strong>，只剩手动与事件触发。常用写法：<code>*/30 * * * *</code> 全天每 30 分钟、<code>0 */2 * * *</code> 每 2 小时整点、<code>0 3 * * *</code> 每天凌晨 3 点</li>
-    <li><strong>媒体补全</strong>：在「媒体补全」页签，见「媒体补全」章</li>
   </ul>
 
   <h3>触发方式</h3>
@@ -551,8 +546,6 @@ http://192.168.1.10:6086/d/AxB7CdEf1234</code></pre>
 
   <h3>整理日志怎么读</h3>
   <pre><code>✦ 识别成功: 蜘蛛侠.2019/ → 蜘蛛侠纵横宇宙 (2022) [animation/tmdb=634649]
-▣ 补全探测: 蜘蛛侠.2019.mkv（文件名缺画质信息）      ← 补全开启时
-✓ 补全 蜘蛛侠.2019.mkv → 蜘蛛侠.2019.2160p.WEB-DL.HEVC...
 ▣ 目标目录就绪: 电影/动画电影/S-蜘蛛侠纵横宇宙-2022-[tmdb=634649]
 ✓ 批量重命名 2 个文件（例: …）
 ✓ 入库: 电影/动画电影/…/蜘蛛侠纵横宇宙.2022.2160p….mkv
@@ -760,33 +753,6 @@ tv:
   <p>上面默认配置的效果：<strong>WiKi 无 DV 的版本 &gt; 2160p 原盘 &gt; 1080p 原盘</strong>——即「不要杜比视界的 4K，宁要干净的 1080p 原盘」的一种典型偏好；你可以按喜好改排序。</p>
 </section>
 
-<!-- ============================================================ 17 -->
-<section id="enrich">
-  <h2><span class="num">17</span>媒体补全</h2>
-
-  <h3>什么时候探测</h3>
-  <p>文件名<strong>缺分辨率或缺编码</strong>（如 <code>蜘蛛侠.2016.mkv</code>、<code>白头山.2019.1080p.mkv</code>）时触发。开启后整理时<strong>同步探测</strong>：拿 115 直链 → ffprobe 读头部几 MB → 拿到真实分辨率/编码/音轨/HDR → 改名 → 再走模板重命名入库，一步到位。也可随时发企微指令「补全」扫描整个媒体库的存量文件（队列 30 秒/个温和处理）。</p>
-
-  <h3>决策矩阵（自动整理 → 媒体补全）</h3>
-  <table class="tw">
-    <tr><th style="width:230px">情形</th><th style="width:110px">默认</th><th>可配</th></tr>
-    <tr><td>名缺画质 + 探测有 → 补齐</td><td>改名</td><td>可改为保留</td></tr>
-    <tr><td>分辨率相符，但缺编码 → 补编码</td><td>改名</td><td>跟随上项</td></tr>
-    <tr><td>名实一致（都对得上）</td><td>保留</td><td>固定保留</td></tr>
-    <tr><td>名实冲突（名 1080 探到 2160 / 反之）</td><td>按探测改</td><td>可改为保留</td></tr>
-    <tr><td>冲突跨 2 档（720 ↔ 2160）</td><td>保留</td><td>固定（疑似探测异常的防御）</td></tr>
-    <tr><td>命名已完整（有来源+发布组）</td><td>保留</td><td>激进模式可改</td></tr>
-    <tr><td>探测失败</td><td>保留原名继续整理</td><td>固定</td></tr>
-  </table>
-  <p>三种<strong>预设模式</strong>：保守（尽量不动名字）/ <strong>标准（推荐）</strong> / 激进（完整命名的冲突也重排）。三个可配项留空即跟随模式默认。</p>
-
-  <h3>探测失败的常见原因</h3>
-  <ul>
-    <li>MP4 的 moov box 在文件尾（未做 faststart 优化）——头部探测拿不到元数据，保留原名不影响入库</li>
-    <li>直链偶发风控——探测失败的文件保留原名，下次整理/扫描会自动重试（失败任务自动复活重试最多 3 次）</li>
-  </ul>
-</section>
-
 <!-- ============================================================ 18 -->
 <section id="emby">
   <h2><span class="num">18</span>Emby 对接</h2>
@@ -861,7 +827,6 @@ tv:
     <tr><td><code>搜索 片名</code></td><td>TMDB 搜片</td></tr>
     <tr><td><code>整理</code>（或底栏按钮）</td><td>触发自动整理（与网页端互斥，占用时回复提示）</td></tr>
     <tr><td><code>同步</code>（或底栏按钮）</td><td>触发增量同步</td></tr>
-    <tr><td><code>补全</code></td><td>扫描媒体库，缺画质文件入队补全</td></tr>
     <tr><td><code>帮助</code></td><td>指令列表</td></tr>
   </table>
 
@@ -995,7 +960,6 @@ docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</b
     <tr><td><code>✦ 识别成功 / ○ …已移到冗余</code></td><td>整理单条目的成败结论</td></tr>
     <tr><td><code>○ TMDB 暂时不可达 … 下轮重试</code></td><td>网络保护（内容留在待整理，未进冗余）</td></tr>
     <tr><td><code>✦ 洗版替换 / ○ 新版不优于库内版本</code></td><td>洗版判定结论</td></tr>
-    <tr><td><code>▣ 补全探测 / ✓ 补全 … → …</code></td><td>画质补全动作</td></tr>
     <tr><td><code>[守望] ⚑ …触发自动整理</code></td><td>转存守望者触发（正常节奏）</td></tr>
   </table>
 
@@ -1044,7 +1008,6 @@ docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</b
   <details><summary>重新放回同样的文件还是提示「已存在」？</summary><p>去重按<strong>网盘目标目录里的 SHA1</strong> 比对：你删了库里的 A 文件，但目标目录还有同 SHA1 的 B 文件（或内容被移进了「已存在」目录）。清掉目标目录/已存在目录里的同内容即可。</p></details>
   <details><summary>网盘手动改了名，本地 STRM 会更新吗？</summary><p>会——增量同步的「改名/移动」事件会删旧建新；没开增量就跑一次全量，再用「失效 STRM 检测」清掉残留。</p></details>
   <details><summary>整理后字幕没挂上？</summary><p>字幕必须与视频<strong>同基名</strong>（语言后缀保留，如 <code>片名.chs.srt</code>）。整理会自动跟随改名；自己后放的字幕注意命名要与视频一致。</p></details>
-  <details><summary>画质补全探测失败有害吗？</summary><p>没有——失败保留原名继续入库。常见原因是 moov 在文件尾的 MP4 拿不到头部元数据；任务会自动重试 3 次。</p></details>
   <details><summary>更新后要求重新登录？</summary><p>升级到「JWT 密钥随机化」版本时会重新生成密钥，旧登录态失效一次——重新登录即可，之后不再发生。</p></details>
   <details><summary>机器人菜单没出现？</summary><p>保存消息配置会自动生成；企微客户端有缓存，退出该会话重进一次。</p></details>
   <details><summary>识别失败的文件去哪了？</summary><p>「冗余」目录。人工把文件/目录改成更规范的名字（带片名+年份）再丢回待整理即可重试；网络原因失败的会留在待整理自动重试。</p></details>
@@ -1066,7 +1029,6 @@ docker compose up -d</code><button class="copy-btn" onclick="cp(this)">复制</b
     <dt>TMDB</dt><dd>The Movie Database，影视元数据库（标题/年份/海报/分类/评分）。识别、命名、分类、入库通知的元数据来源。</dd>
     <dt>SHA1</dt><dd>文件内容指纹。去重与秒传的基础：相同 SHA1 = 相同内容（不论文件名）。</dd>
     <dt>洗版</dt><dd>同一部片存在多个版本时按优先级规则择优保留、旧版归档的策略。</dd>
-    <dt>画质补全</dt><dd>用 ffprobe 读取视频真实参数（分辨率/编码/音轨/HDR）补进文件名的过程。</dd>
     <dt>台账（SyncedFile）</dt><dd>「网盘文件 ↔ 本地 STRM」对照表，删除/移动/改名的精确定位依据。</dd>
     <dt>生活事件</dt><dd>115 官方操作流水（上传/删除/移动/改名…），增量同步的数据源，保留 30 天。</dd>
     <dt>OpenAPI</dt><dd>115 官方开放平台接口（open.115.com），应用凭 AppID+OAuth 授权访问，无 Cookie 风控。</dd>

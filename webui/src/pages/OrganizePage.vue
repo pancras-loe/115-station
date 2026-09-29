@@ -6,7 +6,6 @@ import ScrapeTab from './organize/ScrapeTab.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
-import EnrichTab from './organize/EnrichTab.vue'
 import YamlRuleTab from './organize/YamlRuleTab.vue'
 import { organizeApi } from '@/api'
 import { DEFAULT_CATEGORY_YAML } from './organize/defaultRules'
@@ -24,7 +23,6 @@ const tabs = computed(() => [
   { value: 'rename', label: '重命名策略' },
   { value: 'category', label: '二级分类策略' },
   { value: 'wash', label: '洗版策略' },
-  { value: 'enrich', label: '媒体补全' },
 ])
 </script>
 
@@ -60,7 +58,6 @@ const tabs = computed(() => [
         :load="organizeApi.getWash"
         :persist="organizeApi.saveWash"
       />
-      <EnrichTab v-else-if="tab === 'enrich'" />
     </div>
   </div>
 </template>

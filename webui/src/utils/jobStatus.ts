@@ -90,7 +90,6 @@ const RESULT_LABEL: [string, string][] = [
   ['titles', '片目'],
   ['reused', '复用已下载图片'],
   ['placeholder', '占位剧照未写'],
-  ['probed', '轨道探测'],
   ['reclaimed', '收回孤儿文件'],
 ]
 

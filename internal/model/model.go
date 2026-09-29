@@ -1,6 +1,7 @@
 package model
 
 import (
+	"log"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -219,28 +220,6 @@ type DownloadLink struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// MediaEnrich 补全任务：文件名缺分辨率/编码等信息，用 ffprobe 探测
-// 115 直链头部后按模板重新命名（蜘蛛侠.2016.mkv → 规范名）
-type MediaEnrich struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	FileID    string    `json:"file_id" gorm:"index;size:64"`          // 115 文件 id
-	PickCode  string    `json:"pick_code" gorm:"size:64"`              // 直链探测用
-	FileName  string    `json:"file_name" gorm:"size:255"`             // 当前文件名
-	Status    string    `json:"status" gorm:"size:20;default:pending"` // pending/done/failed/skipped
-	Message   string    `json:"message" gorm:"size:255"`               // 结果说明
-	Attempts  int       `json:"attempts" gorm:"default:0"`             // 重试次数
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ProbeCache ffprobe 探测结果缓存（pickcode → 轨道信息 JSON）。
-// 同一个文件的轨道不会变，整理补全与刮削共用，免得几百集的剧每刮一次都要重新探测
-type ProbeCache struct {
-	PickCode  string    `json:"pick_code" gorm:"primaryKey;size:64"`
-	Result    string    `json:"result" gorm:"type:text"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -343,7 +322,7 @@ type RecognizeMemory struct {
 	Year      string    `json:"year" gorm:"size:10;uniqueIndex:idx_recog_mem"`       // 文件名里的年份，没有为空
 	TmdbID    int       `json:"tmdb_id"`
 	MediaType string    `json:"media_type" gorm:"size:20"`
-	Title     string    `json:"title" gorm:"size:255"` // TMDB 片名，日志与界面展示用
+	Title     string    `json:"title" gorm:"size:255"`  // TMDB 片名，日志与界面展示用
 	Sample    string    `json:"sample" gorm:"size:500"` // 当时人工指定的那条记录的原名，让人看得出这条记忆是怎么来的
 	Hits      int       `json:"hits"`
 	CreatedAt time.Time `json:"created_at"`
@@ -396,8 +375,6 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&Setting{},
 		&ScrapeRule{},
 		&CategoryRule{},
-		&MediaEnrich{},
-		&ProbeCache{},
 		&MediaLibrary{},
 		&SyncEvent{},
 		&SyncedFile{},
@@ -411,6 +388,14 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&TaskJob{},
 	); err != nil {
 		return nil, err
+	}
+	// 「媒体补全」与刮削「轨道探测」写 NFO 两个功能已删（2026-09-29），它们的表一并清掉
+	for _, t := range []string{"media_enriches", "probe_caches"} {
+		if db.Migrator().HasTable(t) {
+			if err := db.Migrator().DropTable(t); err != nil {
+				log.Printf("[数据库] ○ 清理废弃表 %s 失败: %v", t, err)
+			}
+		}
 	}
 
 	DB = db

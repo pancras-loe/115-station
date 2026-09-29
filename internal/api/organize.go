@@ -313,7 +313,7 @@ func applySeasonHint(p, hint *ParsedName) {
 // 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
 // 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来。
 // eps 是调用方已经算好的每集季集（episodeParses + 连续编号换算），这里不再各自重新解析
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, enrichRenames map[string]string, eps map[string]*ParsedName, onLog func(string)) map[string]string {
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, eps map[string]*ParsedName, onLog func(string)) map[string]string {
 	// 计算单个视频的新名（保持原命名规则）
 	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
 	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
@@ -370,14 +370,6 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 			continue
 		}
 		fb := baseName(f.Name)
-		// 视频先被补全改名过：字幕基名映射到补全后的基名再匹配，
-		// 否则前缀失配、字幕掉队（视频带画质新名而字幕留旧名）
-		for oldB, newB := range enrichRenames {
-			if fb == oldB || strings.HasPrefix(fb, oldB+".") {
-				fb = newB + strings.TrimPrefix(fb, oldB)
-				break
-			}
-		}
 		// 「集名.chs.ass」「集名.nfo」「集名-thumb.jpg」都跟着改；对得上多集时取基名最长的
 		if i := assetOwner(fb, oldBases); i >= 0 {
 			newSubName := newBases[i] + trimVideoExtLead(strings.TrimPrefix(fb, oldBases[i])) + ext
@@ -387,9 +379,6 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 		}
 	}
 
-	// 补全不再入异步队列：同步探测已在改名前完成（organize 主流程）；
-	// 此前这里入队后 worker 用入队时的旧文件名重建名，会覆盖随后的模板
-	// 重命名并使字幕失配。异步队列只保留给手动「补全」存量扫描用。
 	if len(names) == 0 {
 		return nil
 	}
@@ -1948,7 +1937,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		fallbackRel = rootRel + "/" + parts[1]
 	}
 	// 洗版要按「这一集将要落到哪个目录」查库内版本，和真正搬过去的目录必须是同一个
-	vplace := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, nil, eps, nil)
+	vplace := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, nil, eps)
 
 	// 洗版**判定**必须逐文件做（主视频重复或画质不佳，不代表同目录的新增集也该拒收），
 	// 但**执行**一律攒到判完再发。逐集各发一次 115 写请求要过 3 秒写间隔：
@@ -2094,66 +2083,13 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 	}
 
-	// 同步补全：文件名缺画质信息时立即探测（ffprobe 拉头部几 MB），
-	// 用探测结果补充画质后再重命名 → 移动 → 入库，一步到位
-	enrichRenames := map[string]string{} // 补全前视频基名 → 补全后基名（字幕跟随用）
-	enriched, enrichFailed := 0, 0
-	if policy := loadEnrichPolicy(); policy.Enabled {
-		for i, vf := range videoFiles {
-			if !enrichNeedsProbe(vf.Name) || vf.PickCode == "" {
-				continue
-			}
-			// 单文件条目（电影/散文件）才逐个点名；剧集几十集逐条打就是几十行，
-			// 只累计数量、收尾给一行汇总（vlog 默认是开的，降级到 vlog 没用）
-			enrichLog := onLog
-			if len(videoFiles) > 1 {
-				enrichLog = func(string) {}
-			}
-			enrichLog(fmt.Sprintf("▣ 补全探测: %s（文件名缺画质信息）", vf.Name))
-			probe, _, perr := probeCached(vf.PickCode) // 探测结果落库，之后刮削直接用
-			if probe == nil {
-				enrichLog(fmt.Sprintf("○ 补全探测失败 %s（保留原名）: %s", vf.Name, perr))
-				enrichFailed++
-				continue
-			}
-			enriched++
-			{
-				action, reason := enrichDecide(vf.Name, probe, policy)
-				if action == "rename" {
-					ext := pathExt(vf.Name)
-					base := strings.TrimSuffix(vf.Name, ext)
-					newName := buildEnrichedName(base, ext, probe)
-					if newName != vf.Name {
-						if err := ops.rename(vf.Fid, newName); err != nil {
-							enrichLog(fmt.Sprintf("○ 补全改名失败 %s: %v", vf.Name, err))
-						} else {
-							enrichLog(fmt.Sprintf("✓ 补全 %s → %s", vf.Name, newName))
-							enrichRenames[baseName(vf.Name)] = baseName(newName)
-							videoFiles[i].Name = newName // 后续模板重命名基于补全后的名字
-						}
-					}
-				} else {
-					enrichLog(fmt.Sprintf("○ 补全跳过 %s: %s", vf.Name, reason))
-				}
-			}
-		}
-	}
-
-	if len(videoFiles) > 1 && enriched+enrichFailed > 0 {
-		failNote := ""
-		if enrichFailed > 0 {
-			failNote = fmt.Sprintf("，%d 个探测失败保留原名", enrichFailed)
-		}
-		onLog(fmt.Sprintf("▣ 画质补全：探测 %d 个视频%s", enriched, failNote))
-	}
-
 	// 先在源目录重命名（批量 batch_rename），再移动到目标。
 	// finalNames 是落盘的依据：文件搬过去之后叫什么，只有这里知道
 	finalNames := map[string]string{}
 	for _, vf := range videoFiles {
 		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
 	}
-	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, enrichRenames, eps, onLog) {
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, eps, onLog) {
 		finalNames[fid] = n
 	}
 
@@ -2164,8 +2100,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			subFiles = append(subFiles, f)
 		}
 	}
-	place := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, subFiles, eps, enrichRenames)
-	place.placeMeta(media, rootRel, videoFiles, metaFiles, enrichRenames, replaceRules)
+	place := placeEntryFiles(media, category, rootRel, fallbackRel, videoFiles, subFiles, eps)
+	place.placeMeta(media, rootRel, videoFiles, metaFiles, replaceRules)
 	groups := map[string][]string{} // 库内相对目录 → fid
 	for _, fid := range mediaFids {
 		rel, ok := place.relOf[fid]

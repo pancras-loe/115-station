@@ -46,7 +46,7 @@ func TestPlaceEntryFilesSplitsSeasons(t *testing.T) {
 	parts := strings.Split(newPath, "/")
 	rootRel := libSubPath(categoryDir("tv", ""), parts[0])
 	fallback := rootRel + "/" + parts[1]
-	pl := placeEntryFiles(media, "", rootRel, fallback, videos, subs, eps, nil)
+	pl := placeEntryFiles(media, "", rootRel, fallback, videos, subs, eps)
 
 	season := func(fid string) string { return pathBase(pl.relOf[fid]) }
 	if season("v1-1") == season("v7-166") || season("v2-23") == season("v7-166") {
@@ -74,7 +74,7 @@ func TestPlaceEntryFilesKeepsOldBehaviour(t *testing.T) {
 	movie := &TmdbMedia{TmdbID: 603, Title: "The Matrix", Year: "1999", MediaType: "movie"}
 	v := remoteFile{Fid: "m", Name: "The.Matrix.1999.1080p.mkv"}
 	s := remoteFile{Fid: "s", Name: "The.Matrix.1999.1080p.chs.srt"}
-	pl := placeEntryFiles(movie, "", "电影/The Matrix (1999)", "电影/The Matrix (1999)", []remoteFile{v}, []remoteFile{s}, nil, nil)
+	pl := placeEntryFiles(movie, "", "电影/The Matrix (1999)", "电影/The Matrix (1999)", []remoteFile{v}, []remoteFile{s}, nil)
 	if pl.relOf["m"] != "电影/The Matrix (1999)" || pl.relOf["s"] != "电影/The Matrix (1999)" {
 		t.Fatalf("电影落点变了：%v", pl.relOf)
 	}
@@ -83,23 +83,9 @@ func TestPlaceEntryFilesKeepsOldBehaviour(t *testing.T) {
 	tv := &TmdbMedia{TmdbID: 1, Title: "某剧", Year: "2020", MediaType: "tv"}
 	only := remoteFile{Fid: "o", Name: "某剧.2020.1080p.mkv"}
 	eps := map[string]*ParsedName{"o": parseFileName(only.Name)}
-	pl = placeEntryFiles(tv, "", "剧集/某剧 (2020)", "剧集/某剧 (2020)/Season 01", []remoteFile{only}, nil, eps, nil)
+	pl = placeEntryFiles(tv, "", "剧集/某剧 (2020)", "剧集/某剧 (2020)/Season 01", []remoteFile{only}, nil, eps)
 	if pl.relOf["o"] != "剧集/某剧 (2020)/Season 01" {
 		t.Fatalf("全无集号时应落在兜底目录，得到 %s", pl.relOf["o"])
-	}
-}
-
-func TestPlaceEntryFilesSubtitleAfterEnrich(t *testing.T) {
-	// 视频被画质补全改过名，字幕还是旧基名：先按补全映射一次再认主人
-	tv := &TmdbMedia{TmdbID: 1, Title: "某剧", Year: "2020", MediaType: "tv"}
-	v1 := remoteFile{Fid: "a", Name: "某剧.S01E01.1080p.mkv"}
-	v2 := remoteFile{Fid: "b", Name: "某剧.S02E01.1080p.mkv"}
-	sub := remoteFile{Fid: "s", Name: "某剧.S02E01.chs.ass"}
-	enrich := map[string]string{"某剧.S02E01": "某剧.S02E01.1080p"}
-	eps := episodeParses([]remoteFile{v1, v2}, nil, nil)
-	pl := placeEntryFiles(tv, "", "剧集/某剧 (2020)", "剧集/某剧 (2020)/Season 01", []remoteFile{v1, v2}, []remoteFile{sub}, eps, enrich)
-	if pl.relOf["s"] != pl.relOf["b"] || pl.relOf["s"] == pl.relOf["a"] {
-		t.Fatalf("补全后的字幕应跟第 2 季那集：%v", pl.relOf)
 	}
 }
 
@@ -136,8 +122,8 @@ func TestPlaceMetaThreeLevels(t *testing.T) {
 	}
 	videos := []remoteFile{v1, v10}
 	eps := episodeParses(videos, nil, nil)
-	pl := placeEntryFiles(media, "", rootRel, rootRel+"/Season 1", videos, nil, eps, nil)
-	pl.placeMeta(media, rootRel, videos, metas, nil, nil)
+	pl := placeEntryFiles(media, "", rootRel, rootRel+"/Season 1", videos, nil, eps)
+	pl.placeMeta(media, rootRel, videos, metas, nil)
 
 	season := pl.relOf["v1"]
 	if season == "" || season == rootRel {
@@ -169,8 +155,8 @@ func TestPlaceMetaMultiSeason(t *testing.T) {
 	}
 	videos := []remoteFile{v1, v2}
 	eps := episodeParses(videos, nil, nil)
-	pl := placeEntryFiles(media, "", rootRel, rootRel+"/Season 1", videos, nil, eps, nil)
-	pl.placeMeta(media, rootRel, videos, metas, nil, nil)
+	pl := placeEntryFiles(media, "", rootRel, rootRel+"/Season 1", videos, nil, eps)
+	pl.placeMeta(media, rootRel, videos, metas, nil)
 	if pl.relOf["a"] == pl.relOf["b"] {
 		t.Fatalf("两季应分开：%v", pl.relOf)
 	}
@@ -190,8 +176,8 @@ func TestPlaceMetaMovieUntouched(t *testing.T) {
 	movie := &TmdbMedia{TmdbID: 603, Title: "The Matrix", Year: "1999", MediaType: "movie"}
 	v := remoteFile{Fid: "m", Name: "The.Matrix.1999.mkv"}
 	n := remoteFile{Fid: "n", Name: "The.Matrix.1999.nfo"}
-	pl := placeEntryFiles(movie, "", "电影/The Matrix (1999)", "电影/The Matrix (1999)", []remoteFile{v}, nil, nil, nil)
-	pl.placeMeta(movie, "电影/The Matrix (1999)", []remoteFile{v}, []remoteFile{n}, nil, nil)
+	pl := placeEntryFiles(movie, "", "电影/The Matrix (1999)", "电影/The Matrix (1999)", []remoteFile{v}, nil, nil)
+	pl.placeMeta(movie, "电影/The Matrix (1999)", []remoteFile{v}, []remoteFile{n}, nil)
 	if _, ok := pl.relOf["n"]; ok {
 		t.Fatalf("电影的 NFO 不该另分落点：%v", pl.relOf)
 	}

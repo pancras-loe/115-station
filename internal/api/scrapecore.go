@@ -1,15 +1,12 @@
 package api
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -40,8 +37,6 @@ type scrapeSession struct {
 	imgs map[string]*fetchedImage
 	// fetch 拉图的实现（测试换成桩）
 	fetch func(imgPath, size string) ([]byte, string, error)
-	// probe 探测的实现（测试换成桩）
-	probe func(pickCode string) (*probeResult, bool, string)
 }
 
 type fetchedImage struct {
@@ -52,7 +47,7 @@ type fetchedImage struct {
 
 func newScrapeSession(tc *TmdbClient, opts fileScrapeOpts, w metaWriter, rep scrapeReporter) *scrapeSession {
 	return &scrapeSession{tc: tc, opts: opts, w: w, rep: rep, imgs: map[string]*fetchedImage{},
-		fetch: tmdbFetchImageSized, probe: probeCached}
+		fetch: tmdbFetchImageSized}
 }
 
 // titleScrapeStat 一个片目的账单
@@ -62,9 +57,6 @@ type titleScrapeStat struct {
 	Skipped     int      // 已存在、按「只补缺失」跳过
 	Reused      int      // 复用本次任务已下载的图
 	Placeholder int      // 判为占位剧照、没写的集
-	Probed      int      // 实际探测（不含缓存命中）
-	ProbeCached int
-	TracksKept  int // 已有 NFO 的轨道信息完整，没再探测
 	Failed      int
 	Gone        bool // 写入时发现目录已不在（片目刚被移走 / 删掉）
 }
@@ -147,11 +139,6 @@ func (r *titleRun) skip(d metaDest, name string) bool {
 // put 写一个产物；how 是日志里「怎么来的」那一截
 func (r *titleRun) put(d metaDest, name string, data []byte, how string) bool {
 	wrote, err := r.s.w.put(d, name, data)
-	return r.recordPut(d, name, how, wrote, err)
-}
-
-// recordPut 把一次写入的结果记进账单、打日志
-func (r *titleRun) recordPut(d metaDest, name, how string, wrote bool, err error) bool {
 	switch {
 	case errors.Is(err, errMetaDirGone):
 		if !r.st.Gone {
@@ -217,126 +204,6 @@ func (r *titleRun) fetchPut(d metaDest, imgPath, size, name string) {
 		how = fmt.Sprintf(" ← 复用本次已下载的 %s", img.url)
 	}
 	r.put(d, name, img.data, how)
-}
-
-// probe 探测一个视频的轨道（开关关着返回 nil）。失败记错误，NFO 照写只是不带 streamdetails
-func (r *titleRun) probe(v scrapeVideo) *probeResult {
-	if !r.s.opts.Probe {
-		return nil
-	}
-	if v.PickCode == "" {
-		r.logv("○ 探测 %s：台账里没有 pickcode，跳过", v.Name)
-		return nil
-	}
-	start := time.Now()
-	p, cached, perr := r.s.probe(v.PickCode)
-	if p == nil {
-		r.fail("轨道探测失败 %s：%s（NFO 照写，不含 streamdetails）", v.Name, truncateStr(perr, 160))
-		return nil
-	}
-	if cached {
-		r.st.ProbeCached++
-		r.logv("▣ 探测 %s：%s（缓存）", v.Name, probeBrief(p))
-	} else {
-		r.st.Probed++
-		r.logv("▣ 探测 %s：%s（%s）", v.Name, probeBrief(p), time.Since(start).Round(100*time.Millisecond))
-	}
-	return p
-}
-
-// patchStreams 开了轨道探测、视频 NFO 却因「只补缺失」要跳过时：已有的 NFO 里没有完整的轨道信息，
-// 就探测一次、只把 <fileinfo> 补进去写回，NFO 里其余内容原样保留。
-// 此前这种情况直接跳过、连探测都不做，用户勾了探测却什么都没发生，日志里也看不出来（2026-09-29 现场）。
-// 返回 true 表示已补上（调用方不再走跳过 / 整份重写）；false 时调用方照原样处理
-func (r *titleRun) patchStreams(d metaDest, name, root string, v scrapeVideo) bool {
-	if !r.s.opts.Probe {
-		return false
-	}
-	pw, ok := r.s.w.(metaPatcher)
-	if !ok {
-		return false
-	}
-	old, ok := pw.existing(d, name)
-	if !ok {
-		return false
-	}
-	if nfoHasTracks(old) {
-		r.st.TracksKept++
-		return false
-	}
-	// 没有 fileinfo，或者有但是空壳 / 残缺：Emby 开着「NFO 保存到媒体目录」时会把 NFO 回写一遍，
-	// STRM 没播过它手里没有流信息，写出来的是空的 <streamdetails/> 或只有视频没音轨。
-	// 只认标签的话这种 NFO 永远补不上（2026-09-29 现场），所以按内容判断，残缺的整段换掉
-	old = stripNFOFileinfo(old)
-	p := r.probe(v)
-	if p == nil {
-		return false
-	}
-	fi := nfoFileInfoFrom(p)
-	if fi == nil {
-		r.logv("○ 探测 %s：没有可写的轨道，%s 不补", v.Name, name)
-		return false
-	}
-	patched, err := insertNFOFileinfo(old, root, fi)
-	if err != nil {
-		r.logv("○ %s 结构认不出（%v），不补轨道信息", name, err)
-		return false
-	}
-	wrote, err := pw.replace(d, name, patched)
-	r.recordPut(d, name, "（已有 NFO，补轨道信息）", wrote, err)
-	return true
-}
-
-var nfoFileinfoRe = regexp.MustCompile(`(?s)[ \t]*<fileinfo\b[^>]*?(?:/>|>.*?</fileinfo>)[ \t]*\r?\n?`)
-
-// nfoHasTracks 已有 NFO 的轨道信息是否完整：视频与音轨都带编码才算。
-// 字幕不要求 —— 没有内嵌字幕的片子多得是
-func nfoHasTracks(nfo []byte) bool {
-	for _, blk := range nfoFileinfoRe.FindAll(nfo, -1) {
-		var fi nfoFileInfo
-		if xml.Unmarshal(bytes.TrimSpace(blk), &fi) != nil || fi.StreamDetails == nil {
-			continue
-		}
-		sd := fi.StreamDetails
-		if sd.Video != nil && sd.Video.Codec != "" && len(sd.Audio) > 0 && sd.Audio[0].Codec != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// stripNFOFileinfo 去掉已有的（残缺的）fileinfo 段，连同它所在那一行
-func stripNFOFileinfo(nfo []byte) []byte {
-	return nfoFileinfoRe.ReplaceAll(nfo, nil)
-}
-
-// insertNFOFileinfo 把 <fileinfo> 插到已有 NFO 最后一个 </root> 前面。
-// 找最后一个而不是第一个：多集合一的 NFO 是几段 <episodedetails> 连着写的，
-// 末尾还可能跟着 Kodi 认的刮削 URL 行，按根元素的闭合标签定位最稳
-func insertNFOFileinfo(nfo []byte, root string, fi *nfoFileInfo) ([]byte, error) {
-	closeTag := []byte("</" + root + ">")
-	at := bytes.LastIndex(nfo, closeTag)
-	if at < 0 {
-		return nil, fmt.Errorf("没有 %s", closeTag)
-	}
-	b, err := xml.MarshalIndent(struct {
-		XMLName       xml.Name          `xml:"fileinfo"`
-		StreamDetails *nfoStreamDetails `xml:"streamdetails"`
-	}{StreamDetails: fi.StreamDetails}, "  ", "  ")
-	if err != nil {
-		return nil, err
-	}
-	// 插入段自带两格缩进，自成一行；闭合标签前的空白去掉，免得插进来的段落前面多一截缩进
-	head := bytes.TrimRight(nfo[:at], " \t")
-	out := make([]byte, 0, len(nfo)+len(b)+4)
-	out = append(out, head...)
-	if len(head) > 0 && head[len(head)-1] != '\n' {
-		out = append(out, '\n')
-	}
-	out = append(out, b...)
-	out = append(out, '\n')
-	out = append(out, nfo[at:]...)
-	return out, nil
 }
 
 // season 某季的集信息（每个片目每季只打一次 TMDB，结果带日志）
@@ -477,22 +344,11 @@ func (r *titleRun) movieNFO(body []byte) {
 		if i < len(t.Videos) {
 			dest = t.Videos[i].Dir
 		}
-		if i < len(t.Videos) && r.patchStreams(dest, name, "movie", t.Videos[i]) {
-			continue
-		}
 		if r.skip(dest, name) {
 			continue
 		}
-		nfo.Fileinfo = nil
-		how := ""
-		if i < len(t.Videos) {
-			if p := r.probe(t.Videos[i]); p != nil {
-				nfo.Fileinfo = nfoFileInfoFrom(p)
-				how = "（含轨道信息）"
-			}
-		}
 		if b, err := marshalNFO(nfo); err == nil {
-			r.put(dest, name, b, how)
+			r.put(dest, name, b, "")
 		}
 	}
 }
@@ -569,7 +425,7 @@ func (r *titleRun) tvNFO(body []byte) {
 		}
 	}
 	// 集级 NFO：每集与 STRM 同基名（xxx.strm → xxx.nfo）落在集文件旁，
-	// TMDB 集信息（标题/首播/简介/剧照）+ 开了探测时的轨道 streamdetails。
+	// TMDB 集信息（标题/首播/简介/剧照）。
 	// 解析不出集号的集文件跳过（tvshow.nfo 与海报仍正常生成）
 	for i, e := range r.eps {
 		if r.s.rep.stopped() || r.st.Gone {
@@ -577,9 +433,6 @@ func (r *titleRun) tvNFO(body []byte) {
 		}
 		name := e.v.Name + ".nfo"
 		r.s.rep.sub("集 NFO", i, len(r.eps), name)
-		if r.patchStreams(e.v.Dir, name, "episodedetails", e.v) {
-			continue
-		}
 		if r.skip(e.v.Dir, name) {
 			continue
 		}
@@ -595,10 +448,6 @@ func (r *titleRun) tvNFO(body []byte) {
 			epNFO.Thumb = tmdbImageBase() + "/t/p/w500" + ep.StillPath
 		}
 		how := fmt.Sprintf("（S%02dE%02d %s）", e.season, e.ep, ep.Name)
-		if p := r.probe(e.v); p != nil {
-			epNFO.Fileinfo = nfoFileInfoFrom(p)
-			how = fmt.Sprintf("（S%02dE%02d %s，含轨道信息）", e.season, e.ep, ep.Name)
-		}
 		if b, err := marshalNFO(epNFO); err == nil {
 			r.put(e.v.Dir, name, b, how)
 		}

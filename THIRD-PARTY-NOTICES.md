@@ -16,7 +16,6 @@
 | 得意黑 Smiley Sans | `internal/api/assets/smileysans-oblique.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-SmileySans.txt](licenses/OFL-1.1-SmileySans.txt) |
 | 站酷小薇体 ZCOOL XiaoWei | `internal/api/assets/zcoolxiaowei-regular.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-ZCOOLXiaoWei.txt](licenses/OFL-1.1-ZCOOLXiaoWei.txt) |
 | CodeMirror 5.65.16 | 旧前端曾使用，现已移除；保留许可副本 | MIT | [licenses/MIT-CodeMirror5.txt](licenses/MIT-CodeMirror5.txt) |
-| FFmpeg / ffprobe | 运行镜像内由 `apk add ffmpeg` 安装，未修改、未静态链接进本项目二进制 | LGPL / GPL（取决于 Alpine 构建选项） | 见镜像内 `/usr/share/licenses` 与 [Alpine ffmpeg 包](https://pkgs.alpinelinux.org/package/edge/community/x86_64/ffmpeg) |
 | Go 依赖 | 见 [`go.mod`](go.mod) / [`go.sum`](go.sum) | 各依赖自有许可证 | `go mod download` 后见各模块目录 |
 | HeroUI Styles（`@heroui/styles`） | 组件 CSS 经 Tailwind 编译后内联进 `webui/dist/index.html` | Apache-2.0（见下方说明） | [licenses/Apache-2.0-HeroUI-styles.txt](licenses/Apache-2.0-HeroUI-styles.txt) |
 | Reka UI（`reka-ui`） | 打包进 `webui/dist/index.html` | MIT | [licenses/MIT-RekaUI.txt](licenses/MIT-RekaUI.txt) |

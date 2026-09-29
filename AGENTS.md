@@ -65,7 +65,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | 认证 | JWT（`golang-jwt/v5`）+ 环境变量管理员账号 |
 | 115 客户端 | `SheltonZhu/115driver`（Cookie 通道）+ 自研 OpenAPI 客户端 |
 | 前端（现役） | Vue 3 + TypeScript + Vite（`webui/`），外观走 HeroUI v3 的样式包 `@heroui/styles`，交互走 Reka UI，详见 [webui/README.md](webui/README.md) |
-| 外部依赖 | ffmpeg/ffprobe（镜像内）、可选 Emby/Jellyfin |
+| 外部依赖 | 可选 Emby/Jellyfin |
 
 ---
 
@@ -94,7 +94,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **路由与认证** | `routes.go` | `Handler{DB, Config}` + 全部路由注册 + 登录防爆破 + 备份/日志接口 |
 | **115 基础设施** | `115.go` `115crypto.go` `http115.go` `open115.go` `files115.go` `ops115.go` `dir.go` `ratelimit.go` | Cookie 通道、ECC 加密、专用 HTTP 客户端（处理缺 SAN 证书）、OpenAPI（PKCE + 刷新）、文件/目录操作、**全局节流器** |
 | **同步** | `full115.go` `incr115.go` `incrdeps.go` `life115.go` `panpath.go` `incrstatus.go` `share.go` `upload115.go` `orphan115.go` `cron.go` `suppress.go` | 全量 / 增量（生活事件，只管外部变更）/ 分享转存 / 上传与监控回传 / 失效 STRM 检测 / 调度 / 整理自产事件抑制。**增量这条链分了四层**：`life115.go` 拉事件（游标 + 405 降级 + 开关门禁）、`panpath.go` 解析 cid→路径（祖先链 + `PathCache` 缓存）、`incr115.go` 消费事件落盘、`incrstatus.go` 对外报状态；`incrdeps.go` 是它们之间的注入接口，主流程靠它才能整体单测 |
-| **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `enrich.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
+| **整理流水线** | `organize.go` `org115.go` `orgstrm.go` `orgrecord.go` `emptydir.go` `resource.go` `rename.go` `wash.go` `scrape.go` `tmdb.go` `airecognize.go` | 识别 → 分类 → 洗版 → 重命名 → 搬移 → **写 STRM / 下附属 → 刮削 → 刷 Emby**（一条龙，见 §6.8）；`resource.go` 是文件名结构化解析的核心，`orgstrm.go` 是落盘出口，`orgrecord.go` 是整理记录与「重新整理」，`airecognize.go` 是模型接口与两个提示词（改写片名 / 从候选里挑），`airecogflow.go` 是 TMDB 全部搜索策略都落空后的 AI 这一环（改写 → 搜 → 挑、打分 `aiScore`、要不要停下 `aiHoldReason`；界面「AI 增强识别」） |
 | **任务队列** | `taskqueue.go` `taskjobs.go` `taskjobsync.go` `taskstage.go` `taskprogress.go` `taskhistory.go` | **两条队列**：主队列（下面这些）串行在 `taskMu` 上；**刮削队列**只跑 `kind=scrape`、不拿 `taskMu`（见 §6.16）。进度按队列各存一份（`jobLane`，主队列沿用 `setJobProgress` 等包级函数，刮削显式用 `scrapeLane`），刮削还有第二级进度 `progress.sub`。**所有手动任务**（重新整理 / 确认入库 / 忽略 / 深度删除 / 手动整理 / 全量 / 手动增量 / 机器人「整理」「同步」）**入队立即返回（202）**；**后台任务**（定时整理 / 定时全量 / 转存与离线完成触发的 `transfer` / 转存守望者）也只入队，优先级 1（排队中手动优先，运行中不抢占），同类去重（`organize` / `full` / `transfer`），空转轮次（`jobOutcome.Idle`）跑完删行、同因重复失败只留最新一条。常驻 worker 串行执行（每个任务单独拿放 `taskMu`），`TaskJob` 表存状态与历史（仍不进队列的只剩增量轮询与 Emby 事件深删，后者在 `endTask` 时补一行 `kind=background`；取代原来内存里的 `recentRuns`）；结构化进度 `setJobProgress`（旧的 `SetTaskProgress` 同时写进当前任务）；前端是顶栏 `TaskQueuePanel.vue`（只看当前）+ `stores/queue.ts`，完整的历史、筛选与任务详情在**任务中心** `/tasks`（`taskhistory.go` 的 `GET /tasks/history` 与扩充后的 `GET /tasks/:id`；`OrganizeRecord.JobID` 记「最近一次处理它的任务」，任务与记录据此互相跳转，老记录为 0 不回填）。整理记录可先**暂存指定**（`OrganizeRecord.Pending*`，`PUT /organize/records/:id/pending`），勾选后 `POST /organize/records/submit` 统一入队（`taskstage.go` 的 `planSubmit` 决定怎么拆）。设计见 `docs/115-station-notes/TASK-QUEUE-PLAN.md` |
 | **网盘文件页** | `filebrowser.go` `fileorganize.go` `filelibrary.go` | 浏览 115 目录树（`GET /files/115`），每行「整理 / 移动」，勾选后批量移动，都入任务队列（`orgpick` / `libredo` / `filemove`）。**媒体库里只有片目目录（当前二级分类目录的下一层，`libCategoryLayout.isTitleRel`）能整理和移动**：整理不走新文件流水线（洗版会撞上自己），而是现场列文件建一条记录交给 `redoOrganize`（`libredo`）；移动只能到 冗余 / 已存在 / 待整理，移出媒体库时 `cleanupMovedTitle` **先删台账再删本地、最后通知 Emby**（反过来深度删除会按台账把刚移走的网盘文件删掉），并清空记录的 `target_cid`（否则之后重新整理被判原地刷新）。整理复用 `processEntry`，媒体库内的条目拒收（走重新整理）。**刮削不在这一页**（2026-09 挪到本地文件页）。测试 `filebrowser_test.go` |
 | **本地文件页** | `locallib.go` `localscrape.go` | 本地媒体库的片目卡片墙（`GET /local/titles`）：一张卡片 = 台账里一个片目（`scanLedgerTitles`），状态只看本地标题目录里有没有 NFO / 海报，**零 115 请求**，列表 30 秒缓存（刮削任务结束时 `forgetLocalTitles`）。海报缩略图走公开路由 `GET /local/poster`（`<img>` 带不了登录态）：列表按 key 签 HMAC（JWT 密钥），`underRoot` 防 `../`，缩成 400px 宽 JPEG 放内存缓存。刮削 `POST /local/scrape` 入队（`scrape`，参数在 `jobParams.Local`），核心是 `scrape.go` 的 `scrapeTitleMeta` + `fileScrapeWriter`，产物写本地媒体库。「上传到网盘」只管这一次，走 `upload115FileConsented`（不看监控上传总开关）；**没勾时不登记上传指纹**，传不传照常由监控上传决定。形态参考 LitePan 的海报墙（PolyForm Noncommercial，只看思路），但片目边界与类型取台账，不在目录里写标记文件。测试 `locallib_test.go` / `localscrape_test.go` |
@@ -106,7 +106,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 ### 数据模型（`internal/model/model.go`）
 
 19 个实体，关键的几个：`Storage`（网盘账号凭据）、`StrmFile`、`SyncTask` / `SyncEvent` / `SyncedFile`（同步台账）、
-`CategoryRule` / `ScrapeRule`（YAML 规则，洗版保存在 `type=wash_config`）、`Setting`（键值配置）、`MediaEnrich`（ffprobe 结果）、
+`CategoryRule` / `ScrapeRule`（YAML 规则，洗版保存在 `type=wash_config`）、`Setting`（键值配置）、
 `MediaLibrary`、`UploadMark`、`OrganizeRecord`（整理流水，一次动作一条）、`EventSuppress`（整理自产事件抑制）、
 `PathCache`（115 目录 id → 网盘绝对路径）、`DownloadLink`（来源链接，见下）。
 
@@ -340,7 +340,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     打开后 `processDir` / `processSingleFile` 识别完（含没识别出来的）只登记一条
     `status=awaiting` 的整理记录，文件原地留在待整理/转存目录，不搬、不改名、不查重、不洗版。
     - 确认入库**复用** `processDir` / `processSingleFile` 本体（`orgCtx.forced` 跳过识别），
-      不要另写一条入库路径——洗版、去重、补全、落盘、刮削必须和自动整理同一套。
+      不要另写一条入库路径——洗版、去重、落盘、刮削必须和自动整理同一套。
     - 结果写回原来那条待确认记录（`orgSink.reuse`），不另起一行。
     - 后续每轮整理按 fid 跳过待确认条目（`loadAwaiting` / `dropHeld`），散文件的待确认记录
       挂着同前缀的其他集，这些 fid 同样算；转存守望者用 `countUnheld` 判断目录是否还有活，
@@ -372,7 +372,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
     - 测试：`strmname_test.go`、`strmmigrate_test.go`、`strmwrite_test.go`。
 
 16. **刮削单独一条队列，不拿 `taskMu`**（`taskqueue.go` 的 `scrapeLane`、`localscrape.go`、`scrapecore.go`，2026-09-28 起）：
-    此前整理后刮削在整理任务里当场跑，一部几百集的综艺刮完才放锁（每集 ffprobe + 剧照），整理 / 同步全在排队。
+    此前整理后刮削在整理任务里当场跑，一部几百集的综艺刮完才放锁（每集剧照），整理 / 同步全在排队。
     - 三个入口（整理后 `flushScrape`、「开始刮削」全库、本地文件页勾选）都是 `scrape` 任务，执行器只有 `execScrapeJob` 一个。
       整理后刮削去重键 `auto`，还没开始的几轮用 `jobSpec.Merge` 取并集（默认的「同键覆盖」会丢掉上一轮的片目）。
     - 与整理并行的冲突**靠刮削自己收拾，不加锁**：刮削不建目录（`fileScrapeWriter.put` 遇到不存在的目录返回 `errMetaDirGone`，
@@ -382,11 +382,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       刮削出错 / 被停 / 什么都没写也照刷（`execScrapeJob` 开头的 defer）。只在刮削队列空闲时交接（`scrapeLaneIdle`），前面排着全库刮削就整理当场刷。
       2026-09-28 现场：整理刷一次、11 秒后刮完又刷一次，两分钟后 Emby 连目录条目都没建。
     - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
-    - ffprobe 默认关（`scrape.probe_streams`）：Emby / Jellyfin 导入 NFO 一般不读 streamdetails。探测结果按 pickcode 落 `ProbeCache`
-      （整理补全也写它，`probeCached`），ffprobe 有 60 秒超时。
-      「只补缺失」时已有的视频 NFO 若没有 `<fileinfo>`，开着探测就只把 streamdetails 插进去写回（`patchStreams`，其余内容原样保留），
-      不整份重写、也不重拉图；按内容判断完整与否（视频与音轨都带编码，`nfoHasTracks`），Emby 回写的空壳 / 残缺 `<fileinfo>` 整段换掉，完整的不再探测。
-      streamdetails 的字段与顺序照 Emby 回写的 NFO（`micodec` / `bitrate` / `aspect` / `framerate` / `scantype` / `samplingrate` / `default` / `forced` / 分钟 `duration`，测试 `nfostream_test.go` 的 `TestNfoStreamsMatchEmby`）；这些扩展字段在 2026-09-29 之前的 `ProbeCache` 里没有（`probeTrack.Ext=false`），缓存命中时照旧只写基础字段。
+    - 刮削不探测轨道、NFO 不写 streamdetails：Emby / Jellyfin 导入 NFO 不读它，播放时自己探测、还会把 NFO 整份重写。
+      原来的 ffprobe「媒体补全」（缺画质信息时探测改名）与 NFO 轨道探测已于 2026-09-29 一并删除，镜像也不再带 ffmpeg，别加回来。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 

@@ -149,7 +149,6 @@ func wecomMenuCreate(cfg WecomConfig) error {
 			{Name: "常用操作", SubButton: []btn{
 				{Type: "click", Name: "立即整理", Key: "整理"},
 				{Type: "click", Name: "增量同步", Key: "同步"},
-				{Type: "click", Name: "画质补全", Key: "补全"},
 				{Type: "click", Name: "任务状态", Key: "状态"},
 			}},
 			{Name: "插件功能", SubButton: []btn{
@@ -244,7 +243,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"搜索 <片名> — TMDB 搜片",
 			"观影 <片名> — TMDB 选片 → 观影搜资源（大小/做种/中字）→ 回序号离线下载",
 			"网盘 <片名> — TMDB 选片 → PanSou 聚合搜网盘分享（115/百度等）→ 回序号转存/离线",
-			"整理 / 同步 / 补全 — 手动触发整理、增量同步、画质补全",
+			"整理 / 同步 — 手动触发整理、增量同步",
 		)
 
 	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
@@ -354,20 +353,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")
-
-	case lower == "补全" || lower == "enrich":
-		if !loadEnrichPolicy().Enabled {
-			reply("补全功能未开启（自动整理 → 媒体补全）")
-			return
-		}
-		go func() {
-			if _, _, err := h.executeEnrichScan(); err != nil {
-				reply("✗ 补全扫描失败: " + err.Error())
-			} else {
-				reply("✓ 补全扫描完成，任务已入队（详见日志）")
-			}
-		}()
-		reply("已开始扫描媒体库，缺画质信息的文件将入队探测。")
 
 	case lower == "整理":
 		// 进任务队列：此前在这里抢锁、等不到就回一句「未开始」，用户只能过会儿再发一遍

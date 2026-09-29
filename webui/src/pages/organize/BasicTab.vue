@@ -165,8 +165,8 @@ async function resolveAll(): Promise<boolean> {
 async function saveAll(): Promise<boolean> {
   if (!(await resolveAll())) return false
   if (!(await saveCron())) return false
-  // org-basic 是整对象覆盖存，而 enrich 那半边在「媒体补全」页签改：
-  // 先把库里最新的拉回来，再盖上本页的字段，免得把对面刚存的策略还原成打开本页时的旧值
+  // org-basic 是整对象覆盖存：先把库里最新的拉回来，再盖上本页的字段，
+  // 库里有而本页不管的字段（后端另写的）就不会被打开本页时的旧值还原
   const mine = pickMine()
   await load()
   Object.assign(model.value, mine)
@@ -199,7 +199,7 @@ const runHint = '确定开始整理？会扫描待整理目录并搬移文件。
 
 async function runOrganize() {
   if (!(await checkTmdb())) return
-  // 整理接口不带参数，三个目录和补全策略全从库里读——改了没保存就是按旧配置搬文件
+  // 整理接口不带参数，三个目录全从库里读——改了没保存就是按旧配置搬文件
   let localFirst = true
   if (dirty.value) {
     if (!(await confirmUnsaved('直接开始会按上次保存的配置搬文件。', saveAll))) {

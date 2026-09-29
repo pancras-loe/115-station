@@ -164,7 +164,6 @@ type nfoMovie struct {
 	Plot          string        `xml:"plot"`
 	TmdbID        string        `xml:"tmdbid"`
 	IMDbID        string        `xml:"id"`
-	Fileinfo      *nfoFileInfo  `xml:"fileinfo,omitempty"`
 }
 
 type nfoTVShow struct {
@@ -182,113 +181,6 @@ type nfoTVShow struct {
 	TmdbID        string        `xml:"tmdbid"`
 }
 
-// ---- 轨道信息（Kodi/Emby 标准的 fileinfo/streamdetails）----
-// 播放器/媒体库据此显示内嵌音轨与字幕，无需对 strm 远端 URL 做探测——
-// 对 strm 媒体库（探测常超时/不全）尤其重要
-
-// 字段与顺序照 Emby 回写 NFO 时的写法（2026-09-29 维护者现场拿到的 Emby NFO 对照）：
-// codec / micodec 同值，scantype 音轨也写，default / forced 写成 True / False，
-// duration 是整分钟（向下取整）、durationinseconds 是秒。
-// scantype / default / forced 只有探测带了扩展字段（probeTrack.Ext）才写，老缓存里没有就不猜
-
-type nfoStreamVideo struct {
-	Codec             string `xml:"codec,omitempty"`
-	MiCodec           string `xml:"micodec,omitempty"`
-	Bitrate           int    `xml:"bitrate,omitempty"`
-	Width             int    `xml:"width,omitempty"`
-	Height            int    `xml:"height,omitempty"`
-	Aspect            string `xml:"aspect,omitempty"`
-	AspectRatio       string `xml:"aspectratio,omitempty"`
-	FrameRate         string `xml:"framerate,omitempty"`
-	Language          string `xml:"language,omitempty"`
-	ScanType          string `xml:"scantype,omitempty"`
-	Default           string `xml:"default,omitempty"`
-	Forced            string `xml:"forced,omitempty"`
-	Duration          int    `xml:"duration,omitempty"`
-	DurationInSeconds int    `xml:"durationinseconds,omitempty"`
-}
-
-type nfoStreamAudio struct {
-	Codec        string `xml:"codec,omitempty"`
-	MiCodec      string `xml:"micodec,omitempty"`
-	Bitrate      int    `xml:"bitrate,omitempty"`
-	Language     string `xml:"language,omitempty"`
-	ScanType     string `xml:"scantype,omitempty"`
-	Channels     int    `xml:"channels,omitempty"`
-	SamplingRate int    `xml:"samplingrate,omitempty"`
-	Default      string `xml:"default,omitempty"`
-	Forced       string `xml:"forced,omitempty"`
-}
-
-type nfoStreamSubtitle struct {
-	Codec    string `xml:"codec,omitempty"`
-	MiCodec  string `xml:"micodec,omitempty"`
-	Language string `xml:"language,omitempty"`
-	Name     string `xml:"name,omitempty"`
-	ScanType string `xml:"scantype,omitempty"`
-	Default  string `xml:"default,omitempty"`
-	Forced   string `xml:"forced,omitempty"`
-}
-
-type nfoStreamDetails struct {
-	Video    *nfoStreamVideo     `xml:"video,omitempty"`
-	Audio    []nfoStreamAudio    `xml:"audio,omitempty"`
-	Subtitle []nfoStreamSubtitle `xml:"subtitle,omitempty"`
-}
-
-type nfoFileInfo struct {
-	StreamDetails *nfoStreamDetails `xml:"streamdetails"`
-}
-
-// nfoFlags 一条轨道的 scantype / default / forced（没有扩展字段时三个都空，omitempty 不输出）
-func nfoFlags(t probeTrack) (scan, def, forced string) {
-	if !t.Ext {
-		return "", "", ""
-	}
-	scan = "progressive"
-	if t.Interlaced {
-		scan = "interlaced"
-	}
-	tf := func(b bool) string {
-		if b {
-			return "True"
-		}
-		return "False"
-	}
-	return scan, tf(t.Default), tf(t.Forced)
-}
-
-// nfoFileInfoFrom 探测结果 → streamdetails（无有效轨道时返回 nil）
-func nfoFileInfoFrom(probe *probeResult) *nfoFileInfo {
-	if probe == nil {
-		return nil
-	}
-	sd := &nfoStreamDetails{}
-	for _, s := range probe.Streams {
-		scan, def, forced := nfoFlags(s)
-		switch s.Kind {
-		case "video":
-			if sd.Video == nil {
-				sd.Video = &nfoStreamVideo{Codec: s.Codec, MiCodec: s.Codec, Bitrate: s.Bitrate,
-					Width: s.Width, Height: s.Height, Aspect: s.Aspect, AspectRatio: s.Aspect,
-					FrameRate: s.FrameRate, Language: s.Language, ScanType: scan, Default: def, Forced: forced,
-					Duration: probe.Duration / 60, DurationInSeconds: probe.Duration}
-			}
-		case "audio":
-			sd.Audio = append(sd.Audio, nfoStreamAudio{Codec: s.Codec, MiCodec: s.Codec, Bitrate: s.Bitrate,
-				Language: s.Language, ScanType: scan, Channels: s.Channels, SamplingRate: s.SampleRate,
-				Default: def, Forced: forced})
-		case "subtitle":
-			sd.Subtitle = append(sd.Subtitle, nfoStreamSubtitle{Codec: s.Codec, MiCodec: s.Codec,
-				Language: s.Language, Name: s.Title, ScanType: scan, Default: def, Forced: forced})
-		}
-	}
-	if sd.Video == nil && len(sd.Audio) == 0 && len(sd.Subtitle) == 0 {
-		return nil
-	}
-	return &nfoFileInfo{StreamDetails: sd}
-}
-
 // ---- 集级 NFO（episodedetails，与 STRM 同基名落盘 xxx.strm → xxx.nfo）----
 
 type nfoEpisode struct {
@@ -301,7 +193,6 @@ type nfoEpisode struct {
 	Ratings   []nfoRating   `xml:"ratings>rating"`
 	UniqueIDs []nfoUniqueID `xml:"uniqueid"`
 	Thumb     string        `xml:"thumb"`
-	Fileinfo  *nfoFileInfo  `xml:"fileinfo,omitempty"`
 }
 
 // ---- 季级 NFO（season.nfo，放在季目录里）----
@@ -468,9 +359,8 @@ type metaDest struct {
 // （xxx.strm → xxx.nfo；同名冲突退回旧写法的 xxx.mkv.strm → xxx.mkv.nfo），
 // Emby 就是把 STRM 的扩展名换成 .nfo 去找的。Name 是 STRM 去掉 .strm，不一定是网盘上的视频名
 type scrapeVideo struct {
-	Name     string // 视频文件名（带扩展名）
-	PickCode string // 轨道探测用
-	Dir      metaDest
+	Name string // 视频文件名（带扩展名）
+	Dir  metaDest
 }
 
 // scrapeTitle 一个待刮削片目
@@ -494,14 +384,6 @@ type metaWriter interface {
 // 返回 true 就当 put 过一次（计数由 writer 自己记），调用方不再拉图
 type metaSkipper interface {
 	skip(d metaDest, name string) bool
-}
-
-// metaPatcher writer 可选实现：「只补缺失」要跳过的产物，读出已有内容改一处再写回。
-// 用在开了轨道探测、而视频 NFO 早就有了的时候：整份重写会冲掉 NFO 里别处来的内容
-// （网盘上带过来的、用户手改的），只往里补 streamdetails
-type metaPatcher interface {
-	existing(d metaDest, name string) (data []byte, ok bool)
-	replace(d metaDest, name string, data []byte) (wrote bool, err error)
 }
 
 func localMetaExists(dir, name string) bool {

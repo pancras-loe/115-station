@@ -37,9 +37,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main
 
 # 运行阶段：最小镜像
 FROM alpine:latest
-# ffmpeg：内嵌轨道识别与媒体信息探测；
-# ca-certificates（TLS）、tzdata（时区）
-RUN apk add --no-cache ffmpeg ca-certificates tzdata
+# ca-certificates（TLS）、tzdata（时区）。
+# 不再带 ffmpeg：「媒体补全」与刮削「轨道探测」写 NFO 已删（2026-09-29），轨道信息交给 Emby 自己探测
+RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 

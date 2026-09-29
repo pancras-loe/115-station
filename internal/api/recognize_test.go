@@ -88,10 +88,10 @@ func TestIsAdOnlyVideo(t *testing.T) {
 
 func TestParseEpisodeOnly(t *testing.T) {
 	cases := []struct {
-		name             string
-		title            string
-		season, episode  int
-		isTV             bool
+		name            string
+		title           string
+		season, episode int
+		isTV            bool
 	}{
 		// 用户实测的剧集命名：EP 编号
 		{"Baby.Walkure.Everyday.EP08.1080p.MAX.WEB-DL.DDP2.0.H.264-MagicStar.mkv", "Baby Walkure Everyday", 1, 8, true},
@@ -117,10 +117,10 @@ func TestParseEpisodeOnly(t *testing.T) {
 
 func TestParseBracketEpisode(t *testing.T) {
 	cases := []struct {
-		name             string
-		title            string
-		season, episode  int
-		isTV             bool
+		name            string
+		title           string
+		season, episode int
+		isTV            bool
 	}{
 		// 用户实测的动漫字幕组命名
 		{"[Sakurato] Hamidashi Creative! [01v2][AVC-8bit 1080p AAC][CHT].mp4", "Hamidashi Creative!", 1, 1, true},
@@ -162,109 +162,5 @@ func TestIsStandardMediaImageName(t *testing.T) {
 		if isStandardMediaImageName(n) {
 			t.Errorf("不应识别为标准图片: %s", n)
 		}
-	}
-}
-
-func TestEnrichHelpers(t *testing.T) {
-	// 需要探测：分辨率/编码任一缺失（只有编码没分辨率、或只有分辨率没编码
-	// 都要探测——后者使名实冲突分支可触发，决策矩阵不再不可达）
-	for _, n := range []string{
-		"蜘蛛侠.2016.mkv",
-		"movie.mp4",
-		"Movie.2020.H265.mkv",  // 缺分辨率
-		"蜘蛛侠.2016.1080p.mkv", // 缺编码
-	} {
-		if !enrichNeedsProbe(n) {
-			t.Errorf("%s 应判定为需要补全", n)
-		}
-	}
-	// 不需要：分辨率与编码都齐全
-	for _, n := range []string{
-		"剧 - S01E01.1080p.WEB-DL.H264.DDP.mkv",
-		"Movie.2160p.HEVC.mkv",
-	} {
-		if enrichNeedsProbe(n) {
-			t.Errorf("%s 不应判定为需要补全", n)
-		}
-	}
-	// 探测结果映射
-	if got := pixFromHeight(1080); got != "1080p" {
-		t.Errorf("pixFromHeight(1080)=%s", got)
-	}
-	if got := pixFromHeight(2160); got != "2160p" {
-		t.Errorf("pixFromHeight(2160)=%s", got)
-	}
-	if got := videoCodecLabel("hevc"); got != "H265" {
-		t.Errorf("videoCodecLabel(hevc)=%s", got)
-	}
-	if got := audioCodecLabel("eac3", 6); got != "DDP" {
-		t.Errorf("audioCodecLabel(eac3,6)=%s", got)
-	}
-	if got := audioCodecLabel("eac3", 8); got != "DDP.Atmos" {
-		t.Errorf("audioCodecLabel(eac3,8)=%s", got)
-	}
-}
-
-func TestEnrichDecide(t *testing.T) {
-	std := enrichPolicy{Mode: "standard"}
-	cons := enrichPolicy{Mode: "conservative"}
-	aggr := enrichPolicy{Mode: "aggressive"}
-
-	// 情形1：名缺+探测有 → 标准/激进补，保守模式在 missing=keep 时保留
-	if a, _ := enrichDecide("蜘蛛侠.2016.mkv", &probeResult{Pix: "1080p"}, std); a != "rename" {
-		t.Errorf("情形1 标准：%s", a)
-	}
-	if a, _ := enrichDecide("蜘蛛侠.2016.mkv", &probeResult{Pix: "1080p"}, enrichPolicy{Mode: "standard", Missing: "keep"}); a != "keep" {
-		t.Errorf("情形1 用户选保留：got %s", a)
-	}
-	// 情形2：名实一致 → 跳过
-	if a, _ := enrichDecide("片名.1080p.mkv", &probeResult{Pix: "1080p"}, std); a != "keep" {
-		t.Errorf("情形2：%s", a)
-	}
-	// 情形3：名1080探测2160 → 标准以探测为准
-	if a, _ := enrichDecide("片名.2016.1080p.mkv", &probeResult{Pix: "2160p"}, std); a != "rename" {
-		t.Errorf("情形3 标准：%s", a)
-	}
-	// 情形3 用户选保留
-	if a, _ := enrichDecide("片名.2016.1080p.mkv", &probeResult{Pix: "2160p"}, enrichPolicy{Mode: "standard", ConflictLow: "keep"}); a != "keep" {
-		t.Errorf("情形3 用户保留：%s", a)
-	}
-	// 情形4：名2160探测1080
-	if a, _ := enrichDecide("片名.2160p.mkv", &probeResult{Pix: "1080p"}, std); a != "rename" {
-		t.Errorf("情形4：%s", a)
-	}
-	// 情形5：探测失败（名有）→ 保留
-	if a, _ := enrichDecide("片名.1080p.mkv", nil, std); a != "keep" {
-		t.Errorf("情形5：%s", a)
-	}
-	// 跨档防御：声明480p 探测2160p（差3档）→ 保留
-	if a, _ := enrichDecide("片名.480p.mkv", &probeResult{Pix: "2160p"}, std); a != "keep" {
-		t.Errorf("跨档防御：%s", a)
-	}
-	// 情形7：完整命名冲突 → 标准/保守保留，激进改
-	full := "片名.2016.1080p.BluRay.H264-GROUP.mkv"
-	if a, _ := enrichDecide(full, &probeResult{Pix: "2160p"}, std); a != "keep" {
-		t.Errorf("情形7 标准：%s", a)
-	}
-	if a, _ := enrichDecide(full, &probeResult{Pix: "2160p"}, aggr); a != "rename" {
-		t.Errorf("情形7 激进：%s", a)
-	}
-	// 保守模式：冲突一律保留
-	if a, _ := enrichDecide("片名.2016.1080p.mkv", &probeResult{Pix: "2160p"}, cons); a != "keep" {
-		t.Errorf("保守冲突：%s", a)
-	}
-}
-
-func TestBuildEnrichedName(t *testing.T) {
-	// 纯缺失：追加画质段
-	got := buildEnrichedName("蜘蛛侠.2016", ".mkv", &probeResult{Pix: "1080p", Video: "H264", Audio: "AAC"})
-	want := "蜘蛛侠.2016.1080p.H264.AAC.mkv"
-	if got != want {
-		t.Errorf("缺失补充: %q want %q", got, want)
-	}
-	// 冲突替换：剔除旧 1080p 段再补 2160p
-	got = buildEnrichedName("片名.2016.1080p", ".mkv", &probeResult{Pix: "2160p", Video: "H265", Audio: "DDP", Effect: "HDR"})
-	if got != "片名.2016.2160p.HDR.H265.DDP.mkv" {
-		t.Errorf("冲突替换: %q", got)
 	}
 }

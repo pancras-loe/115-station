@@ -91,9 +91,9 @@ type orgPlacement struct {
 //     特别篇目录（模板有季变量就渲染第 0 季，没有就是标题目录下的 Specials）——
 //     此前它们原名混进正片季目录，Emby 认不出，还占着正片的位置；
 //     整个条目都没有集号时仍落在 fallbackRel（与原来一致）；
-//   - 字幕跟同名视频走（先按补全改名映射一次），对不上的跟视频最多的那一组。
+//   - 字幕跟同名视频走，对不上的跟视频最多的那一组。
 func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, videos, subs []remoteFile,
-	eps map[string]*ParsedName, enrichRenames map[string]string) orgPlacement {
+	eps map[string]*ParsedName) orgPlacement {
 	pl := orgPlacement{relOf: map[string]string{}}
 	base := categoryDir(media.MediaType, category)
 	anyEp := false
@@ -130,12 +130,6 @@ func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, vi
 	}
 	for _, s := range subs {
 		fb := baseName(s.Name)
-		for oldB, newB := range enrichRenames {
-			if fb == oldB || strings.HasPrefix(fb, oldB+".") {
-				fb = newB + strings.TrimPrefix(fb, oldB)
-				break
-			}
-		}
 		rel, best := major, -1
 		for _, v := range videos {
 			vb := baseName(v.Name)
@@ -254,7 +248,7 @@ func metaRel(name, dir string, vids []metaVideo, rules []ReplaceRule) string {
 // placeMeta 把剧集条目里的 NFO / 图片分到集、季目录（记进 relOf），剧一级的不记 —— 调用方另行放进标题目录。
 // 电影不分：视频本来就在标题目录里
 func (pl *orgPlacement) placeMeta(media *TmdbMedia, rootRel string, videos, metas []remoteFile,
-	enrichRenames map[string]string, rules []ReplaceRule) {
+	rules []ReplaceRule) {
 	if media.MediaType != "tv" || len(metas) == 0 {
 		return
 	}
@@ -263,16 +257,7 @@ func (pl *orgPlacement) placeMeta(media *TmdbMedia, rootRel string, videos, meta
 		vids = append(vids, metaVideo{base: baseName(v.Name), dir: v.Path, rel: pl.relOf[v.Fid]})
 	}
 	for _, m := range metas {
-		name := m.Name
-		// 视频被画质补全改过名，NFO 还是旧基名：先映射一次再认主人（同字幕）
-		fb := baseName(name)
-		for oldB, newB := range enrichRenames {
-			if fb == oldB || strings.HasPrefix(fb, oldB+".") || strings.HasPrefix(fb, oldB+"-") {
-				name = newB + strings.TrimPrefix(fb, oldB) + pathExt(name)
-				break
-			}
-		}
-		if rel := metaRel(name, m.Path, vids, rules); rel != "" && rel != rootRel {
+		if rel := metaRel(m.Name, m.Path, vids, rules); rel != "" && rel != rootRel {
 			pl.relOf[m.Fid] = rel
 		}
 	}
