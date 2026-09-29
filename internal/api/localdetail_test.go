@@ -171,13 +171,7 @@ func TestEmbyDetailOf(t *testing.T) {
 	it.ID, it.Type, it.Name, it.ParentIndexNumber, it.IndexNumber = "1", "Episode", "第一集", 1, 2
 	it.Path = "/media/影视/剧集/狂飙 (2023)/Season 01/狂飙.S01E02.strm"
 	it.RunTimeTicks = 2700 * 10_000_000
-	it.MediaSources = append(it.MediaSources, struct {
-		Path         string       `json:"Path"`
-		Container    string       `json:"Container"`
-		Size         int64        `json:"Size"`
-		Bitrate      int64        `json:"Bitrate"`
-		MediaStreams []embyStream `json:"MediaStreams"`
-	}{Container: "mkv", MediaStreams: []embyStream{
+	it.MediaSources = append(it.MediaSources, embyMediaSource{Container: "mkv", MediaStreams: []embyStream{
 		{Type: "Video", Codec: "hevc", Height: 2160, VideoRange: "HDR", ExtendedVideoType: "DolbyVision"},
 		{Type: "Audio", Codec: "eac3", Channels: 6, Language: "chi"},
 		{Type: "Subtitle", Codec: "ass", IsExternal: true},

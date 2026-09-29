@@ -399,6 +399,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       直接排就只探 3 集；没点名时回查的是刷新目标（全量的同步根、迁移时的整个媒体库），直接排就是递归探整片库 ——
       所以片目之上的目录**不自动探**，不属于任何片目的单个 `.strm` 只探它自己。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
       新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
+      **多版本**（同一片目目录两个 `.strm`）在 Emby 里是一个条目、`MediaSources` 各一份：「有媒体信息」要每个版本都齐（`lackingSources`），
+      探测时逐个缺的版本带 `MediaSourceId` 各发一次（不点名时 Emby 只探它自己挑的那个，另一个永远「未探测」），记账仍按条目记一笔；
+      卡片快照因此必须带 `MediaSources` 字段，片目详情按版本拆行（`embyDetailsOf`）。测试 `embyextract_versions_test.go`。
     - **手动探测一律是任务**（`embyprobejob.go`，kind=`probe`，第三条队列 `probeLane`，不拿 `taskMu`、不占刮削队列）：片目详情「提前探测」、
       本地文件页刮削勾「轨道探测」（刮完另建任务，不再挂在刮削任务上）、重新整理（带刮削且开着探测：`registerRedoProbe` 登记片目，
       入库确认到它时 `splitRedoProbes` 从自动入口摘出来建任务；原地刷新没新 STRM 的直接建）、任务中心失败清单「重试」（`item:<id>` 点名条目）。

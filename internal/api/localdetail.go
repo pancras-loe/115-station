@@ -518,6 +518,47 @@ func embyDetailOf(it embyExtractItem, titleLocal, pathMapping string) embyDetail
 		}
 		break
 	}
+	out.setTracks(streams)
+	return out
+}
+
+// embyDetailsOf 多版本条目（同目录两个 .strm，Emby 合成一个条目）拆成每个版本一行：
+// 只显示第一个版本的话，另一个版本缺不缺媒体信息界面上看不出来。
+// 探测记账是按条目记的，各行共用；有没有媒体信息按版本各算各的
+func embyDetailsOf(it embyExtractItem, titleLocal, pathMapping string) []embyDetailItem {
+	if len(it.MediaSources) <= 1 {
+		return []embyDetailItem{embyDetailOf(it, titleLocal, pathMapping)}
+	}
+	lacking := map[string]bool{}
+	for _, s := range it.lackingSources() {
+		lacking[embySourceKey(s)] = true
+	}
+	var out []embyDetailItem
+	for i, s := range it.MediaSources {
+		v := it
+		v.Path = s.Path
+		v.MediaSources = nil
+		d := embyDetailOf(v, titleLocal, pathMapping)
+		if i > 0 {
+			d.ID = fmt.Sprintf("%s#%d", it.ID, i) // 界面拿 id 当列表 key
+		}
+		if s.Path != "" {
+			d.Name = strings.TrimSuffix(embyPathBase(s.Path), ".strm")
+		}
+		d.Container, d.Size, d.Bitrate = s.Container, s.Size, s.Bitrate
+		d.HasInfo = !lacking[embySourceKey(s)]
+		streams := s.MediaStreams
+		if len(streams) == 0 && s.Path == it.Path {
+			streams = it.MediaStreams
+		}
+		d.setTracks(streams)
+		out = append(out, d)
+	}
+	return out
+}
+
+func (out *embyDetailItem) setTracks(streams []embyStream) {
+	out.Video, out.Audio, out.Subtitles = []embyTrack{}, []embyTrack{}, []embyTrack{}
 	for _, s := range streams {
 		switch strings.ToLower(s.Type) {
 		case "video":
@@ -528,7 +569,6 @@ func embyDetailOf(it embyExtractItem, titleLocal, pathMapping string) embyDetail
 			out.Subtitles = append(out.Subtitles, toEmbyTrack(s))
 		}
 	}
-	return out
 }
 
 // embyTitleLookup 在 Emby 里找片目的条目。先按标题目录找（剧集的 Series、电影所在目录的 Folder），
@@ -609,19 +649,20 @@ func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (emb
 	}
 	running, now := embyExtractRunningID(), time.Now()
 	for _, it := range raw {
-		d := embyDetailOf(it, titleLocal, cfg.PathMapping)
-		d.Probe = embyProbeStateOf(d.HasInfo, it.extractable(), marks[it.ID], queued, running != "" && running == it.ID, now)
-		out.counts[d.Probe.State]++
-		switch {
-		case d.Probe.manualOK():
-			out.manual++
-		case d.Probe.ManualAt != nil && d.Probe.State != "queued" && d.Probe.State != "running":
-			out.debounce++
-			if out.manualAt == nil || d.Probe.ManualAt.Before(*out.manualAt) {
-				out.manualAt = d.Probe.ManualAt
+		for _, d := range embyDetailsOf(it, titleLocal, cfg.PathMapping) {
+			d.Probe = embyProbeStateOf(d.HasInfo, it.extractable(), marks[it.ID], queued, running != "" && running == it.ID, now)
+			out.counts[d.Probe.State]++
+			switch {
+			case d.Probe.manualOK():
+				out.manual++
+			case d.Probe.ManualAt != nil && d.Probe.State != "queued" && d.Probe.State != "running":
+				out.debounce++
+				if out.manualAt == nil || d.Probe.ManualAt.Before(*out.manualAt) {
+					out.manualAt = d.Probe.ManualAt
+				}
 			}
+			out.items = append(out.items, d)
 		}
-		out.items = append(out.items, d)
 	}
 	sort.SliceStable(out.items, func(i, j int) bool {
 		a, b := out.items[i], out.items[j]

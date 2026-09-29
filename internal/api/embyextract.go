@@ -444,6 +444,8 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 		mode = "手动"
 	}
 	log.Printf("[Emby探测] ▶ %s：%d 个条目还没有媒体信息，逐个提前探测（%s）%s", embyPathBase(p), len(todo), mode, note)
+	seen := map[string]string{} // 这一轮探过的版本 → 失败原因（成功为空）
+	sent := false               // 这一轮发过请求：下一个请求前要隔开
 	for i, it := range todo {
 		if manual && embyExtractAllCanceled(jobs) {
 			if !e.auto {
@@ -455,14 +457,55 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			// 自动入口也排过它：剩下的按自动规则接着探
 			manual = false
 		}
-		// 记账在发请求之前：请求发出去就算一次，哪怕随后超时、进程被杀
+		// 记账在发请求之前：请求发出去就算一次，哪怕随后超时、进程被杀。
+		// 多版本条目记一笔账、逐个版本各发一次（每个版本各取一次 115 直链，不算重复）
 		if ok, _ := embyExtractClaim(it.ID, it.label(), time.Now(), manual); !ok {
 			probeReportItem(jobs, probeHeldItem(it))
 			continue
 		}
-		setEmbyExtractRunning(it.ID, it.label())
-		ok, errMsg := embyExtractOne(cfg, it)
-		setEmbyExtractRunning("", "")
+		ok, errMsg := true, ""
+		for _, src := range it.lackingSources() {
+			k := embySourceKey(src)
+			if r, done := seen[k]; done && k != "" {
+				// 同一个版本在这一轮里已经探过（Emby 把它另列成了一个条目）：结果照搬，不再发请求
+				if r != "" {
+					ok, errMsg = false, joinProbeErr(errMsg, r)
+				}
+				continue
+			}
+			if sent {
+				if !embyExtractWait(embyExtractGap) {
+					return false
+				}
+			}
+			sent = true
+			setEmbyExtractRunning(it.ID, it.sourceLabel(src))
+			one, msg := embyExtractOne(cfg, it, src)
+			setEmbyExtractRunning("", "")
+			if one {
+				msg = ""
+			} else {
+				if msg == "" {
+					msg = "失败"
+				}
+				if len(it.MediaSources) > 1 {
+					msg = strings.TrimSuffix(embyPathBase(src.Path), ".strm") + "：" + msg
+				}
+				ok, errMsg = false, joinProbeErr(errMsg, msg)
+			}
+			seen[k] = msg
+			if one {
+				embyExtractFails = 0
+			} else if embyExtractFails++; embyExtractFails >= embyExtractBreakAfter {
+				log.Printf("[Emby探测] ⚠ 连续 %d 个条目探测失败，暂停 %s（可能是 115 风控或 Emby 异常），排队中的稍后继续",
+					embyExtractFails, embyExtractBreakPause)
+				embyExtractFails = 0
+				setEmbyExtractPausedUntil(time.Now().Add(embyExtractBreakPause))
+				if !embyExtractWait(embyExtractBreakPause) {
+					return false
+				}
+			}
+		}
 		embyExtractSettle(it.ID, ok, errMsg)
 		if ok {
 			probeReportOK(jobs)
@@ -471,24 +514,29 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			item.Kind = probeItemFailed
 			probeReportItem(jobs, item)
 		}
-		pause := embyExtractGap
-		if ok {
-			embyExtractFails = 0
-		} else if embyExtractFails++; embyExtractFails >= embyExtractBreakAfter {
-			log.Printf("[Emby探测] ⚠ 连续 %d 个条目探测失败，暂停 %s（可能是 115 风控或 Emby 异常），排队中的稍后继续",
-				embyExtractFails, embyExtractBreakPause)
-			embyExtractFails = 0
-			pause = embyExtractBreakPause
-			setEmbyExtractPausedUntil(time.Now().Add(pause))
-		}
-		select {
-		case <-stopCh:
-			return false
-		case <-time.After(pause):
-		}
-		setEmbyExtractPausedUntil(time.Time{})
+	}
+	if sent && !embyExtractWait(embyExtractGap) {
+		return false
 	}
 	return
+}
+
+func joinProbeErr(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + "；" + b
+}
+
+// embyExtractWait 两次探测之间的间隔（熔断暂停也走它）；返回 false 表示服务要退出了
+func embyExtractWait(d time.Duration) bool {
+	select {
+	case <-stopCh:
+		return false
+	case <-time.After(d):
+	}
+	setEmbyExtractPausedUntil(time.Time{})
+	return true
 }
 
 // embyExtractFails 连续失败的条目数（只有 worker 一个 goroutine 读写）
@@ -618,22 +666,27 @@ type embyStream struct {
 
 // embyExtractItem 一个要提前探测的影视条目
 type embyExtractItem struct {
-	ID                string       `json:"Id"`
-	Name              string       `json:"Name"`
-	Type              string       `json:"Type"`
-	Path              string       `json:"Path"`
-	SeriesName        string       `json:"SeriesName"`
-	IndexNumber       int          `json:"IndexNumber"`
-	ParentIndexNumber int          `json:"ParentIndexNumber"`
-	RunTimeTicks      int64        `json:"RunTimeTicks"`
-	MediaStreams      []embyStream `json:"MediaStreams"`
-	MediaSources      []struct {
-		Path         string       `json:"Path"`
-		Container    string       `json:"Container"`
-		Size         int64        `json:"Size"`
-		Bitrate      int64        `json:"Bitrate"`
-		MediaStreams []embyStream `json:"MediaStreams"`
-	} `json:"MediaSources"`
+	ID                string            `json:"Id"`
+	Name              string            `json:"Name"`
+	Type              string            `json:"Type"`
+	Path              string            `json:"Path"`
+	SeriesName        string            `json:"SeriesName"`
+	IndexNumber       int               `json:"IndexNumber"`
+	ParentIndexNumber int               `json:"ParentIndexNumber"`
+	RunTimeTicks      int64             `json:"RunTimeTicks"`
+	MediaStreams      []embyStream      `json:"MediaStreams"`
+	MediaSources      []embyMediaSource `json:"MediaSources"`
+}
+
+// embyMediaSource 条目的一个版本。同一片目目录里放两个 .strm（两个版本），Emby 会把它们合成
+// 一个条目、MediaSources 里各一份，媒体信息也是各探各的
+type embyMediaSource struct {
+	ID           string       `json:"Id"`
+	Path         string       `json:"Path"`
+	Container    string       `json:"Container"`
+	Size         int64        `json:"Size"`
+	Bitrate      int64        `json:"Bitrate"`
+	MediaStreams []embyStream `json:"MediaStreams"`
 }
 
 // label 日志里怎么称呼它：剧集带剧名与季集号
@@ -656,16 +709,57 @@ func embyStreamsComplete(streams []embyStream) bool {
 	return n >= 2
 }
 
-func (it embyExtractItem) hasMediaInfo() bool {
-	if embyStreamsComplete(it.MediaStreams) {
-		return true
+func (it embyExtractItem) hasMediaInfo() bool { return len(it.lackingSources()) == 0 }
+
+// lackingSources 还缺媒体信息的版本。
+// 多版本条目要**每个版本**都有才算：2026-09-29 现场，双版本电影只按条目 id 探一次，
+// Emby 只探了其中一个版本，另一个一直显示「未探测」，再怎么手动探也还是只探那一个。
+// 单版本（或没带 MediaSources）沿用原判据：顶层与版本里任一份齐了就算有。
+// 没带 MediaSources 时返回一个空 ID 的版本，表示「不点名版本、探整个条目」
+func (it embyExtractItem) lackingSources() []embyMediaSource {
+	if len(it.MediaSources) <= 1 {
+		if embyStreamsComplete(it.MediaStreams) {
+			return nil
+		}
+		if len(it.MediaSources) == 0 {
+			return []embyMediaSource{{Path: it.Path}}
+		}
+		if embyStreamsComplete(it.MediaSources[0].MediaStreams) {
+			return nil
+		}
+		return []embyMediaSource{it.MediaSources[0]}
 	}
+	var out []embyMediaSource
 	for _, s := range it.MediaSources {
 		if embyStreamsComplete(s.MediaStreams) {
-			return true
+			continue
 		}
+		// 顶层轨道是主版本的：Emby 有时只把它写在顶层
+		if s.Path != "" && s.Path == it.Path && embyStreamsComplete(it.MediaStreams) {
+			continue
+		}
+		out = append(out, s)
 	}
-	return false
+	return out
+}
+
+// sourceLabel 多版本时日志 / 报告里带上是哪个版本（文件名）
+func (it embyExtractItem) sourceLabel(s embyMediaSource) string {
+	if len(it.MediaSources) <= 1 || s.Path == "" {
+		return it.label()
+	}
+	return it.label() + "（" + strings.TrimSuffix(embyPathBase(s.Path), ".strm") + "）"
+}
+
+// embySourceKey 同一轮里认版本用：多版本条目若被 Emby 同时列成两个条目，别把同一个版本探两次
+func embySourceKey(s embyMediaSource) string {
+	if s.Path != "" {
+		return "p:" + strings.ReplaceAll(s.Path, "\\", "/")
+	}
+	if id := strings.TrimPrefix(s.ID, "mediasource_"); id != "" {
+		return "i:" + id
+	}
+	return ""
 }
 
 // extractable 光盘结构（ISO / BDMV / VIDEO_TS）Emby 探测不了，探了也是白占一次 115 直链
@@ -846,9 +940,16 @@ var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 
 // embyExtractOne POST /Items/{id}/PlaybackInfo，让 Emby 探测并存下这个条目的媒体信息。
 // 直接打 Emby 本身而不是本站反代：反代会拦 PlaybackInfo 做直连改写和直链预取，这里都用不上
-func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem) (ok bool, errMsg string) {
+//
+// 多版本条目点名 MediaSourceId：不点名时 Emby 只探它自己挑的那个版本，另一个永远缺媒体信息
+func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource) (ok bool, errMsg string) {
 	start := time.Now()
 	q := url.Values{"api_key": {cfg.APIKey}}
+	multi := len(it.MediaSources) > 1 && src.ID != ""
+	if multi {
+		q.Set("MediaSourceId", src.ID)
+	}
+	label := it.sourceLabel(src)
 	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+"/Items/"+url.PathEscape(it.ID)+"/PlaybackInfo?"+q.Encode(), nil)
 	if err != nil {
 		return false, err.Error()
@@ -857,36 +958,55 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem) (ok bool, errMsg str
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			log.Printf("[Emby探测] ○ %s：等了 %s 还没返回，Emby 可能仍在提取（不会马上重试）", it.label(), embyExtractTimeout)
+			log.Printf("[Emby探测] ○ %s：等了 %s 还没返回，Emby 可能仍在提取（不会马上重试）", label, embyExtractTimeout)
 			return false, "超时"
 		}
-		log.Printf("[Emby探测] ✗ %s：请求失败 %v", it.label(), err)
+		log.Printf("[Emby探测] ✗ %s：请求失败 %v", label, err)
 		return false, err.Error()
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		io.Copy(io.Discard, resp.Body)
-		log.Printf("[Emby探测] ✗ %s：HTTP %d", it.label(), resp.StatusCode)
+		log.Printf("[Emby探测] ✗ %s：HTTP %d", label, resp.StatusCode)
 		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
 	var info struct {
-		MediaSources []struct {
-			MediaStreams []embyStream `json:"MediaStreams"`
-		} `json:"MediaSources"`
+		MediaSources []embyMediaSource `json:"MediaSources"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&info)
 	took := time.Since(start).Round(100 * time.Millisecond)
-	var streams []embyStream
-	if len(info.MediaSources) > 0 {
-		streams = info.MediaSources[0].MediaStreams
-	}
+	streams := playbackSourceStreams(info.MediaSources, src, multi)
 	if !embyStreamsComplete(streams) {
 		log.Printf("[Emby探测] ○ %s：Emby 返回了，但没提取到音视频轨道（%s）—— 看 Emby 日志里这条 STRM 的 ffprobe 报错",
-			it.label(), took)
+			label, took)
 		return false, "没提取到音视频轨道"
 	}
-	log.Printf("[Emby探测] ✓ %s：%s（%s）", it.label(), embyStreamsBrief(streams), took)
+	log.Printf("[Emby探测] ✓ %s：%s（%s）", label, embyStreamsBrief(streams), took)
 	return true, ""
+}
+
+// playbackSourceStreams PlaybackInfo 返回里点名那个版本的轨道。
+// 点了名却找不到它（Emby 版本不认 MediaSourceId 时会把全部版本都吐回来），按版本路径再认一次，
+// 都认不出就算没探到 —— 拿另一个版本的轨道报成功，正是这次要修的毛病
+func playbackSourceStreams(sources []embyMediaSource, src embyMediaSource, multi bool) []embyStream {
+	if !multi {
+		if len(sources) > 0 {
+			return sources[0].MediaStreams
+		}
+		return nil
+	}
+	want := strings.TrimPrefix(src.ID, "mediasource_")
+	for _, s := range sources {
+		if strings.TrimPrefix(s.ID, "mediasource_") == want {
+			return s.MediaStreams
+		}
+	}
+	for _, s := range sources {
+		if src.Path != "" && s.Path == src.Path {
+			return s.MediaStreams
+		}
+	}
+	return nil
 }
 
 // embyStreamsBrief 视频 1 · 音轨 4 · 字幕 2

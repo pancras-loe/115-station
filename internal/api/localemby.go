@@ -125,8 +125,9 @@ func fetchLocalEmbyPage(cfg embyRefreshCfg, parent string, start int) ([]embyExt
 	q := url.Values{
 		"Recursive":        {"true"},
 		"IncludeItemTypes": {"Movie,Episode,Video"},
-		// 不要 MediaSources：它把媒体流再带一遍，页面体积翻倍；hasMediaInfo 先看的就是 MediaStreams
-		"Fields":                 {"Path,MediaStreams"},
+		// MediaSources 会把媒体流再带一遍、页面体积翻倍，但少不了：多版本电影（同目录两个 .strm）
+		// 在 Emby 里是一个条目两个版本，顶层 MediaStreams 只有主版本的，看不出另一个版本还没探
+		"Fields":                 {"Path,MediaStreams,MediaSources"},
 		"SortBy":                 {"DateCreated,SortName"}, // 翻页途中入库的新条目排在最后，不会挤得前面漏一条
 		"SortOrder":              {"Ascending"},
 		"StartIndex":             {strconv.Itoa(start)},
