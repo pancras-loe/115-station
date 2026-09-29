@@ -19,7 +19,7 @@ const icon = computed(() =>
 </script>
 
 <template>
-  <HModal v-model:show="open" :title="opts?.title" width="440px">
+  <HModal v-model:show="open" :title="opts?.title" width="440px" top>
     <div class="h-dlg">
       <span class="h-dlg-icon" :class="`tone-${opts?.tone ?? 'accent'}`">
         <component :is="icon" :size="18" :stroke-width="2" />

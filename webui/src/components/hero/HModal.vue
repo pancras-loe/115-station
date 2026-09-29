@@ -27,6 +27,11 @@ const props = withDefaults(
     width?: string
     /** 点遮罩不关闭（表单填到一半的弹窗用） */
     persistent?: boolean
+    /**
+     * 压在其他浮层之上（确认框用）。浮层 z-index 都一样时按 DOM 顺序叠放，而 Portal 的落点在组件
+     * 挂载时就定了：App 一启动就挂上的确认框排在后来打开的抽屉 / 弹窗前面，会被它们的遮罩盖住
+     */
+    top?: boolean
   }>(),
   { width: '560px' },
 )
@@ -38,9 +43,10 @@ const dialogStyle = computed(() => ({ maxWidth: props.width }))
 <template>
   <DialogRoot v-model:open="open">
     <DialogPortal>
-      <DialogOverlay class="modal__backdrop modal__backdrop--opaque h-modal-backdrop" />
+      <DialogOverlay class="modal__backdrop modal__backdrop--opaque h-modal-backdrop" :class="top && 'h-modal--top'" />
       <DialogContent
         class="modal__container h-modal-container"
+        :class="top && 'h-modal--top'"
         data-placement="auto"
         v-bind="description ? {} : { 'aria-describedby': undefined }"
         @pointer-down-outside="(e) => persistent && e.preventDefault()"
@@ -65,6 +71,9 @@ const dialogStyle = computed(() => ({ maxWidth: props.width }))
 </template>
 
 <style scoped>
+.h-modal--top {
+  z-index: calc(var(--z-index-overlay, 100000) + 1) !important;
+}
 .h-modal-container {
   position: fixed;
   inset: 0;

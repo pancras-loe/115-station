@@ -105,7 +105,8 @@
   /* 浮层层级。HeroUI 在 base.css 里定义，我们没引 base（它会改全站 border-color），
      不补上的话 modal 遮罩 z-index 失效，吸顶的顶栏会浮在遮罩上面 */
   --z-index-overlay: 100000;
-  --z-index-toast: calc(var(--z-index-overlay) + 1);
+  /* +1 是确认框（HModal top），提示条要压在确认框上面 */
+  --z-index-toast: calc(var(--z-index-overlay) + 2);
 }
 
 /* HeroUI 暗色主题里输入框底色与卡片同色（它的表单默认摆在页面底色上），
