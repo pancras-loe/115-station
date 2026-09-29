@@ -288,6 +288,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 本地文件页：本地媒体库的片目卡片 + 刮削（入任务队列，locallib.go / localscrape.go）
 		protected.GET("/local/titles", h.ListLocalTitles)
 		protected.POST("/local/scrape", h.ScrapeLocalTitles)
+		protected.GET("/local/titles/detail", h.LocalTitleDetail)
+		protected.GET("/local/titles/emby", h.LocalTitleEmby)
+		protected.POST("/local/titles/probe", h.LocalTitleProbe)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)

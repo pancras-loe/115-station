@@ -3,9 +3,13 @@ import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } f
 
 /**
  * 侧边抽屉（替代 NDrawer）：Reka 的 Dialog 管焦点锁定、Esc、点遮罩关闭，外观是 HeroUI 的浮层 + 模糊遮罩。
- * 目前只有移动端导航在用（从左侧滑出）。标题只给读屏器，界面上不显示。
+ * 左侧：移动端导航；右侧：本地文件页的片目详情（手机上铺满全屏）。标题只给读屏器，界面上不显示。
  */
-withDefaults(defineProps<{ width?: string; title?: string }>(), { width: '260px', title: '菜单' })
+withDefaults(defineProps<{ width?: string; title?: string; side?: 'left' | 'right' }>(), {
+  width: '260px',
+  title: '菜单',
+  side: 'left',
+})
 const open = defineModel<boolean>('show', { required: true })
 </script>
 
@@ -13,7 +17,12 @@ const open = defineModel<boolean>('show', { required: true })
   <DialogRoot v-model:open="open">
     <DialogPortal>
       <DialogOverlay class="h-drawer-backdrop" />
-      <DialogContent class="h-drawer" :style="{ width }" :aria-describedby="undefined">
+      <DialogContent
+        class="h-drawer"
+        :class="side === 'right' && 'h-drawer--right'"
+        :style="{ width }"
+        :aria-describedby="undefined"
+      >
         <DialogTitle class="sr-only">{{ title }}</DialogTitle>
         <slot />
       </DialogContent>
@@ -58,6 +67,33 @@ const open = defineModel<boolean>('show', { required: true })
 }
 .h-drawer[data-state='closed'] {
   animation: h-drawer-out 180ms ease-in;
+}
+.h-drawer--right {
+  left: auto;
+  right: 0;
+  max-width: 100vw;
+  border-radius: 28px 0 0 28px;
+}
+.h-drawer--right[data-state='open'] {
+  animation-name: h-drawer-in-right;
+}
+.h-drawer--right[data-state='closed'] {
+  animation-name: h-drawer-out-right;
+}
+@media (max-width: 720px) {
+  .h-drawer--right {
+    border-radius: 0;
+  }
+}
+@keyframes h-drawer-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes h-drawer-out-right {
+  to {
+    transform: translateX(100%);
+  }
 }
 @keyframes h-drawer-in {
   from {

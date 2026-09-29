@@ -280,8 +280,19 @@ func (h *Handler) localPosterQuery(key string, v int64) string {
 	return "key=" + url.QueryEscape(key) + "&v=" + strconv.FormatInt(v, 10) + "&sig=" + h.localPosterSig(key)
 }
 
-// localPosterThumbW 缩略图宽度：卡片最宽 ~200px，给高分屏留两倍
-const localPosterThumbW = 400
+// localFanartQuery 背景图（片目详情的头图）。签名还是按 key 签：同一个目录里挑哪张图不涉及越权
+func (h *Handler) localFanartQuery(key string, v int64) string {
+	return h.localPosterQuery(key, v) + "&img=fanart"
+}
+
+// localPosterThumbW 缩略图宽度：卡片最宽 ~200px，给高分屏留两倍；背景图铺在详情抽屉顶部，最宽 ~760px
+const (
+	localPosterThumbW = 400
+	localFanartThumbW = 960
+)
+
+// localFanartNames 标题目录里认作背景图的文件名（小写比较）
+var localFanartNames = []string{"fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png", "landscape.jpg"}
 
 // 缩略图内存缓存（路径 + mtime → JPEG）。一张 400px 宽的 JPEG 约 30–50KB，
 // 上限几百张不到 30MB；满了整张清掉重来，比维护 LRU 简单，浏览器那头还有一周的缓存
@@ -292,7 +303,7 @@ var (
 
 const posterThumbMax = 600
 
-// LocalPoster GET /local/poster?key=&v=&sig=（公开路由）
+// LocalPoster GET /local/poster?key=&v=&sig=[&img=fanart]（公开路由）
 func (h *Handler) LocalPoster(c *gin.Context) {
 	key := strings.Trim(c.Query("key"), "/")
 	sig := c.Query("sig")
@@ -310,18 +321,22 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 		c.Status(http.StatusForbidden)
 		return
 	}
-	file, info := findLocalPoster(dir)
+	names, width := localPosterNames, localPosterThumbW
+	if c.Query("img") == "fanart" {
+		names, width = localFanartNames, localFanartThumbW
+	}
+	file, info := findLocalImage(dir, names)
 	if file == "" {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	ck := file + "|" + strconv.FormatInt(info.ModTime().UnixNano(), 10)
+	ck := file + "|" + strconv.FormatInt(info.ModTime().UnixNano(), 10) + "|" + strconv.Itoa(width)
 	posterThumbMu.Lock()
 	data := posterThumbCache[ck]
 	posterThumbMu.Unlock()
 	if data == nil {
 		var err error
-		if data, err = posterThumb(file, localPosterThumbW); err != nil {
+		if data, err = posterThumb(file, width); err != nil {
 			// 解不开（webp 之类）就原样给，浏览器自己会画
 			c.Header("Cache-Control", "private, max-age=604800")
 			c.File(file)
@@ -361,7 +376,7 @@ func underRoot(root, key string) (string, bool) {
 	return p, true
 }
 
-func findLocalPoster(dir string) (string, os.FileInfo) {
+func findLocalImage(dir string, names []string) (string, os.FileInfo) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return "", nil
@@ -372,7 +387,7 @@ func findLocalPoster(dir string) (string, os.FileInfo) {
 			byLower[strings.ToLower(d.Name())] = d
 		}
 	}
-	for _, n := range localPosterNames {
+	for _, n := range names {
 		if d, ok := byLower[n]; ok {
 			if info, err := d.Info(); err == nil && info.Size() > 0 {
 				return filepath.Join(dir, d.Name()), info

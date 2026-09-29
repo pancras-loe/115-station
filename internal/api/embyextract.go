@@ -114,6 +114,56 @@ func queueEmbyExtract(embyPaths ...string) {
 	}
 }
 
+// embyExtractRunning 正在处理的路径与正在探测的 Emby 条目 id（片目详情显示「排队中 / 探测中」用）。
+// 路径出队后要逐个探完底下的条目才算完，这期间它的其余条目仍算排队中
+var embyExtractRunning struct {
+	sync.Mutex
+	path, id string
+}
+
+func setEmbyExtractRunning(id string) {
+	embyExtractRunning.Lock()
+	embyExtractRunning.id = id
+	embyExtractRunning.Unlock()
+}
+
+func setEmbyExtractRunningPath(p string) {
+	embyExtractRunning.Lock()
+	embyExtractRunning.path = p
+	embyExtractRunning.Unlock()
+}
+
+func embyExtractRunningID() string {
+	embyExtractRunning.Lock()
+	defer embyExtractRunning.Unlock()
+	return embyExtractRunning.id
+}
+
+// embyExtractQueuedFor 队列里有没有与这条路径相关的（同一路径、它的上级或下级）。
+// 队列存的是路径不是条目：片目目录排进来时，底下每一集都算「排队中」
+func embyExtractQueuedFor(embyPath string) bool {
+	norm := func(p string) string { return strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/") }
+	want := norm(embyPath)
+	if want == "" {
+		return false
+	}
+	embyExtractRunning.Lock()
+	cur := embyExtractRunning.path
+	embyExtractRunning.Unlock()
+	if cur != "" && embyPathRelated(norm(cur), want) {
+		return true
+	}
+	q := &embyExtractQ
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, p := range q.queue {
+		if embyPathRelated(norm(p), want) {
+			return true
+		}
+	}
+	return false
+}
+
 func embyExtractPop() (string, bool) {
 	q := &embyExtractQ
 	q.mu.Lock()
@@ -153,6 +203,8 @@ func embyExtractWorker() {
 // 单条出错（含 panic）只丢这一条，worker 不能死：它只在第一次排队时拉起
 func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 	alive = true
+	setEmbyExtractRunningPath(p)
+	defer setEmbyExtractRunningPath("")
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Emby探测] ✗ 处理 %s 异常: %v", p, r)
@@ -189,7 +241,9 @@ func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 		if ok, _ := embyExtractClaim(it.ID, time.Now()); !ok {
 			continue
 		}
+		setEmbyExtractRunning(it.ID)
 		ok, errMsg := embyExtractOne(cfg, it)
+		setEmbyExtractRunning("")
 		embyExtractSettle(it.ID, ok, errMsg)
 		pause := embyExtractGap
 		if ok {
@@ -279,9 +333,28 @@ func pruneEmbyExtractMarks() {
 	model.DB.Where("last_at < ?", time.Now().AddDate(0, 0, -30)).Delete(&model.EmbyExtractMark{})
 }
 
-// embyStream PlaybackInfo / Items 返回里的一条轨道
+// embyStream PlaybackInfo / Items 返回里的一条轨道。
+// 探测只看 Type；其余字段给本地文件页的片目详情显示（localdetail.go），同一次 /Items 请求顺带解出来
 type embyStream struct {
-	Type string `json:"Type"`
+	Type              string  `json:"Type"`
+	Codec             string  `json:"Codec"`
+	Profile           string  `json:"Profile"`
+	Language          string  `json:"Language"`
+	DisplayLanguage   string  `json:"DisplayLanguage"`
+	DisplayTitle      string  `json:"DisplayTitle"`
+	Title             string  `json:"Title"`
+	Width             int     `json:"Width"`
+	Height            int     `json:"Height"`
+	BitRate           int64   `json:"BitRate"`
+	BitDepth          int     `json:"BitDepth"`
+	AverageFrameRate  float64 `json:"AverageFrameRate"`
+	VideoRange        string  `json:"VideoRange"`
+	ExtendedVideoType string  `json:"ExtendedVideoType"`
+	Channels          int     `json:"Channels"`
+	ChannelLayout     string  `json:"ChannelLayout"`
+	IsDefault         bool    `json:"IsDefault"`
+	IsForced          bool    `json:"IsForced"`
+	IsExternal        bool    `json:"IsExternal"`
 }
 
 // embyExtractItem 一个要提前探测的影视条目
@@ -293,9 +366,13 @@ type embyExtractItem struct {
 	SeriesName        string       `json:"SeriesName"`
 	IndexNumber       int          `json:"IndexNumber"`
 	ParentIndexNumber int          `json:"ParentIndexNumber"`
+	RunTimeTicks      int64        `json:"RunTimeTicks"`
 	MediaStreams      []embyStream `json:"MediaStreams"`
 	MediaSources      []struct {
 		Path         string       `json:"Path"`
+		Container    string       `json:"Container"`
+		Size         int64        `json:"Size"`
+		Bitrate      int64        `json:"Bitrate"`
 		MediaStreams []embyStream `json:"MediaStreams"`
 	} `json:"MediaSources"`
 }
@@ -352,11 +429,30 @@ func (it embyExtractItem) extractable() bool {
 // 路径可能是单个 .strm（整理落盘点名回查的就是它，条目是 Episode / Movie），
 // 也可能是片目目录（条目是 Folder / Series，要往下找）
 func embyExtractTargets(cfg embyRefreshCfg, embyPath string) ([]embyExtractItem, error) {
-	hits := embyItemsByPath(cfg, embyPath)
-	if len(hits) == 0 {
+	found, items, err := embyMediaItemsAt(cfg, embyPath)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
 		// 还没入库：刮削结束时排进来的新片目常见，入库确认那条入口会再排一次
 		vlog("[Emby探测] %s 在 Emby 里还没有条目，跳过", embyPath)
 		return nil, nil
+	}
+	var todo []embyExtractItem
+	for _, it := range items {
+		if it.ID != "" && !it.hasMediaInfo() && it.extractable() {
+			todo = append(todo, it)
+		}
+	}
+	return todo, nil
+}
+
+// embyMediaItemsAt 一条 Emby 路径下的全部影视条目（Movie / Episode / Video），带轨道信息。
+// found = 路径上有 Emby 条目（没有说明还没入库，或路径映射不对）
+func embyMediaItemsAt(cfg embyRefreshCfg, embyPath string) (found bool, items []embyExtractItem, err error) {
+	hits := embyItemsByPath(cfg, embyPath)
+	if len(hits) == 0 {
+		return false, nil, nil
 	}
 	hit := pickMediaHit(hits)
 	q := url.Values{
@@ -374,25 +470,19 @@ func embyExtractTargets(cfg embyRefreshCfg, embyPath string) ([]embyExtractItem,
 	}
 	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
 	if err != nil {
-		return nil, err
+		return true, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return true, nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var out struct {
 		Items []embyExtractItem `json:"Items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, err
+		return true, nil, err
 	}
-	var todo []embyExtractItem
-	for _, it := range out.Items {
-		if it.ID != "" && !it.hasMediaInfo() && it.extractable() {
-			todo = append(todo, it)
-		}
-	}
-	return todo, nil
+	return true, out.Items, nil
 }
 
 func embyPathBase(p string) string {

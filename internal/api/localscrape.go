@@ -655,6 +655,14 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if res.Placeholder > 0 {
 		msg += fmt.Sprintf("、占位剧照未写 %d 集", res.Placeholder)
 	}
+	if len(extract) > 0 {
+		// 探测与入库确认共用记账（embyextract.go）：说清楚不是每一集都会探，免得用户以为漏了
+		msg += fmt.Sprintf("；%d 个片目已排进 Emby 提前探测（已有媒体信息、近期请求过的条目会跳过，片目详情里可看每集状态）", len(extract))
+	} else if o.Probe && job.DedupeKey != scrapeAutoDedupe && done > 0 {
+		if _, ok := loadEmbyRefreshCfg(); !ok {
+			msg += "；没有配置 Emby，跳过提前探测"
+		}
+	}
 	if rep.n > 0 {
 		msg += fmt.Sprintf("；%d 处出错（见任务详情 / 实时日志）", rep.n)
 	}

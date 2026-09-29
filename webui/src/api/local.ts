@@ -83,7 +83,7 @@ export interface ScrapeOptions {
   force: boolean
   /** 这一次直接传进网盘；不勾时交给监控上传 */
   upload: boolean
-  /** 逐个视频 ffprobe，把轨道写进 NFO（慢） */
+  /** 刮完让 Emby 给还没有媒体信息的视频提前探测（每个一次 115 直链请求；与入库后的自动探测共用记账） */
   probe: boolean
   /** 同一季多集共用的剧照判为占位图，不写 */
   skip_shared_stills: boolean
@@ -101,3 +101,152 @@ export interface LocalScrapeBody {
 }
 
 export const scrape = (body: LocalScrapeBody) => http.post<QueuedReply>('/local/scrape', body)
+
+// ---- 片目详情（后端 internal/api/localdetail.go）----
+
+/** 片目里的一个刮削产物 */
+export interface LocalFile {
+  name: string
+  label?: string
+  exists: boolean
+  /** 缺了不算没刮全：TMDB 上不一定有这张图，集剧照还可能被判成占位图 */
+  optional?: boolean
+  size?: number
+  mod_at?: string
+}
+
+/** 片目里的一个视频 */
+export interface LocalEntry {
+  /** STRM 基名（不带 .strm） */
+  name: string
+  /** 相对标题目录（含 .strm） */
+  rel: string
+  season?: number
+  /** 剧集：0 / 缺省 = 解析不出集号，刮削跳过它 */
+  episode?: number
+  /** 网盘上的视频大小 */
+  size?: number
+  /** 网盘上已经没有这个文件（失效 STRM） */
+  orphan?: boolean
+  /** 台账有、本地 STRM 不在 */
+  strm_missing?: boolean
+  nfo: LocalFile
+  /** 只有剧集有 */
+  thumb?: LocalFile
+  subtitles?: string[]
+}
+
+export interface LocalSeason {
+  season: number
+  /** 季目录；空 = 集文件平铺或混季，不写 season.nfo */
+  dir?: string
+  nfo?: LocalFile
+  poster: LocalFile
+  videos: number
+}
+
+export interface LocalTitleDetail extends LocalTitle {
+  dir: string
+  /** 背景图查询串，用 fanartUrl() 拼 */
+  fanart?: string
+  files: LocalFile[]
+  seasons?: LocalSeason[]
+  entries: LocalEntry[]
+  summary: {
+    nfo_have: number
+    nfo_total: number
+    img_have: number
+    img_total: number
+    thumb_have: number
+    thumb_total: number
+    subtitled: number
+  }
+}
+
+export const titleDetail = (key: string) => http.get<LocalTitleDetail>('/local/titles/detail', { params: { key } })
+
+export const fanartUrl = (d: { fanart?: string }) => (d.fanart ? `/api/local/poster?${d.fanart}` : '')
+
+/**
+ * 提前探测状态：done 已有媒体信息 / none 没探测过 / queued 排队中 / running 探测中 /
+ * retry 上次失败、可以再试 / wait 近期请求过、到 retry_at 才能再试 / exhausted 次数用完 / disc 光盘结构不探测
+ */
+export type ProbeState = 'done' | 'none' | 'queued' | 'running' | 'retry' | 'wait' | 'exhausted' | 'disc'
+
+export interface EmbyTrack {
+  codec?: string
+  profile?: string
+  language?: string
+  lang_name?: string
+  display?: string
+  title?: string
+  width?: number
+  height?: number
+  bitrate?: number
+  bit_depth?: number
+  fps?: number
+  range?: string
+  channels?: number
+  layout?: string
+  default?: boolean
+  forced?: boolean
+  external?: boolean
+}
+
+export interface EmbyDetailItem {
+  id: string
+  name: string
+  type: string
+  season?: number
+  episode?: number
+  rel?: string
+  container?: string
+  size?: number
+  bitrate?: number
+  /** 秒 */
+  runtime?: number
+  video: EmbyTrack[]
+  audio: EmbyTrack[]
+  subtitles: EmbyTrack[]
+  has_info: boolean
+  probe: {
+    state: ProbeState
+    attempts?: number
+    last_at?: string
+    last_err?: string
+    retry_at?: string
+  }
+}
+
+export interface ProbeLimits {
+  max_attempts: number
+  retry_hours: number
+  break_after: number
+  break_minutes: number
+  prune_days: number
+  gap_seconds: number
+}
+
+export interface TitleEmby {
+  /** 配了 Emby 没有 */
+  configured: boolean
+  /** Emby 里有没有这个片目 */
+  found: boolean
+  error?: string
+  /** 入库后自动探测（影视刮削「轨道探测」）开着没有 */
+  auto_probe: boolean
+  limits: ProbeLimits
+  items: EmbyDetailItem[]
+  counts: Partial<Record<ProbeState, number>>
+}
+
+export const titleEmby = (key: string) => http.get<TitleEmby>('/local/titles/emby', { params: { key } })
+
+export interface ProbeReply {
+  queued: number
+  held: number
+  message: string
+}
+
+export const probeTitle = (key: string, confirm = false) =>
+  http.post<ProbeReply>('/local/titles/probe', { key, confirm })

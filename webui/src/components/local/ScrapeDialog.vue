@@ -29,6 +29,9 @@ const { message, dialog } = useFeedback()
 
 /** 开着轨道探测时，所选视频超过这个数要确认两次（与后端 localProbeConfirmVideos 一致） */
 const PROBE_CONFIRM_VIDEOS = 100
+/** 记账规则（后端 embyextract.go：embyExtractRetryAfter / embyExtractMaxAttempts） */
+const PROBE_RULE = '24 小时内请求过、或已失败 2 次'
+
 const queue = useQueueStore()
 
 const DEFAULT_OPTS: ScrapeOptions = {
@@ -197,6 +200,10 @@ async function submit() {
         >
           <HSegmented v-model="opts.probe" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
         </FieldRow>
+        <HAlert v-if="opts.probe" status="accent" class="probe-note">
+          探测记录与入库后的自动探测<b>共用</b>：已有媒体信息的不会再探；{{ PROBE_RULE }}的也会跳过，免得重复取 115 直链。
+          所以有的集没被探测是预期行为 —— 每集的状态和原因可以在片目详情的「媒体信息」里查看<template v-if="single">，也能在那里单独发起探测</template>。
+        </HAlert>
         <FieldRow label="上传到网盘" :hint="uploadHint">
           <HSwitch v-model="opts.upload" aria-label="上传到网盘" />
         </FieldRow>
@@ -246,6 +253,11 @@ async function submit() {
 .opts {
   display: flex;
   flex-direction: column;
+}
+.probe-note {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .foot-note {
   margin-right: auto;
