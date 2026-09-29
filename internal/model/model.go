@@ -220,6 +220,16 @@ type DownloadLink struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// EmbyExtractMark 请 Emby 提前探测媒体信息的记账（按 Emby 条目 id，见 api/embyextract.go）。
+// 每次探测都经 302 取一次 115 直链，所以同一个条目的尝试次数与间隔必须有硬上限，
+// 且重启后仍然有效 —— 失败 / 超时的条目绝不能每次入库确认、每次刮削都再探一遍。成功即删行
+type EmbyExtractMark struct {
+	ItemID   string    `json:"item_id" gorm:"primaryKey;size:64"`
+	Attempts int       `json:"attempts"`
+	LastAt   time.Time `json:"last_at" gorm:"index"`
+	LastErr  string    `json:"last_err" gorm:"size:255"`
+}
+
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -386,6 +396,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&DeepDeleteRecord{},
 		&RecognizeMemory{},
 		&TaskJob{},
+		&EmbyExtractMark{},
 	); err != nil {
 		return nil, err
 	}

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // ==================== Emby 提前探测（入库后让 Emby 把媒体信息提取好）====================
@@ -35,13 +37,35 @@ import (
 //   - 入库确认之后（embyVerifyIngest 查到条目的那一刻）：全局开关，整理 / 增量 / 全量进来的都算
 //   - 刮削任务结束时（execScrapeJob）：这一次任务的开关，对刮到的片目补探 —— 全库刮削即存量补全
 // 已经有媒体信息的条目一律不碰：每次探测都是一次 115 直链请求
+//
+// ⚠️ 防重复探测（2026-09-29 维护者明确要求：重复探测等于重复取 115 直链，有风控风险）。
+// 同一个条目会从好几条路进队列：整理后刮削结束一次、入库确认一次（整理刷新一次、增量再刷一次就是两次），
+// 片目目录与单集 .strm 又是两条不同的路径。只靠「已有媒体信息就跳过」挡不住失败 / 超时的条目 ——
+// 它们每来一次就会再探一次。所以另有三道闸：
+//  1. 按 Emby 条目 id 记账（EmbyExtractMark，落库，重启不丢）：发请求之前先记一次尝试，
+//     同一条目最多试 embyExtractMaxAttempts 次，两次之间至少隔 embyExtractRetryAfter，成功即删账
+//  2. 连续 embyExtractBreakAfter 个条目失败（含超时）就整体暂停 embyExtractBreakPause ——
+//     多半是 115 风控或 Emby 出了问题，再探只会火上浇油
+//  3. 整理后自动刮削不再排队（入库确认那条入口已经覆盖了它的片目），见 execScrapeJob
 
 // embyExtractGap 两次探测之间的间隔。每次探测都会经 302 取一次 115 直链，和整理、同步共用风控额度
-const embyExtractGap = 3 * time.Second
+var embyExtractGap = 3 * time.Second // var：测试里调短
 
 // embyExtractTimeout 一次 PlaybackInfo 最多等多久。远端 STRM 的 ffprobe 慢的时候要几十秒，
-// 超时不算失败：Emby 那边多半还在提取，下次入库 / 刮削时再看
+// 超时也记一次尝试、计入连续失败：Emby 那边多半还在提取，马上再发等于同一个文件被探两遍
 const embyExtractTimeout = 2 * time.Minute
+
+// embyExtractMaxAttempts 同一个 Emby 条目最多请求几次探测（含超时）；embyExtractRetryAfter 两次之间的最短间隔。
+// 超时算一次：Emby 那边多半还在探，马上再发等于同一个文件被探两遍
+const (
+	embyExtractMaxAttempts = 2
+	embyExtractRetryAfter  = 24 * time.Hour
+)
+
+// 连续失败熔断
+const embyExtractBreakAfter = 3
+
+var embyExtractBreakPause = 30 * time.Minute // var：测试里调短
 
 // embyExtractQueueMax 排队上限。全库刮削一次能排进几千个片目，积压太多说明 Emby 那边出了问题，
 // 超出的丢掉（下次刮削还会再排），免得内存里挂着一条永远跑不完的队列
@@ -114,7 +138,11 @@ func embyExtractWorker() {
 			}
 			continue
 		}
-		if !embyExtractPath(p) {
+		cfg, ok := loadEmbyRefreshCfg()
+		if !ok {
+			continue
+		}
+		if !embyExtractPath(cfg, p) {
 			return
 		}
 	}
@@ -122,31 +150,132 @@ func embyExtractWorker() {
 
 // embyExtractPath 探测一条路径下缺媒体信息的条目；返回 false 表示服务要退出了。
 // 单条出错（含 panic）只丢这一条，worker 不能死：它只在第一次排队时拉起
-func embyExtractPath(p string) (alive bool) {
+func embyExtractPath(cfg embyRefreshCfg, p string) (alive bool) {
 	alive = true
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Emby探测] ✗ 处理 %s 异常: %v", p, r)
 		}
 	}()
-	cfg, ok := loadEmbyRefreshCfg()
-	if !ok {
-		return
-	}
 	items, err := embyExtractTargets(cfg, p)
 	if err != nil {
 		vlog("[Emby探测] 查 %s 的条目失败: %v", p, err)
 		return
 	}
+	var todo []embyExtractItem
+	held := 0
 	for _, it := range items {
-		embyExtractOne(cfg, it)
+		if ok, why := embyExtractAllowed(it.ID, time.Now()); !ok {
+			held++
+			vlog("[Emby探测] 跳过 %s：%s", it.label(), why)
+			continue
+		}
+		todo = append(todo, it)
+	}
+	if len(todo) == 0 {
+		if held > 0 {
+			vlog("[Emby探测] %s：%d 个条目近期已请求过探测或已达次数上限，不重复探测", embyPathBase(p), held)
+		}
+		return
+	}
+	note := ""
+	if held > 0 {
+		note = fmt.Sprintf("（另 %d 个近期已请求过，不重复）", held)
+	}
+	log.Printf("[Emby探测] ▶ %s：%d 个条目还没有媒体信息，逐个提前探测%s", embyPathBase(p), len(todo), note)
+	for _, it := range todo {
+		// 记账在发请求之前：请求发出去就算一次，哪怕随后超时、进程被杀
+		if ok, _ := embyExtractClaim(it.ID, time.Now()); !ok {
+			continue
+		}
+		ok, errMsg := embyExtractOne(cfg, it)
+		embyExtractSettle(it.ID, ok, errMsg)
+		pause := embyExtractGap
+		if ok {
+			embyExtractFails = 0
+		} else if embyExtractFails++; embyExtractFails >= embyExtractBreakAfter {
+			log.Printf("[Emby探测] ⚠ 连续 %d 个条目探测失败，暂停 %s（可能是 115 风控或 Emby 异常），排队中的稍后继续",
+				embyExtractFails, embyExtractBreakPause)
+			embyExtractFails = 0
+			pause = embyExtractBreakPause
+		}
 		select {
 		case <-stopCh:
 			return false
-		case <-time.After(embyExtractGap):
+		case <-time.After(pause):
 		}
 	}
 	return
+}
+
+// embyExtractFails 连续失败的条目数（只有 worker 一个 goroutine 读写）
+var embyExtractFails int
+
+// ---- 按条目记账 ----
+
+func embyExtractLoad(id string) (model.EmbyExtractMark, bool) {
+	var m model.EmbyExtractMark
+	return m, model.DB.Where("item_id = ?", id).First(&m).Error == nil
+}
+
+func embyExtractStore(m model.EmbyExtractMark) {
+	if err := model.DB.Save(&m).Error; err != nil {
+		log.Printf("[Emby探测] ✗ 记账失败 %s: %v", m.ItemID, err)
+	}
+}
+
+// embyExtractAllowed 这个条目现在能不能请求探测（只看，不记账）
+func embyExtractAllowed(id string, now time.Time) (bool, string) {
+	if model.DB == nil {
+		return false, "数据库未就绪"
+	}
+	m, ok := embyExtractLoad(id)
+	if !ok {
+		return true, ""
+	}
+	if m.Attempts >= embyExtractMaxAttempts {
+		return false, fmt.Sprintf("已请求过 %d 次都没成功（上次：%s），不再自动探测", m.Attempts, m.LastErr)
+	}
+	if since := now.Sub(m.LastAt); since < embyExtractRetryAfter {
+		return false, fmt.Sprintf("%s 前刚请求过，%s 后才允许再试",
+			since.Round(time.Minute), (embyExtractRetryAfter - since).Round(time.Minute))
+	}
+	return true, ""
+}
+
+// embyExtractClaim 发请求前记一次尝试；不允许时返回 false。
+// 只有 worker 一个 goroutine 调它，查与写之间不会插进别人
+func embyExtractClaim(id string, now time.Time) (bool, string) {
+	if model.DB == nil {
+		return false, "数据库未就绪，记不了账就不探测"
+	}
+	if ok, why := embyExtractAllowed(id, now); !ok {
+		return false, why
+	}
+	m, _ := embyExtractLoad(id)
+	m.ItemID, m.Attempts, m.LastAt, m.LastErr = id, m.Attempts+1, now, "请求中"
+	embyExtractStore(m)
+	return true, ""
+}
+
+// embyExtractSettle 记下结果：成功删账（之后靠「已有媒体信息」跳过），失败留账挡住重复探测
+func embyExtractSettle(id string, ok bool, errMsg string) {
+	if ok {
+		model.DB.Where("item_id = ?", id).Delete(&model.EmbyExtractMark{})
+		return
+	}
+	if m, found := embyExtractLoad(id); found {
+		m.LastErr = truncateStr(errMsg, 200)
+		embyExtractStore(m)
+	}
+}
+
+// pruneEmbyExtractMarks 30 天前的失败记账清掉：那时候文件多半已经洗版换过，值得再给一次机会
+func pruneEmbyExtractMarks() {
+	if model.DB == nil {
+		return
+	}
+	model.DB.Where("last_at < ?", time.Now().AddDate(0, 0, -30)).Delete(&model.EmbyExtractMark{})
 }
 
 // embyStream PlaybackInfo / Items 返回里的一条轨道
@@ -262,9 +391,6 @@ func embyExtractTargets(cfg embyRefreshCfg, embyPath string) ([]embyExtractItem,
 			todo = append(todo, it)
 		}
 	}
-	if len(todo) > 0 {
-		log.Printf("[Emby探测] ▶ %s：%d 个条目还没有媒体信息，逐个提前探测", embyPathBase(embyPath), len(todo))
-	}
 	return todo, nil
 }
 
@@ -277,28 +403,28 @@ var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 
 // embyExtractOne POST /Items/{id}/PlaybackInfo，让 Emby 探测并存下这个条目的媒体信息。
 // 直接打 Emby 本身而不是本站反代：反代会拦 PlaybackInfo 做直连改写和直链预取，这里都用不上
-func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem) {
+func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem) (ok bool, errMsg string) {
 	start := time.Now()
 	q := url.Values{"api_key": {cfg.APIKey}}
 	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+"/Items/"+url.PathEscape(it.ID)+"/PlaybackInfo?"+q.Encode(), nil)
 	if err != nil {
-		return
+		return false, err.Error()
 	}
 	resp, err := embyExtractClient.Do(req)
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
-			log.Printf("[Emby探测] ○ %s：等了 %s 还没返回，Emby 可能仍在提取", it.label(), embyExtractTimeout)
-			return
+			log.Printf("[Emby探测] ○ %s：等了 %s 还没返回，Emby 可能仍在提取（不会马上重试）", it.label(), embyExtractTimeout)
+			return false, "超时"
 		}
 		log.Printf("[Emby探测] ✗ %s：请求失败 %v", it.label(), err)
-		return
+		return false, err.Error()
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		io.Copy(io.Discard, resp.Body)
 		log.Printf("[Emby探测] ✗ %s：HTTP %d", it.label(), resp.StatusCode)
-		return
+		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
 	}
 	var info struct {
 		MediaSources []struct {
@@ -314,9 +440,10 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem) {
 	if !embyStreamsComplete(streams) {
 		log.Printf("[Emby探测] ○ %s：Emby 返回了，但没提取到音视频轨道（%s）—— 看 Emby 日志里这条 STRM 的 ffprobe 报错",
 			it.label(), took)
-		return
+		return false, "没提取到音视频轨道"
 	}
 	log.Printf("[Emby探测] ✓ %s：%s（%s）", it.label(), embyStreamsBrief(streams), took)
+	return true, ""
 }
 
 // embyStreamsBrief 视频 1 · 音轨 4 · 字幕 2

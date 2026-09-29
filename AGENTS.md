@@ -387,7 +387,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       界面上的「轨道探测」（`scrape.probe_streams` / 刮削任务的 `Probe`）现在控制 **Emby 提前探测**（`embyextract.go`）：
       入库确认（`embyVerifyIngest`）后与刮削任务结束时，把路径排进单 worker 队列，对 Emby 里还缺媒体信息（视频 + 音轨不足两条，LitePan 同判据）
       的 Movie / Episode / Video 逐个 `POST /Items/{id}/PlaybackInfo`，一次一个、间隔 3 秒 —— 每次都经 302 取一次 115 直链。
-      直接打 Emby 本身，别走本站反代（会被直连改写 / 直链预取拦下）。测试 `embyextract_test.go`。
+      直接打 Emby 本身，别走本站反代（会被直连改写 / 直链预取拦下）。
+      **禁止重复探测**（维护者硬性要求，重复探测 = 重复取 115 直链）：同一条目会从多条路进队列（入库确认可能两次、
+      目录与 `.strm` 两种路径），只靠「已有媒体信息就跳过」挡不住失败 / 超时的。所以按 Emby 条目 id 落库记账（`EmbyExtractMark`）：
+      **发请求前**先记一次，同一条目最多 2 次、间隔 ≥24 小时，成功删账；连续 3 个失败熔断暂停 30 分钟；
+      整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 

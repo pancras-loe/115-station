@@ -485,8 +485,9 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
 	var wrote map[string]bool
-	// 刮到的片目交给 Emby 提前探测。defer 在刷新之前注册、因此在它之后执行；
-	// 新入库的片目 Emby 这时多半还没建条目，会被跳过 —— 它们由入库确认那条入口接手
+	// 刮到的片目交给 Emby 提前探测。defer 在刷新之前注册、因此在它之后执行。
+	// 整理后自动刮削（scrapeAutoDedupe）不排：那些片目刚入库，入库确认那条入口会排，
+	// 这里再排一次就是同一批条目进两次队列（防重复探测，见 embyextract.go 文件头）
 	var extract []string
 	defer func() {
 		if len(extract) > 0 {
@@ -589,7 +590,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		log.Printf("[影视刮削] ▶ 《%s》(%s) [tmdb=%d] %s，视频 %d 个 → %s",
 			t.Title, t.Year, t.TmdbID, map[string]string{"tv": "剧集", "movie": "电影"}[t.Kind], len(t.Videos), t.Dir.Local)
 		st := sess.scrapeTitleMeta(t)
-		if o.Probe {
+		if o.Probe && job.DedupeKey != scrapeAutoDedupe {
 			if cfg, ok := loadEmbyRefreshCfg(); ok {
 				extract = append(extract, embyPathOf(cfg, t.Dir.Local))
 			}

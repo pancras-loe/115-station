@@ -2,25 +2,39 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
-// 假 Emby：片目目录上是 Folder 条目，下面三集 —— 一集已有媒体信息、一集缺、一集是 ISO
-func fakeEmbyForExtract(t *testing.T) (*httptest.Server, *[]string) {
+// fakeExtractEmby 假 Emby：片目目录上是 Folder 条目，下面若干集。
+// probeOK=false 时 PlaybackInfo 返回 500；成功探测过的集之后列出来就带媒体信息（和真 Emby 一样）
+type fakeExtractEmby struct {
+	t       *testing.T
+	srv     *httptest.Server
+	mu      sync.Mutex
+	probeOK bool
+	eps     []string        // 缺媒体信息的集 id
+	done    map[string]bool // 已探测成功
+	calls   map[string]int  // 每个 id 的 PlaybackInfo 次数
+}
+
+func newFakeExtractEmby(t *testing.T, probeOK bool, eps ...string) *fakeExtractEmby {
 	t.Helper()
-	var mu sync.Mutex
-	var probed []string
-	stream := func(types ...string) []map[string]string {
+	f := &fakeExtractEmby{t: t, probeOK: probeOK, eps: eps, done: map[string]bool{}, calls: map[string]int{}}
+	streams := func(types ...string) []map[string]string {
 		var out []map[string]string
 		for _, ty := range types {
 			out = append(out, map[string]string{"Type": ty})
 		}
 		return out
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		q := r.URL.Query()
 		switch {
 		case r.URL.Path == "/Items" && q.Get("Path") != "":
@@ -28,49 +42,152 @@ func fakeEmbyForExtract(t *testing.T) (*httptest.Server, *[]string) {
 				{"Id": "dir1", "Name": "某剧", "Path": q.Get("Path"), "Type": "Folder"},
 			}})
 		case r.URL.Path == "/Items" && q.Get("ParentId") == "dir1":
-			if q.Get("Recursive") != "true" || q.Get("Fields") == "" {
-				t.Errorf("列子条目的参数不对: %v", q)
+			items := []map[string]any{
+				// 早就有媒体信息的：不碰
+				{"Id": "has", "Type": "Episode", "Path": "/media/某剧/S01E09.strm", "MediaStreams": streams("Video", "Audio")},
+				// 光盘结构：不碰
+				{"Id": "iso", "Type": "Episode", "Path": "/media/某剧/BD.iso.strm"},
 			}
-			json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]any{
-				{"Id": "ep1", "Type": "Episode", "SeriesName": "某剧", "ParentIndexNumber": 1, "IndexNumber": 1,
-					"Path": "/media/某剧/S01E01.strm", "MediaStreams": stream("Video", "Audio", "Subtitle")},
-				{"Id": "ep2", "Type": "Episode", "SeriesName": "某剧", "ParentIndexNumber": 1, "IndexNumber": 2,
-					"Path": "/media/某剧/S01E02.strm", "MediaStreams": stream("Subtitle")},
-				{"Id": "ep3", "Type": "Episode", "Path": "/media/某剧/BD.iso.strm"},
-			}})
-		case r.Method == http.MethodPost && r.URL.Path == "/Items/ep2/PlaybackInfo":
-			if r.URL.Query().Get("api_key") != "k" {
-				t.Errorf("PlaybackInfo 没带 api_key")
+			for i, id := range f.eps {
+				it := map[string]any{"Id": id, "Type": "Episode", "SeriesName": "某剧", "ParentIndexNumber": 1,
+					"IndexNumber": i + 1, "Path": fmt.Sprintf("/media/某剧/S01E%02d.strm", i+1)}
+				if f.done[id] {
+					it["MediaStreams"] = streams("Video", "Audio")
+				}
+				items = append(items, it)
 			}
-			mu.Lock()
-			probed = append(probed, "ep2")
-			mu.Unlock()
+			json.NewEncoder(w).Encode(map[string]any{"Items": items})
+		case r.Method == http.MethodPost && len(r.URL.Path) > len("/Items/") && r.URL.Query().Get("api_key") == "k":
+			var id string
+			fmt.Sscanf(r.URL.Path, "/Items/%s", &id)
+			id = id[:len(id)-len("/PlaybackInfo")]
+			f.calls[id]++
+			if !f.probeOK {
+				http.Error(w, "boom", http.StatusInternalServerError)
+				return
+			}
+			f.done[id] = true
 			json.NewEncoder(w).Encode(map[string]any{"MediaSources": []map[string]any{
-				{"MediaStreams": stream("Video", "Audio", "Audio", "Subtitle")},
+				{"MediaStreams": streams("Video", "Audio", "Audio", "Subtitle")},
 			}})
 		default:
 			t.Errorf("意外请求 %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
 		}
 	}))
-	t.Cleanup(srv.Close)
-	return srv, &probed
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeExtractEmby) cfg() embyRefreshCfg {
+	return embyRefreshCfg{ServerURL: f.srv.URL, APIKey: "k"}
+}
+
+func (f *fakeExtractEmby) totalCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		n += c
+	}
+	return n
+}
+
+// resetExtractState 每个测试一个新库（记账走线上同一条落库路径），间隔调到几乎为零
+func resetExtractState(t *testing.T) {
+	t.Helper()
+	newTestDB(t, "extract.db")
+	embyExtractFails = 0
+	gap, pause := embyExtractGap, embyExtractBreakPause
+	embyExtractGap, embyExtractBreakPause = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { embyExtractGap, embyExtractBreakPause = gap, pause })
 }
 
 func TestEmbyExtractTargetsOnlyMissing(t *testing.T) {
-	srv, probed := fakeEmbyForExtract(t)
-	cfg := embyRefreshCfg{ServerURL: srv.URL, APIKey: "k"}
-	items, err := embyExtractTargets(cfg, "/media/某剧")
+	f := newFakeExtractEmby(t, true, "ep1")
+	items, err := embyExtractTargets(f.cfg(), "/media/某剧")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 已有音视频的不碰、ISO 不碰，只剩缺媒体信息的那一集
-	if len(items) != 1 || items[0].ID != "ep2" || items[0].label() != "某剧 S01E02" {
-		t.Fatalf("应只挑出 ep2，得到 %+v", items)
+	if len(items) != 1 || items[0].ID != "ep1" || items[0].label() != "某剧 S01E01" {
+		t.Fatalf("应只挑出 ep1，得到 %+v", items)
 	}
-	embyExtractOne(cfg, items[0])
-	if len(*probed) != 1 {
-		t.Fatalf("应对 ep2 调一次 PlaybackInfo，实际 %v", *probed)
+}
+
+// 同一片目反复进队列（整理后刮削 + 两次入库确认 + 目录 / .strm 两种路径）：成功过的不再探
+func TestEmbyExtractSuccessNotRepeated(t *testing.T) {
+	resetExtractState(t)
+	f := newFakeExtractEmby(t, true, "ep1", "ep2")
+	for i := 0; i < 3; i++ {
+		embyExtractPath(f.cfg(), "/media/某剧")
+	}
+	if f.calls["ep1"] != 1 || f.calls["ep2"] != 1 || f.totalCalls() != 2 {
+		t.Fatalf("每集只能探一次，实际 %v", f.calls)
+	}
+	if _, ok := embyExtractLoad("ep1"); ok {
+		t.Fatal("成功后应删账")
+	}
+}
+
+// 失败 / 超时的条目：再来多少次入库确认都不能马上重探
+func TestEmbyExtractFailureNotRepeated(t *testing.T) {
+	resetExtractState(t)
+	f := newFakeExtractEmby(t, false, "ep1")
+	for i := 0; i < 5; i++ {
+		embyExtractPath(f.cfg(), "/media/某剧")
+	}
+	if f.calls["ep1"] != 1 {
+		t.Fatalf("失败的条目 24 小时内只能请求一次，实际 %d 次", f.calls["ep1"])
+	}
+	m, ok := embyExtractLoad("ep1")
+	if !ok || m.Attempts != 1 || m.LastErr != "HTTP 500" {
+		t.Fatalf("应留下失败记账：%+v", m)
+	}
+}
+
+func TestEmbyExtractLedgerWindowAndCap(t *testing.T) {
+	resetExtractState(t)
+	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.Local)
+	if ok, _ := embyExtractClaim("x", t0); !ok {
+		t.Fatal("第一次应允许")
+	}
+	embyExtractSettle("x", false, "超时")
+	if ok, _ := embyExtractClaim("x", t0.Add(time.Hour)); ok {
+		t.Fatal("24 小时内不许再试")
+	}
+	if ok, _ := embyExtractClaim("x", t0.Add(25*time.Hour)); !ok {
+		t.Fatal("过了间隔应允许第二次")
+	}
+	embyExtractSettle("x", false, "超时")
+	if ok, why := embyExtractClaim("x", t0.Add(30*24*time.Hour)); ok {
+		t.Fatal("试满两次不再自动探测")
+	} else if why == "" {
+		t.Fatal("拒绝要说明原因")
+	}
+	// 成功即删账
+	embyExtractClaim("y", t0)
+	embyExtractSettle("y", true, "")
+	if _, ok := embyExtractLoad("y"); ok {
+		t.Fatal("成功后应删账")
+	}
+}
+
+// 连续失败触发熔断暂停，暂停之后计数清零
+func TestEmbyExtractBreaker(t *testing.T) {
+	resetExtractState(t)
+	embyExtractBreakPause = 150 * time.Millisecond
+	f := newFakeExtractEmby(t, false, "a", "b", "c")
+	start := time.Now()
+	embyExtractPath(f.cfg(), "/media/某剧")
+	if f.totalCalls() != 3 {
+		t.Fatalf("三个条目各请求一次，实际 %v", f.calls)
+	}
+	if time.Since(start) < embyExtractBreakPause {
+		t.Fatal("连续 3 个失败应暂停")
+	}
+	if embyExtractFails != 0 {
+		t.Fatal("暂停后连续失败计数应清零")
 	}
 }
 
@@ -107,10 +224,5 @@ func TestQueueEmbyExtractDedupe(t *testing.T) {
 	}
 	if len(got) != 3 || got[0] != "/a" || got[1] != "/b" || got[2] != "/c" {
 		t.Fatalf("排队应去重保序，得到 %v", got)
-	}
-	// 出队后可以再排
-	queueEmbyExtract("/a")
-	if p, ok := embyExtractPop(); !ok || p != "/a" {
-		t.Fatal("出过队的路径应能再次排队")
 	}
 }
