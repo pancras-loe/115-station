@@ -101,11 +101,30 @@ onMounted(load)
 
     <HAlert status="accent" class="note">
       按 TMDB 直接生成标准 NFO + 海报到本地媒体库对应片目目录；仅在允许上传时由「监控上传」回传 115
-      —— 替代「Emby 刮削到本地」。Emby 侧建议把元数据读取器设为「仅 NFO」，以本站数据为准。
+      —— 替代「Emby 刮削到本地」。
       电影生成与视频同名的 NFO（口径与 Emby 自己刮削一致），剧集生成 tvshow.nfo、season.nfo、季海报、
       逐集同名 NFO 与集剧照。
       刮削在单独的「刮削队列」里执行，不占任务锁：几百集的剧刮半小时，整理与同步照常进行。
       进度见顶栏任务队列，逐个文件的下载地址、大小与去向见实时日志（搜「[影视刮削]」）。
+    </HAlert>
+
+    <!-- Emby 默认开着联网刮削：不关的话它照样去 TMDB 拉一遍、下一遍图，本站写的 NFO / 海报会被它的结果盖掉，流量白花 -->
+    <HAlert status="warning" class="note" title="用本站刮削时，Emby 媒体库要这样设">
+      在 Emby「媒体库 → 编辑媒体库」里（每个媒体库都要改）：
+      <ol class="emby-steps">
+        <li>元数据读取器：只勾 <b>Nfo</b></li>
+        <li>元数据下载器：<b>全部取消勾选</b></li>
+        <li>元数据存储方式：选 <b>Nfo</b></li>
+        <li>图像获取器：<b>全部取消勾选</b></li>
+        <li>关闭「保存媒体图片到媒体文件夹中」「在服务器的元数据文件夹中保留图像的缓存副本」「预先下载图像」</li>
+      </ol>
+      不改的话 Emby 会自己再联网刮一遍、再下一遍图，最终以 Emby 的结果为准，本站刮的白刮，还多耗流量。
+      <br />
+      <b>想切回 Emby 自己刮削</b>：先把上面的「整理后自动刮削」关掉，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
+      本站已写好的 NFO 与海报不会浪费：Nfo 读取器保持勾选时 Emby 先读现成的，只联网补缺；
+      媒体目录里的海报 Emby 本来就会读，不需要为此打开「保存媒体图片到媒体文件夹中」。
+      那个开关管的是 Emby <b>新下载</b>的图片写到哪 —— 要让「监控上传」把 Emby 的刮削结果回传 115 才需要打开。
+      想让 Emby 完全按自己的重刮，对媒体库「刷新元数据」并选「替换所有元数据 / 图像」。
     </HAlert>
 
     <FieldRow
@@ -163,6 +182,11 @@ onMounted(load)
 <style scoped>
 .note {
   margin-bottom: 12px;
+}
+.emby-steps {
+  margin: 6px 0;
+  padding-left: 20px;
+  list-style: decimal;
 }
 .location-link {
   margin-top: 6px;
