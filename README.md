@@ -1,8 +1,5 @@
 # 115-Station
 
-> **本项目基于 [DaisyYijin/STRMhub](https://github.com/DaisyYijin/STRMhub) 二次开发。**
-> 上游项目为原始作者所有，本仓库在其基础上做了裁剪与改动（详见[与上游的差异](#与上游的差异)）。
-
 115 网盘 → 本地 STRM → Emby/Jellyfin 直接播放的一站式自动化工具。
 
 把 115 网盘的媒体库映射为本地 STRM 文件供 Emby/Jellyfin 刮削入库，播放时通过 302 直链代理让播放器直连 115（不经过服务器转发、不消耗服务器带宽），并在一个界面里完成**同步、整理、洗版、重命名、元数据回传、消息机器人**的全部闭环。
@@ -26,93 +23,6 @@ flowchart LR
 使用问题、Bug 反馈、版本更新，都在群里聊：
 
 **[Telegram 交流群 →](https://t.me/+7b_HYMltYMozZTk1)**
-
----
-
-## 项目来源与致谢
-
-| 项目 | 地址 | 说明 |
-|---|---|---|
-| 上游（Upstream） | <https://github.com/DaisyYijin/STRMhub> | 原始项目，核心架构与绝大部分代码由其作者编写 |
-| 本仓库 | 本项目 | 在上游基础上裁剪网盘支持范围，仅保留 115 链路 |
-
-本项目的所有核心能力——STRM 同步引擎、302 直链代理、TMDB 整理流水线、洗版策略、
-Emby 元数据回传、消息机器人——均来自上游 STRMhub。
-在此向原作者 [@DaisyYijin](https://github.com/DaisyYijin) 表示感谢。
-
-如果这个工具对你有用，**请优先去上游仓库点 Star**。
-
-> **关于提交历史**：本仓库是独立新建的，不是 GitHub 意义上的 fork，**没有保留上游的
-> commit 历史**——第一个提交就包含了上游的全部代码。这意味着 `git blame` / `git log`
-> 会把上游作者写的代码归到本仓库维护者名下，这是仓库形态导致的，不是署名主张。
-> 代码作者身份以本节与上游仓库为准。
-
----
-
-## 与上游的差异
-
-本仓库相对上游 STRMhub 的改动：
-
-- **移除 123 云盘相关功能**
-- **移除夸克网盘相关功能**
-- **移除阿里云盘（阿里网盘）相关功能**
-
-对应影响：
-
-| 位置 | 变化 |
-|---|---|
-| 聚合搜索（PanSou） | 搜索结果中来自 123 / 夸克 / 阿里的链接被过滤（见 [`internal/api/pansou.go`](internal/api/pansou.go) 的 `removedCloudResource`，按 `cloud_type` 标签与链接域名双重判定，规避错误标签） |
-| 转存 / 离线 | 只接受 115 分享链接与磁力 / ed2k，其余网盘分享不再处理 |
-| 前端 | 相关入口与配置项已移除 |
-
-> **注意**：[`internal/api/upload115.go`](internal/api/upload115.go) 中出现的「阿里云 OSS」是 115 官方上传接口所使用的对象存储协议，
-> 与阿里云盘无关，属于 115 上传链路的必要组成部分，未移除。
-
-其余功能与上游保持一致。上游仍在持续更新，本仓库不保证与其同步。
-
----
-
-## 许可证与再分发声明
-
-**请在使用、分发本仓库前阅读本节。**
-
-截至本文撰写时，上游仓库 [DaisyYijin/STRMhub](https://github.com/DaisyYijin/STRMhub)
-**未附带任何开源许可证文件（LICENSE）**。
-
-根据 GitHub 服务条款与著作权法的通行规则：
-
-- 公开在 GitHub 上的代码，若**没有**声明许可证，默认为**保留所有权利（All Rights Reserved）**；
-- GitHub ToS 仅允许其他用户**查看仓库**，以及**在 GitHub 平台内 fork** 该仓库；
-- 在未获得原作者授权的情况下，**不自动获得**在 GitHub 之外修改、再分发、商用该代码的权利。
-
-因此本仓库**刻意不附带 LICENSE 文件**，也不对本项目代码作出任何开源授权声明——
-在上游未授权的前提下，下游 fork 无权替上游决定许可条款。
-
-**建议做法：**
-
-1. 向上游作者提 issue，请其补充一个明确的开源许可证（如 MIT / Apache-2.0 / AGPL-3.0）；
-2. 上游一旦补充许可证，本仓库将同步遵循该许可证，并在此处更新说明。
-
-本仓库通过 GitHub Actions 发布容器镜像到 ghcr.io 以便自部署使用。
-镜像内含上游代码，因此**同样适用上述「未声明许可证」的状况**——
-使用者请自行判断是否接受，本仓库不对镜像作出任何授权声明。
-
-如果你是上游作者并希望本仓库做出调整（补充署名、变更措辞或下架），请提 issue，我会配合处理。
-
-### 第三方组件
-
-本项目（含上游代码）依赖以下第三方组件。**它们的许可证义务独立于上游的授权状况**——
-本仓库不给自己的代码发许可证，但这些组件要求的版权声明与许可证副本必须随附，
-全文见 [`licenses/`](licenses/)，逐项说明见 **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)**。
-
-| 组件 | 用途 | 许可证 |
-|---|---|---|
-| Go 依赖（见 [`go.mod`](go.mod)） | Gin、GORM、115driver、jwt 等 | 各依赖自有许可证 |
-| [CodeMirror 5](https://codemirror.net/5/)（旧前端曾使用，现已移除） | YAML 配置编辑器 | MIT |
-| 霞鹜文楷 LXGW WenKai（`internal/api/assets/`） | 媒体库海报 A、B、G、I 字体 | SIL OFL 1.1 |
-| 得意黑 Smiley Sans（`internal/api/assets/`） | 媒体库海报 C、D、F、H 字体 | SIL OFL 1.1 |
-| 站酷小薇体 ZCOOL XiaoWei（`internal/api/assets/`） | 媒体库海报 E 字体 | SIL OFL 1.1 |
-| FFmpeg（运行镜像内） | 媒体信息探测 | LGPL / GPL（Alpine 包） |
 
 ---
 
@@ -298,8 +208,25 @@ go build ./... && go vet ./... && go test ./... -count=1
 - STRM 目录（`/media`）需要 Emby 同时挂载，路径不一致时在 EMBY 配置里设置路径映射（`本地路径#Emby路径`）
 - 容器停止请给足优雅退出窗口（`stop_grace_period: 20s`），否则可能留下「115 已搬移、台账未写」的中间态
 
+## 许可证与再分发声明
+
+本项目基于 [DaisyYijin/STRMhub](https://github.com/DaisyYijin/STRMhub) 的代码开发，该代码未附带开源许可证，
+按 GitHub 服务条款与著作权法的通行规则默认为「保留所有权利」。因此本仓库**不附带 LICENSE 文件，
+也不作任何开源授权声明**；ghcr 上的镜像同样适用这一状况，使用者请自行判断是否接受。
+
+第三方组件的许可证义务独立于上述状况，所需的版权声明与许可证副本见 [`licenses/`](licenses/)
+与 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
+
 ## 免责声明
 
 本项目仅供个人学习与技术研究使用。使用者需自行承担因使用本项目产生的一切后果，
 包括但不限于账号风控、数据丢失、服务中断。请遵守 115 网盘及各资源站的用户协议与当地法律法规，
 不要用于任何侵犯他人著作权的用途。
+
+---
+
+## 请作者喝咖啡
+
+如果这个工具帮到了你，欢迎扫码请作者喝杯咖啡 ☕
+
+<img src="assets/reward-qrcode.png" alt="微信赞赏码" width="240">
