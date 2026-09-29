@@ -72,9 +72,6 @@ type scrapeHint struct {
 	TmdbID int    `json:"tmdb_id"`
 }
 
-// localScrapeMax 一次最多刮多少部
-const localScrapeMax = 500
-
 // localProbeConfirmVideos 开着 Emby 提前探测时，所选视频总数超过它就要用户确认（两次）
 const localProbeConfirmVideos = 100
 
@@ -99,9 +96,6 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 	switch {
 	case len(keys) == 0:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有选择片目"})
-		return
-	case len(keys) > localScrapeMax:
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多刮削 %d 部，请分批选择", localScrapeMax)})
 		return
 	case req.Scrape == nil || (!req.Scrape.WriteNFO && !req.Scrape.WriteImages):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "NFO 与图片至少要生成一项"})

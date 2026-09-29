@@ -68,7 +68,7 @@ const embyExtractBreakAfter = 3
 
 var embyExtractBreakPause = 30 * time.Minute // var：测试里调短
 
-// embyExtractQueueMax 排队上限。一次手动刮削最多 500 部，积压太多说明 Emby 那边出了问题，
+// embyExtractQueueMax 排队上限。积压太多说明 Emby 那边出了问题（或一次勾了整库刮削），
 // 超出的丢掉（下次刮削还会再排），免得内存里挂着一条永远跑不完的队列
 const embyExtractQueueMax = 5000
 
