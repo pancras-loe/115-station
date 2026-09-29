@@ -82,9 +82,18 @@ var (
 type proxyBucket struct {
 	tokens float64
 	last   time.Time
+	// 限流原本不打日志，2026-09-29 Emby 提前探测被它拦下，ffprobe 只报 429 + moov atom not found，
+	// 本站日志一片 ✓，查了半天。每个 IP 每分钟最多记一行，附上这一分钟拦了几次
+	warnAt  time.Time
+	dropped int
 }
 
 func proxyRateAllow(ip string) bool {
+	// 自家 Emby 免限流：探测一条 mp4（moov 在尾部）要回来换好几次直链，所有探测和播放又共用 Emby 这一个 IP，
+	// 探测间隔 3 秒时十来条就把额度耗光（2026-09-29 现场：从 E14 起全 429，连续失败触发熔断）
+	if proxyIsEmbyServer(ip) {
+		return true
+	}
 	proxyRateMu.Lock()
 	defer proxyRateMu.Unlock()
 	now := time.Now()
@@ -110,6 +119,12 @@ func proxyRateAllow(ip string) bool {
 		b.last = now
 	}
 	if b.tokens < 1 {
+		b.dropped++
+		if now.Sub(b.warnAt) >= time.Minute {
+			log.Printf("[播放] ✗ %s 换直链太频繁，已限流（每分钟 20 次，自上次提示拦下 %d 次）；若这是 Emby，核对本站 Emby 设置里的服务器地址是否解析到这个 IP（它免限流）",
+				ip, b.dropped)
+			b.warnAt, b.dropped = now, 0
+		}
 		return false
 	}
 	b.tokens--
