@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import {
-  ChevronDown,
   Clapperboard,
   ExternalLink,
   FileText,
   Image as ImageIcon,
   Images,
   Radar,
-  RefreshCw,
   Search,
   Sparkles,
   Tv,
@@ -18,7 +16,6 @@ import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HDrawer from '@/components/hero/HDrawer.vue'
-import HDropdown from '@/components/hero/HDropdown.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import DetailFiles from './DetailFiles.vue'
@@ -36,7 +33,7 @@ import { relTime, fullTime } from '@/utils/time'
  */
 const props = defineProps<{ titleKey: string | null }>()
 const show = defineModel<boolean>('show', { required: true })
-const emit = defineEmits<{ scrape: [t: LocalTitle, preset: 'auto' | 'force' | 'pick'] }>()
+const emit = defineEmits<{ scrape: [t: LocalTitle, preset: 'auto' | 'pick'] }>()
 
 const queue = useQueueStore()
 
@@ -195,12 +192,7 @@ const tabs = computed(() => [
   { value: 'emby' as const, label: '媒体信息', count: embyBadge.value, countTone: 'warning' as const },
 ])
 
-const MENU = [
-  { key: 'force', label: '强制重刮', icon: RefreshCw },
-  { key: 'pick', label: '改指定 TMDB 条目', icon: Search },
-]
-
-function scrape(preset: 'auto' | 'force' | 'pick') {
+function scrape(preset: 'auto' | 'pick') {
   if (d.value) emit('scrape', d.value, preset)
 }
 function onStat(key: string) {
@@ -240,9 +232,7 @@ function onStat(key: string) {
               </div>
               <div class="hero-actions">
                 <HButton variant="primary" size="sm" @click="scrape('auto')"><Images :size="14" />刮削</HButton>
-                <HDropdown :options="MENU" align="start" @select="(k) => scrape(k as 'force' | 'pick')">
-                  <HButton variant="secondary" size="sm">更多<ChevronDown :size="14" /></HButton>
-                </HDropdown>
+                <HButton variant="secondary" size="sm" @click="scrape('pick')"><Search :size="14" />改指定 TMDB 条目</HButton>
               </div>
             </template>
             <template v-else-if="loading">

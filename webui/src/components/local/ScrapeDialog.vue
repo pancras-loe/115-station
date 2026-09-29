@@ -20,9 +20,9 @@ import { useQueueStore } from '@/stores/queue'
  * 「上传到网盘」默认关：不勾时只写本地，回不回传网盘照常由「监控上传」决定；
  * 勾了就这一次当场传进网盘对应目录（不看监控上传开关）。
  *
- * preset：卡片菜单的「强制重刮」「改指定 TMDB」直接把弹窗开在对应的选项上。
+ * preset：卡片菜单的「改指定 TMDB」直接把弹窗开在对应的选项上（连带打开强制覆盖）。
  */
-const props = defineProps<{ targets: LocalTitle[]; preset?: 'auto' | 'force' | 'pick' }>()
+const props = defineProps<{ targets: LocalTitle[]; preset?: 'auto' | 'pick' }>()
 const show = defineModel<boolean>('show', { required: true })
 
 const { message, dialog } = useFeedback()
@@ -79,7 +79,7 @@ watch(show, async (v) => {
   } catch {
     saved.value = { ...DEFAULT_OPTS }
   } finally {
-    opts.value = { ...saved.value, force: saved.value.force || props.preset === 'force' || props.preset === 'pick' }
+    opts.value = { ...saved.value, force: saved.value.force || props.preset === 'pick' }
     loading.value = false
   }
 })

@@ -259,10 +259,10 @@ function closeDetail() {
 // ---- 刮削 ----
 
 const dialogTargets = ref<LocalTitle[]>([])
-const dialogPreset = ref<'auto' | 'force' | 'pick'>('auto')
+const dialogPreset = ref<'auto' | 'pick'>('auto')
 const showScrape = ref(false)
 
-function openScrape(list: LocalTitle[], preset: 'auto' | 'force' | 'pick' = 'auto') {
+function openScrape(list: LocalTitle[], preset: 'auto' | 'pick' = 'auto') {
   if (!list.length) return
   dialogTargets.value = list
   dialogPreset.value = preset
@@ -272,13 +272,12 @@ function openScrape(list: LocalTitle[], preset: 'auto' | 'force' | 'pick' = 'aut
 const CARD_MENU = [
   { key: 'detail', label: '查看详情', icon: Info },
   { key: 'auto', label: '刮削', icon: Images },
-  { key: 'force', label: '强制重刮', icon: RefreshCw },
   { key: 'pick', label: '改指定 TMDB 条目', icon: Search },
 ]
 
 function onCardAction(t: LocalTitle, key: string) {
   if (key === 'detail') openDetail(t)
-  else openScrape([t], key as 'auto' | 'force' | 'pick')
+  else openScrape([t], key as 'auto' | 'pick')
 }
 
 function onPosterError(e: Event) {
