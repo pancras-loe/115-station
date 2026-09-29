@@ -25,7 +25,7 @@ package api
 //   {disc_num}          盘号
 //   {season_name}       季名（TMDB 季信息，可能为空）
 //   {season_year}       季年份（可能为空）
-//   {episode_name}      集名（TMDB 集信息，可能为空）
+//   {episode_name}      集名（TMDB 集信息，可能为空；双集文件两集用 & 连接）
 //   {custom_regex_match} 自定义正则匹配结果
 //
 // 支持块语法：{变量非空则输出}，如 {first_letter}/{title} ({year}) [{tmdb_id}]
@@ -33,8 +33,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
+
+	"115-station/internal/model"
 )
 
 // RenameContext 重命名上下文（包含模板引擎需要的全部数据）
@@ -67,6 +72,10 @@ func buildRenameContext(media *TmdbMedia, parsed *ParsedName, originalName strin
 func (ctx *RenameContext) ApplyTemplate(template string) string {
 	result := template
 
+	// 集名要打一次 TMDB，只有模板真的用到才去取（默认模板不用）
+	if strings.Contains(template, "{episode_name") {
+		ctx.fillEpisodeName()
+	}
 	replacements := ctx.allReplacements()
 	addExpressionReplacements(template, replacements)
 
@@ -250,6 +259,70 @@ func (ctx *RenameContext) seasonEpisode() string {
 		return fmt.Sprintf("S%02d", ctx.Parsed.Season)
 	}
 	return ""
+}
+
+// episodeNameLookup 取某一集的 TMDB 集名，取不到返回空。包级变量是给测试换假数据用的
+var episodeNameLookup = tmdbEpisodeName
+
+// 集名最长保留多少个字：115 文件名有长度上限，片名 + 画质串 + 两集集名很容易顶到
+const episodeNameMaxRunes = 60
+
+// reEpisodePlaceholderName TMDB 没有译名时回的占位集名（第 1 集 / Episode 1），写进文件名没有信息量
+var reEpisodePlaceholderName = regexp.MustCompile(`(?i)^\s*(?:第\s*\d+\s*[集话話]|Episode\s*\d+|EP?\s*\d+)\s*$`)
+
+// fillEpisodeName 按解析出的季集号填 {episode_name}。双集文件两集的名字用 & 连起来
+// （/ 在文件名里不合法）；某一集没有像样的集名就只留有的那个
+func (ctx *RenameContext) fillEpisodeName() {
+	m, p := ctx.Media, ctx.Parsed
+	if ctx.EpisodeName != "" || m == nil || p == nil || m.MediaType != "tv" || m.TmdbID <= 0 || p.Episode <= 0 {
+		return
+	}
+	var names []string
+	for _, e := range p.episodeList() {
+		if n := strings.TrimSpace(episodeNameLookup(m.TmdbID, p.Season, e)); n != "" && !reEpisodePlaceholderName.MatchString(n) {
+			names = append(names, n)
+		}
+	}
+	name := strings.Join(names, " & ")
+	if r := []rune(name); len(r) > episodeNameMaxRunes {
+		name = strings.TrimSpace(string(r[:episodeNameMaxRunes]))
+	}
+	ctx.EpisodeName = name
+}
+
+// 集名查询失败的季记一会儿：tmdbSeasonEpisodes 失败不缓存，一季几十集挨个撞超时会把整理拖住
+var (
+	episodeNameFailMu sync.Mutex
+	episodeNameFail   = map[string]time.Time{}
+)
+
+const episodeNameFailTTL = 5 * time.Minute
+
+// tmdbEpisodeName 集名走刮削同一份季集缓存（6 小时），同一季只请求一次
+func tmdbEpisodeName(tvID, season, ep int) string {
+	if model.DB == nil {
+		return ""
+	}
+	key := fmt.Sprintf("%d:%d", tvID, season)
+	episodeNameFailMu.Lock()
+	failedAt, failed := episodeNameFail[key]
+	episodeNameFailMu.Unlock()
+	if failed && time.Since(failedAt) < episodeNameFailTTL {
+		return ""
+	}
+	tc, err := loadTmdbClient()
+	if err != nil {
+		return ""
+	}
+	eps, _, err := tc.tmdbSeasonEpisodes(tvID, season)
+	if err != nil {
+		episodeNameFailMu.Lock()
+		episodeNameFail[key] = time.Now()
+		episodeNameFailMu.Unlock()
+		log.Printf("[重命名] ✗ 取 TMDB 集名失败 tv=%d 第 %d 季: %v（{episode_name} 留空）", tvID, season, err)
+		return ""
+	}
+	return eps[ep].Name
 }
 
 // LoadRenameTemplates 从配置加载重命名模板（yaml 优先，DB 回退）

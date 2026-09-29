@@ -111,3 +111,39 @@ func TestRemapAbsEpisodesPair(t *testing.T) {
 		t.Fatalf("S07E165-166 应换成 E21-E22，得到 E%d-E%d", p.Episode, p.EpisodeEnd)
 	}
 }
+
+func TestEpisodeNameFromTMDB(t *testing.T) {
+	names := map[int]string{1: "逃出生天", 2: "第 2 集", 3: "非法/字符?"}
+	calls := 0
+	old := episodeNameLookup
+	episodeNameLookup = func(tvID, season, ep int) string {
+		calls++
+		if tvID != 2288 || season != 4 {
+			return ""
+		}
+		return names[ep]
+	}
+	defer func() { episodeNameLookup = old }()
+	media := &TmdbMedia{Title: "越狱", MediaType: "tv", TmdbID: 2288}
+	tpl := "{title}.{season_episode}<.{episode_name}>{ext}"
+
+	if got := buildRenameContext(media, parseFileName("Prison.Break.S04E01.mkv"), "Prison.Break.S04E01.mkv").ApplyTemplate(tpl); got != "越狱.S04E01.逃出生天.mkv" {
+		t.Errorf("单集得到 %q", got)
+	}
+	// 第 2 集是 TMDB 占位名，只留第 1 集的
+	if got := buildRenameContext(media, parseFileName("Prison.Break.S04E01-02.mkv"), "Prison.Break.S04E01-02.mkv").ApplyTemplate(tpl); got != "越狱.S04E01-E02.逃出生天.mkv" {
+		t.Errorf("双集得到 %q", got)
+	}
+	if got := buildRenameContext(media, parseFileName("Prison.Break.S04E02.mkv"), "Prison.Break.S04E02.mkv").ApplyTemplate(tpl); got != "越狱.S04E02.mkv" {
+		t.Errorf("占位集名应当留空，得到 %q", got)
+	}
+	if got := buildRenameContext(media, parseFileName("Prison.Break.S04E03.mkv"), "Prison.Break.S04E03.mkv").ApplyTemplate(tpl); strings.ContainsAny(got, "/?") {
+		t.Errorf("集名里的非法字符要清掉，得到 %q", got)
+	}
+	// 模板没用到集名就不查 TMDB
+	calls = 0
+	buildRenameContext(media, parseFileName("Prison.Break.S04E01.mkv"), "x.mkv").ApplyTemplate("{title}.{season_episode}{ext}")
+	if calls != 0 {
+		t.Errorf("模板不含 {episode_name} 却查了 %d 次", calls)
+	}
+}
