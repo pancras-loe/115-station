@@ -2,36 +2,39 @@
 import { ref } from 'vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import { Check, Copy } from '@lucide/vue'
+import { copyText } from '@/utils/clipboard'
 
 defineProps<{ value: string; tone?: 'primary' | 'success' }>()
 
 const copied = ref(false)
+const failed = ref(false)
+const codeEl = ref<HTMLElement>()
 
 async function copy(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    // 非 HTTPS 环境下 clipboard API 不可用（本项目常见的明文 HTTP 部署），
-    // 回退到选中文本，用户按 Ctrl+C
-    const sel = window.getSelection()
-    const range = document.createRange()
-    const el = document.getElementById('copybox-' + text.length)
-    if (el) {
-      range.selectNodeContents(el)
-      sel?.removeAllRanges()
-      sel?.addRange(range)
-    }
+  if (await copyText(text)) {
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1600)
     return
   }
-  copied.value = true
-  setTimeout(() => (copied.value = false), 1600)
+  // 两种写法都失败：选中文本让用户按 Ctrl+C。用模板 ref 定位，
+  // 原来按「值长度」拼 id，同页两个等长的值会选错框
+  const el = codeEl.value
+  if (el) {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+  failed.value = true
+  setTimeout(() => (failed.value = false), 2400)
 }
 </script>
 
 <template>
   <div class="box" :class="tone">
-    <code :id="'copybox-' + value.length">{{ value }}</code>
-    <HTooltip :content="copied ? '已复制' : '复制'">
+    <code ref="codeEl">{{ value }}</code>
+    <HTooltip :content="copied ? '已复制' : failed ? '已选中，按 Ctrl+C 复制' : '复制'">
       <button class="copy" :aria-label="copied ? '已复制' : '复制'" @click="copy(value)">
         <Check v-if="copied" :size="14" />
         <Copy v-else :size="14" />

@@ -6,6 +6,7 @@
 import { computed, ref } from 'vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import { Check, Copy, ExternalLink } from '@lucide/vue'
+import { copyText } from '@/utils/clipboard'
 
 const props = defineProps<{ link: string; kind?: string }>()
 
@@ -35,12 +36,11 @@ const openable = computed(() => ['http', 'share'].includes(kindOf.value))
 
 const copied = ref(false)
 async function copy() {
-  try {
-    await navigator.clipboard.writeText(props.link)
+  if (await copyText(props.link)) {
     copied.value = true
     setTimeout(() => (copied.value = false), 1600)
-  } catch {
-    // 明文 HTTP 部署下 clipboard API 不可用：提示用户手动选中
+  } else {
+    // 两种写法都失败：弹框让用户手动复制
     window.prompt('复制下面的链接', props.link)
   }
 }
