@@ -634,9 +634,12 @@ func embyPathOf(cfg embyRefreshCfg, local string) string {
 // 这是删除链路上唯一「立刻生效」的手段：刷新只是排队等 Emby 扫，
 // 实测能拖到 9 分钟，这期间条目还在库里挂着，点进去播放 404。
 //
-// 安全护栏只有一条，但够用：**本地路径必须确实已经不存在**。
-// Emby 的 DELETE /Items/{Id} 连带删磁盘文件，所以绝不能对还活着的路径动手；
-// 而走到这里的路径都是本站自己刚删掉的，再 Stat 一次确认没了才发请求。
+// Emby 的 DELETE /Items/{Id} 连带删磁盘文件，护栏有两条：
+//  1. **本地路径必须确实已经不存在**：走到这里的路径都是本站自己刚删掉的，
+//     再 Stat 一次确认没了才发请求；
+//  2. **文件型条目所在的目录必须已经空了**：独占目录的影片 Emby 删的是整个目录，
+//     目录里还有新写的 STRM / NFO 就会被一起删掉（见循环里的说明）。
+//
 // 条目路径也要与映射后的路径【完全相等】才算命中（embyItemIDByPath 里比的）
 func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, localPaths []string) []string {
 	root := filepath.Clean(localMediaRoot())
@@ -671,6 +674,17 @@ func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, loca
 			rest = append(rest, local)
 			continue
 		}
+		// ⚠️ 第二道护栏：Emby 删文件型条目（Movie / Episode / Video）时，影片若独占一个目录，
+		// 删的是**整个目录**而不只是那个文件。2026-09-29 现场：重新整理原地改名，
+		// 先写好新名 STRM、再删旧名 STRM 并通知 Emby 删旧条目，Emby 把影片目录连同
+		// 新 STRM 一起删了，紧跟着的刮削报「目录里已经没有 STRM」。洗版在同目录里让位、
+		// 网盘上给某一集改名都是同一个形态。所以所在目录还有别的东西时一律不删条目，
+		// 交给刷新 —— 慢几分钟好过删掉用户的文件。目录条目（被删的是整个目录）不受影响
+		if embyHitsHaveFile(hits) && dirHasEntries(filepath.Dir(local)) {
+			log.Printf("[Emby] ○ %s 所在目录还有其他文件，不删条目（Emby 会连目录一起删），改为刷新", ep)
+			rest = append(rest, local)
+			continue
+		}
 		done := true
 		for _, hit := range hits {
 			if !embyDeleteItem(cfg, hit.ID) {
@@ -684,6 +698,27 @@ func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, loca
 		}
 	}
 	return rest
+}
+
+// embyHitsHaveFile 命中的条目里有没有文件型的（目录型条目删的就是那个已经不在的目录）
+func embyHitsHaveFile(hits []embyItemHit) bool {
+	for _, h := range hits {
+		switch strings.ToLower(strings.TrimSpace(h.Type)) {
+		case "folder", "series", "season", "boxset", "collectionfolder":
+		default:
+			return true // 类型不认识按文件算：宁可退回刷新
+		}
+	}
+	return false
+}
+
+// dirHasEntries 目录里还有没有东西。读不了按「有」算（保守：不删条目）
+func dirHasEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return !os.IsNotExist(err)
+	}
+	return len(entries) > 0
 }
 
 // embyDeleteItem DELETE /Items/{Id}。

@@ -609,6 +609,41 @@ func TestNotifyEmbyDeletedNeverDeletesLivingPath(t *testing.T) {
 	}
 }
 
+// 重新整理原地改名：旧名 STRM 删了，但同目录里已经写好了新名 STRM。
+// Emby 删独占目录的影片会连目录一起删，所以这时绝不能删条目，只能刷新（2026-09-29 史酷比2）
+func TestNotifyEmbyDeletedKeepsSiblings(t *testing.T) {
+	root := t.TempDir()
+	f := newFakeEmby(t, []string{filepath.ToSlash(root)}, true)
+	f.deleteOK = true
+	setupEmbyRefreshCfg(t, f.srv.URL, root)
+
+	dir := filepath.Join(root, "电影", "史酷比2.2004.{tmdbid=11024}")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "新名.strm"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	notifyEmbyDeleted(filepath.Join(dir, "旧名.strm"))
+
+	if len(f.deleted) != 0 {
+		t.Fatalf("同目录还有文件时不该删条目: %v", f.deleted)
+	}
+	if !f.sawHit("POST /Items/item9/Refresh") && !f.sawHit("POST /Items/lib1/Refresh") {
+		t.Fatalf("不删条目就该退回刷新: %v", f.hits)
+	}
+
+	// 目录已经空了：删条目不会误伤任何东西，照常直接删
+	if err := os.Remove(filepath.Join(dir, "新名.strm")); err != nil {
+		t.Fatal(err)
+	}
+	notifyEmbyDeleted(filepath.Join(dir, "旧名.strm"))
+	if len(f.deleted) != 1 {
+		t.Fatalf("目录空了应当直接删条目: %v", f.deleted)
+	}
+}
+
 // 挂载掉线：整个库的路径都会「不存在」，这时候一个删除请求都不许发
 func TestNotifyEmbyDeletedNeverDeletesWhenRootGone(t *testing.T) {
 	root := t.TempDir()

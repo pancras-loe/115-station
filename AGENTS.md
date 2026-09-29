@@ -265,6 +265,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 
     历史设计与 Emby 真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md`，其中旧定时扫描设计已被上述流程替代。
 
+    另：本站删本地 STRM 后通知 Emby 用的 `embyDeleteItems`（`DELETE /Items/{Id}`）**同样会删盘上的文件**，
+    而且对独占目录的影片删的是整个目录。护栏两条：被删路径确实不存在；文件型条目所在目录已经空了
+    （`dirHasEntries`）。2026-09-29 重新整理原地改名，Emby 把刚写好的新名 STRM 连目录一起删了，就是缺了后一条。
+
 11. **数「有几部」时 Emby 的 `/Items` 必须带 `IncludeItemTypes`**（`dashboard.go` 的 `embyCountTypes`）：
     `/Items?ParentId=..&Recursive=true` 不带类型过滤时，`TotalRecordCount` 把子树里**所有**条目都算上——
     每部影片自己那层目录（`Type=Folder`）也是一条，「一部影片一个目录」的电影库正好翻倍
