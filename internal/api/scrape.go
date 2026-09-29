@@ -14,7 +14,7 @@ package api
 // 一次全库就是成千上万次 115 直链请求）。执行器只有一个（localscrape.go 的 execScrapeJob），核心在 scrapecore.go。
 // 刮削队列不拿 taskMu（taskqueue.go），几百集的综艺刮半小时也不挡整理与同步。
 //
-// 接口：GET/POST /scrape/config、GET /scrape/status、POST /scrape/stop
+// 接口：GET/POST /scrape/config、GET /scrape/status
 
 import (
 	"bytes"
@@ -350,28 +350,6 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 func (h *Handler) ScrapeStatus(c *gin.Context) {
 	running, progress := scrapeLaneStatus()
 	c.JSON(http.StatusOK, gin.H{"running": running, "progress": progress})
-}
-
-// ScrapeStop POST /scrape/stop → 停掉正在跑的刮削（当前文件写完即退出），
-// 并取消排着的整理后刮削。本地文件页手动提交的留着：那是用户点名要刮的，要取消去任务队列
-func (h *Handler) ScrapeStop(c *gin.Context) {
-	stopped := false
-	if id, _ := scrapeLane.current(); id != 0 {
-		stopped = scrapeLane.requestStop(id)
-	}
-	res := h.DB.Model(&model.TaskJob{}).
-		Where("kind = ? AND status = ? AND priority = ?", jobKindScrape, jobQueued, jobPriorityBackground).
-		Updates(map[string]interface{}{"status": jobCanceled, "message": "已取消（未执行）", "finished_at": time.Now()})
-	msg := "没有正在进行的刮削"
-	switch {
-	case stopped && res.RowsAffected > 0:
-		msg = fmt.Sprintf("已请求停止，当前文件写完即退出；另取消了 %d 个排队中的刮削", res.RowsAffected)
-	case stopped:
-		msg = "已请求停止，当前文件写完即退出"
-	case res.RowsAffected > 0:
-		msg = fmt.Sprintf("已取消 %d 个排队中的刮削", res.RowsAffected)
-	}
-	c.JSON(http.StatusOK, gin.H{"message": msg})
 }
 
 func onOff(b bool) string {

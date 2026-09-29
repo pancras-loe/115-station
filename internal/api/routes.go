@@ -368,7 +368,6 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/scrape/config", h.ScrapeGetConfig)
 		protected.POST("/scrape/config", h.ScrapeSaveConfig)
 		protected.GET("/scrape/status", h.ScrapeStatus)
-		protected.POST("/scrape/stop", h.ScrapeStop)
 
 		// 影视转存 · 木咖（不太灵系影视库，搜索匿名/资源需 VIP token）
 		protected.GET("/mukaku/config", h.MukakuGetConfig)

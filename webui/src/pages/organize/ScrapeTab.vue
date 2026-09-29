@@ -15,13 +15,11 @@ import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import type { ScrapeConfig } from '@/api/organize'
 import { toastError, useFeedback } from '@/composables/useFeedback'
-import { useQueueStore } from '@/stores/queue'
 
 const { message } = useFeedback()
 const router = useRouter()
 const media = useFullSetting()
 const monitor = useSetting('monitor', { enabled: false })
-const queue = useQueueStore()
 
 const cfg = ref<ScrapeConfig>({
   local_root: '',
@@ -67,16 +65,6 @@ async function save() {
     toastError(e, '保存失败')
   } finally {
     saving.value = false
-  }
-}
-
-async function stop() {
-  try {
-    const d = await organizeApi.stopScrape()
-    message.success(d.message || '已请求停止')
-    await queue.submitted()
-  } catch (e) {
-    toastError(e, '停止失败')
   }
 }
 
@@ -168,9 +156,7 @@ onMounted(load)
     </HAlert>
 
     <FormActions>
-      <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
-      <HButton variant="tertiary" @click="stop">停止当前刮削</HButton>
-    </FormActions>
+      <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>    </FormActions>
   </SectionCard>
 </template>
 
