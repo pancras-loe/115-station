@@ -8,7 +8,7 @@ import HPopover from '@/components/hero/HPopover.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import { useQueueStore } from '@/stores/queue'
 import type { TaskJob } from '@/api/tasks'
-import { JOB_STATUS, dur, elapsed, pct, retryable, subProgressText } from '@/utils/jobStatus'
+import { JOB_STATUS, dur, elapsed, laneText, pct, retryable, subProgressText } from '@/utils/jobStatus'
 
 /**
  * 顶栏的任务队列入口：图标 + 角标（执行中 + 排队数），点开看执行中 / 排队中 / 最近结束。
@@ -28,7 +28,7 @@ const runningJobs = computed(() => queue.jobs.filter((j) => j.status === 'runnin
  * 主队列上正在跑的（拿着任务锁的）。刮削单独一条队列、不拿锁（taskqueue.go），
  * 它在跑不代表锁被队列任务占着：「正在等谁」「后台任务」两行只看主队列
  */
-const runningMain = computed(() => runningJobs.value.filter((j) => j.kind !== 'scrape'))
+const runningMain = computed(() => runningJobs.value.filter((j) => j.kind !== 'scrape' && j.kind !== 'probe'))
 const queuedJobs = computed(() => queue.jobs.filter((j) => j.status === 'queued'))
 const doneJobs = computed(() => queue.finished.slice(0, 20))
 
@@ -140,10 +140,10 @@ const background = computed(() => {
             </template>
 
             <p v-else-if="j.status === 'queued'" class="qp-sub">
-              {{ j.kind === 'scrape' ? '刮削队列' : '' }}第 {{ j.position }} 位
+              {{ laneText(j.kind) }}第 {{ j.position }} 位
               <span v-if="j.priority !== 0" class="qp-dim"> · 后台任务，手动提交的会排在它前面</span>
               <span v-if="(j.eta_sec ?? 0) >= 60"> · 预计约 {{ Math.round((j.eta_sec ?? 0) / 60) }} 分钟内跑完</span>
-              <span v-if="j.position === 1 && j.kind !== 'scrape' && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
+              <span v-if="j.position === 1 && !laneText(j.kind) && waitingFor" class="qp-dim"> · 正在等 {{ waitingFor }}</span>
             </p>
 
             <p

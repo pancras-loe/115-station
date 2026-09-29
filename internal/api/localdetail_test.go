@@ -122,36 +122,47 @@ func TestEmbyProbeStateOf(t *testing.T) {
 	mark := func(n int, ago time.Duration) *model.EmbyExtractMark {
 		return &model.EmbyExtractMark{ItemID: "x", Attempts: n, LastAt: now.Add(-ago), LastErr: "超时"}
 	}
+	const (
+		no  = probeQueuedNone
+		au  = probeQueuedAuto
+		man = probeQueuedManual
+	)
 	cases := []struct {
-		name            string
-		info, extract   bool
-		m               *model.EmbyExtractMark
-		queued, running bool
-		want            string
+		name          string
+		info, extract bool
+		m             *model.EmbyExtractMark
+		queue         string
+		running       bool
+		want          string
 	}{
-		{"有媒体信息就是探过了，哪怕还挂着记账", true, true, mark(1, time.Hour), false, false, "done"},
-		{"光盘结构", false, false, nil, true, false, "disc"},
-		{"没探过", false, true, nil, false, false, "none"},
-		{"没探过、片目在队列里", false, true, nil, true, false, "queued"},
-		{"正在探", false, true, mark(1, 0), true, true, "running"},
-		{"24 小时内请求过：排着队也不会探", false, true, mark(1, time.Hour), true, false, "wait"},
-		{"过了间隔可以再试", false, true, mark(1, 25*time.Hour), false, false, "retry"},
-		{"过了间隔且在队列里", false, true, mark(1, 25*time.Hour), true, false, "queued"},
-		{"次数用完", false, true, mark(2, 48*time.Hour), true, false, "exhausted"},
+		{"有媒体信息就是探过了，哪怕还挂着记账", true, true, mark(1, time.Hour), no, false, "done"},
+		{"光盘结构", false, false, nil, au, false, "disc"},
+		{"没探过", false, true, nil, no, false, "none"},
+		{"没探过、片目在队列里", false, true, nil, au, false, "queued"},
+		{"正在探", false, true, mark(1, 0), au, true, "running"},
+		{"24 小时内请求过：自动排着也不会探", false, true, mark(1, time.Hour), au, false, "wait"},
+		{"过了间隔可以再试", false, true, mark(1, 25*time.Hour), no, false, "retry"},
+		{"过了间隔且在队列里", false, true, mark(1, 25*time.Hour), au, false, "queued"},
+		{"次数用完：自动排着也不探", false, true, mark(2, 48*time.Hour), au, false, "exhausted"},
+		{"次数用完、手动排着：会探", false, true, mark(2, 48*time.Hour), man, false, "queued"},
+		{"手动排着但防抖没过：不会探", false, true, mark(1, time.Minute), man, false, "wait"},
 	}
 	for _, c := range cases {
-		got := embyProbeStateOf(c.info, c.extract, c.m, c.queued, c.running, now)
+		got := embyProbeStateOf(c.info, c.extract, c.m, c.queue, c.running, now)
 		if got.State != c.want {
 			t.Errorf("%s: state=%s，预期 %s", c.name, got.State, c.want)
 		}
 	}
-	if st := embyProbeStateOf(false, true, mark(1, time.Hour), false, false, now); st.RetryAt == nil ||
-		!st.RetryAt.Equal(now.Add(23*time.Hour)) || st.Attempts != 1 || st.LastErr != "超时" {
-		t.Fatalf("wait 要带上次数、原因与可重试时间: %+v", st)
+	if st := embyProbeStateOf(false, true, mark(1, time.Hour), no, false, now); st.RetryAt == nil ||
+		!st.RetryAt.Equal(now.Add(23*time.Hour)) || st.Attempts != 1 || st.LastErr != "超时" || st.ManualAt != nil {
+		t.Fatalf("wait 要带上次数、原因与自动可重试时间，防抖已过不带 ManualAt: %+v", st)
 	}
-	if st := embyProbeStateOf(false, true, mark(2, time.Hour), false, false, now); st.RetryAt == nil ||
-		!st.RetryAt.Equal(now.Add(embyMarkPruneAfter-time.Hour)) {
-		t.Fatalf("exhausted 的 RetryAt 是记账被清掉的时间: %+v", st)
+	if st := embyProbeStateOf(false, true, mark(2, time.Hour), no, false, now); st.RetryAt != nil || !st.manualOK() {
+		t.Fatalf("exhausted 不再有自动重试时间，但可以手动: %+v", st)
+	}
+	if st := embyProbeStateOf(false, true, mark(2, time.Minute), no, false, now); st.ManualAt == nil ||
+		!st.ManualAt.Equal(now.Add(embyExtractDebounce-time.Minute)) || st.manualOK() {
+		t.Fatalf("防抖中要给出能手动请求的时间: %+v", st)
 	}
 }
 

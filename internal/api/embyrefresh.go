@@ -373,9 +373,13 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 	// 入库确认了的路径交给提前探测（影视刮削「轨道探测」开着时），见 embyextract.go。
 	// 放在 defer 里：三轮回查中途 return 的那几种出口都要把已确认的交出去
 	var extract []string
+	// 属于刚重新整理过的片目的，按手动规则另建探测任务（embyprobejob.go 的 splitRedoProbes）
 	defer func() {
-		if len(extract) > 0 && embyExtractEnabled() {
-			queueEmbyExtract(extract...)
+		if len(extract) == 0 {
+			return
+		}
+		if auto := splitRedoProbes(extract); len(auto) > 0 && embyExtractEnabled() {
+			queueEmbyExtract(auto...)
 		}
 	}()
 	for _, d := range embyVerifyDelays {

@@ -10,128 +10,213 @@ import (
 	"115-station/internal/model"
 )
 
-// drainExtractQueue 不起 worker，把队列里的逐条交给 embyExtractPath（和 worker 同一条路）
-func drainExtractQueue(cfg embyRefreshCfg) {
+// startTestExtractWorker 测试里的探测 worker：和线上同一条 embyExtractPath，只是 cfg 用假 Emby。
+// 先占掉 once，别让真 worker 在这个进程里被拉起来抢队列
+func startTestExtractWorker(t *testing.T, cfg embyRefreshCfg) {
+	t.Helper()
 	embyExtractQ.once.Do(func() {})
-	for {
-		e, ok := embyExtractPop()
-		if !ok {
-			return
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if e, ok := embyExtractPop(); ok {
+				embyExtractPath(cfg, *e)
+				continue
+			}
+			time.Sleep(2 * time.Millisecond)
 		}
-		embyExtractPath(cfg, e.path, e.jobs...)
-	}
+	}()
+	t.Cleanup(func() { close(done); <-finished })
 }
 
-func newDoneJob(t *testing.T, title string) model.TaskJob {
+// seedEmbyCfg 探测任务开头会检查「配没配 Emby」
+func seedEmbyCfg(t *testing.T, url string) {
 	t.Helper()
-	job := model.TaskJob{Kind: jobKindScrape, Title: title, Status: jobSuccess}
-	if err := model.DB.Create(&job).Error; err != nil {
+	b, _ := json.Marshal(map[string]string{"server_url": url, "api_key": "k"})
+	if err := model.DB.Save(&model.Setting{Key: "emby", Value: string(b)}).Error; err != nil {
 		t.Fatal(err)
 	}
-	return job
 }
 
-// 探测失败要回到发起它的刮削任务上：原因、下次最早什么时候能再试，任务从「完成」改成「部分失败」
-func TestProbeReportFailureMarksJobPartial(t *testing.T) {
+func runProbeJob(t *testing.T, spec probeJobSpec) model.TaskJob {
+	t.Helper()
+	job, err := enqueueProbeJob(model.DB, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{DB: model.DB}
+	h.runJob(&job, probeLane)
+	return jobStatus(t, job.ID)
+}
+
+func withFastProbePoll(t *testing.T) {
+	prev, prevDeb := probeJobPoll, embyExtractDebounce
+	probeJobPoll = 5 * time.Millisecond
+	t.Cleanup(func() { probeJobPoll, embyExtractDebounce = prev, prevDeb })
+}
+
+// 手动探测任务：全部失败 → 任务失败，每条带原因、次数、防抖过后才能重试的时间
+func TestProbeJobAllFailed(t *testing.T) {
 	resetExtractState(t)
+	withFastProbePoll(t)
 	f := newFakeExtractEmby(t, false, "ep1", "ep2")
-	job := newDoneJob(t, "刮削《某剧》")
+	seedEmbyCfg(t, f.srv.URL)
+	startTestExtractWorker(t, f.cfg())
 
 	before := time.Now()
-	queueEmbyExtractFor(job.ID, "/media/某剧")
-	drainExtractQueue(f.cfg())
-
-	got := jobStatus(t, job.ID)
-	if got.Status != jobPartial {
-		t.Fatalf("探测失败后任务应为部分失败，实际 %s", got.Status)
+	got := runProbeJob(t, probeJobSpec{Title: "探《某剧》", Paths: []string{"/media/某剧"}})
+	if got.Status != jobFailed {
+		t.Fatalf("全部失败应为失败，实际 %s（%s）", got.Status, got.Message)
 	}
 	r := probeReportOf(&got)
-	if r == nil || r.State != "done" || r.Paths != 1 || r.Finished != 1 || r.Failed != 2 || len(r.Items) != 2 {
+	if r == nil || r.State != "done" || r.Planned != 2 || r.Failed != 2 || len(r.Items) != 2 {
 		t.Fatalf("报告不对：%+v", r)
 	}
 	it := r.Items[0]
-	if it.Label != "某剧 S01E01" || it.Kind != probeItemFailed || it.Err != "HTTP 500" || it.Attempts != 1 || it.Final {
+	if it.Label != "某剧 S01E01" || it.Kind != probeItemFailed || it.Err != "HTTP 500" || it.Attempts != 1 {
 		t.Fatalf("失败条目要带称呼、原因与次数：%+v", it)
 	}
-	if it.RetryAt == nil || it.RetryAt.Before(before.Add(embyExtractRetryAfter-time.Minute)) {
-		t.Fatalf("要给出下次最早能再试的时间（约 %s 后）：%v", embyExtractRetryAfter, it.RetryAt)
+	if it.RetryAt == nil || it.RetryAt.Before(before.Add(embyExtractDebounce-time.Second)) {
+		t.Fatalf("要给出防抖过后能再手动请求的时间：%v", it.RetryAt)
 	}
 	if m, _ := embyExtractLoad("ep1"); m.Label != "某剧 S01E01" {
 		t.Fatalf("记账要存条目称呼（全局失败清单用）：%+v", m)
 	}
 
-	// 第二个任务又排到同一片目：冷却期内不请求，报成「跳过」并带上次原因与时间，不算这次任务失败
-	job2 := newDoneJob(t, "刮削《某剧》again")
-	queueEmbyExtractFor(job2.ID, "/media/某剧")
-	drainExtractQueue(f.cfg())
+	// 防抖期内马上重试：不请求，报成跳过；防抖过了再重试：真的请求
+	again := runProbeJob(t, probeJobSpec{Title: "重试", Paths: []string{"/media/某剧"}})
 	if f.totalCalls() != 2 {
-		t.Fatalf("冷却期内不能再请求，实际 %v", f.calls)
+		t.Fatalf("防抖期内不能再请求，实际 %v", f.calls)
 	}
-	got2 := jobStatus(t, job2.ID)
-	r2 := probeReportOf(&got2)
-	if got2.Status != jobSuccess || r2 == nil || r2.Held != 2 || r2.Failed != 0 {
-		t.Fatalf("冷却中跳过不算失败：%s %+v", got2.Status, r2)
+	if r2 := probeReportOf(&again); again.Status != jobSuccess || r2 == nil || r2.Held != 2 || r2.Items[0].RetryAt == nil {
+		t.Fatalf("防抖跳过要说清什么时候能再试：%s %+v", again.Status, r2)
 	}
-	if h := r2.Items[0]; h.Kind != probeItemHeld || h.Err != "HTTP 500" || h.RetryAt == nil {
-		t.Fatalf("跳过的条目要说清上次原因与下次时间：%+v", h)
+	embyExtractDebounce = 0
+	runProbeJob(t, probeJobSpec{Title: "再重试", Paths: []string{"/media/某剧"}})
+	if f.totalCalls() != 4 {
+		t.Fatalf("防抖过了手动重试应真的请求（不受 24 小时限制），实际 %v", f.calls)
 	}
 }
 
-// 成功的只计数，任务保持「完成」
-func TestProbeReportSuccessKeepsSuccess(t *testing.T) {
+// 全部成功 → 完成；已有媒体信息的不请求
+func TestProbeJobSuccess(t *testing.T) {
 	resetExtractState(t)
+	withFastProbePoll(t)
 	f := newFakeExtractEmby(t, true, "ep1")
-	job := newDoneJob(t, "刮削《某剧》")
-	queueEmbyExtractFor(job.ID, "/media/某剧")
-	drainExtractQueue(f.cfg())
-	got := jobStatus(t, job.ID)
+	seedEmbyCfg(t, f.srv.URL)
+	startTestExtractWorker(t, f.cfg())
+	got := runProbeJob(t, probeJobSpec{Title: "探", Paths: []string{"/media/某剧"}})
 	r := probeReportOf(&got)
 	if got.Status != jobSuccess || r == nil || r.OK != 1 || len(r.Items) != 0 || r.State != "done" {
 		t.Fatalf("全部成功：%s %+v", got.Status, r)
 	}
+	if f.calls["has"] != 0 || f.calls["iso"] != 0 {
+		t.Fatalf("已有媒体信息 / 光盘结构不请求：%v", f.calls)
+	}
 }
 
-// Emby 里还没入库：说出来，不算失败；查 Emby 出错：算失败（此前两种都只进详细日志）
-func TestProbeReportMissingAndError(t *testing.T) {
+// 失败清单里点名重试：条目在 Emby 里没了就清掉记账
+func TestProbeJobItemGone(t *testing.T) {
 	resetExtractState(t)
-	inEmby := false
+	withFastProbePoll(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		switch {
-		case q.Get("Path") != "" && inEmby:
-			json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]string{{"Id": "dir1", "Type": "Folder", "Path": q.Get("Path")}}})
-		case q.Get("Path") != "":
-			json.NewEncoder(w).Encode(map[string]any{"Items": []any{}})
-		default: // 列片目下的条目：Emby 出错
-			http.Error(w, "down", http.StatusInternalServerError)
-		}
+		json.NewEncoder(w).Encode(map[string]any{"Items": []any{}})
 	}))
 	t.Cleanup(srv.Close)
-	cfg := embyRefreshCfg{ServerURL: srv.URL, APIKey: "k"}
+	seedEmbyCfg(t, srv.URL)
+	startTestExtractWorker(t, embyRefreshCfg{ServerURL: srv.URL, APIKey: "k"})
+	model.DB.Create(&model.EmbyExtractMark{ItemID: "old", Attempts: 2, LastAt: time.Now().Add(-48 * time.Hour), Label: "旧剧 S01E01"})
 
-	job := newDoneJob(t, "a")
-	queueEmbyExtractFor(job.ID, "/media/新片")
-	drainExtractQueue(cfg)
-	got := jobStatus(t, job.ID)
-	if r := probeReportOf(&got); got.Status != jobSuccess || r == nil || r.Missing != 1 || r.Items[0].Kind != probeItemMissing {
-		t.Fatalf("还没入库：%s %+v", got.Status, r)
+	got := runProbeJob(t, probeJobSpec{Title: "重试", Items: []string{"old"}})
+	r := probeReportOf(&got)
+	if r == nil || r.Missing != 1 || r.Items[0].Label != "旧剧 S01E01" {
+		t.Fatalf("条目没了要说出来：%+v", r)
 	}
-
-	inEmby = true
-	job2 := newDoneJob(t, "b")
-	queueEmbyExtractFor(job2.ID, "/media/新片")
-	drainExtractQueue(cfg)
-	got2 := jobStatus(t, job2.ID)
-	r := probeReportOf(&got2)
-	if got2.Status != jobPartial || r == nil || r.State != "done" || r.Errors != 1 || r.Items[0].Err != "查询 Emby 条目失败: HTTP 500" {
-		t.Fatalf("查 Emby 出错要写回原因并标部分失败：%s %+v", got2.Status, r)
+	if _, ok := embyExtractLoad("old"); ok {
+		t.Fatal("Emby 里没了的条目，失败记账要清掉")
 	}
 }
 
-// 路径没探完、队列里也没有了（服务重启）：显示「中断」，不能一直挂着「排队中」
+// 查 Emby 出错：写回原因、任务失败（此前只进详细日志）
+func TestProbeJobEmbyError(t *testing.T) {
+	resetExtractState(t)
+	withFastProbePoll(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("Path") != "" {
+			json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]string{{"Id": "dir1", "Type": "Folder", "Path": q.Get("Path")}}})
+			return
+		}
+		http.Error(w, "down", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	seedEmbyCfg(t, srv.URL)
+	startTestExtractWorker(t, embyRefreshCfg{ServerURL: srv.URL, APIKey: "k"})
+	got := runProbeJob(t, probeJobSpec{Title: "探", Paths: []string{"/media/新片"}})
+	r := probeReportOf(&got)
+	if got.Status != jobFailed || r == nil || r.Errors != 1 || r.Items[0].Err != "查询 Emby 条目失败: HTTP 500" {
+		t.Fatalf("查 Emby 出错要写回原因并失败：%s %+v", got.Status, r)
+	}
+}
+
+// 停止：排着的路径摘掉，任务记成已取消
+func TestProbeJobCancelDropsQueued(t *testing.T) {
+	resetExtractState(t)
+	embyExtractQ.once.Do(func() {}) // 不起 worker：路径一直排着
+	for {
+		if _, ok := embyExtractPop(); !ok {
+			break
+		}
+	}
+	queueEmbyExtract("/media/自动")
+	queueEmbyExtractFor(7, "/media/自动", "/media/手动")
+	cancelEmbyExtractJob(7)
+	defer forgetEmbyExtractCancel(7)
+	var got []embyExtractEntry
+	for {
+		e, ok := embyExtractPop()
+		if !ok {
+			break
+		}
+		got = append(got, *e)
+	}
+	// 自动入口也排过的留下（改回自动规则），只有手动任务排的拿掉
+	if len(got) != 1 || got[0].path != "/media/自动" || got[0].manual || len(got[0].jobs) != 0 {
+		t.Fatalf("停止后队列不对：%+v", got)
+	}
+}
+
+// 重新整理登记过的片目：入库确认到它时从自动入口摘出来、另建手动探测任务
+func TestSplitRedoProbes(t *testing.T) {
+	resetExtractState(t)
+	seedEmbyCfg(t, "http://emby")
+	registerRedoProbe("/media/剧集/某剧", "某剧", true)
+	auto := splitRedoProbes([]string{"/media/剧集/某剧/Season 01/S01E01.strm", "/media/电影/别的"})
+	if len(auto) != 1 || auto[0] != "/media/电影/别的" {
+		t.Fatalf("只摘出登记过的片目：%v", auto)
+	}
+	var jobs []model.TaskJob
+	model.DB.Where("kind = ?", jobKindProbe).Find(&jobs)
+	if len(jobs) != 1 || decodeJobParams(&jobs[0]).Probe.Paths[0] != "/media/剧集/某剧" || jobs[0].Priority != jobPriorityManual {
+		t.Fatalf("应按片目建一个手动探测任务：%+v", jobs)
+	}
+	// 用过就清：之后同一片目的入库确认走自动入口
+	if auto := splitRedoProbes([]string{"/media/剧集/某剧/Season 01/S01E02.strm"}); len(auto) != 1 {
+		t.Fatalf("登记只用一次：%v", auto)
+	}
+}
+
+// 路径没探完任务就结束了（服务重启）：显示「中断」
 func TestProbeReportLostAfterRestart(t *testing.T) {
 	resetExtractState(t)
-	job := newDoneJob(t, "a")
+	job := model.TaskJob{Kind: jobKindProbe, Title: "a", Status: jobInterrupted}
+	model.DB.Create(&job)
 	b, _ := json.Marshal(jobProbeReport{Paths: 3, Finished: 1})
 	model.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("probe", string(b))
 	got := jobStatus(t, job.ID)

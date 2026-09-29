@@ -120,7 +120,7 @@ func TestEmbyExtractSuccessNotRepeated(t *testing.T) {
 	resetExtractState(t)
 	f := newFakeExtractEmby(t, true, "ep1", "ep2")
 	for i := 0; i < 3; i++ {
-		embyExtractPath(f.cfg(), "/media/某剧")
+		embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧"})
 	}
 	if f.calls["ep1"] != 1 || f.calls["ep2"] != 1 || f.totalCalls() != 2 {
 		t.Fatalf("每集只能探一次，实际 %v", f.calls)
@@ -135,7 +135,7 @@ func TestEmbyExtractFailureNotRepeated(t *testing.T) {
 	resetExtractState(t)
 	f := newFakeExtractEmby(t, false, "ep1")
 	for i := 0; i < 5; i++ {
-		embyExtractPath(f.cfg(), "/media/某剧")
+		embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧"})
 	}
 	if f.calls["ep1"] != 1 {
 		t.Fatalf("失败的条目 24 小时内只能请求一次，实际 %d 次", f.calls["ep1"])
@@ -149,24 +149,41 @@ func TestEmbyExtractFailureNotRepeated(t *testing.T) {
 func TestEmbyExtractLedgerWindowAndCap(t *testing.T) {
 	resetExtractState(t)
 	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.Local)
-	if ok, _ := embyExtractClaim("x", "", t0); !ok {
+	if ok, _ := embyExtractClaim("x", "", t0, false); !ok {
 		t.Fatal("第一次应允许")
 	}
 	embyExtractSettle("x", false, "超时")
-	if ok, _ := embyExtractClaim("x", "", t0.Add(time.Hour)); ok {
+	if ok, _ := embyExtractClaim("x", "", t0.Add(time.Hour), false); ok {
 		t.Fatal("24 小时内不许再试")
 	}
-	if ok, _ := embyExtractClaim("x", "", t0.Add(25*time.Hour)); !ok {
+	if ok, _ := embyExtractClaim("x", "", t0.Add(25*time.Hour), false); !ok {
 		t.Fatal("过了间隔应允许第二次")
 	}
 	embyExtractSettle("x", false, "超时")
-	if ok, why := embyExtractClaim("x", "", t0.Add(30*24*time.Hour)); ok {
+	// 次数用完后永远不再自动探（不再 30 天清账重来）
+	if ok, why := embyExtractClaim("x", "", t0.Add(365*24*time.Hour), false); ok {
 		t.Fatal("试满两次不再自动探测")
 	} else if why == "" {
 		t.Fatal("拒绝要说明原因")
 	}
+
+	// 手动：不看次数与 24 小时，只看防抖
+	t1 := t0.Add(25 * time.Hour) // 第二次请求在 t1
+	if ok, _ := embyExtractClaim("x", "", t1.Add(time.Minute), true); ok {
+		t.Fatal("防抖期内手动也不许请求")
+	}
+	if ok, _ := embyExtractClaim("x", "", t1.Add(embyExtractDebounce+time.Second), true); !ok {
+		t.Fatal("防抖过了手动应允许，哪怕自动次数已用完")
+	}
+	if m, _ := embyExtractLoad("x"); m.Attempts != 3 {
+		t.Fatalf("手动的尝试也要记账：%+v", m)
+	}
+	// 手动失败过的条目，自动入口不会因为手动那次而多出机会
+	if ok, _ := embyExtractClaim("x", "", t1.Add(48*time.Hour), false); ok {
+		t.Fatal("自动次数已用完，手动之后也不许自动再探")
+	}
 	// 成功即删账
-	embyExtractClaim("y", "", t0)
+	embyExtractClaim("y", "", t0, false)
 	embyExtractSettle("y", true, "")
 	if _, ok := embyExtractLoad("y"); ok {
 		t.Fatal("成功后应删账")
@@ -179,7 +196,7 @@ func TestEmbyExtractBreaker(t *testing.T) {
 	embyExtractBreakPause = 150 * time.Millisecond
 	f := newFakeExtractEmby(t, false, "a", "b", "c")
 	start := time.Now()
-	embyExtractPath(f.cfg(), "/media/某剧")
+	embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧"})
 	if f.totalCalls() != 3 {
 		t.Fatalf("三个条目各请求一次，实际 %v", f.calls)
 	}

@@ -80,6 +80,8 @@ type jobParams struct {
 	Files *fileJobParams `json:"files,omitempty"`
 	// Local 本地文件页勾选的片目（刮削，localscrape.go）
 	Local *localScrapeParams `json:"local,omitempty"`
+	// Probe 手动 Emby 提前探测（embyprobejob.go）
+	Probe *probeJobParams `json:"probe,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
@@ -140,6 +142,9 @@ func jobStoppable(job *model.TaskJob) bool {
 	case "scrape":
 		// 刮削逐个片目、片目内逐个文件，随时能停（写了一半的片目下次「只补缺失」接着补）
 		return true
+	case jobKindProbe:
+		// 探测逐个条目，正在请求的那一集探完就停
+		return true
 	case "orgpick":
 		// 网盘文件页勾选的一批：整理逐个条目，两个之间能停
 		if f := decodeJobParams(job).Files; f != nil {
@@ -197,6 +202,7 @@ var jobQueueMu sync.Mutex
 var jobWakes = map[*jobLane]chan struct{}{
 	mainLane:   make(chan struct{}, 1),
 	scrapeLane: make(chan struct{}, 1),
+	probeLane:  make(chan struct{}, 1),
 }
 
 // jobKindScrape 走刮削队列的任务类型
@@ -204,18 +210,24 @@ const jobKindScrape = "scrape"
 
 // laneOfKind 任务类型 → 队列
 func laneOfKind(kind string) *jobLane {
-	if kind == jobKindScrape {
+	switch kind {
+	case jobKindScrape:
 		return scrapeLane
+	case jobKindProbe:
+		return probeLane
 	}
 	return mainLane
 }
 
 // laneWhere 取某条队列任务的查询条件
 func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
-	if l == scrapeLane {
+	switch l {
+	case scrapeLane:
 		return db.Where("kind = ?", jobKindScrape)
+	case probeLane:
+		return db.Where("kind = ?", jobKindProbe)
 	}
-	return db.Where("kind <> ?", jobKindScrape)
+	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindProbe})
 }
 
 func wakeJobWorker() {
@@ -334,6 +346,7 @@ func StartTaskWorker(h *Handler) {
 	markIncrRun() // 刚启动时别立刻判定「增量很久没跑」
 	go h.taskWorkerLoop(mainLane)
 	go h.taskWorkerLoop(scrapeLane)
+	go h.taskWorkerLoop(probeLane)
 	if n := len(queuedJobs(h.DB)); n > 0 {
 		log.Printf("[队列] ○ 启动时有 %d 个排队中的任务，稍后依次执行", n)
 	}
@@ -689,6 +702,15 @@ func (h *Handler) RetryTaskJob(c *gin.Context) {
 	if jobExecutors[job.Kind] == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "后台任务不能在这里重试，等它下一轮自动运行"})
 		return
+	}
+	if job.Kind == jobKindProbe {
+		// 防抖期内重试等于什么都不做（条目全被跳过），直接说清楚要等到什么时候
+		if at := probeRetryReadyAt(probeReportOf(&job), time.Now()); at != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf(
+				"失败的视频刚请求过探测，%s 之后才能重试（同一视频 %d 分钟内不重复请求，避免重复取 115 直链）",
+				at.Format("15:04:05"), int(embyExtractDebounce.Minutes()))})
+			return
+		}
 	}
 	nj, err := enqueueJob(h.DB, jobSpec{
 		Kind: job.Kind, Title: job.Title, DedupeKey: job.DedupeKey,

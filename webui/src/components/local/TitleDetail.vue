@@ -94,7 +94,7 @@ watch(
 
 // 刮削跑完：本地产物变了，重读；探测结果可能也更新了
 const offFinished = queue.onFinished((j) => {
-  if (j.kind === 'scrape' && show.value) {
+  if ((j.kind === 'scrape' || j.kind === 'probe') && show.value) {
     void loadDetail()
     void loadEmby()
   }

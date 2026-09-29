@@ -320,8 +320,8 @@ type TaskJob struct {
 	Progress string `json:"-" gorm:"type:text"`
 	Message  string `json:"message" gorm:"size:500"`
 	Result   string `json:"-" gorm:"type:text"`
-	// Probe 这次任务排进 Emby 提前探测的结果 JSON（jobProbeReport）。探测在任务结束后才跑，
-	// 单独一列：结束时写 Result 的那一下不会把探测已经写回的结果盖掉
+	// Probe 探测任务（kind=probe）的逐条结果 JSON（jobProbeReport），探测 worker 边探边写。
+	// 单独一列：任务结束时写 Result 的那一下不会把它盖掉
 	Probe      string     `json:"-" gorm:"type:text"`
 	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
 	StartedAt  *time.Time `json:"started_at"`

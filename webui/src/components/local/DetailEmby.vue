@@ -9,6 +9,8 @@ import HSkeleton from '@/components/hero/HSkeleton.vue'
 import { localApi } from '@/api'
 import type { EmbyDetailItem, ProbeState, TitleEmby } from '@/api/local'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { untilText, useNow } from '@/composables/useNow'
+import { useQueueStore } from '@/stores/queue'
 import { bytes } from '@/utils/format'
 import {
   PROBE_TEXT,
@@ -26,23 +28,37 @@ import {
 /**
  * 片目详情 ·「媒体信息」：Emby 手里每个视频的音视频 / 字幕轨道，以及提前探测的状态。
  *
- * 提前探测的记账是入库后自动探测、手动刮削「轨道探测」、这里的按钮三条入口共用的（防重复取 115 直链）。
- * 所以用户在刮削里勾了探测、有的集却没探，原因都在这一页逐条写明，并把规则摆出来。
+ * 探测记录是所有入口共用的（防重复取 115 直链），但规则分两种：入库后的自动探测最多 2 次、间隔 24 小时，
+ * 用完不再自动探；这里的按钮、刮削勾「轨道探测」、重新整理属于手动，不限次数，只防抖（同一视频几分钟内不重复）。
+ * 手动探测建一个「Emby 探测」任务，进度在任务中心。
  */
 const props = defineProps<{ data: TitleEmby | null; loading: boolean; titleKey: string; mediaType: 'movie' | 'tv' }>()
 const emit = defineEmits<{ reload: [] }>()
 
 const router = useRouter()
 const { message, dialog } = useFeedback()
+const queue = useQueueStore()
+const now = useNow()
 
 const items = computed(() => props.data?.items ?? [])
 const counts = computed(() => props.data?.counts ?? {})
 const n = (s: ProbeState) => counts.value[s] ?? 0
 const doneCount = computed(() => n('done'))
-/** 点「提前探测」会真正发请求的条目 */
-const todo = computed(() => n('none') + n('retry'))
-const held = computed(() => n('wait') + n('exhausted'))
+/** 点「提前探测」会真正发请求的条目（手动规则：只看防抖，后端算好的） */
+const todo = computed(() => props.data?.manual ?? 0)
+/** 还缺媒体信息、但刚请求过（防抖中）的 */
+const held = computed(() => props.data?.debounce ?? 0)
+const heldWait = computed(() => untilText(props.data?.manual_at, now.value))
 const busy = computed(() => n('queued') + n('running'))
+/** 这个片目排着 / 正在跑的探测任务；它在顶栏轮询里的那一条（带进度） */
+const probeJob = computed(() => {
+  const id = props.data?.job_id
+  if (!id) return null
+  return queue.jobs.find((j) => j.id === id) ?? null
+})
+function openJob(id?: number) {
+  if (id) void router.push({ name: 'tasks', query: { job: String(id) } })
+}
 const limits = computed(() => props.data?.limits)
 
 const STATE_ORDER: ProbeState[] = ['done', 'running', 'queued', 'none', 'retry', 'wait', 'exhausted', 'disc']
@@ -55,7 +71,7 @@ async function probe() {
   const count = todo.value
   const ok = await dialog.confirm({
     title: '提前探测',
-    content: `让 Emby 探测这 ${count} 个还没有媒体信息的视频。每个都会经本站取一次 115 直链，后台一次一个、间隔 ${limits.value?.gap_seconds ?? 3} 秒${count > 20 ? `，大约要 ${Math.ceil((count * (limits.value?.gap_seconds ?? 3)) / 60)} 分钟以上` : ''}。${held.value ? `另有 ${held.value} 个近期已请求过，这次会跳过。` : ''}`,
+    content: `让 Emby 探测这 ${count} 个还没有媒体信息的视频。每个都会经本站取一次 115 直链，后台一次一个、间隔 ${limits.value?.gap_seconds ?? 3} 秒${count > 20 ? `，大约要 ${Math.ceil((count * (limits.value?.gap_seconds ?? 3)) / 60)} 分钟以上` : ''}。会建一个「Emby 探测」任务，进度在任务中心，失败的可以重试。${held.value ? `另有 ${held.value} 个刚请求过，这次跳过。` : ''}`,
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
       { label: '开始探测', value: true, variant: 'primary' },
@@ -81,8 +97,10 @@ async function probe() {
       if (!again) return
       d = await localApi.probeTitle(props.titleKey, true)
     }
-    if (d.queued) message.success(d.message)
-    else message.info(d.message)
+    if (d.queued) {
+      message.success(d.message)
+      await queue.submitted(d.job_id)
+    } else message.info(d.message)
     emit('reload')
   } catch (e) {
     toastError(e, '提交探测失败')
@@ -91,15 +109,18 @@ async function probe() {
   }
 }
 
-// 排队 / 探测中：每 10 秒自己刷一次，直到都探完
+// 排队 / 探测中：每 10 秒自己刷一次，直到都探完；防抖到点也刷一次，让按钮亮起来
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(
-  () => [busy.value, props.loading] as const,
-  ([b, l]) => {
+  () => [busy.value, props.loading, !!props.data?.job_id] as const,
+  ([b, l, j]) => {
     clearTimeout(timer)
-    if (b > 0 && !l) timer = setTimeout(() => emit('reload'), 10_000)
+    if ((b > 0 || j) && !l) timer = setTimeout(() => emit('reload'), 10_000)
   },
 )
+watch(heldWait, (w, prev) => {
+  if (prev && !w && !todo.value) emit('reload')
+})
 
 // ---- 分组与展开 ----
 
@@ -208,13 +229,28 @@ function itemLabel(it: EmbyDetailItem) {
           <HChip v-for="c in stateChips" :key="c.s" :color="PROBE_TONE[c.s]" size="sm">{{ PROBE_TEXT[c.s] }} {{ c.count }}</HChip>
         </div>
         <div class="panel-actions">
-          <HButton variant="primary" size="sm" :disabled="!todo" :loading="probing" @click="probe">
-            <Radar :size="14" />{{ todo ? `提前探测 ${todo} 个视频` : '提前探测' }}
+          <HButton variant="primary" size="sm" :disabled="!todo || !!data.job_id" :loading="probing" @click="probe">
+            <Radar :size="14" />
+            <template v-if="todo">提前探测 {{ todo }} 个视频</template>
+            <template v-else-if="held && heldWait">{{ heldWait }}后可再探测</template>
+            <template v-else>提前探测</template>
           </HButton>
           <span class="panel-note">
-            <template v-if="todo">第一次播放不用再等 Emby 现场探测。每个视频一次 115 直链请求。</template>
+            <template v-if="data.job_id">
+              探测任务
+              <template v-if="probeJob?.status === 'queued'">排队中（探测队列第 {{ probeJob.position }} 位）</template>
+              <template v-else-if="probeJob?.progress?.total">
+                进行中 {{ probeJob.progress.done }}/{{ probeJob.progress.total }}<template v-if="probeJob.progress.label">：{{ probeJob.progress.label }}</template>
+              </template>
+              <template v-else>进行中</template>
+              ，这里每 10 秒自动刷新。
+              <button type="button" class="link" @click="openJob(data.job_id)">查看任务</button>
+            </template>
+            <template v-else-if="todo">第一次播放不用再等 Emby 现场探测。每个视频一次 115 直链请求。</template>
             <template v-else-if="busy">正在后台探测，这里每 10 秒自动刷新。</template>
-            <template v-else-if="held">还缺媒体信息的 {{ held }} 个视频近期已请求过，暂时不会再探测（见下方原因）。</template>
+            <template v-else-if="held">
+              还缺媒体信息的 {{ held }} 个视频刚请求过探测，为避免重复取 115 直链，{{ heldWait ? `${heldWait}后` : '稍后' }}才能再请求。
+            </template>
             <template v-else-if="doneCount === items.length && items.length">全部视频都已有媒体信息。</template>
             <template v-else>没有可以探测的视频。</template>
           </span>
@@ -228,20 +264,20 @@ function itemLabel(it: EmbyDetailItem) {
           <ChevronRight :size="14" class="chev" :class="{ open: showRules }" />
         </button>
         <div v-if="showRules && limits" class="rules">
-          <p>
-            <b>入库后的自动探测、手动刮削里的「轨道探测」、这里的「提前探测」</b>共用同一份探测记录，
-            因为每次探测都要经本站取一次 115 直链，重复探测会平白增加风控风险：
-          </p>
+          <p>每次探测都要经本站取一次 115 直链，重复探测会平白增加风控风险，所以所有入口共用一份探测记录：</p>
           <ul>
             <li>已有媒体信息的视频永远不会再探测；</li>
-            <li>同一个视频最多请求 {{ limits.max_attempts }} 次，两次之间至少隔 {{ limits.retry_hours }} 小时（超时也算一次）；</li>
-            <li>连续 {{ limits.break_after }} 个视频探测失败，整个队列暂停 {{ limits.break_minutes }} 分钟；</li>
-            <li>用完次数的视频不再自动探测，{{ limits.prune_days }} 天后记录过期，才会再给一次机会。</li>
+            <li>
+              <b>入库后的自动探测</b>：同一个视频最多请求 {{ limits.max_attempts }} 次，两次之间至少隔
+              {{ limits.retry_hours }} 小时（超时也算一次），用完就不再自动探；
+            </li>
+            <li>
+              <b>手动探测</b>（这里的按钮、刮削勾「轨道探测」、重新整理）：不受上面的次数限制，只防抖 ——
+              同一个视频 {{ limits.debounce_minutes }} 分钟内不重复请求；
+            </li>
+            <li>连续 {{ limits.break_after }} 个视频探测失败，整个队列暂停 {{ limits.break_minutes }} 分钟（手动的也等）。</li>
           </ul>
-          <p>
-            所以刚入库时自动探测过（哪怕失败了）的视频，马上手动刮削勾「轨道探测」也会被跳过 —— 这是预期行为，不是漏了。
-            每个视频的具体原因见下方列表，把鼠标移到状态上可以看到。
-          </p>
+          <p>手动探测会建一个「Emby 探测」任务，进度与每个视频的结果在任务中心，失败的可以直接重试。</p>
         </div>
       </section>
 
@@ -428,6 +464,17 @@ function itemLabel(it: EmbyDetailItem) {
   font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
+}
+.panel-note .link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.panel-note .link:hover {
+  text-decoration: underline;
 }
 .auto-line {
   margin: 0;

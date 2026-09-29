@@ -342,7 +342,6 @@ func (h *Handler) pruneSyncEvents() {
 	pruneEventSuppress()
 	pruneOrganizeRecords()
 	pruneTaskJobs()
-	pruneEmbyExtractMarks()
 	pruneDownloadLinks()
 	pruneDeepDeleteRecords()
 }

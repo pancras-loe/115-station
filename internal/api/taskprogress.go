@@ -48,7 +48,8 @@ type jobLane struct {
 var (
 	mainLane   = &jobLane{name: "主队列"}
 	scrapeLane = &jobLane{name: "刮削队列"}
-	jobLanes   = []*jobLane{mainLane, scrapeLane}
+	probeLane  = &jobLane{name: "探测队列"} // Emby 提前探测（embyprobejob.go）：只等探测 worker，不拿 taskMu
+	jobLanes   = []*jobLane{mainLane, scrapeLane, probeLane}
 )
 
 // progressKeep 传给 setJobProgress 的 done/total 取这个值表示「不改」。

@@ -370,6 +370,12 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	pruner.flush()
 
 	setJobProgress("刮削与刷新媒体库", 5, redoSteps, rootRel)
+	// 带刮削且开着探测：这是用户这一次明确的动作，Emby 入库后按手动规则探测（embyprobejob.go）。
+	// 登记要在刷新之前，否则入库确认可能先到、按自动规则排掉了
+	if sink.scrapeOn && embyExtractEnabled() {
+		_, landed := sink.refreshTarget()
+		registerRedoProbe(sink.titleLocalDir(rootRel), media.Title, len(landed) > 0)
+	}
 	sink.flushScrape()
 	sink.flushRefresh()
 	setJobProgress("", redoSteps, redoSteps, "")

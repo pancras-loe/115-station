@@ -384,19 +384,20 @@ func (h *Handler) LocalTitleDetail(c *gin.Context) {
 // embyProbeState 一个条目的提前探测状态
 type embyProbeState struct {
 	// State done 已有媒体信息 / none 没探测过 / queued 排队中 / running 探测中 /
-	// retry 上次失败、已过间隔可以再试 / wait 近期请求过、要等到 RetryAt / exhausted 次数用完 / disc 光盘结构不探测
+	// retry 上次失败、已过间隔，自动入口还会再试一次 / wait 自动入口冷却中、要等到 RetryAt /
+	// exhausted 自动入口次数用完、不再自动探测 / disc 光盘结构不探测
 	State    string     `json:"state"`
 	Attempts int        `json:"attempts,omitempty"`
 	LastAt   *time.Time `json:"last_at,omitempty"`
 	LastErr  string     `json:"last_err,omitempty"`
-	RetryAt  *time.Time `json:"retry_at,omitempty"`
+	RetryAt  *time.Time `json:"retry_at,omitempty"` // 自动入口最早什么时候再试（只有 wait 有）
+	// ManualAt 手动防抖还没过：这个时间之后才能手动请求。为空 = 现在就能手动请求（done / disc / 排队中的除外）
+	ManualAt *time.Time `json:"manual_at,omitempty"`
 }
 
-// embyMarkPruneAfter 失败记账保留多久（pruneEmbyExtractMarks 按它清）
-const embyMarkPruneAfter = 30 * 24 * time.Hour
-
-// embyProbeStateOf 纯函数：与 embyExtractAllowed / worker 同一套判定，只是把「为什么不探」说出来
-func embyProbeStateOf(hasInfo, extractable bool, mark *model.EmbyExtractMark, queued, running bool, now time.Time) embyProbeState {
+// embyProbeStateOf 纯函数：与 embyExtractAllowed / worker 同一套判定，只是把「为什么不探」说出来。
+// queue 是它所在路径在队列里按什么规则排着（probeQueued*）：同样排着，自动规则下冷却中的不会真探
+func embyProbeStateOf(hasInfo, extractable bool, mark *model.EmbyExtractMark, queue string, running bool, now time.Time) embyProbeState {
 	switch {
 	case hasInfo:
 		return embyProbeState{State: "done"}
@@ -407,28 +408,40 @@ func embyProbeStateOf(hasInfo, extractable bool, mark *model.EmbyExtractMark, qu
 	if mark != nil {
 		last := mark.LastAt
 		st.Attempts, st.LastAt, st.LastErr = mark.Attempts, &last, mark.LastErr
+		if at := mark.LastAt.Add(embyExtractDebounce); now.Before(at) {
+			st.ManualAt = &at
+		}
 	}
 	switch {
 	case running:
 		st.State = "running"
 	case mark == nil:
-		if queued {
+		if queue != probeQueuedNone {
 			st.State = "queued"
 		}
+	case queue == probeQueuedManual && st.ManualAt == nil:
+		st.State = "queued"
 	case mark.Attempts >= embyExtractMaxAttempts:
 		st.State = "exhausted"
-		at := mark.LastAt.Add(embyMarkPruneAfter)
-		st.RetryAt = &at
 	case now.Sub(mark.LastAt) < embyExtractRetryAfter:
 		st.State = "wait"
 		at := mark.LastAt.Add(embyExtractRetryAfter)
 		st.RetryAt = &at
-	case queued:
+	case queue == probeQueuedAuto:
 		st.State = "queued"
 	default:
 		st.State = "retry"
 	}
 	return st
+}
+
+// manualOK 手动请求现在能不能探它（与 embyExtractAllowed 的手动分支同口径）
+func (st embyProbeState) manualOK() bool {
+	switch st.State {
+	case "done", "disc", "queued", "running":
+		return false
+	}
+	return st.ManualAt == nil
 }
 
 // embyTrack 一条轨道（界面用）
@@ -573,6 +586,10 @@ type embyTitleProbe struct {
 	paths  []string
 	items  []embyDetailItem
 	counts map[string]int
+	// manual 现在点「提前探测」会真正请求的条目数；debounce 还缺媒体信息、但刚请求过（防抖中）的条目数，
+	// manualAt 是其中最早能再手动请求的时间
+	manual, debounce int
+	manualAt         *time.Time
 }
 
 func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (embyTitleProbe, error) {
@@ -584,10 +601,10 @@ func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (emb
 		return out, err
 	}
 	marks := embyMarksOf(raw)
-	queued := false
+	queued := probeQueuedNone
 	for _, p := range paths {
-		if embyExtractQueuedFor(p) {
-			queued = true
+		if m := embyExtractQueuedFor(p); m == probeQueuedManual || (m == probeQueuedAuto && queued == probeQueuedNone) {
+			queued = m
 		}
 	}
 	running, now := embyExtractRunningID(), time.Now()
@@ -595,6 +612,15 @@ func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (emb
 		d := embyDetailOf(it, titleLocal, cfg.PathMapping)
 		d.Probe = embyProbeStateOf(d.HasInfo, it.extractable(), marks[it.ID], queued, running != "" && running == it.ID, now)
 		out.counts[d.Probe.State]++
+		switch {
+		case d.Probe.manualOK():
+			out.manual++
+		case d.Probe.ManualAt != nil && d.Probe.State != "queued" && d.Probe.State != "running":
+			out.debounce++
+			if out.manualAt == nil || d.Probe.ManualAt.Before(*out.manualAt) {
+				out.manualAt = d.Probe.ManualAt
+			}
+		}
 		out.items = append(out.items, d)
 	}
 	sort.SliceStable(out.items, func(i, j int) bool {
@@ -615,7 +641,7 @@ func embyProbeLimits() gin.H {
 	return gin.H{
 		"max_attempts": embyExtractMaxAttempts, "retry_hours": int(embyExtractRetryAfter.Hours()),
 		"break_after": embyExtractBreakAfter, "break_minutes": int(embyExtractBreakPause.Minutes()),
-		"prune_days": int(embyMarkPruneAfter.Hours() / 24), "gap_seconds": int(embyExtractGap.Seconds()),
+		"debounce_minutes": int(embyExtractDebounce.Minutes()), "gap_seconds": int(embyExtractGap.Seconds()),
 	}
 }
 
@@ -640,11 +666,19 @@ func (h *Handler) LocalTitleEmby(c *gin.Context) {
 	}
 	resp["found"] = len(p.paths) > 0
 	resp["items"], resp["counts"] = p.items, p.counts
+	resp["manual"], resp["debounce"] = p.manual, p.debounce
+	if p.manualAt != nil {
+		resp["manual_at"] = p.manualAt
+	}
+	if id := activeProbeJobFor(c.Query("key")); id != 0 {
+		resp["job_id"] = id
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
-// LocalTitleProbe POST /local/titles/probe {key, confirm}：给这个片目里还没有媒体信息的条目排提前探测。
-// 走的还是 embyextract.go 那条队列与记账：近期请求过、次数用完的照样跳过，这里不开后门
+// LocalTitleProbe POST /local/titles/probe {key, confirm}：给这个片目里还没有媒体信息的条目建一个
+// 「Emby 提前探测」任务（手动入口：不受自动入口的次数与 24 小时限制，只有防抖，见 embyextract.go）。
+// 任务中心看得到进度、能停、失败能重试
 func (h *Handler) LocalTitleProbe(c *gin.Context) {
 	var req struct {
 		Key     string `json:"key"`
@@ -672,28 +706,36 @@ func (h *Handler) LocalTitleProbe(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Emby 里还没有这个片目，等它扫描入库后再探测"})
 		return
 	}
-	todo := p.counts["none"] + p.counts["retry"]
-	held := p.counts["wait"] + p.counts["exhausted"]
-	if todo == 0 {
-		msg := "没有需要探测的条目"
+	if p.manual == 0 {
+		msg := "全部视频都已有媒体信息，不需要探测"
 		switch {
 		case p.counts["queued"]+p.counts["running"] > 0:
-			msg = "这个片目已经在探测队列里了"
-		case held > 0:
-			msg = fmt.Sprintf("还缺媒体信息的 %d 个条目近期已请求过或已达次数上限，为避免重复取 115 直链暂不探测", held)
+			msg = "这个片目正在探测，进度在任务中心"
+		case p.debounce > 0 && p.manualAt != nil:
+			msg = fmt.Sprintf("还缺媒体信息的 %d 个视频刚请求过探测，%s 之后才能再请求（防抖 %d 分钟，避免重复取 115 直链）",
+				p.debounce, p.manualAt.Format("15:04:05"), int(embyExtractDebounce.Minutes()))
+		case p.counts["disc"] > 0 && p.counts["done"]+p.counts["disc"] == len(p.items):
+			msg = "剩下的是光盘结构（ISO / BDMV），Emby 探测不了"
 		}
-		c.JSON(http.StatusOK, gin.H{"queued": 0, "held": held, "message": msg})
+		c.JSON(http.StatusOK, gin.H{"queued": 0, "held": p.debounce, "message": msg})
 		return
 	}
-	if todo > localProbeConfirmVideos && !req.Confirm {
-		c.JSON(http.StatusConflict, gin.H{"need_confirm": true, "videos": todo,
-			"error": fmt.Sprintf("要探测 %d 个条目，需要先确认", todo)})
+	if p.manual > localProbeConfirmVideos && !req.Confirm {
+		c.JSON(http.StatusConflict, gin.H{"need_confirm": true, "videos": p.manual,
+			"error": fmt.Sprintf("要探测 %d 个条目，需要先确认", p.manual)})
 		return
 	}
-	queueEmbyExtract(p.paths...)
-	msg := fmt.Sprintf("已排进提前探测队列：%d 个条目，后台逐个进行（每个间隔 %s）", todo, embyExtractGap)
-	if held > 0 {
-		msg += fmt.Sprintf("；另有 %d 个近期已请求过，这次跳过", held)
+	job, err := enqueueProbeJob(h.DB, probeJobSpec{
+		Title: fmt.Sprintf("Emby 提前探测《%s》", truncateStr(e.Title, 60)), Source: "web",
+		DedupeKey: "probe:" + req.Key, Key: req.Key, Paths: p.paths,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	c.JSON(http.StatusOK, gin.H{"queued": todo, "held": held, "message": msg})
+	msg := fmt.Sprintf("已创建探测任务：%d 个视频，后台一次一个（间隔 %s），进度在任务中心", p.manual, embyExtractGap)
+	if p.debounce > 0 {
+		msg += fmt.Sprintf("；另有 %d 个刚请求过，这次跳过", p.debounce)
+	}
+	c.JSON(http.StatusAccepted, gin.H{"queued": p.manual, "held": p.debounce, "message": msg, "job_id": job.ID})
 }

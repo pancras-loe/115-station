@@ -6,8 +6,9 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import { tasksApi } from '@/api'
-import type { TaskJobDetail } from '@/api/tasks'
+import type { TaskJobDetail, TaskProbeItem } from '@/api/tasks'
 import { toastError } from '@/composables/useFeedback'
+import { untilText, useNow } from '@/composables/useNow'
 import { useQueueStore } from '@/stores/queue'
 import {
   JOB_STATUS,
@@ -18,7 +19,7 @@ import {
   jobSourceText,
   msgTone,
   pct,
-  probeRetryText,
+  probeRetryReadyAt,
   resultIssues,
   resultSummary,
   retryable,
@@ -87,37 +88,51 @@ const RECORD_STATUS: Record<string, { text: string; color: 'default' | 'accent' 
   failed: { text: '失败', color: 'danger' },
 }
 
-/** 探测报告的计数行：「成功 3 · 失败 1 · 跳过 2 · 未入库 1」 */
+// ---- Emby 探测任务 ----
+// 进行中的报告随顶栏那条轮询（2 秒一轮）一起更新，这里不另起轮询
+
+const now = useNow()
+
+/** 探测报告的计数行：「片目 1/1 · 视频 3/12 · 成功 3 · 失败 1」 */
 const probeCounts = computed(() => {
   const p = job.value?.probe
   if (!p) return ''
-  const parts: string[] = [`片目 ${p.finished}/${p.paths}`]
+  const parts: string[] = []
+  if (p.paths > 1) parts.push(`片目 ${p.finished}/${p.paths}`)
+  if (p.planned) parts.push(`视频 ${p.ok + p.failed + (p.canceled ?? 0)}/${p.planned}`)
   if (p.ok) parts.push(`成功 ${p.ok}`)
   if (p.failed) parts.push(`失败 ${p.failed}`)
   if (p.errors) parts.push(`出错 ${p.errors}`)
-  if (p.held) parts.push(`跳过 ${p.held}`)
-  if (p.missing) parts.push(`未入库 ${p.missing}`)
+  if (p.held) parts.push(`防抖跳过 ${p.held}`)
+  if (p.missing) parts.push(`查不到 ${p.missing}`)
+  if (p.canceled) parts.push(`停止后没探 ${p.canceled}`)
+  if (!parts.length && p.state === 'done') parts.push('全部视频都已有媒体信息')
   return parts.join(' · ')
 })
 
-// 探测在任务结束后才跑：还没跑完时详情每 10 秒重拉一次（顶栏轮询只管队列里的任务）
-let probeTimer: number | undefined
-watch(
-  () => job.value?.probe?.state,
-  (st) => {
-    if (probeTimer !== undefined) clearInterval(probeTimer)
-    probeTimer = undefined
-    if ((st === 'queued' || st === 'running') && props.jobId != null) {
-      const id = props.jobId
-      probeTimer = window.setInterval(() => {
-        if (props.jobId === id) void load(id)
-      }, 10_000)
-    }
-  },
-)
-onUnmounted(() => {
-  if (probeTimer !== undefined) clearInterval(probeTimer)
+/** 失败 / 防抖跳过的条目还要等多久才能重试：重试按钮据此倒计时 */
+const retryWait = computed(() => {
+  const j = job.value
+  if (!j || j.kind !== 'probe') return ''
+  return untilText(probeRetryReadyAt(j.probe?.items, now.value), now.value)
 })
+
+/** 一个条目接下来会怎样 */
+function probeNext(it: TaskProbeItem): string {
+  const wait = untilText(it.retry_at, now.value)
+  switch (it.kind) {
+    case 'failed':
+    case 'held': {
+      const manual = wait ? `${wait}后可以手动重试（同一视频 ${debounceMin} 分钟内不重复请求）` : '现在可以手动重试'
+      return it.auto_stopped ? `${manual}；自动探测次数已用完，入库后不会再自动探` : manual
+    }
+    case 'missing':
+      return 'Emby 扫描入库后再试；入库确认后也会自动排进探测'
+  }
+  return ''
+}
+// 与后端 embyExtractDebounce 一致（embyextract.go）
+const debounceMin = 5
 
 async function retry() {
   if (!job.value) return
@@ -197,10 +212,10 @@ async function retry() {
       </section>
 
       <section v-if="job.probe" class="block">
-        <h3>Emby 提前探测 · {{ PROBE_REPORT_STATE[job.probe.state] ?? job.probe.state }}</h3>
-        <p class="line">{{ probeCounts }}</p>
+        <h3>探测结果 · {{ PROBE_REPORT_STATE[job.probe.state] ?? job.probe.state }}</h3>
+        <p v-if="probeCounts" class="line">{{ probeCounts }}</p>
         <p v-if="job.probe.paused_until" class="line warn">
-          连续失败，已暂停到 {{ fullTime(job.probe.paused_until) }}（可能是 115 风控或 Emby 异常），之后接着探
+          连续失败，整个探测队列暂停到 {{ fullTime(job.probe.paused_until) }}（可能是 115 风控或 Emby 异常），之后自动接着探
         </p>
         <ul v-if="job.probe.items?.length" class="probe-items">
           <li v-for="(it, i) in job.probe.items" :key="i" class="probe-item">
@@ -209,16 +224,16 @@ async function retry() {
                 {{ PROBE_ITEM_KIND[it.kind]?.text ?? it.kind }}
               </HChip>
               <span class="pi-label">{{ it.label || '—' }}</span>
-              <span v-if="it.attempts" class="dim">已请求 {{ it.attempts }} 次</span>
+              <span v-if="it.attempts" class="dim">累计请求 {{ it.attempts }} 次</span>
             </div>
-            <p v-if="it.err" class="pi-line">{{ it.kind === 'held' ? `上次：${it.err}` : it.err }}</p>
-            <p v-if="it.kind !== 'error'" class="pi-line dim">{{ probeRetryText(it) }}</p>
+            <p v-if="it.err" class="pi-line">{{ it.kind === 'held' ? `刚请求过，上次结果：${it.err}` : it.err }}</p>
+            <p v-if="probeNext(it)" class="pi-line dim">{{ probeNext(it) }}</p>
           </li>
         </ul>
         <p v-if="job.probe.more" class="dim">另有 {{ job.probe.more }} 条没列出，见实时日志（搜「[Emby探测]」）。</p>
         <p class="dim">
-          每个视频最多请求 2 次、两次至少隔 24 小时（每次都要取一次 115 直链），冷却期内的会跳过。
-          每集的状态也可以在「本地文件」的片目详情里看。
+          手动探测不受自动探测的次数限制，只防抖：同一个视频 {{ debounceMin }} 分钟内不重复请求（每次都要取一次 115 直链）。
+          重试会按原来的片目重新检查，已经探好的自动跳过。每集的状态也可以在「本地文件」的片目详情里看。
         </p>
       </section>
 
@@ -229,7 +244,7 @@ async function retry() {
         </ul>
       </section>
 
-      <section class="block">
+      <section v-if="job.kind !== 'probe'" class="block">
         <h3>涉及的整理记录{{ job.record_total ? `（${job.record_total}）` : '' }}</h3>
         <p v-if="!job.records?.length" class="dim">
           {{ job.status === 'queued' || job.status === 'running' ? '任务结束后显示。' : '这次任务没有产生或处理整理记录。' }}
@@ -250,7 +265,8 @@ async function retry() {
         <template #icon><X /></template>
         {{ job.status === 'queued' ? '取消' : '停止' }}
       </HButton>
-      <HButton v-if="job && retryable(job)" variant="tertiary" @click="retry">
+      <span v-if="job && retryable(job) && retryWait" class="retry-wait">防抖中，{{ retryWait }}后可重试</span>
+      <HButton v-if="job && retryable(job)" variant="tertiary" :disabled="!!retryWait" @click="retry">
         <template #icon><RotateCcw /></template>
         重试
       </HButton>
@@ -343,6 +359,11 @@ async function retry() {
   word-break: break-all;
 }
 .pi-line.dim {
+  color: var(--muted);
+}
+.retry-wait {
+  margin-right: auto;
+  font-size: 12.5px;
   color: var(--muted);
 }
 .block h3 {

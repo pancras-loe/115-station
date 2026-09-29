@@ -139,7 +139,7 @@ export const PROBE_TEXT: Record<ProbeState, string> = {
   running: '探测中',
   retry: '可重试',
   wait: '近期已请求',
-  exhausted: '已放弃',
+  exhausted: '自动已停',
   disc: '不探测',
 }
 
@@ -166,6 +166,11 @@ function when(s?: string) {
 /** 一句话说清楚这个条目为什么是这个状态、接下来会怎样 */
 export function probeHint(p: EmbyDetailItem['probe'], limits?: ProbeLimits): string {
   const err = p.last_err && p.last_err !== '请求中' ? `（${p.last_err}）` : ''
+  // 手动探测只看防抖：什么时候能点
+  const manual =
+    p.manual_at && new Date(p.manual_at).getTime() > Date.now()
+      ? `${when(p.manual_at)} 之后可以手动探测（同一视频 ${limits?.debounce_minutes ?? 5} 分钟内不重复请求）`
+      : '现在就可以手动探测'
   switch (p.state) {
     case 'done':
       return 'Emby 已经有这个视频的音视频信息，播放时不用再现场探测。'
@@ -176,11 +181,11 @@ export function probeHint(p: EmbyDetailItem['probe'], limits?: ProbeLimits): str
     case 'running':
       return '正在请 Emby 探测这个视频。'
     case 'retry':
-      return `上次请求失败${err}，已过冷却时间，可以再探测一次（第 ${(p.attempts ?? 0) + 1} 次，也是最后一次）。`
+      return `上次请求失败${err}。再次入库确认时会自动再试一次（第 ${(p.attempts ?? 0) + 1} 次，也是自动的最后一次）；${manual}。`
     case 'wait':
-      return `已请求过 ${p.attempts ?? 1} 次${err}。为避免重复取 115 直链，${when(p.retry_at)} 之前不会再探测，手动刮削勾了「轨道探测」也会跳过它。`
+      return `已请求过 ${p.attempts ?? 1} 次${err}。自动探测 ${when(p.retry_at)} 之后才会再试；${manual}。`
     case 'exhausted':
-      return `已请求 ${p.attempts ?? limits?.max_attempts ?? 2} 次都没成功${err}，不再自动探测；${when(p.retry_at)} 记录过期后才会再给一次机会。可以先在 Emby 里播放一次看是否能正常读取。`
+      return `已请求 ${p.attempts ?? limits?.max_attempts ?? 2} 次都没成功${err}，不再自动探测；${manual}，或先在 Emby 里播放一次看能否正常读取。`
     case 'disc':
       return '光盘结构（ISO / BDMV），Emby 探测不了，不占用 115 请求。'
   }

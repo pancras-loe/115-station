@@ -207,8 +207,9 @@ export const titleDetail = (key: string) => http.get<LocalTitleDetail>('/local/t
 export const fanartUrl = (d: { fanart?: string }) => (d.fanart ? `/api/local/poster?${d.fanart}` : '')
 
 /**
- * 提前探测状态：done 已有媒体信息 / none 没探测过 / queued 排队中 / running 探测中 /
- * retry 上次失败、可以再试 / wait 近期请求过、到 retry_at 才能再试 / exhausted 次数用完 / disc 光盘结构不探测
+ * 提前探测状态（按自动探测的规则说；手动能不能点看 manual_at）：done 已有媒体信息 / none 没探测过 /
+ * queued 排队中 / running 探测中 / retry 上次失败、自动还会再试一次 / wait 自动冷却中、到 retry_at 才会再试 /
+ * exhausted 自动次数用完、不再自动探 / disc 光盘结构不探测
  */
 export type ProbeState = 'done' | 'none' | 'queued' | 'running' | 'retry' | 'wait' | 'exhausted' | 'disc'
 
@@ -253,7 +254,10 @@ export interface EmbyDetailItem {
     attempts?: number
     last_at?: string
     last_err?: string
+    /** 自动入口冷却中：最早什么时候会再自动试 */
     retry_at?: string
+    /** 防抖没过：这个时间之后才能手动请求；为空 = 现在就能手动请求 */
+    manual_at?: string
   }
 }
 
@@ -262,7 +266,8 @@ export interface ProbeLimits {
   retry_hours: number
   break_after: number
   break_minutes: number
-  prune_days: number
+  /** 手动请求的防抖（分钟） */
+  debounce_minutes: number
   gap_seconds: number
 }
 
@@ -277,6 +282,13 @@ export interface TitleEmby {
   limits: ProbeLimits
   items: EmbyDetailItem[]
   counts: Partial<Record<ProbeState, number>>
+  /** 现在点「提前探测」会真正请求的视频数 */
+  manual?: number
+  /** 还缺媒体信息、但刚请求过（防抖中）的视频数；manual_at 是其中最早能再请求的时间 */
+  debounce?: number
+  manual_at?: string
+  /** 这个片目排着 / 正在跑的探测任务 */
+  job_id?: number
 }
 
 export const titleEmby = (key: string) => http.get<TitleEmby>('/local/titles/emby', { params: { key } })
@@ -285,6 +297,8 @@ export interface ProbeReply {
   queued: number
   held: number
   message: string
+  /** 建出来的探测任务（queued > 0 时） */
+  job_id?: number
 }
 
 export const probeTitle = (key: string, confirm = false) =>

@@ -1,5 +1,4 @@
 import type { TaskJob, TaskProbeItem } from '@/api/tasks'
-import { fullTime } from '@/utils/time'
 
 /** 任务状态 → 文案与 chip 颜色。顶栏弹层与任务中心共用 */
 export const JOB_STATUS: Record<string, { text: string; color: 'default' | 'accent' | 'success' | 'warning' | 'danger' }> = {
@@ -20,6 +19,7 @@ export const JOB_KIND: Record<string, string> = {
   confirm: '确认入库',
   orgpick: '整理所选',
   scrape: '刮削',
+  probe: 'Emby 探测',
   libredo: '重新整理片目',
   filemove: '移动',
   ignore: '忽略',
@@ -36,6 +36,15 @@ export const JOB_SOURCE: Record<string, string> = {
   cron: '定时',
   auto: '自动',
   organize: '整理后',
+  scrape: '刮削后',
+  redo: '重新整理后',
+}
+
+/** 不在主队列上的任务，排队位置前面加上是哪条队列（刮削、探测各自一条，不等任务锁）；主队列为空串 */
+export function laneText(kind: string) {
+  if (kind === 'scrape') return '刮削队列'
+  if (kind === 'probe') return '探测队列'
+  return ''
 }
 
 export function jobKindText(kind: string) {
@@ -135,11 +144,12 @@ export function resultSummary(j: TaskJob) {
   return parts.join(' · ')
 }
 
-/** 探测报告的整体状态文案 */
+/** 探测任务的整体状态文案 */
 export const PROBE_REPORT_STATE: Record<string, string> = {
   queued: '排队中',
   running: '探测中',
   done: '已结束',
+  canceled: '已停止',
   lost: '中断（服务重启过，没探完的没有继续）',
 }
 
@@ -147,20 +157,19 @@ export const PROBE_REPORT_STATE: Record<string, string> = {
 export const PROBE_ITEM_KIND: Record<TaskProbeItem['kind'], { text: string; color: 'warning' | 'danger' | 'default' }> = {
   failed: { text: '失败', color: 'danger' },
   error: { text: '出错', color: 'danger' },
-  held: { text: '跳过', color: 'warning' },
-  missing: { text: '未入库', color: 'default' },
+  held: { text: '防抖跳过', color: 'warning' },
+  missing: { text: '查不到', color: 'default' },
 }
 
-/**
- * 一个没探成的条目「接下来会怎样」。
- * 注意没有定时重试：冷却期过了之后，要等这个片目再次入库确认、再刮削一次，或在片目详情里点「提前探测」才会再请求
- */
-export function probeRetryText(it: { retry_at?: string; final?: boolean; kind?: string }) {
-  if (it.kind === 'missing') return 'Emby 入库确认后会自动再排'
-  if (it.final) return `次数已用完，不再自动探测${it.retry_at ? `；${fullTime(it.retry_at)} 记录过期后才会再给一次机会` : ''}`
-  if (!it.retry_at) return '已过冷却时间，下次入库或刮削时会再试'
-  if (new Date(it.retry_at).getTime() <= Date.now()) return '已过冷却时间，下次入库或刮削时会再试'
-  return `${fullTime(it.retry_at)} 之后才允许再探（不会自动重试，到时再刮削或在片目详情里点「提前探测」）`
+/** 失败 / 跳过的条目里，最晚什么时候全部能再手动请求（重试按钮据此倒计时）；都能了返回 undefined */
+export function probeRetryReadyAt(items: TaskProbeItem[] | undefined, now: number): string | undefined {
+  let latest: string | undefined
+  for (const it of items ?? []) {
+    if ((it.kind === 'failed' || it.kind === 'held') && it.retry_at && new Date(it.retry_at).getTime() > now) {
+      if (!latest || new Date(it.retry_at) > new Date(latest)) latest = it.retry_at
+    }
+  }
+  return latest
 }
 
 /** 结果里的问题清单（刮削：未能刮削的片目 problems + 出错明细 errors） */

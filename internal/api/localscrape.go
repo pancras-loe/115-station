@@ -493,18 +493,11 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
 	var wrote map[string]bool
-	// 刮到的片目交给 Emby 提前探测，结果写回这个任务（embyprobereport.go）。
-	// 挂在任务结束回调上、而不是直接排：要等任务行写完「完成」，探测失败时才改得成「部分失败」，
-	// 也不会被结束时那一下写回盖掉。
+	// 刮到的片目交给 Emby 提前探测：用户这一次勾了「轨道探测」，按手动规则另建一个探测任务
+	// （embyprobejob.go，进度与结果在任务中心，失败能单独重试，不把刮削本身标成失败）。
 	// 整理后自动刮削（scrapeAutoDedupe）不排：那些片目刚入库，入库确认那条入口会排，
 	// 这里再排一次就是同一批条目进两次队列（防重复探测，见 embyextract.go 文件头）
 	var extract []string
-	defer func() {
-		if len(extract) > 0 {
-			paths, id := extract, job.ID
-			onJobDone(id, func(model.TaskJob) { queueEmbyExtractFor(id, paths...) })
-		}
-	}()
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
 	o := lp.Scrape
 	localRoot := localMediaRoot()
@@ -657,8 +650,14 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		msg += fmt.Sprintf("、占位剧照未写 %d 集", res.Placeholder)
 	}
 	if len(extract) > 0 {
-		// 探测与入库确认共用记账（embyextract.go）：说清楚不是每一集都会探，免得用户以为漏了
-		msg += fmt.Sprintf("；%d 个片目已排进 Emby 提前探测（已有媒体信息的跳过，结果在任务详情里）", len(extract))
+		pj, err := enqueueProbeJob(h.DB, probeJobSpec{
+			Title: "Emby 提前探测：" + truncateStr(job.Title, 80), Source: "scrape", Paths: extract,
+		})
+		if err != nil {
+			msg += "；Emby 提前探测任务没建成：" + err.Error()
+		} else {
+			msg += fmt.Sprintf("；已建 Emby 提前探测任务 #%d（%d 个片目，已有媒体信息的跳过，进度在任务中心）", pj.ID, len(extract))
+		}
 	} else if o.Probe && job.DedupeKey != scrapeAutoDedupe && done > 0 {
 		if _, ok := loadEmbyRefreshCfg(); !ok {
 			msg += "；没有配置 Emby，跳过提前探测"
@@ -681,9 +680,8 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if w.stat.Local+w.stat.Uploaded+w.stat.Skipped == 0 && rep.n > 0 && !canceled {
 		return jobOutcome{Result: res}, errors.New(msg)
 	}
-	// 整理后刮削什么都没写（全都已有）：后台任务不留行，免得每轮整理都添一条「跳过 N 个」。
-	// 排了探测的要留：探测结果写回这一行
-	idle := job.Priority == jobPriorityBackground && w.stat.Local+w.stat.Uploaded == 0 && rep.n == 0 && len(problems) == 0 && len(extract) == 0
+	// 整理后刮削什么都没写（全都已有）：后台任务不留行，免得每轮整理都添一条「跳过 N 个」
+	idle := job.Priority == jobPriorityBackground && w.stat.Local+w.stat.Uploaded == 0 && rep.n == 0 && len(problems) == 0
 	// 有出错或没刮成的片目：记「部分失败」，不再和全部成功一样显示「完成」
 	partial := rep.n > 0 || len(problems) > 0
 	return jobOutcome{Message: msg, Result: res, Canceled: canceled, Idle: idle, Partial: partial}, nil

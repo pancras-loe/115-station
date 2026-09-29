@@ -25,6 +25,7 @@ import {
   elapsed,
   jobKindText,
   jobSourceText,
+  laneText,
   msgTone,
   pct,
   resultSummary,
@@ -53,7 +54,7 @@ async function loadIncr() {
 
 const running = computed(() => queue.jobs.filter((j) => j.status === 'running'))
 /** 主队列上正在跑的：刮削单独一条队列、不拿任务锁，「锁被谁占着」只看主队列 */
-const runningMain = computed(() => running.value.filter((j) => j.kind !== 'scrape'))
+const runningMain = computed(() => running.value.filter((j) => j.kind !== 'scrape' && j.kind !== 'probe'))
 const queued = computed(() => queue.jobs.filter((j) => j.status === 'queued'))
 
 /** 锁被不在队列里的东西占着（增量轮询、Emby 事件深删）：进行中列表里单独一行 */
@@ -246,10 +247,10 @@ onUnmounted(() => {
               <p v-if="subProgressText(j)" class="sub dim">└ {{ subProgressText(j) }}</p>
             </template>
             <p v-else class="sub">
-              {{ j.kind === 'scrape' ? '刮削队列' : '' }}第 {{ j.position }} 位
+              {{ laneText(j.kind) }}第 {{ j.position }} 位
               <span v-if="j.priority !== 0" class="dim"> · 手动提交的会排在它前面</span>
               <span v-if="(j.eta_sec ?? 0) >= 60"> · 预计约 {{ Math.round((j.eta_sec ?? 0) / 60) }} 分钟内跑完</span>
-              <span v-if="j.position === 1 && j.kind !== 'scrape' && !runningMain.length && queue.lock.busy" class="dim">
+              <span v-if="j.position === 1 && !laneText(j.kind) && !runningMain.length && queue.lock.busy" class="dim">
                 · 正在等 {{ queue.lock.holder }}
               </span>
               <span class="dim"> · 提交于 {{ relTime(j.created_at) }}</span>
@@ -271,7 +272,7 @@ onUnmounted(() => {
 
     <SectionCard
       title="历史"
-      hint="成功与取消的保留 7 天，失败与中断保留 30 天；什么都没做的定时整理不留记录"
+      hint="成功与取消的保留 7 天，部分失败、失败与中断保留 30 天；什么都没做的定时整理不留记录"
     >
       <HTabs :model-value="status" :items="statusTabs" class="filters" @update:model-value="pickStatus" />
 

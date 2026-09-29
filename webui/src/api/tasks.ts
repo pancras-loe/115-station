@@ -31,30 +31,34 @@ export interface QueuedReply {
 /** 一个没探成的条目（后端 embyprobereport.go 的 jobProbeItem） */
 export interface TaskProbeItem {
   label: string
-  /** failed 这次请求失败 / held 近期请求过或次数用完、这次没请求 / missing Emby 里还没有 / error 整条路径没法处理 */
+  /** failed 这次请求失败 / held 刚请求过（防抖）、这次没请求 / missing Emby 里没有 / error 整条路径没法处理 */
   kind: 'failed' | 'held' | 'missing' | 'error'
   err?: string
   attempts?: number
-  /** 最早什么时候允许再探；final 时是记账过期、再给一次机会的时间 */
+  /** 防抖没过：这个时间之后才能再手动请求 */
   retry_at?: string
-  /** 次数用完，不再自动探测 */
-  final?: boolean
+  /** 自动入口的次数已用完：入库后不会再自动探，只能手动 */
+  auto_stopped?: boolean
 }
 
-/** 任务结束后排进 Emby 提前探测的结果 */
+/** 探测任务（kind=probe）的结果，任务跑的过程中持续更新 */
 export interface TaskProbeReport {
   paths: number
   finished: number
+  /** 这次要请求的视频数（逐个片目查到后累加） */
+  planned: number
   ok: number
   failed: number
   held: number
   missing: number
   errors: number
+  /** 任务停止后没探的 */
+  canceled?: number
   items?: TaskProbeItem[]
   more?: number
   updated_at: string
   /** lost = 没探完服务就重启了，内存里的队列丢了 */
-  state: 'queued' | 'running' | 'done' | 'lost'
+  state: 'queued' | 'running' | 'done' | 'canceled' | 'lost'
   /** 连续失败熔断，暂停到这个时间 */
   paused_until?: string
 }
@@ -66,9 +70,14 @@ export interface ProbeFailRow {
   attempts: number
   last_err: string
   last_at: string
-  retry_at?: string
-  final?: boolean
+  /** 自动入口冷却中：最早什么时候会再自动试（前提是再次入库确认） */
+  auto_retry_at?: string
+  /** 自动入口次数用完 */
+  auto_stopped?: boolean
+  /** 防抖没过：这个时间之后才能手动重试 */
+  manual_at?: string
   running?: boolean
+  queued?: boolean
 }
 
 export interface ProbeStatus {
@@ -77,7 +86,7 @@ export interface ProbeStatus {
   queue: number
   running: string
   paused_until?: string
-  limits: { max_attempts: number; retry_hours: number; prune_days: number }
+  limits: { max_attempts: number; retry_hours: number; debounce_minutes: number; break_after: number; break_minutes: number }
   fails: ProbeFailRow[]
   fail_total: number
 }
@@ -96,6 +105,7 @@ export interface TaskJob {
     | 'organize'
     | 'orgpick'
     | 'scrape'
+    | 'probe'
     | 'libredo'
     | 'filemove'
     | 'full'
@@ -178,4 +188,6 @@ export const clear = () => http.post<{ message: string }>('/tasks/clear')
 export const history = (params: TaskHistoryQuery) =>
   http.get<TaskHistoryPage>('/tasks/history', { params, timeoutMs: 15_000 })
 export const probeStatus = () => http.get<ProbeStatus>('/tasks/probe')
+/** 失败清单里手动重试：建一个探测任务（409 = 都还在防抖期内） */
+export const retryProbe = (itemIds: string[]) => http.post<QueuedReply>('/tasks/probe/retry', { item_ids: itemIds })
 export const detail = (id: number) => http.get<{ data: TaskJobDetail }>(`/tasks/${id}`, { timeoutMs: 15_000 })
