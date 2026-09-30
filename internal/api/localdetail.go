@@ -153,11 +153,6 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 		idx.find(titleAbs, "透明 Logo", true, "clearlogo.png", "logo.png"),
 		idx.find(titleAbs, "横版图", true, "landscape.jpg"),
 	)
-	for _, f := range d.Files {
-		if f.Label == "背景图" && f.Exists {
-			d.fanartV = f.ModAt.Unix()
-		}
-	}
 
 	// ---- 视频 ----
 	var videos []scrapeVideo
@@ -203,6 +198,14 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 		}
 		return a.Rel < b.Rel
 	})
+	if !tv {
+		d.perVersionArt(idx, titleAbs)
+	}
+	for _, f := range d.Files {
+		if f.Label == "背景图" && f.Exists {
+			d.fanartV = f.ModAt.Unix()
+		}
+	}
 
 	// ---- 季（与刮削同一套判定：scrapeSeasonDirs 决定 season.nfo 写不写）----
 	if tv {
@@ -267,6 +270,51 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 	}
 	d.grade()
 	return d
+}
+
+// perVersionArt 多版本电影（目录里两个及以上视频）的片目级图按视频名算：每个版本都有
+// <视频名>-poster.jpg 才算有海报，目录级的 poster.jpg 不算 —— Emby 在这种目录里不用它（见 titleRun.multiVersion），
+// 按目录级算的话状态是「刮全了」、Emby 里却一张图都没有，定时补全也不会来补。
+// 缺的时候显示第一个缺的文件名，一眼看出是哪个版本没有
+func (d *localTitleDetail) perVersionArt(idx localDirIndex, titleAbs string) {
+	var ens []localEntry
+	for _, en := range d.Entries {
+		if !en.StrmMissing {
+			ens = append(ens, en)
+		}
+	}
+	if len(ens) < 2 {
+		return
+	}
+	kinds := map[string][]string{"海报": {"poster.jpg", "poster.png"}, "背景图": {"fanart.jpg", "fanart.png"},
+		"透明 Logo": {"clearlogo.png"}, "横版图": {"landscape.jpg"}}
+	for i, f := range d.Files {
+		suffixes, ok := kinds[f.Label]
+		if !ok {
+			continue
+		}
+		var first, lack *localFile
+		for _, en := range ens {
+			dirAbs := filepath.Join(titleAbs, filepath.FromSlash(path.Dir(en.Rel)))
+			names := make([]string, len(suffixes))
+			for j, s := range suffixes {
+				names[j] = en.Name + "-" + s
+			}
+			got := idx.find(dirAbs, f.Label, f.Optional, names...)
+			if !got.Exists {
+				lack = &got
+				break
+			}
+			if first == nil {
+				first = &got
+			}
+		}
+		if lack != nil {
+			d.Files[i] = *lack
+		} else {
+			d.Files[i] = *first
+		}
+	}
 }
 
 // grade 按详情里的产物定卡片状态：必需产物（片目级 NFO、海报、背景图、季 NFO、每集 NFO）缺一样就是 partial，

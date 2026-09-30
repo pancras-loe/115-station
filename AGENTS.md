@@ -415,6 +415,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       对其中任何一个发 PlaybackInfo，返回的都是**整组**版本、主版本排第一。所以只要知道版本 id 就点名 `MediaSourceId`（单版本条目也点），
       结果一律按 id 认（`playbackSourceStreams`），**别再「单版本取第一个」**：那会拿早就探过的主版本轨道 0 秒报成功，缺的那个永远没探。
       多版本时 Emby 存图写 `视频名-poster.jpg` 并删掉 `poster.jpg`，本地文件页与刮削的「已有」都要认它（`perVideoImage`）。
+      Emby 在这种目录里**不用**目录级的 poster / fanart / clearlogo / landscape，所以刮削对多版本电影（`titleRun.multiVersion`）按视频名各写一份：
+      本地已有的（目录级那张、别的版本那张）直接拷，都没有才下载（同一张只下一次），各版本都齐了再收掉目录级的（台账里有的网盘镜像不删）；
+      本地文件页同口径（`perVersionArt`：每个版本都有才算有）。测试 `scrapemulti_test.go`。
       **光盘结构（ISO / BDMV / VIDEO_TS）不探**，同样按版本判（`probeSources` / `discSource`：一个 ISO 版本一个 mkv 版本时 mkv 照探）。
       STRM 名不带扩展名之后（§6.15）文件名上认不出 ISO，所以 **ISO 的直链不看「保留文件后缀」一律带 `.iso`**（`writeStrmNamed`，qmediasync 同款），
       判断时除了 Emby 给的路径还读一次本地 STRM 里的直链（Emby 记的直链要等它重扫才更新）。存量由 `strmiso.go` 启动时一次性补：

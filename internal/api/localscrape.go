@@ -276,6 +276,32 @@ type fileScrapeWriter struct {
 	stat  fileScrapeStat
 	// localDirs 这次在本地写过东西的标题目录（刷 Emby 用）
 	localDirs map[string]bool
+	// localRoot 本地媒体库根，retire 据此查台账。空 = 不知道哪些是网盘镜像，一律不删
+	localRoot string
+}
+
+// retire 删掉一个已被取代的本地产物（多版本电影的目录级海报）。只删本地、不动网盘：
+// 台账里有这一行的是网盘镜像（网盘上就有这张图，全量 / 增量同步下来的），删了下一轮又同步回来，
+// 这种留着 —— 多版本目录里 Emby 反正不用它
+func (w *fileScrapeWriter) retire(d metaDest, name string) bool {
+	if d.Local == "" || w.localRoot == "" {
+		return false
+	}
+	p := filepath.Join(d.Local, name)
+	rel := localRelOrEmpty(w.localRoot, p)
+	if rel == "" {
+		return false
+	}
+	if model.DB != nil {
+		var n int64
+		// 与 scrapeDirVideoRows 同样两级认：台账路径可能多一截前缀
+		model.DB.Model(&model.SyncedFile{}).
+			Where(`rel_path = ? OR rel_path LIKE ? ESCAPE '\'`, rel, "%/"+likeEscape(rel)).Count(&n)
+		if n > 0 {
+			return false
+		}
+	}
+	return os.Remove(p) == nil
 }
 
 func newFileScrapeWriter(ops cloudMetaOps, force, upload bool) *fileScrapeWriter {
@@ -547,6 +573,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	targets, problems := scrapeTargets(lp, scanLedgerTitles())
 
 	w := newFileScrapeWriter(cloud, o.Force, o.Upload)
+	w.localRoot = localRoot
 	wrote = w.localDirs
 	w.markHandled = func(p string) {
 		if st, ok := stampOfPath(p); ok {

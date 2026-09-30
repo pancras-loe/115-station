@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -146,17 +147,26 @@ func (r *titleRun) skip(d metaDest, name string) bool {
 	return false
 }
 
-// skipPerVideo 电影的 poster.jpg / fanart.jpg：Emby 已按视频名另存了一份（<视频名>-poster.jpg）就算有。
+// movieArtNames 电影片目级的几张图。多版本时改按视频名写（<视频名>-poster.jpg，见 multiVersion）
+var movieArtNames = map[string]bool{"poster.jpg": true, "fanart.jpg": true, "clearlogo.png": true, "landscape.jpg": true}
+
+// multiVersion 电影片目里有两个及以上视频。
+// 视频名不以目录名开头时（我们的重命名模板正是如此），Emby 把同目录的几个视频当成几部独立的电影，
+// 目录级的 poster.jpg / fanart.jpg 不知道归谁、一律不用，只认按视频名配对的 <视频名>-poster.jpg。
+// 2026-09-30《夏洛特烦恼》两个版本现场：NFO 按视频名写所以生效，图全是目录级的，Emby 里一张都没有
+func (r *titleRun) multiVersion() bool {
+	return r.t.Kind != "tv" && len(r.t.Videos) >= 2
+}
+
+// skipPerVideo 电影的片目级图：Emby 已按视频名另存了一份（<视频名>-poster.jpg）就算有。
 // 多版本电影 Emby 存图用这个名字并删掉我们的 poster.jpg（见 perVideoImage），
-// 不认的话每次刮削补一张、Emby 刷新删一张，来回折腾
+// 不认的话每次刮削补一张、Emby 刷新删一张，来回折腾；
+// 多版本变回单版本（洗版删掉一个）时，留下那个视频的按名图同样算数，不必再下一张目录级的
 func (r *titleRun) skipPerVideo(name string) bool {
-	if r.t.Kind == "tv" {
+	if r.t.Kind == "tv" || !movieArtNames[name] {
 		return false
 	}
 	kind := strings.TrimSuffix(name, filepath.Ext(name))
-	if kind != "poster" && kind != "fanart" {
-		return false
-	}
 	for _, v := range r.t.Videos {
 		for _, ext := range []string{".jpg", ".png"} {
 			if r.skip(v.Dir, v.Name+"-"+kind+ext) {
@@ -165,6 +175,48 @@ func (r *titleRun) skipPerVideo(name string) bool {
 		}
 	}
 	return false
+}
+
+// localArt 多版本要按视频名补的图，本地有没有现成的一份可以直接拿来：
+// 目录级的那张（单版本时刮的，后来又进了一个版本），或别的版本已有的按名图（Emby 自己存的也算）。
+// 有就不去图床再下一遍。强制覆盖时不用：用户要的就是重新拉
+func (r *titleRun) localArt(name string) (data []byte, from string) {
+	if r.s.opts.Force {
+		return nil, ""
+	}
+	kind, ext := strings.TrimSuffix(name, filepath.Ext(name)), filepath.Ext(name)
+	type cand struct{ dir, name string }
+	cands := []cand{{r.t.Dir.Local, name}}
+	for _, v := range r.t.Videos {
+		cands = append(cands, cand{v.Dir.Local, v.Name + "-" + kind + ext})
+	}
+	for _, c := range cands {
+		if c.dir == "" {
+			continue
+		}
+		if b, err := os.ReadFile(filepath.Join(c.dir, c.name)); err == nil && len(b) > 0 {
+			return b, c.name
+		}
+	}
+	return nil, ""
+}
+
+// retireDirArt 多版本的每个视频都有了自己的那张之后，目录级的同一张就没用了（Emby 不认，
+// 还会把它当成「已刮过」挡住只补缺失）。交给 writer 收掉：它知道哪些是网盘镜像、不能删
+func (r *titleRun) retireDirArt(name string) {
+	rt, ok := r.s.w.(metaRetirer)
+	if !ok || r.t.Dir.Local == "" {
+		return
+	}
+	kind, ext := strings.TrimSuffix(name, filepath.Ext(name)), filepath.Ext(name)
+	for _, v := range r.t.Videos {
+		if v.Dir.Local == "" || !localMetaExists(v.Dir.Local, v.Name+"-"+kind+ext) {
+			return
+		}
+	}
+	if rt.retire(r.t.Dir, name) {
+		r.logv("✂ %s：各版本都有按视频名的一份了，收掉目录级的这张 → %s", name, r.t.Dir.Local)
+	}
 }
 
 // put 写一个产物；how 是日志里「怎么来的」那一截
@@ -581,9 +633,34 @@ func (r *titleRun) images(body []byte) {
 	// 先问 writer 要不要（已有的不拉），要的一起并发拉，再按原顺序写
 	var reqs []imgReq
 	var names []string
+	var dests []metaDest
+	multi := r.multiVersion()
+	var retire []string
 	for _, img := range images {
 		if img[0] == "" {
 			r.logv("○ %s：TMDB 上没有这张图", img[1])
+			continue
+		}
+		if multi && movieArtNames[img[1]] {
+			// 多版本：每个视频一张 <视频名>-poster.jpg。本地已有的（目录级那张、别的版本那张）
+			// 直接拷过去，都没有才下载 —— 几个版本要下的是同一张图，fetchImages 按路径合并，只下一次
+			kind, ext := strings.TrimSuffix(img[1], filepath.Ext(img[1])), filepath.Ext(img[1])
+			for _, v := range t.Videos {
+				name := v.Name + "-" + kind + ext
+				if r.skip(v.Dir, name) {
+					continue
+				}
+				if data, from := r.localArt(img[1]); data != nil {
+					if r.put(v.Dir, name, data, " ← 沿用本地 "+from+"（不重新下载）") {
+						r.st.Reused++
+					}
+					continue
+				}
+				reqs = append(reqs, imgReq{path: img[0], size: "original"})
+				names = append(names, name)
+				dests = append(dests, v.Dir)
+			}
+			retire = append(retire, img[1])
 			continue
 		}
 		if r.skip(t.Dir, img[1]) || r.skipPerVideo(img[1]) {
@@ -591,6 +668,7 @@ func (r *titleRun) images(body []byte) {
 		}
 		reqs = append(reqs, imgReq{path: img[0], size: "original"})
 		names = append(names, img[1])
+		dests = append(dests, t.Dir)
 	}
 	got := r.fetchImages("图片", reqs, names)
 	for i, g := range got {
@@ -598,11 +676,14 @@ func (r *titleRun) images(body []byte) {
 			return
 		}
 		if how, ok := r.settleImage(names[i], g); ok {
-			r.put(t.Dir, names[i], g.img.data, how)
+			r.put(dests[i], names[i], g.img.data, how)
 		}
 	}
-	if r.s.rep.stopped() {
+	if r.s.rep.stopped() || r.st.Gone {
 		return
+	}
+	for _, name := range retire {
+		r.retireDirArt(name)
 	}
 	if t.Kind == "tv" {
 		r.episodeStills()

@@ -513,6 +513,12 @@ type metaSkipper interface {
 	skip(d metaDest, name string) bool
 }
 
+// metaRetirer writer 可选实现：收掉一个已被取代的本地产物（多版本电影的目录级海报，见 retireDirArt）。
+// 返回 true 表示真删了；不该删（网盘镜像）或删不了都返回 false，调用方不当错误处理
+type metaRetirer interface {
+	retire(d metaDest, name string) bool
+}
+
 func localMetaExists(dir, name string) bool {
 	st, err := os.Stat(filepath.Join(dir, name))
 	return err == nil && st.Size() > 0
