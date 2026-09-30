@@ -175,43 +175,6 @@ func embyGetJSON(base, key, path string, q url.Values, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// embyAdminUserID 取一个管理员用户 id：改人物条目要先按用户读出完整条目（/Users/{uid}/Items/{id}）
-func embyAdminUserID(base, key string) (string, error) {
-	type user struct {
-		ID     string `json:"Id"`
-		Policy struct {
-			IsAdministrator bool `json:"IsAdministrator"`
-			IsDisabled      bool `json:"IsDisabled"`
-		} `json:"Policy"`
-	}
-	var users []user
-	// 4.8 起推荐 /Users/Query（返回 {Items}），老版本只有 /Users（返回数组）
-	var page struct {
-		Items []user `json:"Items"`
-	}
-	if err := embyGetJSON(base, key, "/Users/Query", nil, &page); err == nil && len(page.Items) > 0 {
-		users = page.Items
-	} else if err := embyGetJSON(base, key, "/Users", nil, &users); err != nil {
-		return "", err
-	}
-	first := ""
-	for _, u := range users {
-		if u.Policy.IsDisabled {
-			continue
-		}
-		if u.Policy.IsAdministrator {
-			return u.ID, nil
-		}
-		if first == "" {
-			first = u.ID
-		}
-	}
-	if first == "" {
-		return "", errors.New("Emby 里没有可用的用户")
-	}
-	return first, nil
-}
-
 // embyTitlesPage 一页电影 / 剧集（带演职人员）
 func embyTitlesPage(base, key string, start, limit int) ([]embyTitleItem, int, error) {
 	q := url.Values{
@@ -302,10 +265,33 @@ func (p embyPersonItem) lockField(f string) {
 	p["LockedFields"] = append(locked, f)
 }
 
-func embyGetPerson(base, key, uid, pid string) (embyPersonItem, error) {
-	var it embyPersonItem
-	err := embyGetJSON(base, key, "/Users/"+url.PathEscape(uid)+"/Items/"+url.PathEscape(pid), nil, &it)
-	return it, err
+// personItemFields 读人物条目时要带回的字段。改名 / 简介要把整条 DTO POST 回去，
+// Emby 的条目更新接口会拿请求里的值覆盖这些字段 —— 少带一个就等于把它清空（生日、出生地、锁定字段 …）。
+// Settings 带回 LockData / LockedFields
+const personItemFields = "ProviderIds,Overview,SortName,OriginalTitle,Genres,Tags,Studios,Taglines," +
+	"ProductionLocations,PremiereDate,EndDate,ProductionYear,DateCreated,CommunityRating,CriticRating," +
+	"OfficialRating,CustomRating,ExternalUrls,RemoteTrailers,Settings"
+
+// embyGetPerson 读人物条目。
+//
+// **别改回 /Users/{uid}/Items/{id}**：Emby 按用户读单个人物条目时，若这个人物从没刷新过元数据，
+// 会先当场去 TMDB 拉一遍再返回（UserLibraryService 的按需刷新）。连不上 TMDB 的服务器上这一下
+// 就卡到超时 —— 2026-09-30 现场：每个人物都 20 秒超时失败，Emby 日志里同时刻正卡在
+// api.themoviedb.org/3/configuration/primary_translations。列表查询 /Items?Ids= 不触发按需刷新
+func embyGetPerson(base, key, pid string) (embyPersonItem, error) {
+	var page struct {
+		Items []embyPersonItem `json:"Items"`
+	}
+	q := url.Values{"Ids": {pid}, "Fields": {personItemFields}, "EnableUserData": {"false"}}
+	if err := embyGetJSON(base, key, "/Items", q, &page); err != nil {
+		return nil, err
+	}
+	for _, it := range page.Items {
+		if it.str("Id") == pid {
+			return it, nil
+		}
+	}
+	return nil, fmt.Errorf("Emby 里没有这个人物条目（id %s）", pid)
 }
 
 func embyUpdateItem(base, key, id string, it embyPersonItem) error {
@@ -327,15 +313,25 @@ func embyUpdateItem(base, key, id string, it embyPersonItem) error {
 
 // embyPersonNameTaken 同名人物是否已经是另一个条目。
 // 常见于：新刮的 NFO 已经写了中文名，Emby 按中文名建了新人物，老片子还挂着英文名的那个。
-// 这时再把英文名那个改成同名，两个人物同名，Emby 按名字认人时会乱
-func embyPersonNameTaken(base, key, name, selfID string) bool {
-	var p struct {
-		ID string `json:"Id"`
+// 这时再把英文名那个改成同名，两个人物同名，Emby 按名字认人时会乱。
+// 用 /Persons 列表按关键词查再精确比对名字，不用 /Persons/{名字}（单条目读取，理由同 embyGetPerson）
+func embyPersonNameTaken(base, key, name, selfID string) (bool, error) {
+	var page struct {
+		Items []struct {
+			ID   string `json:"Id"`
+			Name string `json:"Name"`
+		} `json:"Items"`
 	}
-	if err := embyGetJSON(base, key, "/Persons/"+url.PathEscape(name), nil, &p); err != nil {
-		return false
+	q := url.Values{"SearchTerm": {name}, "Limit": {"50"}, "EnableUserData": {"false"}, "EnableImages": {"false"}}
+	if err := embyGetJSON(base, key, "/Persons", q, &page); err != nil {
+		return false, err
 	}
-	return p.ID != "" && p.ID != selfID
+	for _, p := range page.Items {
+		if strings.TrimSpace(p.Name) == name && p.ID != selfID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func embyUploadPrimary(base, key, id string, data []byte) error {
@@ -586,7 +582,6 @@ type personRunner struct {
 	tc       *TmdbClient
 	base     string
 	key      string
-	uid      string
 	skip     map[string]bool // 记账里还没到期的人物
 	done     map[string]bool // 本轮已处理过的人物（同一个人出现在很多部片里）
 	credits  map[string]*titleCredits
@@ -666,7 +661,7 @@ func (r *personRunner) handle(t embyTitleItem, ref embyPersonRef) personResult {
 		savePersonMark(ref.ID, ref.Name, tmdbID, res.State, res.Note)
 		return res
 	}
-	item, err := embyGetPerson(r.base, r.key, r.uid, ref.ID)
+	item, err := embyGetPerson(r.base, r.key, ref.ID)
 	if err != nil {
 		return fail(0, err)
 	}
@@ -696,7 +691,9 @@ func (r *personRunner) handle(t embyTitleItem, ref embyPersonRef) personResult {
 
 	taken := false
 	if r.cfg.ZhName && !hasHan(name) && meta.ZhName != "" && meta.ZhName != name {
-		taken = embyPersonNameTaken(r.base, r.key, meta.ZhName, ref.ID)
+		if taken, err = embyPersonNameTaken(r.base, r.key, meta.ZhName, ref.ID); err != nil {
+			return fail(tmdbID, fmt.Errorf("查同名人物失败: %v", err))
+		}
 	}
 	plan := planPerson(r.cfg, name, item.str("Overview"), item.hasPrimaryImage(), hasTmdbID, meta, taken)
 
@@ -772,13 +769,8 @@ func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if err != nil {
 		return jobOutcome{}, err
 	}
-	uid, err := embyAdminUserID(base, key)
-	if err != nil {
-		return jobOutcome{}, fmt.Errorf("读取 Emby 用户失败: %v", err)
-	}
-
 	r := &personRunner{
-		cfg: cfg, tc: tc, base: base, key: key, uid: uid,
+		cfg: cfg, tc: tc, base: base, key: key,
 		skip: map[string]bool{}, done: map[string]bool{}, credits: map[string]*titleCredits{},
 	}
 	var marks []model.EmbyPersonMark

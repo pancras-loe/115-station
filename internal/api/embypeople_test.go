@@ -212,6 +212,8 @@ type fakePeopleServer struct {
 	uploads map[string]int
 	updates map[string]int
 	tmdbHit map[string]int
+	// userGets 按用户读条目的次数，必须为 0
+	userGets int
 }
 
 func (f *fakePeopleServer) ref(id, typ string) map[string]any {
@@ -250,8 +252,6 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(append([]byte("\xff\xd8\xff\xe0"), make([]byte, 200)...)) // imgGet 拒收 100 字节以下的图
 
 	// ---- Emby ----
-	case path == "/Users/Query":
-		js(map[string]any{"Items": []map[string]any{{"Id": "u1", "Policy": map[string]any{"IsAdministrator": true}}}})
 	case path == "/Items" && r.URL.Query().Get("IncludeItemTypes") == "Movie,Series":
 		js(map[string]any{"TotalRecordCount": 2, "Items": []map[string]any{
 			{"Id": "m1", "Name": "阿甘正传", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "13"}, "People": []any{
@@ -264,11 +264,15 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"Id": "e1", "People": []any{f.ref("w1", "Writer")}},
 			{"Id": "e2", "People": []any{f.ref("w1", "Writer"), f.ref("p1", "GuestStar")}},
 		}})
-	case strings.HasPrefix(path, "/Users/u1/Items/"):
-		id := strings.TrimPrefix(path, "/Users/u1/Items/")
+	case strings.HasPrefix(path, "/Users/"):
+		// 按用户读单个条目会让 Emby 当场去 TMDB 刷新人物，连不上时卡到超时：一律不许用
+		f.userGets++
+		w.WriteHeader(http.StatusGatewayTimeout)
+	case path == "/Items" && r.URL.Query().Get("Ids") != "":
+		id := r.URL.Query().Get("Ids")
 		p := f.persons[id]
-		if p == nil {
-			w.WriteHeader(http.StatusNotFound)
+		if p == nil || !strings.Contains(r.URL.Query().Get("Fields"), "Settings") {
+			js(map[string]any{"Items": []any{}, "TotalRecordCount": 0})
 			return
 		}
 		it := map[string]any{"Id": id, "Name": p.Name, "Overview": p.Overview, "Type": "Person",
@@ -279,16 +283,16 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.Image != "" {
 			it["ImageTags"] = map[string]any{"Primary": p.Image}
 		}
-		js(it)
-	case strings.HasPrefix(path, "/Persons/"):
-		name := strings.TrimPrefix(path, "/Persons/")
+		js(map[string]any{"Items": []any{it}, "TotalRecordCount": 1})
+	case path == "/Persons":
+		term := r.URL.Query().Get("SearchTerm")
+		var items []map[string]any
 		for id, p := range f.persons {
-			if p.Name == name {
-				js(map[string]any{"Id": id})
-				return
+			if strings.Contains(p.Name, term) {
+				items = append(items, map[string]any{"Id": id, "Name": p.Name})
 			}
 		}
-		w.WriteHeader(http.StatusNotFound)
+		js(map[string]any{"Items": items})
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/Images/Primary"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/Items/"), "/Images/Primary")
 		body, _ := io.ReadAll(r.Body)
@@ -356,6 +360,9 @@ func TestPersonFillEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := out.Result.(personJobResult)
+	if f.userGets != 0 {
+		t.Fatalf("不许按用户读人物条目（会触发 Emby 按需刷新卡住）: %d 次", f.userGets)
+	}
 
 	p1 := f.persons["p1"]
 	if f.uploads["p1"] != 1 || p1.Name != "汤姆·汉克斯" || p1.Tmdb != "31" || !strings.Contains(p1.Overview, "美国演员") {
