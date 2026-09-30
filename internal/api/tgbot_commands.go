@@ -2,51 +2,41 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
-	"time"
 )
 
 var tgMenu = []map[string]string{
 	{"command": "help", "description": "帮助与指令列表"},
 	{"command": "id", "description": "查看当前聊天 ID"},
 	{"command": "status", "description": "运行状态"},
-	{"command": "search", "description": "搜索 TMDB：/search 片名"},
-	{"command": "gy", "description": "观影资源：/gy 片名"},
-	{"command": "wp", "description": "网盘资源：/wp 片名"},
+	{"command": "search", "description": "找资源（全部来源）：/search 片名"},
+	{"command": "gy", "description": "只搜观影：/gy 片名"},
+	{"command": "wp", "description": "只搜网盘：/wp 片名"},
 	{"command": "download", "description": "下载或转存：/download 链接"},
 	{"command": "organize", "description": "执行整理"},
 	{"command": "sync", "description": "执行增量同步"},
-	{"command": "cancel", "description": "取消当前选择会话"},
+	{"command": "cancel", "description": "关闭当前搜索"},
 }
 
-const tgHelp = "115-Station 私聊机器人\n\n/status 状态\n/search 片名：TMDB 搜索\n/gy 片名：观影搜资源\n/wp 片名：网盘搜资源\n/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n/organize 整理\n/sync 增量同步\n/cancel 取消当前选择\n/id 查看聊天 ID\n\n支持对应中文指令。选片和资源可点按钮或回复数字，5 分钟有效。取消选择不会停止已提交的任务。"
-
-type tgChoice struct {
-	label string
-	run   func()
-}
-type tgSelection struct {
-	token   string
-	chat    int64
-	user    int64
-	until   time.Time
-	choices []tgChoice
-}
+const tgHelp = "115-Station 私聊机器人\n\n" +
+	"/search 片名：找资源，观影 / 盘搜 / TG 频道 / 不太灵一起搜\n" +
+	"/gy 片名：只搜观影\n/wp 片名：只搜网盘\n" +
+	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
+	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n\n" +
+	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
+	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
+	"10 分钟内有效，关闭不会停止已提交的任务。"
 
 // tgConversation 只由接收器的单个 worker 访问，阶段切换和消费按钮不需要跨请求共享裸指针。
 type tgConversation struct {
-	h         *Handler
-	api       *tgAPI
-	cfg       TGConfig
-	ctx       context.Context
-	chat      int64
-	user      int64
-	selection *tgSelection
+	h    *Handler
+	api  *tgAPI
+	cfg  TGConfig
+	ctx  context.Context
+	chat int64
+	user int64
 }
 
 func tgCommand(text string) (string, string) {
@@ -67,7 +57,7 @@ func tgCommand(text string) (string, string) {
 	if cmd, ok := aliases[first]; ok {
 		return cmd, args
 	}
-	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}} {
+	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}} {
 		if strings.HasPrefix(text, p.prefix) {
 			return p.command, strings.TrimSpace(strings.TrimPrefix(text, p.prefix))
 		}
@@ -75,8 +65,8 @@ func tgCommand(text string) (string, string) {
 	if classifyLink(text) != "" {
 		return "download", text
 	}
-	if n, err := strconv.Atoi(text); err == nil && n > 0 {
-		return "pick", text
+	if act, ok := botFlowAct(text); ok {
+		return "flow", act
 	}
 	return "unknown", ""
 }
@@ -88,11 +78,13 @@ func (b *tgConversation) send(text string, buttons [][]tgButton) {
 	}
 }
 
+func (b *tgConversation) flowKey() string { return fmt.Sprintf("tg:%d", b.chat) }
+
 func (b *tgConversation) handle(u tgUpdate) {
 	defer func() {
 		if recover() != nil {
-			b.selection = nil
-			log.Printf("[TG机器人] ✗ 指令处理异常，已清理选择会话")
+			botFlowDrop(b.flowKey(), nil)
+			log.Printf("[TG机器人] ✗ 指令处理异常，已关闭搜索会话")
 		}
 	}()
 	m, from := tgUpdateMessage(u)
@@ -116,42 +108,44 @@ func (b *tgConversation) handle(u tgUpdate) {
 	}
 	b.chat, b.user = m.Chat.ID, from.ID
 	if u.Callback != nil {
-		parts := strings.Split(u.Callback.Data, ":")
-		if len(parts) != 3 || parts[0] != "pick" {
+		// 按钮：f:<会话 token>:<操作>，操作结果编辑按钮所在的那条消息
+		parts := strings.SplitN(u.Callback.Data, ":", 3)
+		if len(parts) != 3 || parts[0] != "f" || parts[1] == "" {
 			b.reply("按钮已失效，请重新搜索。")
 			return
 		}
-		n, _ := strconv.Atoi(parts[2])
-		b.pick(parts[1], n)
+		msg := m.ID
+		v, _ := b.h.botAct(b.flowKey(), parts[2], parts[1], b.flowIO(&msg))
+		b.show(v, &msg)
 		return
 	}
 	switch cmd {
-	case "pick":
-		n, _ := strconv.Atoi(args)
-		b.pick("", n)
+	case "flow":
+		var msg int64
+		v, ok := b.h.botAct(b.flowKey(), args, "", b.flowIO(&msg))
+		if !ok {
+			b.reply("当前没有进行中的搜索，发送 /search 片名 开始。")
+			return
+		}
+		b.show(v, &msg)
 	case "cancel":
-		b.selection = nil
-		b.reply("已取消当前选择；已提交的任务继续执行。")
-	case "wp", "gy":
-		b.selection = nil
+		botFlowDrop(b.flowKey(), nil)
+		b.reply("已关闭当前搜索；已提交的任务继续执行。")
+	case "search", "wp", "gy":
 		if args == "" {
 			b.reply("请在命令后填写片名，例如 /" + cmd + " 星际穿越")
 			return
 		}
-		b.search(cmd, args)
-	case "status", "search", "download", "organize", "sync":
-		if (cmd == "search" || cmd == "download") && args == "" {
-			b.reply("请在命令后填写片名或链接。")
+		source := map[string]string{"search": "", "gy": "gy", "wp": "pansou"}[cmd]
+		var msg int64
+		v := b.h.botFind(b.flowKey(), source, args, b.flowIO(&msg))
+		b.show(v, &msg)
+	case "status", "download", "organize", "sync":
+		if cmd == "download" && args == "" {
+			b.reply("请在命令后填写链接。")
 			return
 		}
-		if cmd == "search" {
-			b.selection = nil
-			b.reply("正在查询 TMDB…")
-		}
-		if cmd == "download" {
-			b.selection = nil
-		}
-		text := map[string]string{"status": "状态", "search": "搜索 " + args, "download": "下载 " + args, "organize": "整理", "sync": "同步"}[cmd]
+		text := map[string]string{"status": "状态", "download": "下载 " + args, "organize": "整理", "sync": "同步"}[cmd]
 		// 只允许明确列出的业务进入公共路由，中文别名同样不能绕进补全或建库。
 		reply := b.replyForCurrentChat()
 		b.h.handleBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), text, reply)
@@ -169,105 +163,48 @@ func (b *tgConversation) replyForCurrentChat() func(...string) {
 	}
 }
 
-func (b *tgConversation) choose(title string, choices []tgChoice) {
+// flowIO 搜索进度写在 *msg 那条消息上（没有就先发一条），提交进度与结果另发
+func (b *tgConversation) flowIO(msg *int64) botIO {
+	return botIO{
+		say:      b.replyForCurrentChat(),
+		progress: func(s string) { b.upsert(msg, "⏳ "+s, nil) },
+	}
+}
+
+// upsert 有消息 id 就原地编辑，编辑不了（太旧、被删）就新发一条并记下 id
+func (b *tgConversation) upsert(msg *int64, text string, buttons [][]tgButton) {
 	if b.ctx.Err() != nil {
 		return
 	}
-	if len(choices) == 0 {
-		b.reply("没有找到资源，请更换关键词。")
+	if *msg != 0 && b.api.edit(b.ctx, b.chat, *msg, text, buttons) == nil {
 		return
 	}
-	var nonce [12]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		b.reply("暂时无法创建选择会话，请重试。")
+	id, err := b.api.sendOne(b.ctx, b.chat, text, buttons)
+	if err != nil {
+		if b.ctx.Err() == nil {
+			log.Printf("[TG机器人] ✗ 回复失败: %v", err)
+		}
 		return
 	}
-	s := &tgSelection{token: hex.EncodeToString(nonce[:]), chat: b.chat, user: b.user, until: time.Now().Add(5 * time.Minute), choices: choices}
-	b.selection = s
-	lines := []string{title}
+	*msg = id
+}
+
+// show 把一屏内容落到 TG：提示另发；列表编辑 *msg 那条（按钮所在的消息 / 搜索进度那条）
+func (b *tgConversation) show(v botView, msg *int64) {
+	if len(v.Lines) == 0 || (v.Refresh && *msg == 0) {
+		return
+	}
+	if v.Toast {
+		b.reply(v.Lines...)
+		return
+	}
 	var rows [][]tgButton
-	for i, c := range choices {
-		lines = append(lines, fmt.Sprintf("%d. %s", i+1, c.label))
-		rows = append(rows, []tgButton{{Text: fmt.Sprintf("%d. %s", i+1, truncateStr(c.label, 35)), Data: fmt.Sprintf("pick:%s:%d", s.token, i+1)}})
+	for _, row := range v.Buttons {
+		var r []tgButton
+		for _, btn := range row {
+			r = append(r, tgButton{Text: btn.Text, Data: "f:" + v.Token + ":" + btn.Act})
+		}
+		rows = append(rows, r)
 	}
-	lines = append(lines, "点击按钮或回复数字选择，5 分钟有效；/cancel 取消。")
-	b.send(strings.Join(lines, "\n"), rows)
-}
-
-// takeSelection 在执行外部请求前消费整组选项，双击与旧阶段按钮不会再次提交。
-func takeSelection(s **tgSelection, token string, n int, chat, user int64, now time.Time) (func(), string) {
-	current := *s
-	if current == nil {
-		return nil, "选择已完成或失效，请重新搜索。"
-	}
-	if !now.Before(current.until) {
-		*s = nil
-		return nil, "选择已过期，请重新搜索。"
-	}
-	if current.chat != chat || current.user != user || (token != "" && token != current.token) {
-		return nil, "这是旧的选择按钮，请使用最新结果。"
-	}
-	if n < 1 || n > len(current.choices) {
-		return nil, fmt.Sprintf("请选择 1-%d。", len(current.choices))
-	}
-	*s = nil
-	return current.choices[n-1].run, ""
-}
-
-func (b *tgConversation) pick(token string, n int) {
-	run, msg := takeSelection(&b.selection, token, n, b.chat, b.user, time.Now())
-	if run == nil {
-		b.reply(msg)
-		return
-	}
-	if b.ctx.Err() == nil {
-		run()
-	}
-}
-
-func (b *tgConversation) search(kind, keyword string) {
-	b.reply("正在查询 TMDB…")
-	movies, err := b.h.wecomTmdbMulti(keyword)
-	if err != nil {
-		b.reply("TMDB 搜索失败：" + err.Error())
-		return
-	}
-	if len(movies) > 10 {
-		movies = movies[:10]
-	}
-	var choices []tgChoice
-	for _, m := range movies {
-		label := fmt.Sprintf("%s（%s）[%s] %.1f", m.Title, m.Year, m.Type, m.Vote)
-		choices = append(choices, tgChoice{label: label, run: func() { b.resources(kind, m) }})
-	}
-	b.choose("请选择影视：", choices)
-}
-
-// resources 选定影片后搜一个来源（/gy 观影、/wp 盘搜），与网页影视转存同一套
-// 搜索、相关性过滤、排序与提交（transferhub.go）
-func (b *tgConversation) resources(kind string, m wecomTmdbHit) {
-	key, label, limit := "pansou", "网盘", 10
-	if kind == "gy" {
-		key, label, limit = "gy", "观影", 20
-	}
-	b.reply("正在搜索「" + m.Title + "」的资源…")
-	items, note, err := b.h.botResources(key, m, limit)
-	if err != nil {
-		b.reply(label + "搜索失败：" + err.Error())
-		return
-	}
-	listTitle := "「" + m.Title + "」资源："
-	if note != "" {
-		listTitle = "「" + m.Title + "」资源（" + note + "）："
-	}
-	var choices []tgChoice
-	for _, it := range items {
-		choices = append(choices, tgChoice{label: resBotLabel(it, 140), run: func() {
-			if b.ctx.Err() != nil {
-				return
-			}
-			b.h.botSubmitResource(key, it, b.replyForCurrentChat())
-		}})
-	}
-	b.choose(listTitle, choices)
+	b.upsert(msg, v.text(), rows)
 }

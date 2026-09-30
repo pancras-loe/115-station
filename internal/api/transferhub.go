@@ -1016,48 +1016,22 @@ func (h *Handler) TransferOwned(c *gin.Context) {
 
 // ==================== 机器人 ====================
 
-// botResources 机器人按片搜一个来源：相关的排前面按默认顺序截前 limit 条。
-// 一条相关的都没有时退回全部结果并说明，别让人空手而归。
-// 机器人不接 RE0（解锁花积分，要人在网页上确认）
-func (h *Handler) botResources(key string, hit wecomTmdbHit, limit int) (items []ResourceItem, note string, err error) {
-	q := resQuery{TmdbID: hit.ID, Type: hit.Type, Title: hit.Title, Year: hit.Year}
-	r, err := searchResources(h, key, q, false)
-	if err != nil {
-		return nil, "", err
-	}
-	var relevant []ResourceItem
-	for _, it := range r.Items {
-		if it.Relevant {
-			relevant = append(relevant, it)
-		}
-	}
-	switch {
-	case len(r.Items) == 0:
-	case len(relevant) == 0:
-		note = fmt.Sprintf("%d 条结果的片名都对不上「%s」，以下仅供参考", len(r.Items), hit.Title)
-		relevant = r.Items
-	case len(relevant) < len(r.Items):
-		note = fmt.Sprintf("已隐藏 %d 条片名对不上的结果", len(r.Items)-len(relevant))
-	}
-	total := len(relevant)
-	if len(relevant) > limit {
-		relevant = relevant[:limit]
-		if note != "" {
-			note += "；"
-		}
-		note += fmt.Sprintf("展示前 %d 条，共 %d 条", limit, total)
-	}
-	return relevant, note, nil
-}
-
-// resBotLabel 机器人列表里的一行：[类型] 标题 | 画质 | 大小 | 做种 | 时间
-func resBotLabel(it ResourceItem, width int) string {
+// resBotLabel 机器人列表里的一行：[来源·类型] 标题 | 画质 | 大小 | 做种 | 时间。
+// withSource：几个来源混在一个列表里时带上来源名
+func resBotLabel(it ResourceItem, width int, withSource bool) string {
 	kind := map[string]string{"share115": "115 分享", "magnet": "磁力", "ed2k": "ed2k"}[it.Kind]
 	if kind == "" {
 		kind = pansouTypeLabel(it.Pan)
 		if kind == "" {
 			kind = "其他网盘"
 		}
+	}
+	if withSource {
+		src := botSourceLabel(it.Source)
+		if it.Via != "" {
+			src = "TG" + it.Via // 频道名比「TG 频道」有用：TG@频道
+		}
+		kind = src + "·" + kind
 	}
 	line := "[" + kind + "] " + truncateStr(it.Title, width)
 	var meta []string
@@ -1110,15 +1084,15 @@ func resTagLine(t resTags) string {
 	return strings.Join(parts, "·")
 }
 
-// botSubmitResource 机器人选中一条资源后的处理，回复文案按结果分
-func (h *Handler) botSubmitResource(key string, it ResourceItem, reply func(...string)) {
+// botSubmitResource 机器人选中一条资源后的处理，回复文案按结果分；返回是否提交成功
+func (h *Handler) botSubmitResource(it ResourceItem, reply func(...string)) bool {
 	if it.Action == "open" {
 		out := "此资源不是 115 分享，请手动打开：\n" + it.URL
 		if it.Code != "" {
 			out += "\n提取码：" + it.Code
 		}
 		reply(out)
-		return
+		return true
 	}
 	switch it.Action {
 	case "transfer":
@@ -1129,15 +1103,26 @@ func (h *Handler) botSubmitResource(key string, it ResourceItem, reply func(...s
 		} else {
 			reply("⏳ 提交 115 离线下载…")
 		}
+	case "unlock":
+		reply("RE0 资源解锁要花积分，请到网页「影视转存」里确认后解锁。")
+		return false
 	}
-	r, err := h.submitResource(resSubmitReq{Source: key, Action: it.Action, URL: it.URL, Code: it.Code, Ref: it.Ref, Title: it.Title}, "机器人")
+	r, err := h.submitResource(resSubmitReq{Source: it.Source, Action: it.Action, URL: it.URL, Code: it.Code, Ref: it.Ref, Title: it.Title}, "机器人")
 	if err != nil {
 		if it.Action == "transfer" {
 			reply("✗ 转存失败（部分内容可能已转存，请先看一眼网盘转存目录再决定是否重试）：" + err.Error())
-			return
+			return false
 		}
 		reply("✗ 提交失败：" + err.Error())
-		return
+		return false
 	}
 	reply("✓ " + r.Message)
+	return true
+}
+
+func firstNonEmptyStr(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }

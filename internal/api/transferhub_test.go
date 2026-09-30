@@ -272,33 +272,3 @@ func TestSubmitResourceGuards(t *testing.T) {
 		t.Errorf("其他网盘应当原样交回: %+v %v", r, err)
 	}
 }
-
-// 企微观影列表分组后序号要和会话里存的顺序一致（此前按原顺序取，回复 3 拿到的是别的种子）
-func TestGyBotGroupedListOrder(t *testing.T) {
-	items := []ResourceItem{
-		{Title: "A.1080p"},
-		{Title: "B.4K.中字"},
-		{Title: "C.无标签"},
-		{Title: "D.2160p"},
-	}
-	ordered, lines := gyBotGroupedList(items)
-	var got []string
-	for _, it := range ordered {
-		got = append(got, it.Title)
-	}
-	if strings.Join(got, ",") != "B.4K.中字,D.2160p,A.1080p,C.无标签" {
-		t.Fatalf("分组顺序: %v", got)
-	}
-	for i, it := range ordered {
-		prefix := fmt.Sprintf("%d. %s", i+1, it.Title)
-		found := false
-		for _, l := range lines {
-			if strings.HasPrefix(l, prefix) {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("序号 %d 对应的应当是 %s:\n%s", i+1, it.Title, strings.Join(lines, "\n"))
-		}
-	}
-}

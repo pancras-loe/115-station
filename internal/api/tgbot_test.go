@@ -49,44 +49,13 @@ func TestTGCommandsExcludeRemovedOperations(t *testing.T) {
 		{"/wp 星际穿越", "wp", "星际穿越"}, {"网盘星际穿越", "wp", "星际穿越"},
 		{"/sync", "sync", ""}, {"整理", "organize", ""}, {"magnet:?xt=urn:btih:abc", "download", "magnet:?xt=urn:btih:abc"},
 		{"/download https://115.com/s/abc 提取码:1234", "download", "https://115.com/s/abc 提取码:1234"},
+		{"搜索 星际穿越", "search", "星际穿越"}, {"12", "flow", "12"}, {"0", "flow", "0"},
+		{"下一页", "flow", "n"}, {"Q", "flow", "q"},
 	} {
 		cmd, arg := tgCommand(tc.text)
 		if cmd != tc.cmd || arg != tc.arg {
 			t.Fatalf("解析 %q 得到 %q %q", tc.text, cmd, arg)
 		}
-	}
-}
-
-func TestTGSelectionIsBoundAndConsumedOnce(t *testing.T) {
-	now := time.Now()
-	calls := 0
-	s := &tgSelection{token: "new", chat: 42, user: 42, until: now.Add(time.Minute), choices: []tgChoice{{run: func() { calls++ }}}}
-	for _, tc := range []struct {
-		token      string
-		chat, user int64
-		n          int
-	}{{"old", 42, 42, 1}, {"new", 43, 42, 1}, {"new", 42, 43, 1}, {"new", 42, 42, 2}} {
-		if fn, _ := takeSelection(&s, tc.token, tc.n, tc.chat, tc.user, now); fn != nil {
-			t.Fatal("旧按钮、越权或越界选择不应执行")
-		}
-		if s == nil {
-			t.Fatal("错误按钮不应销毁当前有效会话")
-		}
-	}
-	fn, _ := takeSelection(&s, "new", 1, 42, 42, now)
-	if fn == nil {
-		t.Fatal("有效选择未执行")
-	}
-	fn()
-	if fn, _ := takeSelection(&s, "new", 1, 42, 42, now); fn != nil {
-		fn()
-	}
-	if calls != 1 {
-		t.Fatalf("重复提交 %d 次", calls)
-	}
-	s = &tgSelection{until: now.Add(-time.Second)}
-	if fn, _ := takeSelection(&s, "", 1, 42, 42, now); fn != nil || s != nil {
-		t.Fatal("过期会话未清理")
 	}
 }
 
@@ -255,9 +224,52 @@ func TestTGQueuedCommandRechecksSavedConfig(t *testing.T) {
 		msgCfgCache.cfg, msgCfgCache.at, msgCfgCache.err = old, at, oldErr
 		msgCfgCache.Unlock()
 	}()
-	b := &tgConversation{cfg: TGConfig{Enabled: true, Token: "test", ChatID: "42"}, ctx: context.Background(), selection: &tgSelection{token: "keep"}}
+	f := &botFlow{token: "keep", at: time.Now()}
+	botFlowPut("tg:42", f)
+	defer botFlowDrop("tg:42", f)
+	b := &tgConversation{cfg: TGConfig{Enabled: true, Token: "test", ChatID: "42"}, ctx: context.Background()}
 	b.handle(tgUpdate{Message: &tgMessage{From: tgUser{ID: 42}, Chat: tgChat{ID: 42, Type: "private"}, Text: "/cancel"}})
-	if b.selection == nil {
+	if botFlowGet("tg:42") == nil {
 		t.Fatal("配置变更后仍执行了旧用户的排队指令")
+	}
+}
+
+// 按钮翻页编辑按钮所在的那条消息，「已经是最后一页」这种提示另发，不能把列表覆盖掉
+func TestTGFlowButtonsEditInPlace(t *testing.T) {
+	msgCfgCache.Lock()
+	old, at, oldErr := msgCfgCache.cfg, msgCfgCache.at, msgCfgCache.err
+	msgCfgCache.cfg = &MessageConfig{TG: TGConfig{Enabled: true, Token: "test", ChatID: "42"}}
+	msgCfgCache.at = time.Now()
+	msgCfgCache.Unlock()
+	defer func() {
+		msgCfgCache.Lock()
+		msgCfgCache.cfg, msgCfgCache.at, msgCfgCache.err = old, at, oldErr
+		msgCfgCache.Unlock()
+	}()
+	var mu sync.Mutex
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			ID int64 `json:"message_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		calls = append(calls, fmt.Sprintf("%s#%d", r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:], p.ID))
+		mu.Unlock()
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":99}}`)
+	}))
+	defer server.Close()
+	_, _ = botFlowFixture(t, "tg:42", botItems(10))
+	b := &tgConversation{api: &tgAPI{base: server.URL, token: "test", client: server.Client()},
+		cfg: TGConfig{Enabled: true, Token: "test", ChatID: "42"}, ctx: context.Background()}
+	press := func(data string) {
+		b.handle(tgUpdate{Callback: &tgCallback{From: tgUser{ID: 42}, Data: data,
+			Message: &tgMessage{ID: 7, Chat: tgChat{ID: 42, Type: "private"}}}})
+	}
+	press("f:tok:n")
+	press("f:tok:n")
+	press("pick:old:1")
+	if got := strings.Join(calls, ","); got != "editMessageText#7,sendMessage#0,sendMessage#0" {
+		t.Fatalf("调用顺序 %s", got)
 	}
 }

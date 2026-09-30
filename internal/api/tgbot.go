@@ -24,6 +24,7 @@ type tgAPI struct {
 type tgAPIError struct {
 	Code  int
 	Retry int
+	desc  string // Telegram 的原始描述，只拿来判断「内容没变」，不进 Error()（可能回显请求内容）
 }
 
 func (e *tgAPIError) Error() string {
@@ -66,6 +67,7 @@ func (a *tgAPI) call(ctx context.Context, method string, data any, out any) erro
 	var envelope struct {
 		OK         bool            `json:"ok"`
 		Code       int             `json:"error_code"`
+		Desc       string          `json:"description"`
 		Result     json.RawMessage `json:"result"`
 		Parameters struct {
 			Retry int `json:"retry_after"`
@@ -78,7 +80,7 @@ func (a *tgAPI) call(ctx context.Context, method string, data any, out any) erro
 		if envelope.Code == 0 {
 			envelope.Code = resp.StatusCode
 		}
-		return &tgAPIError{envelope.Code, envelope.Parameters.Retry}
+		return &tgAPIError{envelope.Code, envelope.Parameters.Retry, envelope.Desc}
 	}
 	if out != nil {
 		return json.Unmarshal(envelope.Result, out)
@@ -393,4 +395,46 @@ func (a *tgAPI) send(ctx context.Context, chat int64, text string, buttons [][]t
 		runes = runes[n:]
 	}
 	return nil
+}
+
+// tgMaxText 单条消息的上限是 4096 字符，留点余量
+const tgMaxText = 4000
+
+func tgClip(text string) string {
+	if r := []rune(text); len(r) > tgMaxText {
+		return string(r[:tgMaxText-1]) + "…"
+	}
+	return text
+}
+
+func tgMarkup(buttons [][]tgButton) map[string]any {
+	if buttons == nil {
+		buttons = [][]tgButton{} // 编辑时传空键盘才能把旧按钮去掉
+	}
+	return map[string]any{"inline_keyboard": buttons}
+}
+
+// sendOne 发一条不分段的消息并返回消息 id，之后原地编辑它（找资源的列表页、搜索进度）
+func (a *tgAPI) sendOne(ctx context.Context, chat int64, text string, buttons [][]tgButton) (int64, error) {
+	payload := map[string]any{"chat_id": chat, "text": tgClip(text)}
+	if len(buttons) > 0 {
+		payload["reply_markup"] = tgMarkup(buttons)
+	}
+	var m tgMessage
+	if err := a.call(ctx, "sendMessage", payload, &m); err != nil {
+		return 0, err
+	}
+	return m.ID, nil
+}
+
+// edit 原地改一条消息（MoviePilot 翻页、选片都是编辑原消息，不刷屏）。
+// 内容没变时 Telegram 回 400「message is not modified」，当成功处理
+func (a *tgAPI) edit(ctx context.Context, chat, id int64, text string, buttons [][]tgButton) error {
+	err := a.call(ctx, "editMessageText", map[string]any{
+		"chat_id": chat, "message_id": id, "text": tgClip(text), "reply_markup": tgMarkup(buttons),
+	}, nil)
+	if e, ok := err.(*tgAPIError); ok && e.Code == 400 && strings.Contains(e.desc, "not modified") {
+		return nil
+	}
+	return err
 }

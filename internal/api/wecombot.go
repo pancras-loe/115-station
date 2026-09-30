@@ -16,8 +16,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"115-station/internal/model"
@@ -221,16 +221,10 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		h.wecomHandleLink(strings.TrimSpace(text), reply)
 		return
 	}
-	// 观影/网盘会话中的序号回复（1-2 位纯数字）：选片 / 选资源
-	if len(text) <= 2 && regexpPureDigits.MatchString(text) {
-		if wecomGySessionGet(user) != nil {
-			n, _ := strconv.Atoi(text)
-			h.wecomHandleGyPick(user, n, reply)
-			return
-		}
-		if wecomPansouSessionGet(user) != nil {
-			n, _ := strconv.Atoi(text)
-			h.wecomHandlePansouPick(user, n, reply)
+	// 找资源会话里的操作（序号 / 0 择优 / n p 翻页 / b r k q）。没有会话时照常当指令处理
+	if act, ok := botFlowAct(text); ok {
+		if v, ok := h.botAct("bot:"+user, act, "", wecomFlowIO(reply)); ok {
+			wecomShow(v, reply)
 			return
 		}
 	}
@@ -240,9 +234,9 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"可用指令：",
 			"直接发链接 — 磁力/ed2k/HTTP 提交离线下载；115 分享链接（连同提取码一起发）自动转存并整理入库",
 			"状态 — 任务状态 + 转存目录 + 离线任务",
-			"搜索 <片名> — TMDB 搜片",
-			"观影 <片名> — TMDB 选片 → 观影搜资源（大小/做种/中字）→ 回序号离线下载",
-			"网盘 <片名> — TMDB 选片 → PanSou 聚合搜网盘分享（115/百度等）→ 回序号转存/离线",
+			"搜索 <片名> — 找资源：观影 / 盘搜 / TG 频道 / 不太灵一起搜，TMDB 选片后回序号转存或离线（可连续挑多条）",
+			"观影 <片名> / 网盘 <片名> — 只搜观影 / 只搜网盘",
+			"  资源列表里：0 自动择优，n / p 翻页，b 重新选片，r 重搜，q 退出",
 			"整理 / 同步 — 手动触发整理、增量同步",
 		)
 
@@ -316,44 +310,15 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		}
 		reply(lines...)
 
-	case strings.HasPrefix(text, "搜索"), strings.HasPrefix(lower, "so "):
-		q := strings.TrimSpace(strings.TrimPrefix(text, "搜索"))
-		if strings.HasPrefix(lower, "so ") {
-			q = strings.TrimSpace(text[3:])
-		}
-		if q == "" {
-			reply("用法：搜索 <片名>")
-			return
-		}
-		results := h.wecomSearchTMDB(q)
-		if len(results) == 0 {
-			reply("未找到: " + q)
-			return
-		}
-		lines := []string{fmt.Sprintf("TMDB 搜索 %q：", q)}
-		for _, r := range results {
-			lines = append(lines, r)
-		}
-		reply(lines...)
-
-	case strings.HasPrefix(text, "网盘"), strings.HasPrefix(lower, "wp "):
-		kw := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "网盘"), "wp "))
+	case strings.HasPrefix(text, "搜索"), strings.HasPrefix(text, "找资源"), strings.HasPrefix(lower, "so "),
+		strings.HasPrefix(text, "网盘"), strings.HasPrefix(lower, "wp "),
+		strings.HasPrefix(text, "观影"), strings.HasPrefix(lower, "gy "):
+		source, kw := wecomFindArgs(text)
 		if kw == "" {
-			reply("用法：网盘 <片名>，例如：网盘 蜘蛛侠")
+			reply("用法：搜索 <片名>（观影 <片名> / 网盘 <片名> 只搜一个来源），例如：搜索 蜘蛛侠")
 			return
 		}
-		h.wecomHandlePansouSearch(user, kw, reply)
-		return
-	case strings.HasPrefix(text, "观影"), strings.HasPrefix(lower, "gy "):
-		kw := strings.TrimSpace(strings.TrimPrefix(text, "观影"))
-		if strings.HasPrefix(lower, "gy ") {
-			kw = strings.TrimSpace(text[3:])
-		}
-		if kw == "" {
-			reply("用法：观影 <片名>，例如：观影 蜘蛛侠")
-			return
-		}
-		h.wecomHandleGySearch(user, kw, reply)
+		wecomShow(h.botFind("bot:"+user, source, kw, wecomFlowIO(reply)), reply)
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")
@@ -444,22 +409,40 @@ func isShareCode(s string) bool {
 	return len(s) > 0
 }
 
-// wecomSearchTMDB 搜片（独立轻实现：不加载完整整理客户端）
-func (h *Handler) wecomSearchTMDB(q string) []string {
-	tc, err := loadTmdbClient()
-	if err != nil {
-		return []string{"TMDB 未配置: " + err.Error()}
+// wecomFindArgs 找资源指令拆成来源与片名：搜索 / 找资源 / so 搜全部，观影 / gy 只搜观影，网盘 / wp 只搜盘搜
+func wecomFindArgs(text string) (source, keyword string) {
+	lower := strings.ToLower(text)
+	for _, p := range []struct{ prefix, source string }{
+		{"搜索", ""}, {"找资源", ""}, {"so ", ""}, {"观影", "gy"}, {"gy ", "gy"}, {"网盘", "pansou"}, {"wp ", "pansou"},
+	} {
+		if strings.HasPrefix(lower, p.prefix) {
+			return p.source, strings.TrimSpace(text[len(p.prefix):])
+		}
 	}
-	parsed := &ParsedName{Title: q}
-	media, err := tc.recognize(parsed)
-	if err != nil || media == nil {
-		return nil
+	return "", strings.TrimSpace(text)
+}
+
+// wecomFlowIO 企微没法编辑已发的消息：搜索进度只报第一句，不然一次聚合搜索能刷五六条
+func wecomFlowIO(reply func(...string)) botIO {
+	var once sync.Once
+	return botIO{say: reply, progress: func(s string) { once.Do(func() { reply("⏳ " + s) }) }}
+}
+
+// wecomShow 企微只有纯文本（选片页另发海报图文）：Refresh 这种「原地更新」直接略过
+func wecomShow(v botView, reply func(...string)) {
+	if len(v.Lines) == 0 || v.Refresh {
+		return
 	}
-	typ := "电影"
-	if media.MediaType == "tv" {
-		typ = "剧集"
+	if len(v.Cards) > 0 && NotifyMessageNews(v.Cards) {
+		// 图文里已经有序号和片名，文字只留标题与操作提示
+		reply(v.Lines[0], v.Hint)
+		return
 	}
-	return []string{fmt.Sprintf("%s《%s》(%s) tmdb=%d — 可发送：下载 <磁力链接> 提交", typ, media.Title, media.Year, media.TmdbID)}
+	lines := v.Lines
+	if v.Hint != "" {
+		lines = append(lines, v.Hint)
+	}
+	reply(lines...)
 }
 
 // submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）。
