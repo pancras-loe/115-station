@@ -262,6 +262,15 @@ type EmbyPersonMark struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// MetaFillMark 媒体信息补全（扩展功能，api/metafill.go）对片目补刮的记账（按台账片目 key）。
+// 补刮过、缺的还是那几样（TMDB 上就是没有背景图、目录名认不出条目 …）的片目，不记账的话每次定时都要白刮一遍。
+// Lack 记当时缺什么（「背景图,3 集 NFO」）：缺的东西变了（新加了几集）就不算同一回事，照常补
+type MetaFillMark struct {
+	Key     string    `json:"key" gorm:"primaryKey;size:512"`
+	Lack    string    `json:"lack" gorm:"size:512"`
+	TriedAt time.Time `json:"tried_at"`
+}
+
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -434,6 +443,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&EmbyExtractMark{},
 		&PersonMeta{},
 		&EmbyPersonMark{},
+		&MetaFillMark{},
 	); err != nil {
 		return nil, err
 	}

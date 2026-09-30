@@ -451,7 +451,7 @@ type fileScrapeResult struct {
 	Reclaimed   int            `json:"reclaimed,omitempty"`   // 片目被挪走后收回的文件
 	Problems    []string       `json:"problems,omitempty"`
 	Errors      []string       `json:"errors,omitempty"`
-	// FollowJob 刮完另建的 Emby 提前探测任务：刮削结束时它多半还在跑，任务中心据此标「探测中」（jobFollowOf）
+	// FollowJob 刮完另建的 Emby 提前探测任务：刮削结束时它多半还在跑，任务中心据此标「探测中」（jobFollowsOf）
 	FollowJob uint `json:"follow_job,omitempty"`
 }
 

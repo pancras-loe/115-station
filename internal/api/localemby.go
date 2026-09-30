@@ -75,9 +75,27 @@ func loadLocalEmby(cfg embyRefreshCfg, root string, force bool) {
 	s.stats, s.scanned, s.err = stats, scanned, ""
 }
 
-// fetchLocalEmby 分页读 Emby 的影视条目，按路径归到台账片目。
-// 只读本地媒体库映射得到的那几个 Emby 库；一个都对不上时（映射没配 / 版本不返回 Locations）退回全服务器
+// fetchLocalEmby 分页读 Emby 的影视条目，按路径归到台账片目
 func fetchLocalEmby(cfg embyRefreshCfg, root string, ledger map[string]*ledgerTitleEntry) (map[string]localEmbyStat, int, error) {
+	out := map[string]localEmbyStat{}
+	scanned, err := walkLocalEmby(cfg, root, ledger, func(key string, it embyExtractItem) {
+		st := out[key]
+		st.Items++
+		if it.needsProbe(cfg.PathMapping) {
+			st.Lack++
+		}
+		out[key] = st
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, scanned, nil
+}
+
+// walkLocalEmby 分页读 Emby 的影视条目，归得到台账片目的逐个交给 fn，返回读了多少条。
+// 只读本地媒体库映射得到的那几个 Emby 库；一个都对不上时（映射没配 / 版本不返回 Locations）退回全服务器。
+// 定时补全（metafill.go）也用它：要逐个条目看记账，光有计数不够
+func walkLocalEmby(cfg embyRefreshCfg, root string, ledger map[string]*ledgerTitleEntry, fn func(key string, it embyExtractItem)) (int, error) {
 	rootSlash := strings.TrimRight(filepath.ToSlash(root), "/")
 	var parents []string
 	for _, lib := range embyMediaFolders(cfg) {
@@ -92,33 +110,25 @@ func fetchLocalEmby(cfg embyRefreshCfg, root string, ledger map[string]*ledgerTi
 	if len(parents) == 0 {
 		parents = []string{""}
 	}
-	out := map[string]localEmbyStat{}
 	scanned := 0
 	for _, parent := range parents {
 		for start := 0; start < localEmbyMaxItems; start += localEmbyPage {
 			items, err := fetchLocalEmbyPage(cfg, parent, start)
 			if err != nil {
-				return nil, 0, err
+				return 0, err
 			}
 			for _, it := range items {
 				scanned++
-				key := localEmbyTitleKey(embyPathToLocal(cfg.PathMapping, it.Path), rootSlash, ledger)
-				if key == "" {
-					continue
+				if key := localEmbyTitleKey(embyPathToLocal(cfg.PathMapping, it.Path), rootSlash, ledger); key != "" {
+					fn(key, it)
 				}
-				st := out[key]
-				st.Items++
-				if it.needsProbe(cfg.PathMapping) {
-					st.Lack++
-				}
-				out[key] = st
 			}
 			if len(items) < localEmbyPage {
 				break
 			}
 		}
 	}
-	return out, scanned, nil
+	return scanned, nil
 }
 
 func fetchLocalEmbyPage(cfg embyRefreshCfg, parent string, start int) ([]embyExtractItem, error) {

@@ -37,11 +37,16 @@ type probeJobParams struct {
 	Key   string   `json:"key,omitempty"` // 本地片目 key（片目详情据此找到正在进行的任务）
 	Paths []string `json:"paths,omitempty"`
 	Items []string `json:"items,omitempty"`
+	// Auto 按自动规则放行（定时补全建的任务，metafill.go）：同一条目最多 2 次、间隔 24 小时，
+	// 不是手动规则的「只防抖」—— 定时任务每晚都跑，按手动规则就是每晚把探不成的再请求一遍
+	Auto bool `json:"auto,omitempty"`
 }
 
 type probeJobSpec struct {
 	Title, Source, DedupeKey, Key string
 	Paths, Items                  []string
+	Auto                          bool
+	Priority                      int // 零值 = jobPriorityManual
 }
 
 // enqueueProbeJob 建一个手动探测任务。同一个片目排着没开始的，合并成一个（DedupeKey 同键覆盖）
@@ -53,8 +58,8 @@ func enqueueProbeJob(db *gorm.DB, s probeJobSpec) (model.TaskJob, error) {
 		s.Source = "web"
 	}
 	return enqueueJob(db, jobSpec{
-		Kind: jobKindProbe, Title: s.Title, DedupeKey: s.DedupeKey, Source: s.Source, Priority: jobPriorityManual,
-		Params: jobParams{Probe: &probeJobParams{Key: s.Key, Paths: s.Paths, Items: s.Items}},
+		Kind: jobKindProbe, Title: s.Title, DedupeKey: s.DedupeKey, Source: s.Source, Priority: s.Priority,
+		Params: jobParams{Probe: &probeJobParams{Key: s.Key, Paths: s.Paths, Items: s.Items, Auto: s.Auto}},
 	})
 }
 
@@ -87,7 +92,8 @@ func execProbeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		targets = append(targets, embyExtractItemPrefix+id)
 	}
 	defer forgetEmbyExtractCancel(job.ID)
-	queueEmbyExtractFor(job.ID, targets...)
+	defer forgetEmbyExtractAutoJob(job.ID)
+	queueEmbyExtractJob(job.ID, p.Auto, targets...)
 
 	stopped, gone := false, 0
 	var r jobProbeReport

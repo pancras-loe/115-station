@@ -23,8 +23,8 @@ const when = computed(() => {
 const summary = computed(() => resultSummary(props.job))
 const text = computed(() => [summary.value, props.job.message].filter(Boolean).join(' · '))
 /** 后续任务还没跑完：这个任务本身是完了，但整件事没完，行里要说出来，别只剩一个「完成」 */
-const follow = computed(() => props.job.follow)
-const followActive = computed(() => follow.value?.status === 'running' || follow.value?.status === 'queued')
+const follows = computed(() => props.job.follows ?? [])
+const followActive = (status: string) => status === 'running' || status === 'queued'
 </script>
 
 <template>
@@ -35,16 +35,17 @@ const followActive = computed(() => follow.value?.status === 'running' || follow
     <div class="h-main">
       <button type="button" class="h-title" :title="job.title" @click="emit('open', job.id)">{{ job.title }}</button>
       <button
-        v-if="follow"
+        v-for="follow in follows"
+        :key="follow.id"
         type="button"
         class="h-follow"
-        :class="{ active: followActive }"
+        :class="{ active: followActive(follow.status) }"
         :title="follow.title"
         @click="emit('open', follow.id)"
       >
         <span class="h-follow-dot" aria-hidden="true" />
         后续 {{ jobKindText(follow.kind) }} #{{ follow.id }}
-        {{ followActive ? '还在' + (JOB_STATUS[follow.status]?.text ?? follow.status) : JOB_STATUS[follow.status]?.text ?? follow.status }}
+        {{ followActive(follow.status) ? '还在' + (JOB_STATUS[follow.status]?.text ?? follow.status) : JOB_STATUS[follow.status]?.text ?? follow.status }}
         <ChevronRight class="h-follow-arrow" />
       </button>
       <p v-if="text" class="h-msg" :class="msgTone(job)" :title="text">
@@ -120,7 +121,7 @@ const followActive = computed(() => follow.value?.status === 'running' || follow
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin: 3px 0 0;
+  margin: 3px 6px 0 0;
   padding: 1px 8px 1px 7px;
   border: 0;
   border-radius: var(--r-sm);

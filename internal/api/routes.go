@@ -107,6 +107,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
 	StartCoverGenScheduler(h)
+	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
 	StartTgSubScheduler(h)
 
@@ -371,6 +372,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/personfill/config", h.PersonFillSaveConfig)
 		protected.POST("/personfill/run", h.PersonFillRun)
 		protected.POST("/personfill/reset", h.PersonFillResetMarks)
+		protected.GET("/metafill/config", h.MetaFillGetConfig)
+		protected.POST("/metafill/config", h.MetaFillSaveConfig)
+		protected.POST("/metafill/run", h.MetaFillRun)
+		protected.POST("/metafill/reset", h.MetaFillResetMarks)
 
 		// TG 关键词订阅（频道轮询 → 水位去重 → 命中通知/自动转存）
 		protected.GET("/tgsub/config", h.TgSubGetConfig)

@@ -243,18 +243,33 @@ func TestJobDTOFollow(t *testing.T) {
 	model.DB.Create(&scrape)
 
 	d := toJobDTO(scrape, nil)
-	if d.Follow == nil || d.Follow.ID != probe.ID || d.Follow.Status != jobRunning || d.Follow.Kind != "probe" {
-		t.Fatalf("要带上后续任务及其状态：%+v", d.Follow)
+	if len(d.Follows) != 1 || d.Follows[0].ID != probe.ID || d.Follows[0].Status != jobRunning || d.Follows[0].Kind != "probe" {
+		t.Fatalf("要带上后续任务及其状态：%+v", d.Follows)
 	}
 	model.DB.Model(&probe).Update("status", jobSuccess)
-	if d := toJobDTO(scrape, nil); d.Follow == nil || d.Follow.Status != jobSuccess {
-		t.Fatalf("后续任务跑完状态要跟着变：%+v", d.Follow)
+	if d := toJobDTO(scrape, nil); len(d.Follows) != 1 || d.Follows[0].Status != jobSuccess {
+		t.Fatalf("后续任务跑完状态要跟着变：%+v", d.Follows)
 	}
 	model.DB.Delete(&probe)
-	if d := toJobDTO(scrape, nil); d.Follow != nil {
-		t.Fatalf("后续任务被清理了就不返回：%+v", d.Follow)
+	if d := toJobDTO(scrape, nil); len(d.Follows) != 0 {
+		t.Fatalf("后续任务被清理了就不返回：%+v", d.Follows)
 	}
-	if d := toJobDTO(model.TaskJob{Kind: "organize", Status: jobSuccess, Result: `{"success":1}`}, nil); d.Follow != nil {
+	if d := toJobDTO(model.TaskJob{Kind: "organize", Status: jobSuccess, Result: `{"success":1}`}, nil); len(d.Follows) != 0 {
 		t.Fatal("没有后续任务的不返回")
+	}
+
+	// 媒体信息补全一次建两个后续任务（刮削 + 探测）：都要带上，被清理掉的那个不返回
+	sj := model.TaskJob{Kind: "scrape", Title: "媒体信息补全：刮削", Status: jobQueued}
+	pj := model.TaskJob{Kind: "probe", Title: "媒体信息补全：探测", Status: jobRunning}
+	model.DB.Create(&sj)
+	model.DB.Create(&pj)
+	fill := model.TaskJob{Kind: jobKindMetaFill, Status: jobSuccess,
+		Result: fmt.Sprintf(`{"follow_jobs":[%d,%d]}`, sj.ID, pj.ID)}
+	if d := toJobDTO(fill, nil); len(d.Follows) != 2 || d.Follows[0].ID != sj.ID || d.Follows[1].ID != pj.ID {
+		t.Fatalf("两个后续任务按顺序都要带上：%+v", d.Follows)
+	}
+	model.DB.Delete(&sj)
+	if d := toJobDTO(fill, nil); len(d.Follows) != 1 || d.Follows[0].ID != pj.ID {
+		t.Fatalf("没写出东西被删掉的刮削任务不返回：%+v", d.Follows)
 	}
 }

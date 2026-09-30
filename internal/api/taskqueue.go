@@ -215,7 +215,8 @@ const jobKindScrape = "scrape"
 // laneOfKind 任务类型 → 队列
 func laneOfKind(kind string) *jobLane {
 	switch kind {
-	case jobKindScrape:
+	case jobKindScrape, jobKindMetaFill:
+		// 媒体信息补全只扫描、几十秒，扫完建的刮削任务正好排在它后面
 		return scrapeLane
 	case jobKindProbe:
 		return probeLane
@@ -229,13 +230,13 @@ func laneOfKind(kind string) *jobLane {
 func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
 	switch l {
 	case scrapeLane:
-		return db.Where("kind = ?", jobKindScrape)
+		return db.Where("kind IN ?", []string{jobKindScrape, jobKindMetaFill})
 	case probeLane:
 		return db.Where("kind = ?", jobKindProbe)
 	case personLane:
 		return db.Where("kind = ?", jobKindPerson)
 	}
-	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindProbe, jobKindPerson})
+	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindMetaFill, jobKindProbe, jobKindPerson})
 }
 
 func wakeJobWorker() {
@@ -570,7 +571,7 @@ type taskJobDTO struct {
 	RecordIDs []uint          `json:"record_ids,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Probe     *jobProbeReport `json:"probe,omitempty"` // 任务结束后排进 Emby 提前探测的结果（embyprobereport.go）
-	Follow    *jobFollow      `json:"follow,omitempty"`
+	Follows   []jobFollow     `json:"follows,omitempty"`
 	Stoppable bool            `json:"stoppable,omitempty"`
 	Progress  *jobProgress    `json:"progress,omitempty"`
 	Position  int             `json:"position,omitempty"`
@@ -583,7 +584,7 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 		d.Result = json.RawMessage(job.Result)
 	}
 	d.Probe = probeReportOf(&job)
-	d.Follow = jobFollowOf(d.Result)
+	d.Follows = jobFollowsOf(d.Result)
 	d.Stoppable = job.Status == jobQueued || (job.Status == jobRunning && jobStoppable(&job))
 	switch job.Status {
 	case jobRunning:
@@ -604,7 +605,7 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 	return d
 }
 
-// jobFollow 任务结束时另建的后续任务（目前只有手动刮削 → Emby 提前探测）。
+// jobFollow 任务结束时另建的后续任务（手动刮削 → Emby 提前探测；媒体信息补全 → 刮削 + 探测）。
 // 刮削自己确实完了，但探测多半还在跑：列表里只写「完成」，用户会以为整件事做完了（2026-09-30 反馈）
 type jobFollow struct {
 	ID     uint   `json:"id"`
@@ -613,22 +614,32 @@ type jobFollow struct {
 	Status string `json:"status"`
 }
 
-// jobFollowOf 结果里带 follow_job 的，查一下那个任务现在的状态（任务已被清理就不返回）
-func jobFollowOf(result json.RawMessage) *jobFollow {
+// jobFollowsOf 结果里带 follow_job / follow_jobs 的，查一下那些任务现在的状态（任务已被清理的不返回：
+// 后台建的刮削什么都没写时整行删掉）
+func jobFollowsOf(result json.RawMessage) []jobFollow {
 	if len(result) == 0 || model.DB == nil {
 		return nil
 	}
 	var r struct {
-		FollowJob uint `json:"follow_job"`
+		FollowJob  uint   `json:"follow_job"`
+		FollowJobs []uint `json:"follow_jobs"`
 	}
-	if json.Unmarshal(result, &r) != nil || r.FollowJob == 0 {
+	if json.Unmarshal(result, &r) != nil {
 		return nil
 	}
-	var j model.TaskJob
-	if model.DB.Select("id", "kind", "title", "status").First(&j, r.FollowJob).Error != nil {
-		return nil
+	ids := r.FollowJobs
+	if r.FollowJob != 0 {
+		ids = append([]uint{r.FollowJob}, ids...)
 	}
-	return &jobFollow{ID: j.ID, Kind: j.Kind, Title: j.Title, Status: j.Status}
+	var out []jobFollow
+	for _, id := range ids {
+		var j model.TaskJob
+		if id == 0 || model.DB.Select("id", "kind", "title", "status").First(&j, id).Error != nil {
+			continue
+		}
+		out = append(out, jobFollow{ID: j.ID, Kind: j.Kind, Title: j.Title, Status: j.Status})
+	}
+	return out
 }
 
 // queuedReply 入队接口的统一回复：202 + 任务 id、排第几、大概要等多久
@@ -750,9 +761,15 @@ func (h *Handler) RetryTaskJob(c *gin.Context) {
 			return
 		}
 	}
+	params := decodeJobParams(&job)
+	if params.Probe != nil {
+		// 定时补全建的探测任务按自动规则放行；用户点了重试就是手动要探（与失败清单里的「重试」同口径），
+		// 否则失败过的条目 24 小时内全被跳过，重试等于什么都没做
+		params.Probe.Auto = false
+	}
 	nj, err := enqueueJob(h.DB, jobSpec{
 		Kind: job.Kind, Title: job.Title, DedupeKey: job.DedupeKey,
-		Source: "web", Priority: jobPriorityManual, Params: decodeJobParams(&job),
+		Source: "web", Priority: jobPriorityManual, Params: params,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

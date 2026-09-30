@@ -79,3 +79,31 @@ export const personFillConfig = () => http.get<{ data?: PersonFillInfo }>('/pers
 export const savePersonFill = (body: PersonFillConfig) => http.post('/personfill/config', body)
 export const runPersonFill = () => http.post<{ message?: string; job_id?: number }>('/personfill/run')
 export const resetPersonFill = () => http.post<{ message?: string }>('/personfill/reset')
+
+// ---- 媒体信息补全 ----
+export interface MetaFillConfig {
+  enabled: boolean
+  cron: string
+  /** 没刮全的片目补 NFO / 图片 */
+  scrape: boolean
+  /** Emby 里缺媒体信息的让它提前探测（自动规则） */
+  probe: boolean
+  max_titles: number
+  max_probe: number
+}
+export interface MetaFillInfo {
+  config: MetaFillConfig
+  next_run?: string
+  /** 补刮过、缺的没变，冷却期内不再刮的片目数 */
+  marks?: number
+  retry_days?: number
+  emby?: boolean
+  local_root?: boolean
+  /** 自动探测的规则：同一视频最多几次、两次间隔几小时 */
+  limits?: { max_attempts: number; retry_hours: number }
+  last_job?: { id: number; status: string; message?: string; finished_at?: string } | null
+}
+export const metaFillConfig = () => http.get<{ data?: MetaFillInfo }>('/metafill/config')
+export const saveMetaFill = (body: MetaFillConfig) => http.post('/metafill/config', body)
+export const runMetaFill = () => http.post<{ message?: string; job_id?: number }>('/metafill/run')
+export const resetMetaFill = () => http.post<{ message?: string }>('/metafill/reset')

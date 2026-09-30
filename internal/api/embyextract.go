@@ -89,7 +89,8 @@ const embyExtractQueueMax = 5000
 const embyExtractItemPrefix = "item:"
 
 // embyExtractEntry 队列里的一条：一个 Emby 路径（或 item:条目id）+ 排它进来的探测任务。
-// manual = 有手动入口排过它（按手动规则放行）；auto = 自动入口也排过（手动任务全停了还得按自动规则探完）
+// manual = 有手动任务排过它（按手动规则放行）；auto = 入库确认也排过（任务全停了还得按自动规则探完）。
+// 定时补全排的任务（metafill.go）挂在 jobs 里但按自动规则探，见 embyExtractAutoJobs
 type embyExtractEntry struct {
 	path   string
 	jobs   []uint
@@ -114,6 +115,48 @@ func queueEmbyExtract(embyPaths ...string) { queueEmbyExtractFor(0, embyPaths...
 // queueEmbyExtractFor jobID ≠ 0 表示手动入口（探测任务）：按手动规则放行、结果写回那个任务。
 // 路径已经在排的，把任务挂到那一条上，不另排
 func queueEmbyExtractFor(jobID uint, embyPaths ...string) {
+	queueEmbyExtractJob(jobID, false, embyPaths...)
+}
+
+// embyExtractAutoJobs 按自动规则探的探测任务（定时补全建的，metafill.go）。
+// 任务是定时建的、不是用户这一次点名要探：结果照样写回任务（任务中心看得到进度、能停），
+// 放行却必须和入库确认同一套 —— 同一条目最多 2 次、间隔 24 小时，用完不再探。
+// 按手动规则的话，探不成的条目每晚都会被再请求一次 115 直链（维护者硬性要求防重复探测）
+var embyExtractAutoJobs = struct {
+	sync.Mutex
+	m map[uint]bool
+}{m: map[uint]bool{}}
+
+func embyExtractIsAutoJob(id uint) bool {
+	embyExtractAutoJobs.Lock()
+	defer embyExtractAutoJobs.Unlock()
+	return embyExtractAutoJobs.m[id]
+}
+
+// forgetEmbyExtractAutoJob 任务结束后清掉
+func forgetEmbyExtractAutoJob(id uint) {
+	embyExtractAutoJobs.Lock()
+	delete(embyExtractAutoJobs.m, id)
+	embyExtractAutoJobs.Unlock()
+}
+
+// embyExtractHasManual 这些任务里有没有按手动规则探的
+func embyExtractHasManual(jobs []uint) bool {
+	for _, id := range jobs {
+		if !embyExtractIsAutoJob(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// queueEmbyExtractJob autoRule = 这个任务按自动规则放行（定时补全）
+func queueEmbyExtractJob(jobID uint, autoRule bool, embyPaths ...string) {
+	if jobID != 0 && autoRule {
+		embyExtractAutoJobs.Lock()
+		embyExtractAutoJobs.m[jobID] = true
+		embyExtractAutoJobs.Unlock()
+	}
 	q := &embyExtractQ
 	q.mu.Lock()
 	added, forJob, dropped := 0, 0, 0
@@ -136,7 +179,9 @@ func queueEmbyExtractFor(jobID uint, embyPaths ...string) {
 			e.auto = true
 			continue
 		}
-		e.manual = true
+		if !autoRule {
+			e.manual = true
+		}
 		if !containsUint(e.jobs, jobID) {
 			e.jobs = append(e.jobs, jobID)
 			forJob++
@@ -184,12 +229,11 @@ func cancelEmbyExtractJob(jobID uint) {
 	for _, e := range q.queue {
 		if i := indexUint(e.jobs, jobID); i >= 0 {
 			e.jobs = append(e.jobs[:i:i], e.jobs[i+1:]...)
-			if len(e.jobs) == 0 {
-				e.manual = false
-				if !e.auto {
-					delete(q.queued, e.path)
-					continue
-				}
+			// 停掉的是唯一的手动任务、还挂着定时补全的任务：改回自动规则
+			e.manual = embyExtractHasManual(e.jobs)
+			if len(e.jobs) == 0 && !e.auto {
+				delete(q.queued, e.path)
+				continue
 			}
 		}
 		kept = append(kept, e)
@@ -202,6 +246,19 @@ func forgetEmbyExtractCancel(jobID uint) {
 	embyExtractCanceled.Lock()
 	delete(embyExtractCanceled.m, jobID)
 	embyExtractCanceled.Unlock()
+}
+
+// embyExtractActiveJobs 这些任务里还没被停的
+func embyExtractActiveJobs(jobs []uint) []uint {
+	embyExtractCanceled.Lock()
+	defer embyExtractCanceled.Unlock()
+	var out []uint
+	for _, id := range jobs {
+		if !embyExtractCanceled.m[id] {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // embyExtractAllCanceled 这些任务是不是全被停了（空列表不算）
@@ -323,7 +380,7 @@ func embyExtractQueuedFor(embyPath string) string {
 		}
 	}
 	embyExtractRunning.Lock()
-	cur := embyExtractEntry{path: embyExtractRunning.path, manual: len(embyExtractRunning.jobs) > 0}
+	cur := embyExtractEntry{path: embyExtractRunning.path, manual: embyExtractHasManual(embyExtractRunning.jobs)}
 	embyExtractRunning.Unlock()
 	see(cur)
 	q := &embyExtractQ
@@ -458,7 +515,7 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			}
 			sent = false
 		}
-		if manual && embyExtractAllCanceled(jobs) {
+		if len(jobs) > 0 && embyExtractAllCanceled(jobs) {
 			if !e.auto {
 				n := len(todo) - i
 				log.Printf("[Emby探测] ○ %s：任务已停止，剩下 %d 个条目不探", embyPathBase(p), n)
@@ -466,6 +523,9 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 				return
 			}
 			// 自动入口也排过它：剩下的按自动规则接着探
+			manual = false
+		} else if manual && !embyExtractHasManual(embyExtractActiveJobs(jobs)) {
+			// 手动任务停了、还有定时补全的任务在等：剩下的按自动规则探
 			manual = false
 		}
 		// 记账在发请求之前：请求发出去就算一次，哪怕随后超时、进程被杀。
@@ -612,7 +672,13 @@ func embyExtractAllowed(id string, now time.Time, manual bool) (bool, string) {
 		return false, "数据库未就绪"
 	}
 	m, ok := embyExtractLoad(id)
-	if !ok {
+	return embyExtractAllowedBy(m, ok, now, manual)
+}
+
+// embyExtractAllowedBy 纯函数部分：found = 记账里有这个条目。
+// 定时补全扫全库时一次读出全部记账逐个判，不必每个条目查一次库（metafill.go）
+func embyExtractAllowedBy(m model.EmbyExtractMark, found bool, now time.Time, manual bool) (bool, string) {
+	if !found {
 		return true, ""
 	}
 	since := now.Sub(m.LastAt)

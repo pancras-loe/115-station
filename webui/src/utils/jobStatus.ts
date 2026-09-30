@@ -21,6 +21,7 @@ export const JOB_KIND: Record<string, string> = {
   scrape: '刮削',
   probe: 'Emby 探测',
   person: '演职人员补全',
+  metafill: '媒体信息补全',
   libredo: '重新整理片目',
   filemove: '移动',
   ignore: '忽略',
@@ -43,7 +44,7 @@ export const JOB_SOURCE: Record<string, string> = {
 
 /** 不在主队列上的任务，排队位置前面加上是哪条队列（刮削、探测、人物各自一条，不等任务锁）；主队列为空串 */
 export function laneText(kind: string) {
-  if (kind === 'scrape') return '刮削队列'
+  if (kind === 'scrape' || kind === 'metafill') return '刮削队列'
   if (kind === 'probe') return '探测队列'
   if (kind === 'person') return '人物队列'
   return ''
@@ -119,6 +120,11 @@ const RESULT_LABEL: [string, string][] = [
   ['images', '补头像'],
   ['renamed', '改中文名'],
   ['bios', '补中文简介'],
+  // 媒体信息补全（metafill.go 的 metaFillResult）
+  ['scrape_lack', '没刮全'],
+  ['scrape_queued', '补刮'],
+  ['probe_lack', '缺媒体信息'],
+  ['probe_queued', '探测'],
 ]
 
 /** 刮削结果里嵌套的产物计数 */

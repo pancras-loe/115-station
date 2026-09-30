@@ -5,13 +5,14 @@ import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, Images, Play, Settings2, UsersRound } from '@lucide/vue'
+import { CalendarCheck, FileSearch, Images, Play, Settings2, UsersRound } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import PersonFillModal from '@/components/plugins/PersonFillModal.vue'
+import MetaFillModal from '@/components/plugins/MetaFillModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
@@ -99,6 +100,23 @@ async function pfRun() {
   }
 }
 
+// ============ 媒体信息补全 ============
+// 扫描后建刮削 / 探测任务，入任务队列（刮削队列）后立即返回
+const mfShow = ref(false)
+
+async function mfRun() {
+  busy.value.metafill = true
+  try {
+    const d = await pluginsApi.runMetaFill()
+    results.value.metafill = { status: 'ok', title: d.message || '已加入任务队列', detail: '扫描完会另建刮削 / 探测任务，进度见任务中心' }
+    await queue.submitted(d.job_id)
+  } catch (e) {
+    results.value.metafill = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    busy.value.metafill = false
+  }
+}
+
 // ============ 插件清单 ============
 const plugins = [
   {
@@ -130,6 +148,16 @@ const plugins = [
     runLabel: '立即运行',
     onConfig: () => (pfShow.value = true),
     onRun: pfRun,
+  },
+  {
+    key: 'metafill',
+    name: '媒体信息补全',
+    icon: FileSearch,
+    desc: '定时找出本地媒体库里缺 NFO、海报、背景图的片目补刮，Emby 里还没有媒体信息的视频让它提前探测。探测按自动规则、有单次上限，避免反复取 115 直链。',
+    available: true,
+    runLabel: '立即运行',
+    onConfig: () => (mfShow.value = true),
+    onRun: mfRun,
   },
 ]
 
@@ -189,6 +217,7 @@ const availableCount = plugins.filter((p) => p.available).length
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
     <PersonFillModal v-model:show="pfShow" />
+    <MetaFillModal v-model:show="mfShow" />
   </SectionCard>
 </template>
 
