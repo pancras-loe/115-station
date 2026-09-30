@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestParseTmdbIDQuery(t *testing.T) {
 	cases := []struct {
@@ -118,5 +121,42 @@ func TestRankTmdbCandsYearAndKind(t *testing.T) {
 	got = rankTmdbCands(cands[:2], tmdbSearchPlan{queries: []string{"三体"}, tv: true})
 	if got[0].ID != 2 {
 		t.Errorf("名字像剧集时剧集应排第一，得到 %+v", got[0])
+	}
+}
+
+// 搜「教父」：教父、教父2、教父3 依次排在最前（续集按上映年份），纪录片 / 没海报的垫底
+func TestRankTmdbCandsSequels(t *testing.T) {
+	cands := []manualCand{
+		{ID: 10, MediaType: "movie", Title: "教父之父", Year: "2001", popularity: 80},
+		{ID: 242, MediaType: "movie", Title: "教父3", Year: "1990", popularity: 40},
+		{ID: 20, MediaType: "movie", Title: "教父：幕后故事", Year: "2010", popularity: 90, minor: true},
+		{ID: 240, MediaType: "movie", Title: "教父2", Year: "1974", popularity: 50},
+		{ID: 30, MediaType: "tv", Title: "教父三人行", Year: "2015", popularity: 70},
+		{ID: 238, MediaType: "movie", Title: "教父", Original: "The Godfather", Year: "1972", popularity: 60},
+		{ID: 40, MediaType: "movie", Title: "教父1990", Year: "1990", popularity: 5},
+	}
+	got := rankTmdbCands(cands, tmdbSearchPlan{queries: []string{"教父"}})
+	var ids []int
+	for _, c := range got {
+		ids = append(ids, c.ID)
+	}
+	want := []int{238, 240, 242, 10, 30, 40, 20}
+	if !slices.Equal(ids, want) {
+		t.Errorf("排序 %v，期望 %v", ids, want)
+	}
+}
+
+func TestTmdbSequelTail(t *testing.T) {
+	yes := []string{"2", "3", "2奥创纪元", "partii", "part2", "第二部", "ii", "二"}
+	no := []string{"之父", "三人行", "1990", "人", "的秘密"}
+	for _, s := range yes {
+		if !reTmdbSequelTail.MatchString(s) {
+			t.Errorf("%q 应算续集编号", s)
+		}
+	}
+	for _, s := range no {
+		if reTmdbSequelTail.MatchString(s) {
+			t.Errorf("%q 不应算续集编号", s)
+		}
 	}
 }

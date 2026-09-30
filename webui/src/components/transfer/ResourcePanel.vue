@@ -37,6 +37,11 @@ type SourceState =
 const perSource = ref<Record<string, SourceState>>({})
 const rowState = ref<Record<string, { tone: 'busy' | 'ok' | 'err'; text: string }>>({})
 
+// 只看某个来源。必须声明在下面那个 immediate watch 之前：回调在 setup 里当场执行，
+// 声明在后就是 TDZ 报错，loadAll 一次都没跑 —— 选完片直接显示「各来源都没有搜到资源」，
+// 要点「重新搜索」才有结果
+const onlySource = ref<SourceKey | ''>('')
+
 // 过期请求的结果丢掉：换了一部片之后，上一部片慢吞吞回来的盘搜结果不能混进来
 let generation = 0
 
@@ -106,7 +111,6 @@ const allItems = computed(() => {
 })
 
 // ---- 筛选 ----
-const onlySource = ref<SourceKey | ''>('')
 const kind = ref<KindGroup | 'all'>('all')
 const pix = ref<'all' | '4k' | '1080' | 'other'>('all')
 const season = ref('')

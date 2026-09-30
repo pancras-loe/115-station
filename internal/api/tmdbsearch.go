@@ -90,16 +90,18 @@ func tmdbQueryVariants(q string) []string {
 
 // manualCand 一条候选（字段名与前端 TmdbCandidate 对齐）
 type manualCand struct {
-	ID         int     `json:"id"`
-	MediaType  string  `json:"media_type"`
-	Title      string  `json:"title"`
-	Year       string  `json:"year"`
-	Poster     string  `json:"poster"`
-	Vote       float64 `json:"vote,omitempty"`
-	Overview   string  `json:"overview,omitempty"`
+	ID        int     `json:"id"`
+	MediaType string  `json:"media_type"`
+	Title     string  `json:"title"`
+	Year      string  `json:"year"`
+	Poster    string  `json:"poster"`
+	Vote      float64 `json:"vote,omitempty"`
+	Overview  string  `json:"overview,omitempty"`
 	// Original 原名：影视转存按它判断资源标题是不是这部片（英文资源名多用原名）
-	Original   string  `json:"original_title,omitempty"`
+	Original   string `json:"original_title,omitempty"`
 	popularity float64
+	// minor 纪录片 / 脱口秀 / 新闻 / 没海报的条目：不过滤（偶尔真要找），排在正片后面
+	minor bool
 }
 
 // tmdbRawItem 搜索结果 / 详情里共用的字段
@@ -115,7 +117,12 @@ type tmdbRawItem struct {
 	VoteAverage   float64 `json:"vote_average"`
 	Overview      string  `json:"overview"`
 	Popularity    float64 `json:"popularity"`
+	GenreIDs      []int   `json:"genre_ids"` // 只有搜索结果带，详情接口是 genres 对象数组
 }
+
+// tmdbMinorGenres 挑片时基本不是想找的类型：纪录片（电影剧集同号）、新闻、脱口秀。
+// 真人秀（10764）不算：综艺是本站的正经分类
+var tmdbMinorGenres = []int{99, 10763, 10767}
 
 func (r tmdbRawItem) cand(kind string) manualCand {
 	title, orig, date := r.Title, r.OriginalTitle, r.ReleaseDate
@@ -129,6 +136,7 @@ func (r tmdbRawItem) cand(kind string) manualCand {
 	return manualCand{
 		ID: r.ID, MediaType: kind, Title: title, Year: year, Poster: r.PosterPath,
 		Vote: r.VoteAverage, Overview: r.Overview, Original: orig, popularity: r.Popularity,
+		minor: r.PosterPath == "" || slices.ContainsFunc(r.GenreIDs, func(g int) bool { return slices.Contains(tmdbMinorGenres, g) }),
 	}
 }
 
@@ -185,7 +193,22 @@ func planTmdbSearch(q string, rules []ReplaceRule) tmdbSearchPlan {
 	return plan
 }
 
-// rankTmdbCands 去重后排序：片名（或原名）与搜索词完全相同的在前，其次是包含的；
+// reTmdbSequelTail 片名去掉搜索词后剩下的是不是续集编号（比较前已经 tmdbNorm：小写、去空白标点）：
+// 教父2、速度与激情8、复仇者联盟2奥创纪元、the godfather part ii、第二部。
+// 阿拉伯数字最多两位且后面不能再跟数字（「教父1990」不是续集），中文数字后面只能是部 / 章 / 集或结尾
+// （「三体人」「教父三人行」不算）
+var reTmdbSequelTail = regexp.MustCompile(`^(?:part|chapter|vol|第)?(?:\d{1,2}(?:\D|$)|(?:i{1,3}|iv|vi{0,3}|ix|x)$|[一二三四五六七八九十]{1,2}(?:[部章集]|$))`)
+
+// 候选的片名档位
+const (
+	tmdbTierNone    = iota
+	tmdbTierContain // 包含搜索词
+	tmdbTierSequel  // 搜索词 + 续集编号
+	tmdbTierExact   // 与搜索词相同
+)
+
+// rankTmdbCands 去重后排序。先把纪录片 / 脱口秀 / 没海报的放到最后，其余按片名档位：
+// 完全相同 → 续集（搜「教父」时教父2、教父3 紧跟在教父后面，按上映年份排）→ 包含 → 其他；
 // 同档里年份对得上的在前，再是类型对得上的（名字像剧集时剧集在前），最后按热度
 func rankTmdbCands(cands []manualCand, plan tmdbSearchPlan) []manualCand {
 	norms := make([]string, 0, len(plan.queries))
@@ -195,53 +218,69 @@ func rankTmdbCands(cands []manualCand, plan tmdbSearchPlan) []manualCand {
 		}
 	}
 	tier := func(c manualCand) int {
-		best := 0
+		best := tmdbTierNone
 		for _, t := range []string{tmdbNorm(c.Title), tmdbNorm(c.Original)} {
 			if t == "" {
 				continue
 			}
 			for _, q := range norms {
-				if t == q {
-					return 2
-				}
-				if strings.Contains(t, q) {
-					best = 1
+				switch {
+				case t == q:
+					return tmdbTierExact
+				case strings.HasPrefix(t, q) && reTmdbSequelTail.MatchString(t[len(q):]):
+					best = max(best, tmdbTierSequel)
+				case strings.Contains(t, q):
+					best = max(best, tmdbTierContain)
 				}
 			}
 		}
 		return best
 	}
-	score := func(c manualCand) int {
-		n := tier(c) * 4 // 片名档位压过年份与类型
-		if plan.year != "" && c.Year == plan.year {
-			n += 2
-		}
-		if plan.tv && c.MediaType == "tv" {
-			n++
-		}
-		return n
+	type ranked struct {
+		c           manualCand
+		tier, score int
 	}
 	seen := map[string]bool{}
-	out := make([]manualCand, 0, len(cands))
-	tiers := map[string]int{}
+	list := make([]ranked, 0, len(cands))
 	for _, c := range cands {
 		k := c.MediaType + ":" + strconv.Itoa(c.ID)
 		if c.ID == 0 || seen[k] {
 			continue
 		}
 		seen[k] = true
-		tiers[k] = score(c)
-		out = append(out, c)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ti, tj := tiers[out[i].MediaType+":"+strconv.Itoa(out[i].ID)], tiers[out[j].MediaType+":"+strconv.Itoa(out[j].ID)]
-		if ti != tj {
-			return ti > tj
+		r := ranked{c: c, tier: tier(c)}
+		r.score = r.tier * 4 // 片名档位压过年份与类型
+		if plan.year != "" && c.Year == plan.year {
+			r.score += 2
 		}
-		return out[i].popularity > out[j].popularity
+		if plan.tv && c.MediaType == "tv" {
+			r.score++
+		}
+		list = append(list, r)
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		a, b := list[i], list[j]
+		if a.c.minor != b.c.minor {
+			return !a.c.minor
+		}
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		// 续集按上映先后，没有年份的垫底
+		if a.tier == tmdbTierSequel && b.tier == tmdbTierSequel && a.c.Year != b.c.Year {
+			if a.c.Year == "" || b.c.Year == "" {
+				return b.c.Year == ""
+			}
+			return a.c.Year < b.c.Year
+		}
+		return a.c.popularity > b.c.popularity
 	})
-	if len(out) > tmdbSearchMax {
-		out = out[:tmdbSearchMax]
+	out := make([]manualCand, 0, min(len(list), tmdbSearchMax))
+	for _, r := range list {
+		if len(out) == tmdbSearchMax {
+			break
+		}
+		out = append(out, r.c)
 	}
 	return out
 }
