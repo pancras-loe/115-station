@@ -169,7 +169,17 @@ const RULES = {
 }
 .rules li + li { margin-top: 2px; }
 
-.records { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+/* 记录多了（每条还可能带长长的拦截原因）会把整页撑得没完没了，限高后在卡片里自己滚 */
+.records {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(560px, 65vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .record {
   padding: 10px 0;
   border-top: 1px solid var(--separator);
@@ -195,5 +205,6 @@ const RULES = {
 }
 @media (max-width: 720px) {
   .rules-col { grid-template-columns: 1fr; gap: 4px; }
+  .records { max-height: 60vh; }
 }
 </style>
