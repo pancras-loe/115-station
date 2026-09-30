@@ -404,6 +404,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       **多版本**（同一片目目录两个 `.strm`）在 Emby 里是一个条目、`MediaSources` 各一份：「有媒体信息」要每个版本都齐（`lackingSources`），
       探测时逐个缺的版本带 `MediaSourceId` 各发一次（不点名时 Emby 只探它自己挑的那个，另一个永远「未探测」），记账仍按条目记一笔；
       卡片快照因此必须带 `MediaSources` 字段，片目详情按版本拆行（`embyDetailsOf`）。测试 `embyextract_versions_test.go`。
+      **光盘结构（ISO / BDMV / VIDEO_TS）不探**，同样按版本判（`probeSources` / `discSource`：一个 ISO 版本一个 mkv 版本时 mkv 照探）。
+      STRM 名不带扩展名之后（§6.15）文件名上认不出 ISO，所以 **ISO 的直链不看「保留文件后缀」一律带 `.iso`**（`writeStrmNamed`，qmediasync 同款），
+      判断时除了 Emby 给的路径还读一次本地 STRM 里的直链（Emby 记的直链要等它重扫才更新）。存量由 `strmiso.go` 启动时一次性补：
+      直链里带原文件名的本地改写；`pick_code` 且关了保留后缀的本地认不出，入队一次全量同步（固定快速模式，不可用时自动降级），全量对「还没带 `.iso` 的 ISO」无视「跳过已存在」照写。测试 `strmiso_test.go`。
     - **手动探测一律是任务**（`embyprobejob.go`，kind=`probe`，第三条队列 `probeLane`，不拿 `taskMu`、不占刮削队列）：片目详情「提前探测」、
       本地文件页刮削勾「轨道探测」（刮完另建任务，不再挂在刮削任务上）、重新整理（带刮削且开着探测：`registerRedoProbe` 登记片目，
       入库确认到它时 `splitRedoProbes` 从自动入口摘出来建任务；原地刷新没新 STRM 的直接建）、任务中心失败清单「重试」（`item:<id>` 点名条目）。

@@ -93,6 +93,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 存量 STRM 改名迁移（一次性）。必须同步跑、排在下面任何后台任务启动之前：
 	// 迁移中台账与本地文件短暂不一致，增量 / 整理 / 深删插进来会读到半截状态（strmmigrate.go）
 	MigrateStrmNames(db)
+	// 存量 ISO 的直链补 .iso（一次性，strmiso.go）：改名迁移之后跑，台账已是新名
+	h.MigrateStrmISOExt()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 
@@ -311,8 +313,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 任务队列
 		protected.GET("/tasks", h.ListTaskJobs)
 		protected.GET("/tasks/history", h.ListTaskHistory)
-		protected.GET("/tasks/probe", h.EmbyProbeStatus) // Emby 提前探测的全局状态（embyprobereport.go）
-		protected.POST("/tasks/probe/retry", h.RetryEmbyProbe) // 失败清单里重试（建手动探测任务）
+		protected.GET("/tasks/probe", h.EmbyProbeStatus)             // Emby 提前探测的全局状态（embyprobereport.go）
+		protected.POST("/tasks/probe/retry", h.RetryEmbyProbe)       // 失败清单里重试（建手动探测任务）
 		protected.POST("/tasks/probe/ignore", h.IgnoreEmbyProbe)     // 失败清单里忽略（打标记，不删记账）
 		protected.POST("/tasks/probe/unignore", h.UnignoreEmbyProbe) // 撤销全部忽略
 		protected.GET("/tasks/:id", h.GetTaskJob)

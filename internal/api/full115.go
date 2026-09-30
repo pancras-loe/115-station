@@ -834,7 +834,8 @@ func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remo
 func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile, strmName string) (strmRel string, wrote bool, err error) {
 	base := strings.TrimRight(domain, "/")
 	idPart := f.PickCode
-	if keepExt {
+	if keepExt || isISOName(f.Name) {
+		// ISO 不看开关一律带 .iso：STRM 名不带扩展名之后，直链是本地唯一认得出光盘镜像的地方（strmiso.go）
 		idPart += pathExt(f.Name)
 	}
 	var streamURL string
@@ -853,9 +854,10 @@ func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f
 	strmRel = path.Join(f.Path, strmName)
 	strmPath := filepath.Join(dir, strmName)
 
-	// 已存在：配置了跳过就跳过；没配跳过但内容一模一样，写了也是原样，同样算没动
+	// 已存在：配置了跳过就跳过；没配跳过但内容一模一样，写了也是原样，同样算没动。
+	// 例外：直链还没带 .iso 的 ISO 照写 —— 存量补 .iso 靠全量同步走到这里（strmiso.go）
 	if old, err := os.ReadFile(strmPath); err == nil {
-		if skipExist || string(old) == streamURL {
+		if string(old) == streamURL || (skipExist && !strmMissingISOExt(string(old), f.Name)) {
 			return strmRel, false, nil
 		}
 	}

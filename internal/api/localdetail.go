@@ -485,6 +485,7 @@ type embyDetailItem struct {
 	Subtitles []embyTrack    `json:"subtitles"`
 	HasInfo   bool           `json:"has_info"`
 	Probe     embyProbeState `json:"probe"`
+	disc      bool           // 缺媒体信息但是光盘结构（ISO / BDMV），探不了：按版本算
 }
 
 func toEmbyTrack(s embyStream) embyTrack {
@@ -531,7 +532,9 @@ func embyDetailOf(it embyExtractItem, titleLocal, pathMapping string) embyDetail
 // 探测记账是按条目记的，各行共用；有没有媒体信息按版本各算各的
 func embyDetailsOf(it embyExtractItem, titleLocal, pathMapping string) []embyDetailItem {
 	if len(it.MediaSources) <= 1 {
-		return []embyDetailItem{embyDetailOf(it, titleLocal, pathMapping)}
+		d := embyDetailOf(it, titleLocal, pathMapping)
+		d.disc = !d.HasInfo && !it.needsProbe(pathMapping)
+		return []embyDetailItem{d}
 	}
 	lacking := map[string]bool{}
 	for _, s := range it.lackingSources() {
@@ -551,6 +554,7 @@ func embyDetailsOf(it embyExtractItem, titleLocal, pathMapping string) []embyDet
 		}
 		d.Container, d.Size, d.Bitrate = s.Container, s.Size, s.Bitrate
 		d.HasInfo = !lacking[embySourceKey(s)]
+		d.disc = !d.HasInfo && it.discSource(s, pathMapping)
 		streams := s.MediaStreams
 		if len(streams) == 0 && s.Path == it.Path {
 			streams = it.MediaStreams
@@ -654,7 +658,7 @@ func embyTitleProbeOf(cfg embyRefreshCfg, root string, e *ledgerTitleEntry) (emb
 	running, now := embyExtractRunningID(), time.Now()
 	for _, it := range raw {
 		for _, d := range embyDetailsOf(it, titleLocal, cfg.PathMapping) {
-			d.Probe = embyProbeStateOf(d.HasInfo, it.extractable(), marks[it.ID], queued, running != "" && running == it.ID, now)
+			d.Probe = embyProbeStateOf(d.HasInfo, !d.disc, marks[it.ID], queued, running != "" && running == it.ID, now)
 			out.counts[d.Probe.State]++
 			switch {
 			case d.Probe.manualOK():

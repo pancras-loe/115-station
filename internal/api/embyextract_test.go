@@ -48,8 +48,9 @@ func newFakeExtractEmby(t *testing.T, probeOK bool, eps ...string) *fakeExtractE
 			items := []map[string]any{
 				// 早就有媒体信息的：不碰
 				{"Id": "has", "Type": "Episode", "Path": "/media/某剧/S01E09.strm", "MediaStreams": streams("Video", "Audio")},
-				// 光盘结构：不碰
-				{"Id": "iso", "Type": "Episode", "Path": "/media/某剧/BD.iso.strm"},
+				// 光盘结构：不碰。STRM 名不带扩展名之后，认它靠 Emby 记下的直链（ISO 一律带 .iso）
+				{"Id": "iso", "Type": "Episode", "Path": "/media/某剧/BD.strm",
+					"MediaSources": []map[string]any{{"Id": "iso", "Path": "http://127.0.0.1:6086/d/abc.iso?/BD.iso"}}},
 			}
 			for i, id := range f.eps {
 				it := map[string]any{"Id": id, "Type": "Episode", "SeriesName": "某剧", "ParentIndexNumber": 1,

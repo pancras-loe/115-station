@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -464,7 +465,7 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			continue
 		}
 		ok, errMsg := true, ""
-		for _, src := range it.lackingSources() {
+		for _, src := range it.probeSources(cfg.PathMapping) {
 			k := embySourceKey(src)
 			if r, done := seen[k]; done && k != "" {
 				// 同一个版本在这一轮里已经探过（Emby 把它另列成了一个条目）：结果照搬，不再发请求
@@ -767,20 +768,72 @@ func embySourceKey(s embyMediaSource) string {
 	return ""
 }
 
-// extractable 光盘结构（ISO / BDMV / VIDEO_TS）Emby 探测不了，探了也是白占一次 115 直链
-func (it embyExtractItem) extractable() bool {
-	paths := []string{it.Path}
-	for _, s := range it.MediaSources {
-		paths = append(paths, s.Path)
-	}
-	for _, p := range paths {
-		p = strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
-		p = strings.TrimSuffix(p, ".strm")
-		if strings.HasSuffix(p, ".iso") || strings.Contains(p, "/bdmv/") || strings.Contains(p, "/video_ts/") {
-			return false
+// probeSources 真正要探的版本：还缺媒体信息、且不是光盘结构。
+// 光盘结构（ISO / BDMV / VIDEO_TS）Emby 探测不了，探了也是白占一次 115 直链（LitePan 同样跳过）。
+// 按版本判：同一片目一个 ISO 版本一个 mkv 版本时，mkv 那个照探
+func (it embyExtractItem) probeSources(pathMapping string) []embyMediaSource {
+	var out []embyMediaSource
+	for _, s := range it.lackingSources() {
+		if !it.discSource(s, pathMapping) {
+			out = append(out, s)
 		}
 	}
-	return true
+	return out
+}
+
+// needsProbe 条目里还有要探的版本
+func (it embyExtractItem) needsProbe(pathMapping string) bool {
+	return len(it.probeSources(pathMapping)) > 0
+}
+
+// discSource 这个版本是不是光盘结构。
+//
+// 只看 Emby 给的路径不够：2026-09-28 起 STRM 名不带视频扩展名（disc.iso → disc.strm，见 strmname.go），
+// 条目路径上已经没有 .iso；版本路径是 Emby 扫库时记下的直链，STRM 改写后到它重扫之前还是旧的。
+// 所以再读一次本地 STRM 里的直链（零 115 请求）—— ISO 的直链一律带 .iso（writeStrmNamed）
+func (it embyExtractItem) discSource(s embyMediaSource, pathMapping string) bool {
+	paths := []string{s.Path}
+	if len(it.MediaSources) <= 1 && it.Path != s.Path {
+		paths = append(paths, it.Path) // 单版本：条目路径就是这个版本的 .strm
+	}
+	for _, p := range paths {
+		if p != "" && (discPath(p) || strmFileIsDisc(embyPathToLocal(pathMapping, p))) {
+			return true
+		}
+	}
+	return false
+}
+
+// discPath 一条路径或直链是不是光盘结构：
+// xxx.iso / xxx.iso.strm（旧命名）/ …/BDMV/… / …/VIDEO_TS/…，
+// 以及直链 /d/{pickcode}.iso[?/原文件名] 与 /d/{pickcode}?/原文件名.iso
+func discPath(p string) bool {
+	p = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(p, "\\", "/")))
+	if strings.Contains(p, "/bdmv/") || strings.Contains(p, "/video_ts/") {
+		return true
+	}
+	if strings.HasSuffix(strings.TrimSuffix(p, ".strm"), ".iso") {
+		return true
+	}
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return strings.HasSuffix(p[:i], ".iso")
+	}
+	return false
+}
+
+// strmFileIsDisc 读本地 .strm 里的直链判断。不是 .strm、读不到的一律按「不是」处理（照常探）
+func strmFileIsDisc(local string) bool {
+	if !strings.EqualFold(path.Ext(local), ".strm") {
+		return false
+	}
+	f, err := os.Open(filepath.FromSlash(local))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 4096) // 直链一行，远不到这么长
+	n, _ := io.ReadFull(f, buf)
+	return discPath(string(buf[:n]))
 }
 
 // embyExtractTargets 一条 Emby 路径下还缺媒体信息的影视条目。
@@ -797,7 +850,7 @@ func embyExtractTargets(cfg embyRefreshCfg, embyPath string) (todo []embyExtract
 		return nil, false, nil
 	}
 	for _, it := range items {
-		if it.ID != "" && !it.hasMediaInfo() && it.extractable() {
+		if it.ID != "" && it.needsProbe(cfg.PathMapping) {
 			todo = append(todo, it)
 		}
 	}
@@ -891,7 +944,7 @@ func embyExtractTargetByID(cfg embyRefreshCfg, id string) (todo []embyExtractIte
 		if it.hasMediaInfo() {
 			// 已经有了（在 Emby 里播过一次）：失败记账没用了
 			model.DB.Where("item_id = ?", id).Delete(&model.EmbyExtractMark{})
-		} else if it.extractable() {
+		} else if it.needsProbe(cfg.PathMapping) {
 			todo = append(todo, it)
 		}
 	}

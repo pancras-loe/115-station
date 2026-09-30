@@ -108,7 +108,7 @@ func fetchLocalEmby(cfg embyRefreshCfg, root string, ledger map[string]*ledgerTi
 				}
 				st := out[key]
 				st.Items++
-				if !it.hasMediaInfo() && it.extractable() {
+				if it.needsProbe(cfg.PathMapping) {
 					st.Lack++
 				}
 				out[key] = st
