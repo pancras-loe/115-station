@@ -1012,90 +1012,7 @@ func embyMediaItemsAt(cfg embyRefreshCfg, embyPath string) (found bool, items []
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return true, nil, err
 	}
-	if q.Get("ParentId") != "" {
-		out.Items = append(out.Items, embyAltVersionItems(cfg, embyPath, out.Items)...)
-	}
 	return true, out.Items, nil
-}
-
-// embyAltVersionMax 一个目录里最多按路径补查几个 .strm（Emby 还没扫进去的每个都是一次白查）
-const embyAltVersionMax = 10
-
-// embyAltVersionItems 目录直属、却没被按目录列出来的 .strm，按路径逐个补查。
-//
-// 同目录多版本电影在 Emby 里是几个独立的 Movie 条目（各带一个 MediaSources），界面上合成一部、
-// 可以切版本；按 ParentId 列目录时只给主版本。2026-09-30《夏洛特烦恼》现场：REMUX 是 882、
-// 6Audios 是 883，按搜索列两条都在，探测按目录列只探了 882，883 从来没进过名单
-// （连「跳过」都没有），一直缺媒体信息。只看目录直属的：Emby 只合并同一目录里的版本。
-// 读本地目录 + 只读查询，零 115 请求
-func embyAltVersionItems(cfg embyRefreshCfg, dirPath string, listed []embyExtractItem) []embyExtractItem {
-	local := embyPathToLocal(cfg.PathMapping, dirPath)
-	ents, err := os.ReadDir(filepath.FromSlash(local))
-	if err != nil {
-		return nil
-	}
-	have := map[string]bool{}
-	for _, it := range listed {
-		have[strings.ToLower(embyPathBase(it.Path))] = true
-	}
-	sep := "/"
-	if strings.Contains(dirPath, "\\") && !strings.Contains(dirPath, "/") {
-		sep = "\\"
-	}
-	base := strings.TrimRight(dirPath, "/\\")
-	var out []embyExtractItem
-	tried := 0
-	for _, d := range ents {
-		name := d.Name()
-		if d.IsDir() || !strings.EqualFold(path.Ext(name), ".strm") || have[strings.ToLower(name)] {
-			continue
-		}
-		if tried >= embyAltVersionMax {
-			break
-		}
-		tried++
-		if it, ok := embyExtractItemAt(cfg, base+sep+name); ok {
-			have[strings.ToLower(name)] = true
-			out = append(out, it)
-		}
-	}
-	if len(out) > 0 {
-		vlog("[Emby探测] %s：按目录没列出的 %d 个版本按路径补上了", embyPathBase(dirPath), len(out))
-	}
-	return out
-}
-
-// embyExtractItemAt 按路径精确查一个影视条目（带轨道信息）
-func embyExtractItemAt(cfg embyRefreshCfg, embyPath string) (embyExtractItem, bool) {
-	q := url.Values{
-		"Path":                   {embyPath},
-		"Recursive":              {"true"},
-		"IncludeItemTypes":       {"Movie,Episode,Video"},
-		"Fields":                 {"MediaStreams,MediaSources,Path"},
-		"Limit":                  {"5"},
-		"EnableTotalRecordCount": {"false"},
-	}
-	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
-	if err != nil {
-		return embyExtractItem{}, false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return embyExtractItem{}, false
-	}
-	var out struct {
-		Items []embyExtractItem `json:"Items"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return embyExtractItem{}, false
-	}
-	want := strings.TrimRight(strings.ReplaceAll(embyPath, "\\", "/"), "/")
-	for _, it := range out.Items {
-		if it.ID != "" && strings.ReplaceAll(it.Path, "\\", "/") == want {
-			return it, true
-		}
-	}
-	return embyExtractItem{}, false
 }
 
 func embyPathBase(p string) string {
@@ -1108,12 +1025,14 @@ var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 // embyExtractOne POST /Items/{id}/PlaybackInfo，让 Emby 探测并存下这个条目的媒体信息。
 // 直接打 Emby 本身而不是本站反代：反代会拦 PlaybackInfo 做直连改写和直链预取，这里都用不上
 //
-// 多版本条目点名 MediaSourceId：不点名时 Emby 只探它自己挑的那个版本，另一个永远缺媒体信息
+// 知道版本 id 就点名 MediaSourceId：不点名时 Emby 只探它自己挑的那个版本，另一个永远缺媒体信息。
+// 单版本条目也要点名 —— Emby 实测把同目录多版本存成几个独立条目、各带一个 MediaSources，
+// 但对其中任何一个发 PlaybackInfo，返回的是整组版本、主版本排第一（2026-09-30《夏洛特烦恼》：
+// 883 缺信息，返回的第一个是早就探过的 882，0 秒报「成功」，883 其实没探）
 func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource) (ok bool, errMsg string) {
 	start := time.Now()
 	q := url.Values{"api_key": {cfg.APIKey}}
-	multi := len(it.MediaSources) > 1 && src.ID != ""
-	if multi {
+	if src.ID != "" {
 		q.Set("MediaSourceId", src.ID)
 	}
 	label := it.sourceLabel(src)
@@ -1142,7 +1061,7 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&info)
 	took := time.Since(start).Round(100 * time.Millisecond)
-	streams := playbackSourceStreams(info.MediaSources, src, multi)
+	streams := playbackSourceStreams(info.MediaSources, src)
 	if !embyStreamsComplete(streams) {
 		log.Printf("[Emby探测] ○ %s：Emby 返回了，但没提取到音视频轨道（%s）—— 看 Emby 日志里这条 STRM 的 ffprobe 报错",
 			label, took)
@@ -1154,9 +1073,11 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 
 // playbackSourceStreams PlaybackInfo 返回里点名那个版本的轨道。
 // 点了名却找不到它（Emby 版本不认 MediaSourceId 时会把全部版本都吐回来），按版本路径再认一次，
-// 都认不出就算没探到 —— 拿另一个版本的轨道报成功，正是这次要修的毛病
-func playbackSourceStreams(sources []embyMediaSource, src embyMediaSource, multi bool) []embyStream {
-	if !multi {
+// 都认不出就算没探到 —— 拿另一个版本的轨道报成功，正是这次要修的毛病。
+// 单版本条目同样按 id 认：它可能是一组多版本里的一个，返回里排第一的是主版本（见 embyExtractOne）。
+// 只有不知道版本 id（条目没带 MediaSources，src 是按条目路径补的）时才取第一个
+func playbackSourceStreams(sources []embyMediaSource, src embyMediaSource) []embyStream {
+	if src.ID == "" {
 		if len(sources) > 0 {
 			return sources[0].MediaStreams
 		}

@@ -406,9 +406,9 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       **多版本**（同一片目目录两个 `.strm`）在 Emby 里是一个条目、`MediaSources` 各一份：「有媒体信息」要每个版本都齐（`lackingSources`），
       探测时逐个缺的版本带 `MediaSourceId` 各发一次（不点名时 Emby 只探它自己挑的那个，另一个永远「未探测」），记账仍按条目记一笔；
       卡片快照因此必须带 `MediaSources` 字段，片目详情按版本拆行（`embyDetailsOf`）。测试 `embyextract_versions_test.go`。
-      **但 2026-09-30 实测的 Emby 不是上面这种形态**：同目录两个 `.strm` 是两个独立的 Movie 条目（各带一个 `MediaSources`），
-      界面上合成一部可切版本，**按 `ParentId` 列目录只给主版本**，另一个只有按搜索 / 按路径才查得到。所以按目录列完后，
-      `embyAltVersionItems` 拿本地目录直属的 `.strm` 对一遍，没列出来的按 `Path` 逐个补查（零 115 请求）。两种形态都要认，别删任何一边。
+      **2026-09-30 实测的 Emby 是另一种形态**：同目录两个 `.strm` 是两个独立的 Movie 条目（各带一个 `MediaSources`），界面上合成一部可切版本；
+      对其中任何一个发 PlaybackInfo，返回的都是**整组**版本、主版本排第一。所以只要知道版本 id 就点名 `MediaSourceId`（单版本条目也点），
+      结果一律按 id 认（`playbackSourceStreams`），**别再「单版本取第一个」**：那会拿早就探过的主版本轨道 0 秒报成功，缺的那个永远没探。
       多版本时 Emby 存图写 `视频名-poster.jpg` 并删掉 `poster.jpg`，本地文件页与刮削的「已有」都要认它（`perVideoImage`）。
       **光盘结构（ISO / BDMV / VIDEO_TS）不探**，同样按版本判（`probeSources` / `discSource`：一个 ISO 版本一个 mkv 版本时 mkv 照探）。
       STRM 名不带扩展名之后（§6.15）文件名上认不出 ISO，所以 **ISO 的直链不看「保留文件后缀」一律带 `.iso`**（`writeStrmNamed`，qmediasync 同款），

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -145,45 +144,44 @@ func TestEmbyDetailsOfVersions(t *testing.T) {
 	}
 }
 
-// 真实 Emby 的多版本（2026-09-30《夏洛特烦恼》现场）：两个 .strm 是两个独立的 Movie 条目，
-// 各带一个 MediaSources；按 ParentId 列目录只给主版本，另一个要按路径才查得到。
-// 主版本已有媒体信息时，另一个也得被探到，且只探一次
-func TestEmbyExtractAltVersionHiddenFromParent(t *testing.T) {
+// 真实 Emby 的多版本（2026-09-30《夏洛特烦恼》现场）：同目录两个 .strm 是两个独立的 Movie 条目，
+// 各带一个 MediaSources；对任何一个发 PlaybackInfo 返回整组版本，主版本排第一。
+// 主版本早有媒体信息时，另一个必须点名探，且不能拿主版本的轨道报成功
+func TestEmbyExtractSeparateVersionItems(t *testing.T) {
 	resetExtractState(t)
-	root := t.TempDir()
-	dir := filepath.Join(root, "夏洛特烦恼")
-	touch(t, filepath.Join(dir, "A.REMUX.strm"), "http://x/d/a.mkv")
-	touch(t, filepath.Join(dir, "A.6Audios.strm"), "http://x/d/b.mkv")
-	ed := filepath.ToSlash(dir) // 不配映射：Emby 路径就是本地路径
 	full := []map[string]string{{"Type": "Video"}, {"Type": "Audio"}}
 	var mu sync.Mutex
 	var calls []string
 	done := map[string]bool{"882": true}
-	item := func(id, name string) map[string]any {
-		p := ed + "/" + name
-		src := map[string]any{"Id": "mediasource_" + id, "Path": "http://x/d/" + id + ".mkv"}
+	src := func(id string) map[string]any {
+		m := map[string]any{"Id": "mediasource_" + id, "Path": "http://x/d/" + id + ".mkv"}
 		if done[id] {
-			src["MediaStreams"] = full
+			m["MediaStreams"] = full
 		}
-		return map[string]any{"Id": id, "Type": "Movie", "Name": "夏洛特烦恼", "Path": p, "MediaSources": []any{src}}
+		return m
+	}
+	item := func(id string) map[string]any {
+		return map[string]any{"Id": id, "Type": "Movie", "Name": "夏洛特烦恼",
+			"Path": "/media/夏洛特烦恼/" + id + ".strm", "MediaSources": []any{src(id)}}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		q := r.URL.Query()
 		switch {
-		case r.URL.Path == "/Items" && q.Get("Path") == ed:
+		case r.URL.Path == "/Items" && q.Get("Path") != "":
 			json.NewEncoder(w).Encode(map[string]any{"Items": []map[string]string{
 				{"Id": "dir", "Path": q.Get("Path"), "Type": "Folder"}}})
 		case r.URL.Path == "/Items" && q.Get("ParentId") == "dir":
-			json.NewEncoder(w).Encode(map[string]any{"Items": []any{item("882", "A.REMUX.strm")}})
-		case r.URL.Path == "/Items" && q.Get("Path") == ed+"/A.6Audios.strm":
-			json.NewEncoder(w).Encode(map[string]any{"Items": []any{item("883", "A.6Audios.strm")}})
+			json.NewEncoder(w).Encode(map[string]any{"Items": []any{item("882"), item("883")}})
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/PlaybackInfo"):
-			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/Items/"), "/PlaybackInfo")
-			calls = append(calls, id+"|"+q.Get("MediaSourceId"))
-			done[id] = true
-			json.NewEncoder(w).Encode(map[string]any{"MediaSources": []any{item(id, "")["MediaSources"].([]any)[0]}})
+			sid := q.Get("MediaSourceId")
+			calls = append(calls, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/Items/"), "/PlaybackInfo")+"|"+sid)
+			if sid == "" {
+				sid = "mediasource_882" // 不点名：Emby 挑主版本
+			}
+			done[strings.TrimPrefix(sid, "mediasource_")] = true
+			json.NewEncoder(w).Encode(map[string]any{"MediaSources": []any{src("882"), src("883")}})
 		default:
 			t.Errorf("意外请求 %s %s", r.Method, r.URL)
 			http.NotFound(w, r)
@@ -192,9 +190,20 @@ func TestEmbyExtractAltVersionHiddenFromParent(t *testing.T) {
 	defer srv.Close()
 	cfg := embyRefreshCfg{ServerURL: srv.URL, APIKey: "k"}
 	for i := 0; i < 3; i++ {
-		embyExtractPath(cfg, embyExtractEntry{path: ed, manual: true})
+		embyExtractPath(cfg, embyExtractEntry{path: "/media/夏洛特烦恼", manual: true})
 	}
-	if strings.Join(calls, ",") != "883|" {
-		t.Fatalf("应只探 883 一次，实际 %q", calls)
+	if strings.Join(calls, ",") != "883|mediasource_883" || !done["883"] {
+		t.Fatalf("应点名探 883 一次，实际 %q", calls)
+	}
+}
+
+func TestPlaybackSourceStreamsByID(t *testing.T) {
+	full := []embyStream{{Type: "Video"}, {Type: "Audio"}}
+	resp := []embyMediaSource{{ID: "mediasource_882", MediaStreams: full}, {ID: "mediasource_883"}}
+	if embyStreamsComplete(playbackSourceStreams(resp, embyMediaSource{ID: "mediasource_883"})) {
+		t.Fatal("返回里 883 没有轨道，不能拿排第一的 882 报成功")
+	}
+	if !embyStreamsComplete(playbackSourceStreams(resp, embyMediaSource{})) {
+		t.Fatal("不知道版本时沿用第一个")
 	}
 }
