@@ -186,3 +186,11 @@ body {
   outline: 2px solid var(--c-primary);
   outline-offset: 2px;
 }
+/* 文本输入框例外：浏览器对输入框鼠标点进去也算 :focus-visible，而 HeroUI 的输入框 / 数字框 / 文本域
+   已经在外层画了圆角焦点边框，再叠一圈方形 outline 就是框中框（数字框还会在两个按钮之间画出竖线） */
+input:not([type='color']):focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[contenteditable]:focus-visible {
+  outline: none;
+}

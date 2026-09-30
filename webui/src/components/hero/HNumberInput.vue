@@ -6,6 +6,8 @@ import { Minus, Plus } from '@lucide/vue'
  * 数字输入（替代 NInputNumber）：Reka 的 NumberField（上下键、滚轮、边界夹取）+ HeroUI number-field 外观。
  * 两侧 −/+ 在手机上比敲键盘好用；#suffix 放单位（秒、MB …）。
  * 清空时 v-model 是 null，和原来 NInputNumber 的行为一致，调用方已经按 `?? 0` 处理。
+ * step-snapping 关掉：Reka 默认把手输的值吸附到 min + k·step 上，min=1、step=50 时输 20 变 1、输 55 变 51。
+ * step 只该管 −/+ 每次加减多少，手输什么就是什么（超出 min/max 仍会夹取）
  */
 withDefaults(
   defineProps<{
@@ -31,6 +33,7 @@ const model = defineModel<number | null>({ default: null })
     :min="min"
     :max="max"
     :step="step"
+    :step-snapping="false"
     :disabled="disabled"
     :format-options="{ useGrouping: false }"
     locale="zh-CN"
