@@ -1,135 +1,187 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
+import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
-import { heroTone } from '@/components/hero/tone'
-import { ChevronRight, ExternalLink } from '@lucide/vue'
-
-export type RowAction = 'transfer' | 'offline' | 'open'
+import { ExternalLink } from '@lucide/vue'
+import type { ResourceItem } from '@/api/transfer'
+import { SOURCE_LABEL, kindGroup, kindLabel, pixLabel } from '@/utils/transferSort'
 
 const props = defineProps<{
-  tag?: string
-  tagType?: 'default' | 'info' | 'success' | 'warning' | 'error'
-  title: string
-  meta?: string[]
-  action: RowAction
-  /** 触发动作，resolve 的字符串作为成功提示展示在行内 */
-  run: () => Promise<string>
+  item: ResourceItem
+  /** 行内状态：一次搜索可能提交十几条，toast 会互相覆盖，而且要看得出哪几条已经提交过 */
+  state?: { tone: 'busy' | 'ok' | 'err'; text: string }
 }>()
+const emit = defineEmits<{ act: [] }>()
 
-const ACTION_LABEL: Record<RowAction, string> = {
-  transfer: '转存',
-  offline: '离线下载',
-  open: '打开链接',
-}
+const KIND_TONE = { share115: 'success', download: 'accent', pan: 'default' } as const
 
-// 行内状态而不是全局 toast：一次搜索可能提交十几条，toast 会互相覆盖，
-// 而且用户需要看到「哪几条已经提交过了」
-const state = ref<{ tone: 'idle' | 'busy' | 'ok' | 'err'; text: string }>({ tone: 'idle', text: '' })
+const tags = computed(() => {
+  const t = props.item.tags
+  const out: string[] = []
+  const pix = pixLabel(t.pix)
+  if (pix) out.push(pix)
+  if (t.effect) out.push(t.effect)
+  if (t.type && /remux/i.test(t.type)) out.push('原盘')
+  else if (t.type) out.push(t.type)
+  if (t.video) out.push(t.video)
+  if (t.season) out.push(t.season)
+  if (t.zh) out.push('中字')
+  return out
+})
 
-async function click() {
-  if (state.value.tone === 'ok') {
-    state.value = { tone: 'ok', text: state.value.text + '（已提交过）' }
-    return
+const meta = computed(() => {
+  const it = props.item
+  const out: string[] = [SOURCE_LABEL[it.source] ?? it.source]
+  if (it.size) out.push(it.size)
+  if (it.seeds) out.push(`做种 ${it.seeds}`)
+  if (it.time) out.push(it.time)
+  if (it.code) out.push(`提取码 ${it.code}`)
+  return out
+})
+
+const submitted = computed(() => {
+  const at = props.item.submitted_at
+  if (!at) return ''
+  const d = new Date(at * 1000)
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} 提交过`
+})
+
+const actionLabel = computed(() => {
+  const it = props.item
+  switch (it.action) {
+    case 'transfer':
+      return '转存'
+    case 'offline':
+      return '离线下载'
+    case 'open':
+      return '打开链接'
+    case 'unlock':
+      if (it.owned) return '获取并转存'
+      return it.points != null ? `解锁 · ${it.points} 积分` : '解锁'
   }
-  if (state.value.tone === 'busy') return
-  if (props.action === 'open') {
-    await props.run()
-    return
-  }
-  state.value = { tone: 'busy', text: props.action === 'transfer' ? '转存中…' : '提交 115 离线下载中…' }
-  try {
-    state.value = { tone: 'ok', text: await props.run() }
-  } catch (e) {
-    state.value = { tone: 'err', text: e instanceof Error ? e.message : '失败' }
-  }
-}
+  return ''
+})
 </script>
 
 <template>
-  <button class="row" @click="click">
-    <HChip :color="heroTone(tagType || 'default')" v-if="tag">{{ tag }}</HChip>
-
-    <div class="main">
-      <div class="title" :title="title">{{ title }}</div>
-      <div v-if="meta?.length" class="meta">
+  <div class="res" :class="{ dim: !item.relevant }">
+    <div class="res-main">
+      <div class="res-head">
+        <HChip :color="KIND_TONE[kindGroup(item)]">{{ kindLabel(item) }}</HChip>
+        <span class="res-title" :title="item.title">{{ item.title }}</span>
+      </div>
+      <div v-if="tags.length || item.rank === 0 || submitted" class="res-tags">
+        <span v-if="item.rank === 0" class="tag tag-pref" title="命中洗版策略里优先级最高的那条规则">洗版首选</span>
+        <span v-for="t in tags" :key="t" class="tag">{{ t }}</span>
+        <span v-if="submitted" class="tag tag-warn">{{ submitted }}</span>
+      </div>
+      <div class="res-meta">
         <span v-for="(m, i) in meta" :key="i">{{ m }}</span>
       </div>
-      <div v-if="state.text" class="state" :class="state.tone">{{ state.text }}</div>
+      <div v-if="state?.text" class="res-state" :class="state.tone">{{ state.text }}</div>
     </div>
-
-    <div class="side" :class="{ dim: action === 'open' }">
-      {{ ACTION_LABEL[action] }}
-      <ExternalLink v-if="action === 'open'" :size="13" />
-      <ChevronRight v-else :size="14" />
-    </div>
-  </button>
+    <HButton
+      class="res-act"
+      size="sm"
+      :variant="item.action === 'open' ? 'tertiary' : state?.tone === 'ok' ? 'secondary' : 'primary'"
+      :loading="state?.tone === 'busy'"
+      @click="emit('act')"
+    >
+      <template v-if="item.action === 'open'" #icon><ExternalLink :size="13" /></template>
+      {{ state?.tone === 'ok' && item.action !== 'open' ? '再次提交' : actionLabel }}
+    </HButton>
+  </div>
 </template>
 
 <style scoped>
-.row {
-  all: unset;
-  box-sizing: border-box;
+.res {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 4px;
-  cursor: pointer;
-  border-bottom: 1px solid var(--c-border);
-  transition: background-color 0.12s;
+  gap: 12px;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
 }
-.row:last-child {
-  border-bottom: none;
+.res:last-child {
+  border-bottom: 0;
 }
-.row:hover {
-  background: var(--c-bg-hover);
+.res.dim .res-title,
+.res.dim .res-tags {
+  opacity: 0.6;
 }
-
-.main {
+.res-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
-.title {
-  font-size: 13px;
-  color: var(--c-text-1);
+.res-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.res-title {
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--foreground);
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.meta {
-  margin-top: 2px;
+.res-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag {
+  padding: 0 7px;
+  border-radius: var(--r-sm);
   font-size: 11.5px;
-  color: var(--c-text-3);
+  line-height: 19px;
+  background: var(--default);
+  color: color-mix(in oklab, var(--foreground) 75%, var(--muted));
 }
-.meta span + span::before {
-  content: '·';
-  margin: 0 6px;
-  color: var(--c-text-4);
+.tag-pref {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
-
-.state {
-  margin-top: 4px;
-  font-size: 11.5px;
+.tag-warn {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
-.state.busy {
-  color: var(--c-text-3);
+.res-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
-.state.ok {
-  color: var(--c-success);
+.res-state {
+  font-size: 12px;
+  color: var(--muted);
 }
-.state.err {
-  color: var(--c-danger);
+.res-state.ok {
+  color: var(--success);
 }
-
-.side {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 12.5px;
-  color: var(--c-primary);
+.res-state.err {
+  color: var(--danger);
 }
-.side.dim {
-  color: var(--c-text-3);
+.res-act {
+  flex: none;
+}
+@media (max-width: 720px) {
+  .res {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .res-act {
+    align-self: flex-end;
+  }
 }
 </style>

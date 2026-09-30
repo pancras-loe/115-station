@@ -15,8 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gin-gonic/gin"
 )
 
 type wecomTmdbHit struct {
@@ -32,7 +30,7 @@ type wecomGySession struct {
 	Stage    string // movie=待选片名 resource=待选种子
 	Keyword  string
 	Movies   []wecomTmdbHit
-	Torrents []gin.H
+	Items    []ResourceItem // 按列表上的序号排好（gyBotGroupedList 重排过）
 	At       time.Time
 }
 
@@ -252,39 +250,38 @@ func gyBotBucket(title string) string {
 
 var gyBotBucketOrder = []string{"中字 4K", "中字 1080P", "中字", "原盘", "4K", "1080P", "其他"}
 
-// gyBotGroupedList 分组输出种子列表（编号为全局连续，回复序号即可）
-func gyBotGroupedList(torrents []gin.H) []string {
+// gyBotGroupedList 分组输出种子列表（编号为全局连续，回复序号即可）。
+// 返回按列表上的序号重排后的资源：分组打乱了原来的顺序，会话里必须存重排后的那份，
+// 否则回复 3 拿到的是原始顺序的第 3 条（此前就是这么错的）
+func gyBotGroupedList(items []ResourceItem) ([]ResourceItem, []string) {
 	var lines []string
-	n := 0
+	ordered := make([]ResourceItem, 0, len(items))
 	for _, bucket := range gyBotBucketOrder {
-		var idx []int
-		for i, t := range torrents {
-			title, _ := t["title"].(string)
-			if gyBotBucket(title) == bucket {
-				idx = append(idx, i)
+		var group []ResourceItem
+		for _, it := range items {
+			if gyBotBucket(it.Title) == bucket {
+				group = append(group, it)
 			}
 		}
-		if len(idx) == 0 {
+		if len(group) == 0 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("【%s】共 %d 条", bucket, len(idx)))
-		for _, i := range idx {
-			n++
-			t := torrents[i]
-			title, _ := t["title"].(string)
-			size, _ := t["size"].(string)
-			seeds, _ := t["seeds"].(string)
-			tm, _ := t["time"].(string)
-			line := fmt.Sprintf("%d. %s", n, truncateStr(title, 58))
+		lines = append(lines, fmt.Sprintf("【%s】共 %d 条", bucket, len(group)))
+		for _, it := range group {
+			ordered = append(ordered, it)
+			line := fmt.Sprintf("%d. %s", len(ordered), truncateStr(it.Title, 58))
 			var meta []string
-			if size != "" {
-				meta = append(meta, size)
+			if it.Size != "" {
+				meta = append(meta, it.Size)
 			}
-			if seeds != "" {
-				meta = append(meta, "做种 "+seeds)
+			if it.Seeds > 0 {
+				meta = append(meta, fmt.Sprintf("做种 %d", it.Seeds))
 			}
-			if tm != "" {
-				meta = append(meta, tm)
+			if it.Time != "" {
+				meta = append(meta, it.Time)
+			}
+			if it.SubmittedAt > 0 {
+				meta = append(meta, "提交过")
 			}
 			if len(meta) > 0 {
 				line += "\n     " + strings.Join(meta, " | ")
@@ -292,13 +289,7 @@ func gyBotGroupedList(torrents []gin.H) []string {
 			lines = append(lines, line)
 		}
 	}
-	if n < len(torrents) {
-		for i := n; i < len(torrents); i++ {
-			title, _ := torrents[i]["title"].(string)
-			lines = append(lines, fmt.Sprintf("%d. %s", i+1, truncateStr(title, 58)))
-		}
-	}
-	return lines
+	return ordered, lines
 }
 
 // wecomTmdbSendPickList TMDB 搜索并下发选片单（观影/盘搜机器人共用）：
@@ -370,38 +361,29 @@ func (h *Handler) wecomHandleGyPick(user string, n int, reply func(...string)) {
 		}
 		m := s.Movies[n-1]
 		reply("⏳ 正在观影站搜索「" + m.Title + "」…")
-		torrents, _, err := gySearchTorrents(m.Title, "")
+		items, note, err := h.botResources("gy", m, 30)
 		if err != nil {
 			reply("✗ 观影搜索失败: " + err.Error())
 			return
 		}
-		if len(torrents) == 0 {
+		if len(items) == 0 {
 			reply("观影站没有找到「" + m.Title + "」的资源，可重新「观影 <其他片名>」")
 			return
 		}
-		lines := []string{fmt.Sprintf("「%s」观影资源 %d 条（序号连续，回复序号提交 115 离线）：", m.Title, len(torrents))}
-		lines = append(lines, gyBotGroupedList(torrents)...)
+		head := fmt.Sprintf("「%s」观影资源 %d 条（序号连续，回复序号提交 115 离线）：", m.Title, len(items))
+		if note != "" {
+			head += "\n（" + note + "）"
+		}
+		ordered, list := gyBotGroupedList(items)
 		s.Stage = "resource"
 		s.Keyword = m.Title
-		s.Torrents = torrents
-		reply(lines...)
+		s.Items = ordered
+		reply(append([]string{head}, list...)...)
 	case "resource":
-		if n < 1 || n > len(s.Torrents) {
-			reply(fmt.Sprintf("序号超出范围（1-%d）", len(s.Torrents)))
+		if n < 1 || n > len(s.Items) {
+			reply(fmt.Sprintf("序号超出范围（1-%d）", len(s.Items)))
 			return
 		}
-		path, _ := s.Torrents[n-1]["path"].(string)
-		title, _ := s.Torrents[n-1]["title"].(string)
-		reply("⏳ 提取磁力链接中…")
-		magnet, _, err := gyFetchMagnet(path)
-		if err != nil {
-			reply("✗ " + err.Error())
-			return
-		}
-		if err := h.submitOfflineLink(magnet, "机器人"); err != nil {
-			reply("✗ 离线提交失败: " + err.Error())
-			return
-		}
-		reply("✓ 已提交 115 离线下载：", truncateStr(title, 60), "下载完成后自动整理入库并通知。")
+		h.botSubmitResource("gy", s.Items[n-1], reply)
 	}
 }

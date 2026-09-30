@@ -238,85 +238,36 @@ func (b *tgConversation) search(kind, keyword string) {
 	var choices []tgChoice
 	for _, m := range movies {
 		label := fmt.Sprintf("%s（%s）[%s] %.1f", m.Title, m.Year, m.Type, m.Vote)
-		choices = append(choices, tgChoice{label: label, run: func() { b.resources(kind, m.Title) }})
+		choices = append(choices, tgChoice{label: label, run: func() { b.resources(kind, m) }})
 	}
 	b.choose("请选择影视：", choices)
 }
 
-func (b *tgConversation) resources(kind, title string) {
-	b.reply("正在搜索「" + title + "」的资源…")
-	var choices []tgChoice
-	listTitle := "「" + title + "」资源："
+// resources 选定影片后搜一个来源（/gy 观影、/wp 盘搜），与网页影视转存同一套
+// 搜索、相关性过滤、排序与提交（transferhub.go）
+func (b *tgConversation) resources(kind string, m wecomTmdbHit) {
+	key, label, limit := "pansou", "网盘", 10
 	if kind == "gy" {
-		items, _, err := gySearchTorrents(title, "")
-		if err != nil {
-			b.reply("观影搜索失败：" + err.Error())
-			return
-		}
-		if len(items) > 20 {
-			listTitle = fmt.Sprintf("「%s」资源（展示前 20 条，共 %d 条）：", title, len(items))
-			items = items[:20]
-		}
-		for _, it := range items {
-			name, _ := it["title"].(string)
-			path, _ := it["path"].(string)
-			label := truncateStr(name, 140)
-			for _, field := range []string{"size", "seeds", "time"} {
-				if value, _ := it[field].(string); value != "" {
-					if field == "seeds" {
-						value = "做种 " + value
-					}
-					label += " | " + value
-				}
+		key, label, limit = "gy", "观影", 20
+	}
+	b.reply("正在搜索「" + m.Title + "」的资源…")
+	items, note, err := b.h.botResources(key, m, limit)
+	if err != nil {
+		b.reply(label + "搜索失败：" + err.Error())
+		return
+	}
+	listTitle := "「" + m.Title + "」资源："
+	if note != "" {
+		listTitle = "「" + m.Title + "」资源（" + note + "）："
+	}
+	var choices []tgChoice
+	for _, it := range items {
+		choices = append(choices, tgChoice{label: resBotLabel(it, 140), run: func() {
+			if b.ctx.Err() != nil {
+				return
 			}
-			choices = append(choices, tgChoice{label: label, run: func() {
-				b.reply("正在提取磁力链接…")
-				magnet, _, err := gyFetchMagnet(path)
-				if err != nil {
-					b.reply("提取失败：" + err.Error())
-					return
-				}
-				if b.ctx.Err() != nil {
-					return
-				}
-				b.h.wecomHandleLink(magnet, b.replyForCurrentChat())
-			}})
-		}
-	} else {
-		items, err := pansouSearchItems(title)
-		if err != nil {
-			b.reply("网盘搜索失败：" + err.Error())
-			return
-		}
-		if len(items) > 10 {
-			listTitle = fmt.Sprintf("「%s」资源（展示前 10 条，共 %d 条）：", title, len(items))
-			items = items[:10]
-		}
-		for _, it := range items {
-			label := fmt.Sprintf("[%s] %s", pansouTypeLabel(it.CloudType), truncateStr(firstNonEmptyStr(it.Note, it.URL), 140))
-			if it.Password != "" {
-				label += " | 提取码 " + it.Password
-			}
-			if it.Datetime != "" {
-				label += " | " + it.Datetime
-			}
-			choices = append(choices, tgChoice{label: label, run: func() {
-				switch it.Action {
-				case "transfer":
-					b.reply("正在转存 115…")
-					msg, ok, _, err := b.h.shareReceiveCore(it.URL, it.Password, b.h.shareFolderCid(), "机器人", true)
-					if err != nil {
-						b.reply("转存失败（部分内容可能已转存，请先看一眼网盘转存目录再决定是否重试）：" + err.Error())
-						return
-					}
-					b.reply(fmt.Sprintf("%s\n成功 %d 项，已接入整理流程。", msg, ok))
-				case "offline":
-					b.h.wecomHandleLink(it.URL, b.replyForCurrentChat())
-				default:
-					b.reply("此资源请手动打开：", it.URL, "提取码："+it.Password)
-				}
-			}})
-		}
+			b.h.botSubmitResource(key, it, b.replyForCurrentChat())
+		}})
 	}
 	b.choose(listTitle, choices)
 }

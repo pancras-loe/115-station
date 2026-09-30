@@ -522,126 +522,16 @@ type re0Resource struct {
 	CreatedAt       string   `json:"created_at"`
 }
 
-// re0TmdbCandidates 复用 TMDB multi-search 把片名解析成候选条目
-func re0TmdbCandidates(h *Handler, query string) []gin.H {
-	tc, err := loadTmdbClient()
-	if err != nil {
-		return nil
-	}
-	body, err := tc.get("/search/multi", map[string]string{"query": query, "include_adult": "false"})
-	if err != nil {
-		return nil
-	}
-	var result struct {
-		Results []struct {
-			ID           int     `json:"id"`
-			MediaType    string  `json:"media_type"`
-			Title        string  `json:"title"`
-			Name         string  `json:"name"`
-			ReleaseDate  string  `json:"release_date"`
-			FirstAirDate string  `json:"first_air_date"`
-			PosterPath   string  `json:"poster_path"`
-			VoteAverage  float64 `json:"vote_average"`
-		} `json:"results"`
-	}
-	if json.Unmarshal(body, &result) != nil {
-		return nil
-	}
-	items := make([]gin.H, 0, 6)
-	for _, r := range result.Results {
-		if r.MediaType != "movie" && r.MediaType != "tv" {
-			continue
-		}
-		title := r.Title
-		date := r.ReleaseDate
-		if title == "" {
-			title = r.Name
-		}
-		if date == "" {
-			date = r.FirstAirDate
-		}
-		year := ""
-		if len(date) >= 4 {
-			year = date[:4]
-		}
-		items = append(items, gin.H{
-			"id": r.ID, "media_type": r.MediaType, "title": title,
-			"year": year, "poster": r.PosterPath, "vote": r.VoteAverage,
-		})
-		if len(items) >= 5 {
-			break
-		}
-	}
-	return items
-}
-
-// Re0Search GET /re0/search?query=xxx
-// 片名 → TMDB 候选 → 每个候选查 RE0 资源列表（带解锁积分/状态）
-func (h *Handler) Re0Search(c *gin.Context) {
-	q := strings.TrimSpace(c.Query("query"))
-	if q == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入影视名称"})
-		return
-	}
+// re0ListResources 按 TMDB 条目查 RE0 资源列表（带解锁积分 / 是否已解锁）
+func re0ListResources(h *Handler, mediaType string, tmdbID int) ([]re0Resource, error) {
 	cfg := loadRe0Cfg()
-	if cfg.ClientSecret == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请先配置 RE0 应用（client_id / Secret）"})
-		return
-	}
-	candidates := re0TmdbCandidates(h, q)
-	if len(candidates) == 0 {
-		c.JSON(http.StatusOK, gin.H{"data": []gin.H{}, "hint": "TMDB 未匹配到影视条目"})
-		return
-	}
-	out := make([]gin.H, 0, len(candidates))
-	var firstErr error
-	gotAny := false
-	for _, cand := range candidates {
-		mediaType, _ := cand["media_type"].(string)
-		id := strconv.Itoa(cand["id"].(int))
-		var resources []re0Resource
-		err := re0Call(h, cfg, http.MethodGet, "/api/open/resources/"+mediaType+"/"+id, nil, nil, &resources)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			resources = nil
-		} else if len(resources) > 0 {
-			gotAny = true
-		}
-		out = append(out, gin.H{
-			"id": cand["id"], "media_type": mediaType, "title": cand["title"],
-			"year": cand["year"], "poster": cand["poster"], "vote": cand["vote"],
-			"resources": resources,
-			"resources_err": func() string {
-				if err != nil {
-					return err.Error()
-				}
-				return ""
-			}(),
-		})
-	}
-	// 所有候选都没拿到资源且至少一次查询报错 → 把原因带给前端（如应用未获批）
-	hint := ""
-	if !gotAny && firstErr != nil {
-		hint = "资源查询失败: " + firstErr.Error()
-	}
-	c.JSON(http.StatusOK, gin.H{"data": out, "hint": hint})
+	var resources []re0Resource
+	err := re0Call(h, cfg, http.MethodGet, "/api/open/resources/"+mediaType+"/"+strconv.Itoa(tmdbID), nil, nil, &resources)
+	return resources, err
 }
 
-// Re0Unlock POST /re0/unlock {media_type, tmdb_id, slug, transfer}
-// 解锁拿 115 分享链接；transfer=true 且为 115 链接时直接进分享转存引擎
-func (h *Handler) Re0Unlock(c *gin.Context) {
-	var req struct {
-		MediaType string `json:"media_type"`
-		TmdbID    int    `json:"tmdb_id"`
-		Slug      string `json:"slug"`
-		Transfer  bool   `json:"transfer"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Slug == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误（需要 slug）"})
-		return
-	}
+// re0UnlockSlug 解锁一条资源，拿到分享链接与访问码。已解锁过的再调一次不扣积分（already_owned）
+func re0UnlockSlug(h *Handler, slug string) (link, code string, err error) {
 	cfg := loadRe0Cfg()
 	var data struct {
 		URL          string `json:"url"`
@@ -650,28 +540,13 @@ func (h *Handler) Re0Unlock(c *gin.Context) {
 		AlreadyOwned bool   `json:"already_owned"`
 	}
 	if err := re0Call(h, cfg, http.MethodPost, "/api/open/resources/unlock", nil,
-		map[string]string{"slug": req.Slug}, &data); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "解锁失败: " + err.Error()})
-		return
+		map[string]string{"slug": slug}, &data); err != nil {
+		return "", "", err
 	}
-	link := data.FullURL
+	link = data.FullURL
 	if link == "" {
 		link = data.URL
 	}
-	out := gin.H{
-		"slug": req.Slug, "url": link, "access_code": data.AccessCode,
-		"already_owned": data.AlreadyOwned, "transferred": false,
-	}
-	// 115 链接自动进分享转存引擎（整理收尾由转存流程自理）
-	if req.Transfer && data.FullURL != "" && is115ShareLink(data.FullURL) {
-		msg, ok, fail, err := h.shareReceiveCore(data.FullURL, data.AccessCode, "", "影巢", true)
-		if err != nil {
-			out["transfer_error"] = err.Error()
-		} else {
-			out["transferred"] = ok > 0
-			out["transfer_msg"] = fmt.Sprintf("%s（成功 %d，失败 %d）", msg, ok, fail)
-		}
-	}
-	log.Printf("[RE0] ✦ 解锁: %s → %s", truncateStr(req.Slug, 16), truncateStr(link, 60))
-	c.JSON(http.StatusOK, out)
+	log.Printf("[RE0] ✦ 解锁: %s → %s（已拥有 %v）", truncateStr(slug, 16), truncateStr(link, 60), data.AlreadyOwned)
+	return link, data.AccessCode, nil
 }

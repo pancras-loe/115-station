@@ -271,43 +271,22 @@ func (h *Handler) MukakuLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "登录成功"})
 }
 
-// MukakuSearch GET /mukaku/search?kw=
-// 站内标题搜索（匿名可用）。TMDB 选片后用标准标题作为关键词。
-func (h *Handler) MukakuSearch(c *gin.Context) {
-	kw := strings.TrimSpace(c.Query("kw"))
-	if kw == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入搜索关键词"})
-		return
-	}
+// mukakuSearchVideos 站内标题搜索（匿名可用）。影视转存用 TMDB 规范标题当关键词
+func mukakuSearchVideos(kw string) ([]mukakuVideo, error) {
 	cfg := loadMukakuCfg()
 	params := url.Values{"sb": {kw}, "page": {"1"}, "limit": {fmt.Sprint(mukakuPageSize)}}
 	data, err := mukakuAPI(cfg, http.MethodGet, "getVideoList", params, nil)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
 	var list struct {
 		Data []mukakuVideo `json:"data"`
 	}
 	if json.Unmarshal(data, &list) != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "搜索响应解析失败"})
-		return
+		return nil, fmt.Errorf("搜索响应解析失败")
 	}
-	items := make([]gin.H, 0, len(list.Data))
-	for _, v := range list.Data {
-		items = append(items, gin.H{
-			"id":      v.ID,
-			"title":   v.Title,
-			"otitle":  v.Otitle,
-			"year":    v.Years,
-			"quality": v.Quality,
-			"doub":    v.DoubScore,
-			"imdb":    v.IMDBScore,
-			"image":   v.Image,
-		})
-	}
-	log.Printf("[不太灵影视] ✓ 搜索「%s」：%d 条", kw, len(items))
-	c.JSON(http.StatusOK, gin.H{"data": items})
+	log.Printf("[不太灵影视] ✓ 搜索「%s」：%d 条", kw, len(list.Data))
+	return list.Data, nil
 }
 
 // mukakuVideo 搜索结果条目
@@ -322,29 +301,20 @@ type mukakuVideo struct {
 	Image     string `json:"image"`
 }
 
-// MukakuResources GET /mukaku/resources?id=
-// 影片资源列表（seed_name/link/code）。资源仅 VIP 登录态可见；响应里
-// 资源字段名未公开，做形态无关扫描：递归找带 link 的对象数组。
-func (h *Handler) MukakuResources(c *gin.Context) {
-	id := strings.TrimSpace(c.Query("id"))
-	if id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 id"})
-		return
-	}
+// mukakuVideoResources 影片资源列表（seed_name/link/code）。资源仅 VIP 登录态可见；
+// 响应里资源字段名未公开，做形态无关扫描：递归找带 link 的对象数组
+func mukakuVideoResources(id int64) ([]gin.H, error) {
 	cfg := loadMukakuCfg()
 	if cfg.AccessToken == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "资源仅对 VIP 可见：请先在配置里粘贴 access_token 或用验证码登录"})
-		return
+		return nil, fmt.Errorf("资源仅对 VIP 可见：请先在来源设置里粘贴 access_token 或用验证码登录")
 	}
-	params := url.Values{"id": {id}}
-	data, err := mukakuAPI(cfg, http.MethodGet, "getVideoDetail", params, nil)
+	data, err := mukakuAPI(cfg, http.MethodGet, "getVideoDetail", url.Values{"id": {fmt.Sprint(id)}}, nil)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
-	resources, raw := mukakuScanResources(data)
-	log.Printf("[不太灵影视] ✓ 影片 %s 资源：%d 条", id, len(resources))
-	c.JSON(http.StatusOK, gin.H{"data": resources, "raw_found": raw})
+	resources, _ := mukakuScanResources(data)
+	log.Printf("[不太灵影视] ✓ 影片 %d 资源：%d 条", id, len(resources))
+	return resources, nil
 }
 
 // mukakuScanResources 递归扫描详情响应，收集带 link 字段的对象

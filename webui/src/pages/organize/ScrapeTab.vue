@@ -112,7 +112,7 @@ onMounted(load)
         <HChip :color="heroTone(monitor.model.value.enabled ? 'success' : 'default')">
           {{ monitor.model.value.enabled ? '已允许上传' : '已禁止上传（默认）' }}
         </HChip>
-        <HButton variant="ghost" class="text-btn" @click="router.push({ name: 'upload-download', query: { tab: 'upload' } })">
+        <HButton variant="ghost" class="text-btn" @click="router.push({ name: 'upload-download' })">
           前往上传开关配置
         </HButton>
       </div>

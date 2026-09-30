@@ -97,7 +97,8 @@ type manualCand struct {
 	Poster     string  `json:"poster"`
 	Vote       float64 `json:"vote,omitempty"`
 	Overview   string  `json:"overview,omitempty"`
-	original   string
+	// Original 原名：影视转存按它判断资源标题是不是这部片（英文资源名多用原名）
+	Original   string  `json:"original_title,omitempty"`
 	popularity float64
 }
 
@@ -127,7 +128,7 @@ func (r tmdbRawItem) cand(kind string) manualCand {
 	}
 	return manualCand{
 		ID: r.ID, MediaType: kind, Title: title, Year: year, Poster: r.PosterPath,
-		Vote: r.VoteAverage, Overview: r.Overview, original: orig, popularity: r.Popularity,
+		Vote: r.VoteAverage, Overview: r.Overview, Original: orig, popularity: r.Popularity,
 	}
 }
 
@@ -195,7 +196,7 @@ func rankTmdbCands(cands []manualCand, plan tmdbSearchPlan) []manualCand {
 	}
 	tier := func(c manualCand) int {
 		best := 0
-		for _, t := range []string{tmdbNorm(c.Title), tmdbNorm(c.original)} {
+		for _, t := range []string{tmdbNorm(c.Title), tmdbNorm(c.Original)} {
 			if t == "" {
 				continue
 			}

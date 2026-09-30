@@ -334,24 +334,27 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// TMDB 搜索（影视转存页与整理记录的「重新整理」共用：名称或 TMDB ID → 条目选择）
 		protected.GET("/tmdb/search", h.TmdbSearchMulti)
 
-		// 影视转存 · 观影（账号密码登录 + PoW 反爬自动过验证；磁力提交 115 离线）
+		// 影视转存：按影片聚合各资源站（transferhub.go）。下面四个站点只剩配置 / 登录接口，
+		// 搜索与提交统一走这里
+		protected.GET("/transfer/sources", h.TransferSources)
+		protected.POST("/transfer/sources", h.TransferSaveSources)
+		protected.GET("/transfer/resources/:source", h.TransferResources)
+		protected.POST("/transfer/submit", h.TransferSubmit)
+		protected.GET("/transfer/owned", h.TransferOwned)
+
+		// 影视转存 · 观影（账号密码登录 + PoW 反爬自动过验证）
 		protected.GET("/guanying/config", h.GyGetConfig)
 		protected.GET("/guanying/check", h.GyCheck)
 
 		protected.POST("/guanying/config", h.GySaveConfig)
 		protected.POST("/guanying/login", h.GyLogin)
 		protected.POST("/guanying/logout", h.GyLogout)
-		protected.GET("/guanying/search", h.GySearch)
-		protected.GET("/guanying/resources", h.GyResources)
-		protected.POST("/guanying/offline", h.GyOffline)
 
-		// 影视转存 · RE0（官方 OpenAPI：OAuth 用户授权 + 资源查询/解锁/转存）
+		// 影视转存 · RE0（官方 OpenAPI：OAuth 用户授权）
 		protected.GET("/re0/config", h.Re0GetConfig)
 		protected.POST("/re0/config", h.Re0SaveConfig)
 		protected.GET("/re0/check", h.Re0Check)
 		protected.GET("/re0/oauth/start", h.Re0OAuthStart)
-		protected.GET("/re0/search", h.Re0Search)
-		protected.POST("/re0/unlock", h.Re0Unlock)
 
 		// 分享链接转存（转存到接收文件夹后由整理+增量接管）
 		protected.POST("/share/receive", h.ShareReceive)
@@ -392,13 +395,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/mukaku/config", h.MukakuSaveConfig)
 		protected.GET("/mukaku/captcha", h.MukakuCaptcha)
 		protected.POST("/mukaku/login", h.MukakuLogin)
-		protected.GET("/mukaku/search", h.MukakuSearch)
-		protected.GET("/mukaku/resources", h.MukakuResources)
 
 		// 影视转存 · PanSou 网盘聚合搜索（开源项目公开实例，免认证）
 		protected.GET("/pansou/config", h.PansouGetConfig)
 		protected.POST("/pansou/config", h.PansouSaveConfig)
-		protected.GET("/pansou/search", h.PansouSearch)
 
 		// 离线下载（磁力/ed2k/HTTP）
 		protected.POST("/offline/add", h.offlineAddTask)

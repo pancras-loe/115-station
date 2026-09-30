@@ -343,6 +343,36 @@ const ROUTES: Record<string, Route> = {
       { id: 90228, media_type: 'tv', title: '沙丘：预言', year: '2024', vote: 7.1, poster: '', overview: '' },
     ],
   },
+  '/transfer/sources': {
+    sources: [
+      { key: 'gy', label: '观影', enabled: true, reason: '' },
+      { key: 'pansou', label: '盘搜', enabled: true, reason: '' },
+      { key: 'mukaku', label: '不太灵', enabled: true, reason: '未设置 VIP Token（资源仅 VIP 可见）' },
+      { key: 're0', label: 'RE0', enabled: true, reason: '' },
+    ],
+    folder: '3100000000000000001',
+    folder_path: '/StrmStation/转存',
+  },
+  '/transfer/owned': { data: { 'movie:438631': { title: '沙丘', category: '电影/科幻电影', at: 1760000000 } } },
+  '/transfer/resources/gy': {
+    items: [
+      { source: 'gy', kind: 'magnet', action: 'offline', title: 'Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.DV.HDR.HEVC.TrueHD.7.1.Atmos-FraMeSToR', ref: '/bt/1', size: '78.21G', size_bytes: 83977000000, seeds: 12, time: '3 天前', time_unix: 1759500000, tags: { pix: '2160p', type: 'REMUX', effect: 'DV.HDR', video: 'HEVC', audio: 'TrueHD.7.1' }, relevant: true, rank: 0 },
+      { source: 'gy', kind: 'magnet', action: 'offline', title: 'Dune.Part.Two.2024.1080p.WEB-DL.DDP5.1.H264 中字', ref: '/bt/2', size: '8.2G', size_bytes: 8804000000, seeds: 40, time: '2 周前', time_unix: 1758500000, tags: { pix: '1080p', type: 'WEB-DL', video: 'H264', zh: true }, relevant: true, rank: 2 },
+      { source: 'gy', kind: 'magnet', action: 'offline', title: 'Dune.1984.1080p.BluRay.x264', ref: '/bt/3', size: '12G', size_bytes: 12884901888, seeds: 3, tags: { pix: '1080p', type: 'BluRay', video: 'x264' }, relevant: false, rank: 2 },
+    ],
+  },
+  '/transfer/resources/pansou': {
+    items: [
+      { source: 'pansou', kind: 'share115', action: 'transfer', title: '沙丘2 (2024) 4K 杜比视界 内封简繁 [58.3G]', url: 'https://115cdn.com/s/swabc', code: 'x1y2', size: '58.3G', size_bytes: 62598000000, time: '2026-09-12', time_unix: 1757600000, tags: { pix: '2160p', effect: 'DV', zh: true }, relevant: true, rank: 0, submitted_at: 1759000000 },
+      { source: 'pansou', kind: 'pan', pan: 'baidu', action: 'open', title: '沙丘2 1080P 国英双语', url: 'https://pan.baidu.com/s/1abc', code: 'ab12', time: '2026-08-30', time_unix: 1756500000, tags: { pix: '1080p', zh: true }, relevant: true, rank: 2 },
+      { source: 'pansou', kind: 'share115', action: 'transfer', title: '流浪地球2 4K 合集', url: 'https://115.com/s/other', tags: { pix: '2160p' }, relevant: false, rank: 1 },
+    ],
+  },
+  '/transfer/resources/re0': {
+    items: [
+      { source: 're0', kind: 'share115', action: 'unlock', title: '沙丘2 2160p WEB-DL', ref: 'slug-1', size: '22.4GB', size_bytes: 24051816857, points: 5, owned: false, tags: { pix: '2160p', type: 'WEB-DL' }, relevant: true, rank: 1 },
+    ],
+  },
   '/files/115': (q: URLSearchParams) => {
     const cid = q.get('cid') ?? '0'
     return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS, categories: ['电影/科幻电影', '电影/动画电影'] }

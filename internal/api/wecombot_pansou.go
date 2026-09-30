@@ -18,7 +18,7 @@ type wecomPansouSession struct {
 	Stage   string // movie=待选片名 resource=待选资源
 	Keyword string
 	Movies  []wecomTmdbHit
-	Items   []PansouItem
+	Items   []ResourceItem
 	At      time.Time
 }
 
@@ -76,7 +76,7 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 		}
 		m := s.Movies[n-1]
 		reply("⏳ 正在 PanSou 聚合搜索「" + m.Title + "」…")
-		items, err := pansouSearchItems(m.Title)
+		items, note, err := h.botResources("pansou", m, 10) // 消息长度限制，只发前 10 条
 		if err != nil {
 			reply("✗ PanSou 搜索失败: " + err.Error())
 			return
@@ -85,26 +85,16 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 			reply("PanSou 没有找到「" + m.Title + "」的网盘分享，可重新「网盘 <其他片名>」")
 			return
 		}
-		if len(items) > 10 {
-			items = items[:10] // 消息长度限制，只发前 10 条（已按类型+时间排好）
-		}
 		s.Items = items
 		s.Stage = "resource"
 		s.Keyword = m.Title
-		lines := []string{fmt.Sprintf("「%s」网盘资源 %d 条（115 分享自动转存，磁力/ed2k 提交离线，其他网盘回原链）：", m.Title, len(items))}
+		head := fmt.Sprintf("「%s」网盘资源 %d 条（115 分享自动转存，磁力/ed2k 提交离线，其他网盘回原链）：", m.Title, len(items))
+		if note != "" {
+			head += "\n（" + note + "）"
+		}
+		lines := []string{head}
 		for i, it := range items {
-			line := fmt.Sprintf("%d. [%s] %s", i+1, pansouTypeLabel(it.CloudType), truncateStr(firstNonEmptyStr(it.Note, it.URL), 52))
-			var meta []string
-			if it.Password != "" {
-				meta = append(meta, "提取码 "+it.Password)
-			}
-			if t := strings.Replace(it.Datetime, "T", " ", 1); len(t) >= 16 {
-				meta = append(meta, t[:16])
-			}
-			if len(meta) > 0 {
-				line += "\n     " + strings.Join(meta, " | ")
-			}
-			lines = append(lines, line)
+			lines = append(lines, fmt.Sprintf("%d. %s", i+1, resBotLabel(it, 52)))
 		}
 		lines = append(lines, "（回复 1-"+strconv.Itoa(len(items))+" 处理，5 分钟内有效）")
 		reply(lines...)
@@ -113,31 +103,7 @@ func (h *Handler) wecomHandlePansouPick(user string, n int, reply func(...string
 			reply(fmt.Sprintf("序号超出范围（1-%d）", len(s.Items)))
 			return
 		}
-		it := s.Items[n-1]
-		label := pansouTypeLabel(it.CloudType)
-		switch it.Action {
-		case "transfer":
-			reply("⏳ 正在转存 115…")
-			msg, success, _, err := h.shareReceiveCore(it.URL, it.Password, h.shareFolderCid(), "机器人", true)
-			if err != nil {
-				reply("✗ 转存失败: " + err.Error())
-				return
-			}
-			reply("✓ "+msg, fmt.Sprintf("成功 %d 项，完成后自动整理入库。", success))
-		case "offline":
-			reply("⏳ 提交 115 离线下载…")
-			if err := h.submitOfflineLink(it.URL, "机器人"); err != nil {
-				reply("✗ 离线提交失败: " + err.Error())
-				return
-			}
-			reply("✓ 已提交 115 离线下载。下载完成后自动整理入库并通知。")
-		default:
-			out := fmt.Sprintf("[%s] 链接（115-Station 仅支持 115 自动转存，请手动打开）：\n%s", label, it.URL)
-			if it.Password != "" {
-				out += "\n提取码: " + it.Password
-			}
-			reply(out)
-		}
+		h.botSubmitResource("pansou", s.Items[n-1], reply)
 	}
 }
 

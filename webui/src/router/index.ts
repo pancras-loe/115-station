@@ -71,13 +71,15 @@ const routes: RouteRecordRaw[] = [
         path: 'upload-download',
         name: 'upload-download',
         component: () => import('@/pages/UploadDownloadPage.vue'),
-        meta: { title: '上传下载', desc: '监控上传 / 转存下载', icon: 'transfer' },
+        meta: { title: '监控上传', desc: '把本地新产生的 NFO / 图片回传 115', icon: 'transfer' },
+        // 「转存下载」页签已并进影视转存：旧地址 ?tab=download 带过去
+        beforeEnter: (to) => (to.query.tab === 'download' ? { name: 'media-transfer' } : true),
       },
       {
         path: 'media-transfer',
         name: 'media-transfer',
         component: () => import('@/pages/MediaTransferPage.vue'),
-        meta: { title: '影视转存', desc: '观影种子搜索 / 115 离线下载', icon: 'download' },
+        meta: { title: '影视转存', desc: '按影片聚合各资源站 / 链接转存与离线下载', icon: 'download' },
       },
       {
         path: 'settings',

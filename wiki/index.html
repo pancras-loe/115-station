@@ -867,7 +867,7 @@ tv:
     <tr><td>HTTP/FTP 直链</td><td>同上</td></tr>
     <tr><td>115 分享链接</td><td>走「转存」（秒存到网盘）→ 自动整理</td></tr>
   </table>
-  <p>提交入口：① 上传下载页「链接」框（提取码有独立输入框）；② 企微/TG 机器人直接发链接。转存目录在「分享同步」卡配置。</p>
+  <p>提交入口：① 影视转存页的输入框（粘贴链接即提交，提取码有独立输入框）；② 企微/TG 机器人直接发链接。转存目录在「影视转存 → 来源设置」配置。</p>
 
   <h3>全自动闭环</h3>
   <div class="flow">
@@ -890,7 +890,7 @@ tv:
   <h2><span class="num">21</span>监控上传</h2>
   <p>反向同步 Emby 的劳动成果：Emby 刮削会在本地生成海报/演员图/NFO，<strong>监控上传</strong>把这些回传到 115 对应目录——网盘侧也有一套完整元数据，未来重建本地库或分享都不丢刮削。</p>
   <ul>
-    <li><strong>配置</strong>：上传下载页 → 监控上传 Tab → 监控目录填本地媒体库根（如 <code>/media</code>）</li>
+    <li><strong>配置</strong>：监控上传页 → 监控目录填本地媒体库根（如 <code>/media</code>）</li>
     <li><strong>识别范围</strong>：Emby/Jellyfin 标准命名的图片（poster / fanart / banner / logo / seasonXX-poster…）与 NFO（tvshow / movie / season / 每集同名 .nfo）</li>
     <li><strong>机制</strong>：每分钟扫描一次新增文件，按相对路径对应上传；24 小时窗口外的旧文件不回传（防止风暴）；云端目录连续 3 轮未命中该文件就停止重试（防刷屏，日志说明）</li>
   </ul>

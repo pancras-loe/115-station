@@ -40,8 +40,8 @@ export const navItems: NavItem[] = [
   // 图标与顶栏的任务弹层入口一致
   { name: 'tasks', label: '任务中心', icon: ListChecks },
 
-  { name: 'upload-download', label: '上传下载', icon: ArrowDownUp, group: '传输' },
-  { name: 'media-transfer', label: '影视转存', icon: Download },
+  { name: 'media-transfer', label: '影视转存', icon: Download, group: '传输' },
+  { name: 'upload-download', label: '监控上传', icon: ArrowDownUp },
 
   { name: 'settings', label: '系统配置', icon: Settings, group: '系统' },
   { name: 'message', label: '消息配置', icon: MessageSquare },

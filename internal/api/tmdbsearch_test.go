@@ -55,7 +55,7 @@ func TestTmdbQueryVariants(t *testing.T) {
 func TestRankTmdbCands(t *testing.T) {
 	cands := []manualCand{
 		{ID: 1, MediaType: "tv", Title: "三体动画", popularity: 50},
-		{ID: 108545, MediaType: "tv", Title: "三体", original: "3 Body Problem", popularity: 90},
+		{ID: 108545, MediaType: "tv", Title: "三体", Original: "3 Body Problem", popularity: 90},
 		{ID: 2, MediaType: "movie", Title: "无关条目", popularity: 999},
 		{ID: 108545, MediaType: "tv", Title: "三体", popularity: 90}, // 两个搜索词各搜到一次
 		{ID: 108545, MediaType: "movie", Title: "同号电影", popularity: 1},
