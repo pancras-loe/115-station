@@ -133,6 +133,8 @@ export interface TaskJob {
   result?: Record<string, unknown>
   /** 结束后排进 Emby 提前探测的结果（手动刮削勾了「轨道探测」时才有），探测跑完前会继续更新 */
   probe?: TaskProbeReport
+  /** 结束时另建的后续任务（手动刮削勾了轨道探测 → Emby 提前探测）及其当前状态 */
+  follow?: { id: number; kind: string; title: string; status: TaskJobStatus }
   /** 排队中可取消 / 运行中可停止（逐条处理的任务才能在两条之间停） */
   stoppable?: boolean
   /** 排队中：第几位（从 1 起）与预计多少秒后跑完 */

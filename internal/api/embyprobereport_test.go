@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -222,5 +223,62 @@ func TestProbeReportLostAfterRestart(t *testing.T) {
 	got := jobStatus(t, job.ID)
 	if r := probeReportOf(&got); r == nil || r.State != "lost" {
 		t.Fatalf("应判为中断：%+v", r)
+	}
+}
+
+// 失败清单：第一次探、结果还没回来的条目不算失败，不列出；失败过再重试的列出并显示探测中；
+// 记着「请求中」却没人在探的（服务重启过）显示中断（2026-09-30 现场：探一集清单里闪一条「请求中断」）
+func TestProbeFailListSkipsFirstInFlight(t *testing.T) {
+	resetExtractState(t)
+	now := time.Now()
+	for _, m := range []model.EmbyExtractMark{
+		{ItemID: "fresh", Label: "新集", Attempts: 1, LastAt: now, LastErr: embyExtractPending},
+		{ItemID: "stale", Label: "断掉的", Attempts: 1, LastAt: now.Add(-time.Hour), LastErr: embyExtractPending},
+		{ItemID: "old", Label: "失败过", Attempts: 1, LastAt: now.Add(-2 * time.Hour), LastErr: "HTTP 500"},
+	} {
+		embyExtractStore(m)
+	}
+	list := func() (rows []probeFailRow, total int) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/tasks/probe", nil)
+		(&Handler{DB: model.DB}).EmbyProbeStatus(c)
+		var out struct {
+			Fails []probeFailRow `json:"fails"`
+			Total int            `json:"fail_total"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Fails, out.Total
+	}
+	byID := func(rows []probeFailRow) map[string]probeFailRow {
+		m := map[string]probeFailRow{}
+		for _, r := range rows {
+			m[r.ItemID] = r
+		}
+		return m
+	}
+
+	setEmbyExtractRunning("fresh", "新集")
+	t.Cleanup(func() { setEmbyExtractRunning("", "") })
+	rows, total := list()
+	got := byID(rows)
+	if _, ok := got["fresh"]; ok || total != 2 || len(rows) != 2 {
+		t.Fatalf("第一次探、还在探的不该进失败清单：total=%d %+v", total, rows)
+	}
+	if got["stale"].LastErr != "请求中断（服务重启）" {
+		t.Fatalf("没人在探的「请求中」要显示中断：%+v", got["stale"])
+	}
+
+	// 失败过的条目再探：列出、显示探测中
+	embyExtractClaim("old", "失败过", now, true)
+	setEmbyExtractRunning("old", "失败过")
+	got = byID(func() []probeFailRow { r, _ := list(); return r }())
+	if r := got["old"]; !r.Running || r.LastErr != embyExtractPending {
+		t.Fatalf("失败过再重试的要列出并显示探测中：%+v", r)
+	}
+	if _, ok := got["fresh"]; !ok {
+		t.Fatal("不在探了的「请求中」要列出来（中断）")
 	}
 }

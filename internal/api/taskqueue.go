@@ -570,6 +570,7 @@ type taskJobDTO struct {
 	RecordIDs []uint          `json:"record_ids,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Probe     *jobProbeReport `json:"probe,omitempty"` // 任务结束后排进 Emby 提前探测的结果（embyprobereport.go）
+	Follow    *jobFollow      `json:"follow,omitempty"`
 	Stoppable bool            `json:"stoppable,omitempty"`
 	Progress  *jobProgress    `json:"progress,omitempty"`
 	Position  int             `json:"position,omitempty"`
@@ -582,6 +583,7 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 		d.Result = json.RawMessage(job.Result)
 	}
 	d.Probe = probeReportOf(&job)
+	d.Follow = jobFollowOf(d.Result)
 	d.Stoppable = job.Status == jobQueued || (job.Status == jobRunning && jobStoppable(&job))
 	switch job.Status {
 	case jobRunning:
@@ -600,6 +602,33 @@ func toJobDTO(job model.TaskJob, queued []model.TaskJob) taskJobDTO {
 		}
 	}
 	return d
+}
+
+// jobFollow 任务结束时另建的后续任务（目前只有手动刮削 → Emby 提前探测）。
+// 刮削自己确实完了，但探测多半还在跑：列表里只写「完成」，用户会以为整件事做完了（2026-09-30 反馈）
+type jobFollow struct {
+	ID     uint   `json:"id"`
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// jobFollowOf 结果里带 follow_job 的，查一下那个任务现在的状态（任务已被清理就不返回）
+func jobFollowOf(result json.RawMessage) *jobFollow {
+	if len(result) == 0 || model.DB == nil {
+		return nil
+	}
+	var r struct {
+		FollowJob uint `json:"follow_job"`
+	}
+	if json.Unmarshal(result, &r) != nil || r.FollowJob == 0 {
+		return nil
+	}
+	var j model.TaskJob
+	if model.DB.Select("id", "kind", "title", "status").First(&j, r.FollowJob).Error != nil {
+		return nil
+	}
+	return &jobFollow{ID: j.ID, Kind: j.Kind, Title: j.Title, Status: j.Status}
 }
 
 // queuedReply 入队接口的统一回复：202 + 任务 id、排第几、大概要等多久

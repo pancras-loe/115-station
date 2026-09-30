@@ -451,6 +451,8 @@ type fileScrapeResult struct {
 	Reclaimed   int            `json:"reclaimed,omitempty"`   // 片目被挪走后收回的文件
 	Problems    []string       `json:"problems,omitempty"`
 	Errors      []string       `json:"errors,omitempty"`
+	// FollowJob 刮完另建的 Emby 提前探测任务：刮削结束时它多半还在跑，任务中心据此标「探测中」（jobFollowOf）
+	FollowJob uint `json:"follow_job,omitempty"`
 }
 
 // scrapeTarget 一个待刮片目：台账条目 + 整理时的识别结果（可无）
@@ -657,6 +659,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 			msg += "；Emby 提前探测任务没建成：" + err.Error()
 		} else {
 			msg += fmt.Sprintf("；已建 Emby 提前探测任务 #%d（%d 个片目，已有媒体信息的跳过，进度在任务中心）", pj.ID, len(extract))
+			res.FollowJob = pj.ID
 		}
 	} else if o.Probe && job.DedupeKey != scrapeAutoDedupe && done > 0 {
 		if _, ok := loadEmbyRefreshCfg(); !ok {

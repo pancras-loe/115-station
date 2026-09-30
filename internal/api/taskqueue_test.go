@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -229,5 +230,31 @@ func TestJobProgressKeep(t *testing.T) {
 	}
 	if requestJobStop(8) || !requestJobStop(7) || !jobStopRequested() {
 		t.Fatal("停止请求只能作用于当前任务")
+	}
+}
+
+// 刮削完另建的探测任务：刮削行带上它的实时状态，别只剩一个「完成」（2026-09-30 反馈）
+func TestJobDTOFollow(t *testing.T) {
+	newTestDB(t, "follow.db")
+	probe := model.TaskJob{Kind: "probe", Title: "Emby 提前探测：刮削《某剧》", Status: jobRunning}
+	model.DB.Create(&probe)
+	scrape := model.TaskJob{Kind: "scrape", Title: "刮削《某剧》", Status: jobSuccess,
+		Result: fmt.Sprintf(`{"titles":1,"follow_job":%d}`, probe.ID)}
+	model.DB.Create(&scrape)
+
+	d := toJobDTO(scrape, nil)
+	if d.Follow == nil || d.Follow.ID != probe.ID || d.Follow.Status != jobRunning || d.Follow.Kind != "probe" {
+		t.Fatalf("要带上后续任务及其状态：%+v", d.Follow)
+	}
+	model.DB.Model(&probe).Update("status", jobSuccess)
+	if d := toJobDTO(scrape, nil); d.Follow == nil || d.Follow.Status != jobSuccess {
+		t.Fatalf("后续任务跑完状态要跟着变：%+v", d.Follow)
+	}
+	model.DB.Delete(&probe)
+	if d := toJobDTO(scrape, nil); d.Follow != nil {
+		t.Fatalf("后续任务被清理了就不返回：%+v", d.Follow)
+	}
+	if d := toJobDTO(model.TaskJob{Kind: "organize", Status: jobSuccess, Result: `{"success":1}`}, nil); d.Follow != nil {
+		t.Fatal("没有后续任务的不返回")
 	}
 }

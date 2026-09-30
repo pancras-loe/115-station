@@ -447,7 +447,17 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 	log.Printf("[Emby探测] ▶ %s：%d 个条目还没有媒体信息，逐个提前探测（%s）%s", embyPathBase(p), len(todo), mode, note)
 	seen := map[string]string{} // 这一轮探过的版本 → 失败原因（成功为空）
 	sent := false               // 这一轮发过请求：下一个请求前要隔开
+	defer setEmbyExtractRunning("", "")
 	for i, it := range todo {
+		// 间隔放在记账之前：记账（LastErr=「请求中」）到发请求之间不能空着 3 秒 ——
+		// 那几秒里条目既不算「正在探」，失败清单就把它当成「请求中断（服务重启）」列出来，
+		// 探一集闪一条（2026-09-30 现场）。停服也不会留下一笔没发出去的尝试
+		if sent {
+			if !embyExtractWait(embyExtractGap) {
+				return false
+			}
+			sent = false
+		}
 		if manual && embyExtractAllCanceled(jobs) {
 			if !e.auto {
 				n := len(todo) - i
@@ -464,8 +474,11 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			probeReportItem(jobs, probeHeldItem(it))
 			continue
 		}
-		ok, errMsg := true, ""
-		for _, src := range it.probeSources(cfg.PathMapping) {
+		// 记了账就算「正在探」，一直到结果落账（多版本之间的间隔也算）
+		setEmbyExtractRunning(it.ID, it.label())
+		ok, errMsg, brk := true, "", false
+		srcs := it.probeSources(cfg.PathMapping)
+		for j, src := range srcs {
 			k := embySourceKey(src)
 			if r, done := seen[k]; done && k != "" {
 				// 同一个版本在这一轮里已经探过（Emby 把它另列成了一个条目）：结果照搬，不再发请求
@@ -482,7 +495,6 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			sent = true
 			setEmbyExtractRunning(it.ID, it.sourceLabel(src))
 			one, msg := embyExtractOne(cfg, it, src)
-			setEmbyExtractRunning("", "")
 			if one {
 				msg = ""
 			} else {
@@ -498,22 +510,33 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			if one {
 				embyExtractFails = 0
 			} else if embyExtractFails++; embyExtractFails >= embyExtractBreakAfter {
-				log.Printf("[Emby探测] ⚠ 连续 %d 个条目探测失败，暂停 %s（可能是 115 风控或 Emby 异常），排队中的稍后继续",
-					embyExtractFails, embyExtractBreakPause)
-				embyExtractFails = 0
-				setEmbyExtractPausedUntil(time.Now().Add(embyExtractBreakPause))
-				if !embyExtractWait(embyExtractBreakPause) {
-					return false
+				// 熔断：这个条目剩下的版本不探了（算这次失败），先落账再暂停 ——
+				// 暂停放在落账之前的话，这 30 分钟里它一直挂着「请求中 / 探测中」
+				brk = true
+				if j < len(srcs)-1 {
+					errMsg = joinProbeErr(errMsg, "连续失败熔断，其余版本没探")
 				}
+				break
 			}
 		}
 		embyExtractSettle(it.ID, ok, errMsg)
+		setEmbyExtractRunning("", "")
 		if ok {
 			probeReportOK(jobs)
 		} else {
 			item := probeHeldItem(it) // 记账刚写过：带上失败原因与什么时候能再试
 			item.Kind = probeItemFailed
 			probeReportItem(jobs, item)
+		}
+		if brk {
+			log.Printf("[Emby探测] ⚠ 连续 %d 个条目探测失败，暂停 %s（可能是 115 风控或 Emby 异常），排队中的稍后继续",
+				embyExtractFails, embyExtractBreakPause)
+			embyExtractFails = 0
+			setEmbyExtractPausedUntil(time.Now().Add(embyExtractBreakPause))
+			if !embyExtractWait(embyExtractBreakPause) {
+				return false
+			}
+			sent = false // 暂停已经隔开了
 		}
 	}
 	if sent && !embyExtractWait(embyExtractGap) {
@@ -613,6 +636,9 @@ func embyExtractAllowed(id string, now time.Time, manual bool) (bool, string) {
 	return true, ""
 }
 
+// embyExtractPending 记了账、结果还没回来时 LastErr 的占位
+const embyExtractPending = "请求中"
+
 // embyExtractClaim 发请求前记一次尝试；不允许时返回 false。
 // label 是条目的称呼，任务中心列失败清单用。只有 worker 一个 goroutine 调它，查与写之间不会插进别人
 func embyExtractClaim(id, label string, now time.Time, manual bool) (bool, string) {
@@ -623,7 +649,7 @@ func embyExtractClaim(id, label string, now time.Time, manual bool) (bool, strin
 		return false, why
 	}
 	m, _ := embyExtractLoad(id)
-	m.ItemID, m.Attempts, m.LastAt, m.LastErr = id, m.Attempts+1, now, "请求中"
+	m.ItemID, m.Attempts, m.LastAt, m.LastErr = id, m.Attempts+1, now, embyExtractPending
 	// 能走到这里的忽略条目只可能是手动请求：用户点名要探，再失败就该回到清单里
 	m.IgnoredAt = nil
 	if label != "" {

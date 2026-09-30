@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 
 	"115-station/internal/model"
 )
@@ -265,12 +266,21 @@ func (h *Handler) EmbyProbeStatus(c *gin.Context) {
 	}
 	var marks []model.EmbyExtractMark
 	var total, ignored int64
-	if h.DB != nil {
-		h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NULL").Count(&total)
-		h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NOT NULL").Count(&ignored)
-		h.DB.Where("ignored_at IS NULL").Order("last_at DESC").Limit(probeFailListMax).Find(&marks)
-	}
 	running, now := embyExtractRunningID(), time.Now()
+	if h.DB != nil {
+		// 记账在发请求之前：第一次探、结果还没回来的条目也有一行，它还没失败过，不进失败清单
+		// （否则每探一集清单里就闪一条，2026-09-30 现场）。失败过再重试的照常列出、显示「探测中」
+		fails := func() *gorm.DB {
+			q := h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NULL")
+			if running != "" {
+				q = q.Where("NOT (item_id = ? AND attempts <= 1 AND last_err = ?)", running, embyExtractPending)
+			}
+			return q
+		}
+		fails().Count(&total)
+		h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NOT NULL").Count(&ignored)
+		fails().Order("last_at DESC").Limit(probeFailListMax).Find(&marks)
+	}
 	rows := make([]probeFailRow, 0, len(marks))
 	for i := range marks {
 		m := marks[i]
@@ -278,7 +288,7 @@ func (h *Handler) EmbyProbeStatus(c *gin.Context) {
 		row := probeFailRow{ItemID: m.ItemID, Label: m.Label, Attempts: m.Attempts, LastErr: m.LastErr, LastAt: m.LastAt,
 			AutoRetryAt: st.RetryAt, AutoStopped: st.State == "exhausted", ManualAt: st.ManualAt,
 			Running: st.State == "running", Queued: st.State == "queued"}
-		if row.LastErr == "请求中" && !row.Running {
+		if row.LastErr == embyExtractPending && !row.Running {
 			// 发出请求后没等到结果服务就退出了
 			row.LastErr = "请求中断（服务重启）"
 		}
