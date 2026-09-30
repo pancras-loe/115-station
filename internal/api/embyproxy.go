@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -152,11 +153,19 @@ func embyResponsePath(req *http.Request) string {
 // 限制等问题都会让它失败）
 func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) error {
 	return func(resp *http.Response) error {
-		if resp.Request == nil || resp.StatusCode != http.StatusOK {
+		if resp.Request == nil {
 			return nil
 		}
 		match := playbackInfoPathRe.FindStringSubmatch(embyResponsePath(resp.Request))
 		if len(match) == 0 {
+			return nil
+		}
+		// 起播耗时排查：Emby 处理 PlaybackInfo 用了多久（STRM 缺媒体信息时它会当场 ffprobe），
+		// 媒体源各自什么容器、带没带轨道。每次播放一行，不走详细日志
+		timing := playbackInfoTiming{item: match[1], status: resp.StatusCode, ua: resp.Request.UserAgent(),
+			took: stationElapsed(resp.Request)}
+		defer timing.log()
+		if resp.StatusCode != http.StatusOK {
 			return nil
 		}
 		if !strings.Contains(resp.Header.Get("Content-Type"), "json") {
@@ -184,7 +193,9 @@ func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) e
 		}
 		rememberEmbyResponseUser(resp.Request)
 		sources, _ := root["MediaSources"].([]interface{})
+		timing.sources = describePlaybackSources(db, cfg, sources)
 		changed, rewritten := false, 0
+		defer func() { timing.rewritten = rewritten }()
 		for _, s := range sources {
 			ms, ok := s.(map[string]interface{})
 			if !ok {
@@ -244,6 +255,76 @@ func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) e
 		resp.Header.Del("Content-Encoding")
 		return nil
 	}
+}
+
+// stationStartHeader 反代转发前打的时间戳（UnixNano），响应回来时算 Emby 用了多久
+const stationStartHeader = "X-Station-Start"
+
+func stationElapsed(req *http.Request) time.Duration {
+	ns, err := strconv.ParseInt(req.Header.Get(stationStartHeader), 10, 64)
+	if err != nil || ns <= 0 {
+		return -1
+	}
+	return time.Since(time.Unix(0, ns))
+}
+
+// playbackInfoTiming 一次 PlaybackInfo 的耗时摘要（defer 打印：改写中途返回的分支也要留一行）
+type playbackInfoTiming struct {
+	item, ua  string
+	status    int
+	took      time.Duration
+	sources   string
+	rewritten int
+}
+
+func (t *playbackInfoTiming) log() {
+	took := "未知"
+	if t.took >= 0 {
+		took = t.took.Round(time.Millisecond).String()
+	}
+	src := t.sources
+	if src == "" {
+		src = "无"
+	}
+	log.Printf("[播放] ⏱ PlaybackInfo 条目 %s：Emby 用时 %s（HTTP %d），媒体源 %s，改写 %d 个，UA=%q",
+		t.item, took, t.status, src, t.rewritten, t.ua)
+}
+
+// describePlaybackSources 媒体源摘要：「iso 无轨道、mkv 视频1/音频2/字幕3」。
+// 容器取直链后缀：STRM 名不带扩展名，Emby 给的路径与 Container 常常只看得出 strm，再读一次本地 STRM
+func describePlaybackSources(db *gorm.DB, cfg *config.Config, sources []interface{}) string {
+	parts := make([]string, 0, len(sources))
+	for _, s := range sources {
+		ms, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		p, _ := ms["Path"].(string)
+		container := directURLContainer(p)
+		if container == "strm" {
+			container = directURLContainer(readStrmDirectURL(db, cfg, p))
+		}
+		if container == "" || container == "strm" {
+			container, _ = ms["Container"].(string)
+		}
+		if container == "" {
+			container = "?"
+		}
+		streams, _ := ms["MediaStreams"].([]interface{})
+		n := map[string]int{}
+		for _, st := range streams {
+			if m, ok := st.(map[string]interface{}); ok {
+				typ, _ := m["Type"].(string)
+				n[strings.ToLower(typ)]++
+			}
+		}
+		if len(streams) == 0 {
+			parts = append(parts, container+" 无轨道")
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s 视频%d/音频%d/字幕%d", container, n["video"], n["audio"], n["subtitle"]))
+	}
+	return strings.Join(parts, "、")
 }
 
 // 详情页和播放信息的预取共用正式播放解析器；实际播放器 UA 改变时重新取链。
@@ -406,6 +487,9 @@ func embyReverseProxy(db *gorm.DB, cfg *config.Config, targetURL *url.URL, strip
 				req.URL.RawPath = ""
 			}
 			req.Header.Set("X-Station-Path", req.URL.Path)
+			if playbackInfoPathRe.MatchString(req.URL.Path) {
+				req.Header.Set(stationStartHeader, strconv.FormatInt(time.Now().UnixNano(), 10))
+			}
 			req.URL.Path = strings.TrimRight(targetURL.Path, "/") + req.URL.Path
 			// 直连改写需要读取 JSON 响应体，禁用压缩传输
 			req.Header.Del("Accept-Encoding")

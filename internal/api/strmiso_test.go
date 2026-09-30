@@ -164,3 +164,20 @@ func TestMigrateStrmISOExt(t *testing.T) {
 		t.Fatalf("本地读不到任何 STRM 时应报错，得到 %v", err)
 	}
 }
+
+// 起播耗时日志里的媒体源摘要：STRM 名不带扩展名时，容器从本地 STRM 的直链里读
+func TestDescribePlaybackSources(t *testing.T) {
+	dir := t.TempDir()
+	iso := filepath.ToSlash(filepath.Join(dir, "BD.strm"))
+	os.WriteFile(iso, []byte("http://h:6086/d/abc.iso?/BD.iso"), 0o666)
+	got := describePlaybackSources(nil, nil, []interface{}{
+		map[string]interface{}{"Path": iso, "Container": "strm"},
+		map[string]interface{}{"Path": "http://h:6086/d/def.mkv", "MediaStreams": []interface{}{
+			map[string]interface{}{"Type": "Video"}, map[string]interface{}{"Type": "Audio"},
+			map[string]interface{}{"Type": "Audio"}, map[string]interface{}{"Type": "Subtitle"},
+		}},
+	})
+	if got != "iso 无轨道、mkv 视频1/音频2/字幕1" {
+		t.Fatalf("摘要不对: %q", got)
+	}
+}

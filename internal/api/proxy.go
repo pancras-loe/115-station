@@ -148,15 +148,16 @@ func handleProxyRedirect(c *gin.Context, db *gorm.DB, cfg *config.Config) {
 // servePickcodeDirect 只换链并返回 302。播放器（含空 UA）直接向 CDN 取流，
 // 失败明确报错，不再以占用服务器带宽的方式掩盖兼容性问题。
 func servePickcodeDirect(c *gin.Context, db *gorm.DB, cfg *config.Config, pickcode string) {
+	start := time.Now()
 	u, err := playbackLinks.resolve(c.Request.Context(), db, cfg, pickcode, c.Request.UserAgent())
 	if err != nil {
-		log.Printf("[播放] ✗ 取链失败，未启用中转")
+		log.Printf("[播放] ✗ 取链失败，未启用中转（%s）", time.Since(start).Round(time.Millisecond))
 		c.String(http.StatusBadGateway, "无法获取可直接播放的地址，请检查账号、播放器 UA 与直链通道")
 		return
 	}
 	// 带上来源 IP 与 UA：入库后紧跟着的 302 多半是神医助手 / Emby 用 ffprobe 探测 STRM，
 	// 不看 UA 分不清是真播放还是探测
-	vlog("[播放] ✓ 返回 CDN 302（%s，UA=%q）", c.ClientIP(), c.Request.UserAgent())
+	vlog("[播放] ✓ 返回 CDN 302（取链 %s，%s，UA=%q）", time.Since(start).Round(time.Millisecond), c.ClientIP(), c.Request.UserAgent())
 	playbackRedirect(c.Writer, c.Request, u)
 }
 
