@@ -637,7 +637,13 @@ onBeforeUnmount(() => {
 .segs {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+}
+/* 手机上这一行不折行、整行横滑：各段保持自然宽度，不许被压扁（压扁后分段控件内部还会再滚一层，
+   文字被截成「全部类」），Emby 提示也别折成竖排撑高整行 */
+.segs > * {
+  flex: none;
 }
 .filter {
   flex: 1 1 200px;
@@ -859,6 +865,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--muted);
 }

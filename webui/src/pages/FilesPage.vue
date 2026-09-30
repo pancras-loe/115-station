@@ -408,6 +408,7 @@ onMounted(() => load())
             <HChip
               v-else-if="containedRoles(it).length"
               size="sm"
+              class="contain-chip"
               :title="`这个目录里有工作区：${containedRoles(it).map((r) => ROLE_TEXT[r]).join('、')}`"
             >
               含{{ containedRoles(it).map((r) => ROLE_TEXT[r]).join(' · ') }}
@@ -573,6 +574,22 @@ onMounted(() => load())
   align-items: center;
   gap: 8px;
 }
+.name-col > .chip {
+  flex: none;
+  white-space: nowrap;
+}
+/* 「含已存在 · 冗余 · 待整理」这种长标签在手机上比目录名还宽：让它先缩、省略号截断
+   （完整内容在悬浮提示里），别把目录名挤没，也别折成两行压到名字上 */
+.name-col > .contain-chip {
+  flex: 0 1000 auto;
+  min-width: 3em;
+  overflow: hidden;
+}
+.contain-chip :deep(.chip__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .size-col {
   flex: none;
   width: 90px;
@@ -620,6 +637,7 @@ onMounted(() => load())
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13.5px;
   color: var(--foreground);

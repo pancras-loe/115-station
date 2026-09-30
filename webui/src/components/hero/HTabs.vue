@@ -1,5 +1,5 @@
 <script setup lang="ts" generic="T extends string">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TabsIndicator, TabsList, TabsRoot, TabsTrigger } from 'reka-ui'
 
 /**
@@ -39,6 +39,30 @@ watch(
   },
   { immediate: true },
 )
+
+/**
+ * 哪一侧还有没露出来的页签。手机上最后一个页签常被容器边缘切掉半截（「AI 增强」），
+ * 看着像显示错位；在还能滑的那一侧渐隐，才读得出「这里能横滑」。
+ */
+const fadeL = ref(false)
+const fadeR = ref(false)
+function measure() {
+  const el = scroller.value
+  if (!el) return
+  fadeL.value = el.scrollLeft > 1
+  fadeR.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+}
+let ro: ResizeObserver | null = null
+onMounted(() => {
+  measure()
+  if (scroller.value && typeof ResizeObserver !== 'undefined') {
+    ro = new ResizeObserver(measure)
+    ro.observe(scroller.value)
+    const list = scroller.value.firstElementChild
+    if (list) ro.observe(list)
+  }
+})
+onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
@@ -49,7 +73,12 @@ watch(
     orientation="horizontal"
   >
     <div class="tabs__list-container h-tabs-scroll">
-      <div ref="scroller" class="h-tabs-scroller">
+      <div
+        ref="scroller"
+        class="h-tabs-scroller"
+        :class="{ 'fade-l': fadeL, 'fade-r': fadeR }"
+        @scroll.passive="measure"
+      >
         <TabsList class="tabs__list" data-orientation="horizontal">
           <TabsIndicator class="tabs__indicator h-tabs-indicator" />
           <TabsTrigger
@@ -84,6 +113,19 @@ watch(
 }
 .h-tabs-scroller::-webkit-scrollbar {
   display: none;
+}
+.h-tabs-scroller.fade-l,
+.h-tabs-scroller.fade-r {
+  --fl: 0px;
+  --fr: 0px;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fl), #000 calc(100% - var(--fr)), transparent);
+}
+.h-tabs-scroller.fade-l {
+  --fl: 28px;
+}
+.h-tabs-scroller.fade-r {
+  --fr: 28px;
 }
 /* 滑块（TabsIndicator）必须以滚动的列表本身为定位参照：否则它相对外层容器定位，
    列表一横滑，滑块就飞出视口，把整页撑出横向滚动条（手机上十个页签时必现） */
