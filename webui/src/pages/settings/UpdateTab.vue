@@ -58,7 +58,8 @@ const verdict = computed(() => {
 
     <FieldRow label="当前版本">
       <span class="mono">{{ displayVersion(st?.current) || '—' }}</span>
-      <span v-if="st?.sha && st.sha !== 'dev'" class="muted mono"> · {{ st.sha.slice(0, 7) }}</span>
+      <!-- 版本号里已经带着提交号（还没打过 tag / 两版之间的构建）就不再重复一遍 -->
+      <span v-if="st?.sha && st.sha !== 'dev' && !st.current.includes(st.sha.slice(0, 7))" class="muted mono"> · {{ st.sha.slice(0, 7) }}</span>
     </FieldRow>
     <FieldRow label="最新正式版">
       <template v-if="st?.latest">
