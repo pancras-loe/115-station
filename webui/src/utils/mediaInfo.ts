@@ -185,6 +185,7 @@ export function probeHint(p: EmbyDetailItem['probe'], limits?: ProbeLimits): str
     case 'wait':
       return `已请求过 ${p.attempts ?? 1} 次${err}。自动探测 ${when(p.retry_at)} 之后才会再试；${manual}。`
     case 'exhausted':
+      if (p.ignored) return `上次请求失败${err}，已在任务中心忽略，不再自动探测；${manual}（手动探测后若再失败，会重新出现在任务中心）。`
       return `已请求 ${p.attempts ?? limits?.max_attempts ?? 2} 次都没成功${err}，不再自动探测；${manual}，或先在 Emby 里播放一次看能否正常读取。`
     case 'disc':
       return '光盘结构（ISO / BDMV），Emby 探测不了，不占用 115 请求。'

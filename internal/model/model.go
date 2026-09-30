@@ -230,6 +230,10 @@ type EmbyExtractMark struct {
 	LastErr  string    `json:"last_err" gorm:"size:255"`
 	// Label 条目怎么称呼（剧名 S01E02 / 片名）：任务中心列失败清单用，老记账为空
 	Label string `json:"label" gorm:"size:255"`
+	// IgnoredAt 用户在任务中心的失败清单里点了「忽略」：不再列出、也不再自动探测。
+	// 只打标记不删行 —— 删了自动入口的次数就清零，下次入库确认又会再请求两次（§6.16 禁止重复探测）。
+	// 手动探测照常可以，手动请求时清掉标记，再失败就重新出现在清单里
+	IgnoredAt *time.Time `json:"ignored_at,omitempty"`
 }
 
 // PersonMeta TMDB 人物的中文名 / 头像 / 中文简介缓存（按 TMDB 人物 id，见 api/embypeople.go）。

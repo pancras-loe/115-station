@@ -258,6 +258,8 @@ export interface EmbyDetailItem {
     retry_at?: string
     /** 防抖没过：这个时间之后才能手动请求；为空 = 现在就能手动请求 */
     manual_at?: string
+    /** 在任务中心忽略了：state 按 exhausted 报，不再自动探 */
+    ignored?: boolean
   }
 }
 

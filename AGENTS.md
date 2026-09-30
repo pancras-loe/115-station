@@ -410,7 +410,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       执行器只把路径带任务 id 排进同一个 worker 然后等结果（别另起第二个探测者），停止时 `cancelEmbyExtractJob` 摘掉排着的。
       每个条目的结果写 `TaskJob.Probe`（`embyprobereport.go`），任务状态：全失败 `failed`、部分失败 `partial`。
       防抖期内重试任务后端直接 409 说清几点能试（`probeRetryReadyAt`），前端倒计时。**没有定时重试**，文案别写成「会自动重试」。
-      入库确认排的自动探测没有任务可挂，靠任务中心的全局卡片（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条手动重试；条目在 Emby 里没了顺手删账）。
+      入库确认排的自动探测没有任务可挂，靠任务中心的「Emby 探测」页签（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条 / 全部手动重试；条目在 Emby 里没了顺手删账）。**「忽略」只打 `EmbyExtractMark.IgnoredAt`、不删账**（删了自动次数清零，下次入库确认又要请求两次）：忽略的不再列出、不再自动探，手动请求时清掉标记（`embyExtractClaim`），再失败回到清单；`POST /tasks/probe/ignore` / `unignore`。
     - 任务状态 `partial`（部分失败）：执行器返回 `jobOutcome.Partial`。刮削有出错的产物或没刮成的片目（含中途片目被挪走）就是部分失败；停止优先于它。可重试，保留 30 天。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
@@ -431,7 +431,7 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 | 加一个通知通道 | `internal/api/notify_extra.go` |
 | 改前端页面 | `webui/src/pages/` 下对应的页面组件；路由表在 `webui/src/router/index.ts` |
 | 改总览面板 | `internal/api/dashboard.go`（数据）+ `webui/src/pages/DashboardPage.vue`（界面）。**Emby 计数别再改回不带 `IncludeItemTypes`**，见 §6.11；台账校准在 `internal/api/medialib.go` + `webui/src/components/dashboard/CalibrateModal.vue` |
-| 改任务中心 | `webui/src/pages/TasksPage.vue`（页签容器，`?job=` 打开任务详情）+ `webui/src/pages/tasks/`（`JobsTab.vue` 当前状态 / 进行中 / 历史，`JobDetail.vue` 详情弹窗）；状态 / 类型 / 来源文案在 `webui/src/utils/jobStatus.ts`。后端 `internal/api/taskhistory.go`。顶栏轮询的 `GET /tasks` 别拿来查历史 |
+| 改任务中心 | `webui/src/pages/TasksPage.vue`（页签容器，`?job=` 打开任务详情；探测状态在这里统一轮询，给角标和两个页签用）+ `webui/src/pages/tasks/`（`JobsTab.vue` 进行中：概况 / 进行中 / 最近结束 5 条；`HistoryTab.vue` 历史：按天分组、筛选、分页，打开时认一次 `?status=`；`ProbeTab.vue` Emby 探测失败清单：重试 / 忽略；`HistoryRow.vue` 两处共用的已结束任务行；`JobDetail.vue` 详情弹窗）。页签值 `jobs` 沿用旧名，别改（收藏的 `?tab=jobs` 要能打开）；状态 / 类型 / 来源文案在 `webui/src/utils/jobStatus.ts`。后端 `internal/api/taskhistory.go`。顶栏轮询的 `GET /tasks` 别拿来查历史 |
 | 改整理记录页 | `webui/src/pages/tasks/RecordsTab.vue`（在任务中心的「整理记录」页签；原在自动整理页，旧地址 `/organize?tab=records` 由 `organize` 路由的 `beforeEnter` 重定向，别删）+ `webui/src/components/organize/RedoDialog.vue`（TMDB 搜索复用 `/tmdb/search`；`mode=confirm` 时用于待确认条目改指定）。筛选栏角标、页签角标与侧栏 / 手机底栏「任务中心」上的待确认角标共用 `stores/recordStats.ts`（布局层在队列任务结束时刷新）。`?job_id=` 只看某个任务涉及的记录。**那一行上有两个删除按钮**：「深度删除」删网盘真文件，垃圾桶图标只删记录，改动时别把两者的文案/样式拉近 |
 | 改 Strm 管理页（`/sync`） | `webui/src/pages/SyncPage.vue` 是页签容器，四个页签在 `webui/src/pages/strm/`（配置 / 全量 / 增量 / 深度删除） |
 | 改同步定时 | `internal/api/cron.go`：三条线 —— 自动整理 cron（`incr.cron`）、增量独立轮询（`incr.interval_sec`，默认 30 秒）、全量 cron（服务于失效 STRM 检测）。三者共用 `taskMu`（见 §6.12）；整理与全量的 cron 命中时**只入任务队列**（`runScheduledTick` / `runScheduledFullSync`，后台优先级、各自去重），由 worker 排队执行，不存在「错过」。**`incr.cron` 与 `incr.interval_sec` 同一个 setting key，界面却分在两个页面上**（cron 在「自动整理 → 基础配置」，间隔在「Strm 管理 → 增量同步」）：历史上两件事绑在一条 cron 上，增量拆成独立轮询后 key 没动。前端两侧都要走 `webui/src/composables/incrSetting.ts` 的 `patchIncrCfg` 只改自己那个字段，整存整取会互相覆盖 |

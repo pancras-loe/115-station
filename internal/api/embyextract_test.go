@@ -193,6 +193,27 @@ func TestEmbyExtractLedgerWindowAndCap(t *testing.T) {
 	}
 }
 
+// 任务中心「忽略」：只打标记不删账 —— 自动入口不再探、次数不清零；手动请求清掉标记，再失败回到清单
+func TestEmbyExtractIgnored(t *testing.T) {
+	resetExtractState(t)
+	t0 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.Local)
+	embyExtractClaim("x", "", t0, false)
+	embyExtractSettle("x", false, "超时")
+	model.DB.Model(&model.EmbyExtractMark{}).Where("item_id = ?", "x").Update("ignored_at", t0.Add(time.Hour))
+	if ok, why := embyExtractClaim("x", "", t0.Add(48*time.Hour), false); ok || why == "" {
+		t.Fatal("忽略后自动入口不许再探，且要说明原因")
+	}
+	if m, _ := embyExtractLoad("x"); m.Attempts != 1 || m.IgnoredAt == nil {
+		t.Fatalf("忽略不删账、不改次数: %+v", m)
+	}
+	if ok, _ := embyExtractClaim("x", "", t0.Add(48*time.Hour), true); !ok {
+		t.Fatal("忽略的条目手动照常能探")
+	}
+	if m, _ := embyExtractLoad("x"); m.IgnoredAt != nil || m.Attempts != 2 {
+		t.Fatalf("手动请求要清掉忽略标记、照常记次数: %+v", m)
+	}
+}
+
 // 连续失败触发熔断暂停，暂停之后计数清零
 func TestEmbyExtractBreaker(t *testing.T) {
 	resetExtractState(t)

@@ -393,6 +393,8 @@ type embyProbeState struct {
 	RetryAt  *time.Time `json:"retry_at,omitempty"` // 自动入口最早什么时候再试（只有 wait 有）
 	// ManualAt 手动防抖还没过：这个时间之后才能手动请求。为空 = 现在就能手动请求（done / disc / 排队中的除外）
 	ManualAt *time.Time `json:"manual_at,omitempty"`
+	// Ignored 在任务中心的失败清单里被忽略了：State 按 exhausted 报（同样不再自动探），界面据此换一句说明
+	Ignored bool `json:"ignored,omitempty"`
 }
 
 // embyProbeStateOf 纯函数：与 embyExtractAllowed / worker 同一套判定，只是把「为什么不探」说出来。
@@ -421,6 +423,8 @@ func embyProbeStateOf(hasInfo, extractable bool, mark *model.EmbyExtractMark, qu
 		}
 	case queue == probeQueuedManual && st.ManualAt == nil:
 		st.State = "queued"
+	case mark.IgnoredAt != nil:
+		st.State, st.Ignored = "exhausted", true
 	case mark.Attempts >= embyExtractMaxAttempts:
 		st.State = "exhausted"
 	case now.Sub(mark.LastAt) < embyExtractRetryAfter:

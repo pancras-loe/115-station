@@ -313,6 +313,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/tasks/history", h.ListTaskHistory)
 		protected.GET("/tasks/probe", h.EmbyProbeStatus) // Emby 提前探测的全局状态（embyprobereport.go）
 		protected.POST("/tasks/probe/retry", h.RetryEmbyProbe) // 失败清单里重试（建手动探测任务）
+		protected.POST("/tasks/probe/ignore", h.IgnoreEmbyProbe)     // 失败清单里忽略（打标记，不删记账）
+		protected.POST("/tasks/probe/unignore", h.UnignoreEmbyProbe) // 撤销全部忽略
 		protected.GET("/tasks/:id", h.GetTaskJob)
 		protected.POST("/tasks/:id/cancel", h.CancelTaskJob)
 		protected.POST("/tasks/:id/retry", h.RetryTaskJob)

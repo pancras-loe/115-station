@@ -88,7 +88,10 @@ export interface ProbeStatus {
   paused_until?: string
   limits: { max_attempts: number; retry_hours: number; debounce_minutes: number; break_after: number; break_minutes: number }
   fails: ProbeFailRow[]
+  /** 没成功、也没被忽略的条目总数（fails 只列最近 100 条） */
   fail_total: number
+  /** 已忽略的条目数：不列出、不再自动探 */
+  ignored_total: number
 }
 
 export interface TaskJob {
@@ -190,4 +193,9 @@ export const history = (params: TaskHistoryQuery) =>
 export const probeStatus = () => http.get<ProbeStatus>('/tasks/probe')
 /** 失败清单里手动重试：建一个探测任务（409 = 都还在防抖期内） */
 export const retryProbe = (itemIds: string[]) => http.post<QueuedReply>('/tasks/probe/retry', { item_ids: itemIds })
+/** 失败清单里忽略（只打标记，记账保留）：item_ids 与 all 二选一 */
+export const ignoreProbe = (body: { item_ids?: string[]; all?: boolean }) =>
+  http.post<{ message: string; ignored: number }>('/tasks/probe/ignore', body)
+/** 撤销全部忽略 */
+export const unignoreProbe = () => http.post<{ message: string }>('/tasks/probe/unignore')
 export const detail = (id: number) => http.get<{ data: TaskJobDetail }>(`/tasks/${id}`, { timeoutMs: 15_000 })

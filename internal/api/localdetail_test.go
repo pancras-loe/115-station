@@ -157,6 +157,14 @@ func TestEmbyProbeStateOf(t *testing.T) {
 		!st.RetryAt.Equal(now.Add(23*time.Hour)) || st.Attempts != 1 || st.LastErr != "超时" || st.ManualAt != nil {
 		t.Fatalf("wait 要带上次数、原因与自动可重试时间，防抖已过不带 ManualAt: %+v", st)
 	}
+	ign := mark(1, time.Hour)
+	ign.IgnoredAt = &now
+	if st := embyProbeStateOf(false, true, ign, au, false, now); st.State != "exhausted" || !st.Ignored || st.RetryAt != nil {
+		t.Fatalf("忽略的条目按自动已停报，自动排着也不探: %+v", st)
+	}
+	if st := embyProbeStateOf(false, true, ign, man, false, now); st.State != "queued" {
+		t.Fatalf("忽略的条目被手动排着照常会探: %+v", st)
+	}
 	if st := embyProbeStateOf(false, true, mark(2, time.Hour), no, false, now); st.RetryAt != nil || !st.manualOK() {
 		t.Fatalf("exhausted 不再有自动重试时间，但可以手动: %+v", st)
 	}

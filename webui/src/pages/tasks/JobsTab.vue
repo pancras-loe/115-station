@@ -1,48 +1,31 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, RotateCcw, Trash2, X } from '@lucide/vue'
+import { ChevronRight, X } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
-import HPagination from '@/components/hero/HPagination.vue'
-import HPopconfirm from '@/components/hero/HPopconfirm.vue'
-import HSearchField from '@/components/hero/HSearchField.vue'
-import HSelect from '@/components/hero/HSelect.vue'
-import HTabs from '@/components/hero/HTabs.vue'
-import HTooltip from '@/components/hero/HTooltip.vue'
 import { syncApi, tasksApi } from '@/api'
 import type { IncrStatus } from '@/api/sync'
-import type { TaskJob } from '@/api/tasks'
-import { toastError } from '@/composables/useFeedback'
+import type { ProbeStatus, TaskJob } from '@/api/tasks'
+import { useNow } from '@/composables/useNow'
 import { useQueueStore } from '@/stores/queue'
-import ProbeStatusCard from './ProbeStatusCard.vue'
-import {
-  JOB_KIND,
-  JOB_SOURCE,
-  JOB_STATUS,
-  dur,
-  elapsed,
-  jobKindText,
-  jobSourceText,
-  laneText,
-  msgTone,
-  pct,
-  resultSummary,
-  retryable,
-  subProgressText,
-} from '@/utils/jobStatus'
+import HistoryRow from './HistoryRow.vue'
+import { JOB_STATUS, dur, elapsed, jobKindText, jobSourceText, laneText, pct, subProgressText } from '@/utils/jobStatus'
 import { fullTime, relTime } from '@/utils/time'
 
 /**
- * 任务中心 · 任务页签：当前状态 / 进行中 / 历史。
- * 进行中直接读顶栏那条轮询（stores/queue.ts），不另起轮询；历史只在这一页打开时查
- * （GET /tasks/history），任务结束时顺手刷新一次
+ * 任务中心 · 进行中页签：概况 / 进行中 / 最近结束。
+ * 历史与 Emby 探测失败清单各自单独成页签（原来都叠在这一页，历史要滚过三张卡片才看得到），
+ * 这里只各放一个入口：概况里的探测状态、「最近结束」的几条与失败计数。
+ * 进行中直接读顶栏那条轮询（stores/queue.ts），不另起轮询；探测状态由 TasksPage 统一轮询后传进来
  */
-const emit = defineEmits<{ open: [id: number] }>()
+const props = defineProps<{ probe: ProbeStatus | null; probeVisible: boolean }>()
+const emit = defineEmits<{ open: [id: number]; goto: [tab: string, status?: string] }>()
 const queue = useQueueStore()
+const now = useNow()
 
-// ---- 当前状态：锁 + 增量 ----
+// ---- 概况：锁 + 增量 + 探测 ----
 const incr = ref<IncrStatus | null>(null)
 async function loadIncr() {
   try {
@@ -79,89 +62,32 @@ const incrText = computed(() => {
   return t
 })
 
-// ---- 历史 ----
-const rows = ref<TaskJob[]>([])
-const total = ref(0)
+/** 探测只放一句话，详情与失败清单在「Emby 探测」页签 */
+const probeText = computed(() => {
+  const s = props.probe
+  if (!s) return '—'
+  if (!s.emby) return '没有配置 Emby'
+  const t = s.paused_until ? new Date(s.paused_until).getTime() : 0
+  if (t > now.value) return `连续失败，暂停到 ${fullTime(s.paused_until)}`
+  if (s.running) return `正在探测${s.queue ? ` · 还有 ${s.queue} 个片目排队` : ''}`
+  if (s.queue) return `${s.queue} 个片目排队中`
+  return s.enabled ? '空闲' : '自动探测未开启'
+})
+
+// ---- 最近结束 ----
+const RECENT = 5
+const recent = ref<TaskJob[]>([])
 const counts = ref<Record<string, number>>({})
-const page = ref(1)
-const size = ref(20)
-const status = ref('all')
-const kind = ref('')
-const source = ref('')
-const keyword = ref('')
-const loading = ref(false)
-
-const STATUS_TABS = ['all', 'success', 'partial', 'failed', 'interrupted', 'canceled'] as const
-const statusTabs = computed(() =>
-  STATUS_TABS.map((k) => ({
-    value: k,
-    label: k === 'all' ? '全部' : JOB_STATUS[k].text,
-    count: counts.value[k] ?? 0,
-    countTone:
-      k === 'failed' || k === 'interrupted'
-        ? ('danger' as const)
-        : k === 'partial'
-          ? ('warning' as const)
-          : ('accent' as const),
-  })),
-)
-const KIND_OPTIONS = [{ label: '全部类型', value: '' }, ...Object.entries(JOB_KIND).map(([value, label]) => ({ label, value }))]
-const SOURCE_OPTIONS = [
-  { label: '全部来源', value: '' },
-  ...Object.entries(JOB_SOURCE).map(([value, label]) => ({ label, value })),
-]
-
-async function loadHistory() {
-  loading.value = true
+async function loadRecent() {
   try {
-    const d = await tasksApi.history({
-      status: status.value,
-      kind: kind.value,
-      source: source.value,
-      q: keyword.value.trim(),
-      page: page.value,
-      size: size.value,
-    })
-    rows.value = d.data ?? []
-    total.value = d.total ?? 0
+    const d = await tasksApi.history({ status: 'all', page: 1, size: RECENT })
+    recent.value = d.data ?? []
     counts.value = d.counts ?? {}
-  } catch (e) {
-    toastError(e, '读取任务历史失败')
-  } finally {
-    loading.value = false
+  } catch {
+    // 拉不到只是少了这一块，历史页签里会报错
   }
 }
-
-function refilter() {
-  page.value = 1
-  void loadHistory()
-}
-
-function onPage(p: number) {
-  page.value = p
-  void loadHistory()
-}
-
-function onSize(n: number) {
-  size.value = n
-  refilter()
-}
-
-function pickStatus(v: string) {
-  status.value = v
-  refilter()
-}
-
-function reload() {
-  void loadHistory()
-  void loadIncr()
-  void queue.poll()
-}
-
-async function clearAll() {
-  await queue.clearFinished()
-  refilter()
-}
+const troubled = computed(() => (counts.value.failed ?? 0) + (counts.value.interrupted ?? 0))
 
 async function retry(j: TaskJob) {
   await queue.retry(j.id)
@@ -170,11 +96,11 @@ async function retry(j: TaskJob) {
 let offFinished: (() => void) | undefined
 let timer: number | undefined
 onMounted(() => {
-  void loadHistory()
   void loadIncr()
-  // 有任务跑完，历史第一页就变了；增量状态 15 秒一刷，和顶栏空闲时的轮询同一节奏
+  void loadRecent()
+  // 有任务跑完，最近结束就变了；增量状态 15 秒一刷，和顶栏空闲时的轮询同一节奏
   offFinished = queue.onFinished(() => {
-    void loadHistory()
+    void loadRecent()
   })
   timer = window.setInterval(loadIncr, 15_000)
 })
@@ -186,7 +112,7 @@ onUnmounted(() => {
 
 <template>
   <div class="stack">
-    <SectionCard title="当前状态" hint="同一时间只有一个任务在动网盘；整理、同步、全量、深删都排这一把锁">
+    <SectionCard title="概况" hint="同一时间只有一个任务在动网盘；整理、同步、全量、深删都排这一把锁">
       <dl class="state">
         <div class="state-item">
           <dt>任务锁</dt>
@@ -204,10 +130,14 @@ onUnmounted(() => {
           <dt>增量重放</dt>
           <dd class="is-warn">连续 {{ incr?.stall.rounds }} 轮没消费：{{ incr?.stall.reason }}</dd>
         </div>
+        <div v-if="probeVisible" class="state-item is-link" role="link" tabindex="0" @click="emit('goto', 'probe')" @keydown.enter="emit('goto', 'probe')">
+          <dt>Emby 提前探测<ChevronRight class="go" /></dt>
+          <dd>
+            {{ probeText }}<span v-if="probe?.fail_total" class="warn"> · 失败 {{ probe.fail_total }}</span>
+          </dd>
+        </div>
       </dl>
     </SectionCard>
-
-    <ProbeStatusCard />
 
     <SectionCard title="进行中" :hint="`执行中 ${queue.running} · 排队 ${queue.queued}`">
       <EmptyState
@@ -270,73 +200,22 @@ onUnmounted(() => {
       </ul>
     </SectionCard>
 
-    <SectionCard
-      title="历史"
-      hint="成功与取消的保留 7 天，部分失败、失败与中断保留 30 天；什么都没做的定时整理不留记录"
-    >
-      <HTabs :model-value="status" :items="statusTabs" class="filters" @update:model-value="pickStatus" />
-
-      <div class="toolbar">
-        <div class="sel">
-          <HSelect v-model="kind" :options="KIND_OPTIONS" aria-label="任务类型" @update:model-value="refilter" />
-        </div>
-        <div class="sel">
-          <HSelect v-model="source" :options="SOURCE_OPTIONS" aria-label="提交来源" @update:model-value="refilter" />
-        </div>
-        <HSearchField v-model="keyword" class="kw" placeholder="标题 / 结果说明" @search="refilter" />
-        <HTooltip content="刷新">
-          <HButton variant="ghost" icon-only :loading="loading" aria-label="刷新" @click="reload">
-            <RefreshCw />
+    <SectionCard title="最近结束">
+      <template #extra>
+        <div class="extra">
+          <HButton v-if="troubled" size="sm" variant="ghost" class="danger-text" @click="emit('goto', 'history', 'failed')">
+            失败 / 中断 {{ troubled }}
           </HButton>
-        </HTooltip>
-        <span class="grow" />
-        <HPopconfirm danger confirm-text="清理" :disabled="!counts.all" @confirm="clearAll">
-          <HButton variant="danger-soft" :disabled="!counts.all">
-            <template #icon><Trash2 /></template>
-            清理已结束
+          <HButton size="sm" variant="ghost" @click="emit('goto', 'history')">
+            全部历史<span v-if="counts.all" class="n">{{ counts.all }}</span>
+            <ChevronRight class="go" />
           </HButton>
-          <template #content>删除全部 {{ counts.all ?? 0 }} 条已结束任务的历史（排队中与执行中的不受影响）。整理记录不会被删。</template>
-        </HPopconfirm>
-      </div>
-
-      <div class="list-wrap" :class="{ 'is-loading': loading }">
-        <EmptyState v-if="!rows.length && !loading" text="没有符合条件的任务" />
-        <ul v-else class="list">
-          <li v-for="j in rows" :key="j.id" class="row">
-            <div class="row-main">
-              <div class="row-head">
-                <HChip :color="JOB_STATUS[j.status]?.color ?? 'default'">{{ JOB_STATUS[j.status]?.text ?? j.status }}</HChip>
-                <button type="button" class="title link" :title="j.title" @click="emit('open', j.id)">{{ j.title }}</button>
-                <span class="meta">{{ jobKindText(j.kind) }} · {{ jobSourceText(j.source) }}</span>
-              </div>
-              <p class="sub" :class="msgTone(j)">
-                <span v-if="resultSummary(j)" class="result">{{ resultSummary(j) }}</span>
-                <span v-if="resultSummary(j) && j.message"> · </span>
-                <span class="msg">{{ j.message || (resultSummary(j) ? '' : '—') }}</span>
-              </p>
-              <p class="sub dim">
-                <span :title="fullTime(j.started_at || j.created_at)">{{ relTime(j.started_at || j.created_at) }}</span>
-                <span v-if="j.started_at"> · 用时 {{ elapsed(j) }}</span>
-                <span v-if="j.record_ids?.length"> · {{ j.record_ids.length }} 条记录</span>
-              </p>
-            </div>
-            <HButton v-if="retryable(j)" size="sm" variant="ghost" title="按原参数重新加入队列" @click="retry(j)">
-              <template #icon><RotateCcw /></template>
-              重试
-            </HButton>
-          </li>
-        </ul>
-      </div>
-
-      <HPagination
-        v-if="total > size"
-        :page="page"
-        :page-size="size"
-        :total="total"
-        class="pager"
-        @update:page="onPage"
-        @update:page-size="onSize"
-      />
+        </div>
+      </template>
+      <EmptyState v-if="!recent.length" text="还没有已结束的任务" />
+      <ul v-else class="plain">
+        <HistoryRow v-for="j in recent" :key="j.id" :job="j" @open="emit('open', $event)" @retry="retry" />
+      </ul>
     </SectionCard>
   </div>
 </template>
@@ -376,39 +255,47 @@ onUnmounted(() => {
 .state-item dd.is-warn {
   color: var(--warning);
 }
-
-.filters {
-  margin-bottom: 12px;
+.state-item.is-link {
+  cursor: pointer;
+  transition: background 150ms ease;
 }
-.toolbar {
+.state-item.is-link:hover {
+  background: color-mix(in oklab, var(--surface-secondary), var(--foreground) 6%);
+}
+.state-item.is-link dt {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
+  justify-content: space-between;
 }
-.sel {
-  width: 132px;
+.state-item .warn {
+  color: var(--warning);
 }
-.kw {
-  width: 240px;
-  max-width: 100%;
+.go {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  color: var(--muted);
 }
-.grow {
-  flex: 1;
+.extra {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.n {
+  margin-left: 4px;
+  color: var(--muted);
+}
+.danger-text {
+  color: var(--danger);
 }
 
-.list-wrap {
-  transition: opacity 150ms ease;
-}
-.list-wrap.is-loading {
-  opacity: 0.55;
-  pointer-events: none;
-}
-.list {
+.list,
+.plain {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+.list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -465,15 +352,6 @@ onUnmounted(() => {
   color: color-mix(in oklab, var(--foreground) 72%, var(--muted));
   word-break: break-all;
 }
-.sub.err .msg {
-  color: var(--danger);
-}
-.sub.warn .msg {
-  color: var(--warning);
-}
-.result {
-  color: var(--foreground);
-}
 .dim,
 .sub.dim {
   color: var(--muted);
@@ -492,20 +370,10 @@ onUnmounted(() => {
   background: var(--accent);
   transition: width 300ms ease;
 }
-.pager {
-  margin-top: 12px;
-}
 
 @media (max-width: 720px) {
   .meta {
     display: none;
-  }
-  .sel {
-    flex: 1;
-    width: auto;
-  }
-  .kw {
-    width: 100%;
   }
 }
 </style>

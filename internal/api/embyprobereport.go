@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -262,10 +264,11 @@ func (h *Handler) EmbyProbeStatus(c *gin.Context) {
 		out["paused_until"] = t
 	}
 	var marks []model.EmbyExtractMark
-	var total int64
+	var total, ignored int64
 	if h.DB != nil {
-		h.DB.Model(&model.EmbyExtractMark{}).Count(&total)
-		h.DB.Order("last_at DESC").Limit(probeFailListMax).Find(&marks)
+		h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NULL").Count(&total)
+		h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NOT NULL").Count(&ignored)
+		h.DB.Where("ignored_at IS NULL").Order("last_at DESC").Limit(probeFailListMax).Find(&marks)
 	}
 	running, now := embyExtractRunningID(), time.Now()
 	rows := make([]probeFailRow, 0, len(marks))
@@ -281,6 +284,59 @@ func (h *Handler) EmbyProbeStatus(c *gin.Context) {
 		}
 		rows = append(rows, row)
 	}
-	out["fails"], out["fail_total"] = rows, total
+	out["fails"], out["fail_total"], out["ignored_total"] = rows, total, ignored
 	c.JSON(http.StatusOK, out)
+}
+
+// IgnoreEmbyProbe POST /tasks/probe/ignore {item_ids | all} → 把失败条目从清单里拿掉。
+// 只打 IgnoredAt 标记、不删记账（见 model.EmbyExtractMark.IgnoredAt）；正在探 / 排着的跳过，
+// 否则刚点完忽略它又被手动请求清掉标记，界面上看着像没生效
+func (h *Handler) IgnoreEmbyProbe(c *gin.Context) {
+	var req struct {
+		ItemIDs []string `json:"item_ids"`
+		All     bool     `json:"all"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || (!req.All && len(req.ItemIDs) == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	q := h.DB.Where("ignored_at IS NULL")
+	if !req.All {
+		q = q.Where("item_id IN ?", req.ItemIDs)
+	}
+	var marks []model.EmbyExtractMark
+	q.Find(&marks)
+	running, now := embyExtractRunningID(), time.Now()
+	var ids []string
+	busy := 0
+	for i := range marks {
+		m := marks[i]
+		if m.ItemID == running || embyExtractQueuedItem(m.ItemID) != probeQueuedNone {
+			busy++
+			continue
+		}
+		ids = append(ids, m.ItemID)
+	}
+	if len(ids) > 0 {
+		if err := h.DB.Model(&model.EmbyExtractMark{}).Where("item_id IN ?", ids).Update("ignored_at", now).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	msg := fmt.Sprintf("已忽略 %d 个", len(ids))
+	if busy > 0 {
+		msg += fmt.Sprintf("，另 %d 个正在探测或排队中，没动", busy)
+	}
+	log.Printf("[Emby探测] ○ 任务中心忽略 %d 个失败条目（跳过进行中 %d 个）", len(ids), busy)
+	c.JSON(http.StatusOK, gin.H{"message": msg, "ignored": len(ids)})
+}
+
+// UnignoreEmbyProbe POST /tasks/probe/unignore → 撤销全部忽略：回到失败清单，自动探测按原来的次数与间隔照常判定
+func (h *Handler) UnignoreEmbyProbe(c *gin.Context) {
+	res := h.DB.Model(&model.EmbyExtractMark{}).Where("ignored_at IS NOT NULL").Update("ignored_at", nil)
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已恢复 %d 个", res.RowsAffected)})
 }

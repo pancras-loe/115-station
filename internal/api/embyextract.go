@@ -599,6 +599,9 @@ func embyExtractAllowed(id string, now time.Time, manual bool) (bool, string) {
 		}
 		return true, ""
 	}
+	if m.IgnoredAt != nil {
+		return false, "已在任务中心忽略，不再自动探测，可以手动探测"
+	}
 	if m.Attempts >= embyExtractMaxAttempts {
 		return false, fmt.Sprintf("已请求过 %d 次都没成功（上次：%s），不再自动探测，可以手动重试", m.Attempts, m.LastErr)
 	}
@@ -620,6 +623,8 @@ func embyExtractClaim(id, label string, now time.Time, manual bool) (bool, strin
 	}
 	m, _ := embyExtractLoad(id)
 	m.ItemID, m.Attempts, m.LastAt, m.LastErr = id, m.Attempts+1, now, "请求中"
+	// 能走到这里的忽略条目只可能是手动请求：用户点名要探，再失败就该回到清单里
+	m.IgnoredAt = nil
 	if label != "" {
 		m.Label = truncateStr(label, 250)
 	}
