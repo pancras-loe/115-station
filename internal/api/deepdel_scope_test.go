@@ -55,7 +55,8 @@ func TestDeepDelRejectsContainer633Files(t *testing.T) {
 				var left, rejected int64
 				h.DB.Model(&model.SyncedFile{}).Count(&left)
 				h.DB.Model(&model.DeepDeleteRecord{}).Where("status = ?", "rejected").Count(&rejected)
-				if left != 633 || rejected != 1 {
+				// 类型不符是静默跳过：不删、不记拦截、不推通知
+				if left != 633 || rejected != 0 {
 					t.Fatalf("台账=%d 拦截记录=%d", left, rejected)
 				}
 			})

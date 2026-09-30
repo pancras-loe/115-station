@@ -23,7 +23,7 @@ func deepDelMediaType(payload map[string]interface{}) (string, error) {
 	case "Movie", "Episode", "Series", "Season":
 		return kind, nil
 	default:
-		return "", fmt.Errorf("事件类型 %q 不是可联动删除的影视条目", kind)
+		return "", fmt.Errorf("事件类型 %q 不在联动范围", kind)
 	}
 }
 

@@ -37,9 +37,13 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	if !h.loadDeepDelCfg().Enabled {
 		return
 	}
+	// 类型不在白名单是「不归深删管」，不是拦截：删一部片，Emby 刷新时会顺手收掉
+	// 空了的片目 Folder 条目，每次都会跟一条 Folder 事件。当拦截报出来就是每删一部
+	// 推一条「深度删除被拦下」，用户读成删除失败（2026-09-30 现场）。
+	// 拦截记录与通知只留给真正越界的事件（路径 / 布局 / 库根校验失败）
 	kind, err := deepDelMediaType(payload)
 	if err != nil {
-		h.rejectDeepDelEvent(err.Error())
+		log.Printf("[深度删除] ○ 跳过 Emby 事件：%v（只联动电影 / 剧 / 季 / 集）", err)
 		return
 	}
 	rels, pcs := h.deepDelLocators(payload, deep)
