@@ -16,6 +16,7 @@
 | 得意黑 Smiley Sans | `internal/api/assets/smileysans-oblique.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-SmileySans.txt](licenses/OFL-1.1-SmileySans.txt) |
 | 站酷小薇体 ZCOOL XiaoWei | `internal/api/assets/zcoolxiaowei-regular.ttf`（`//go:embed` 进二进制） | SIL OFL 1.1 | [licenses/OFL-1.1-ZCOOLXiaoWei.txt](licenses/OFL-1.1-ZCOOLXiaoWei.txt) |
 | CodeMirror 5.65.16 | 旧前端曾使用，现已移除；保留许可副本 | MIT | [licenses/MIT-CodeMirror5.txt](licenses/MIT-CodeMirror5.txt) |
+| OpenCC 繁简转换词典（经 `github.com/longbridgeapp/opencc` v0.3.13） | 模块内 `dictionary/`、`config/` 以 `//go:embed` 编进二进制（演职人员补全把繁体中文名转简体，`internal/api/personname.go`） | Apache-2.0（词典源自 [BYVoid/OpenCC](https://github.com/BYVoid/OpenCC)） | [licenses/Apache-2.0-OpenCC.txt](licenses/Apache-2.0-OpenCC.txt) |
 | Go 依赖 | 见 [`go.mod`](go.mod) / [`go.sum`](go.sum) | 各依赖自有许可证 | `go mod download` 后见各模块目录 |
 | HeroUI Styles（`@heroui/styles`） | 组件 CSS 经 Tailwind 编译后内联进 `webui/dist/index.html` | Apache-2.0（见下方说明） | [licenses/Apache-2.0-HeroUI-styles.txt](licenses/Apache-2.0-HeroUI-styles.txt) |
 | Reka UI（`reka-ui`） | 打包进 `webui/dist/index.html` | MIT | [licenses/MIT-RekaUI.txt](licenses/MIT-RekaUI.txt) |

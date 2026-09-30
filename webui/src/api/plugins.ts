@@ -50,3 +50,30 @@ export const coverGenSample = (body: { config: CoverGenConfig; live: boolean; li
 /** 封面预览图直接走 <img src>，带时间戳绕开浏览器缓存（重新生成后要能立刻看到） */
 export const coverPreviewUrl = (name: string) =>
   `/api/covergen/preview?name=${encodeURIComponent(name)}&t=${Date.now()}`
+
+// ---- 演职人员补全 ----
+export type PersonType = 'actor' | 'director' | 'writer'
+export interface PersonFillConfig {
+  enabled: boolean
+  cron: string
+  types: PersonType[]
+  image: boolean
+  zh_name: boolean
+  zh_bio: boolean
+  max_cast: number
+  max_per_run: number
+}
+export interface PersonFillInfo {
+  config: PersonFillConfig
+  next_run?: string
+  /** 记账里各状态的人物数（这些人物到期前不再处理） */
+  marks?: Record<string, number>
+  state_text?: Record<string, string>
+  cached?: number
+  cached_zh?: number
+  last_job?: { id: number; status: string; message?: string; finished_at?: string } | null
+}
+export const personFillConfig = () => http.get<{ data?: PersonFillInfo }>('/personfill/config')
+export const savePersonFill = (body: PersonFillConfig) => http.post('/personfill/config', body)
+export const runPersonFill = () => http.post<{ message?: string; job_id?: number }>('/personfill/run')
+export const resetPersonFill = () => http.post<{ message?: string }>('/personfill/reset')

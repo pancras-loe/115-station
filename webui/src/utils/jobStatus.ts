@@ -20,6 +20,7 @@ export const JOB_KIND: Record<string, string> = {
   orgpick: '整理所选',
   scrape: '刮削',
   probe: 'Emby 探测',
+  person: '演职人员补全',
   libredo: '重新整理片目',
   filemove: '移动',
   ignore: '忽略',
@@ -40,10 +41,11 @@ export const JOB_SOURCE: Record<string, string> = {
   redo: '重新整理后',
 }
 
-/** 不在主队列上的任务，排队位置前面加上是哪条队列（刮削、探测各自一条，不等任务锁）；主队列为空串 */
+/** 不在主队列上的任务，排队位置前面加上是哪条队列（刮削、探测、人物各自一条，不等任务锁）；主队列为空串 */
 export function laneText(kind: string) {
   if (kind === 'scrape') return '刮削队列'
   if (kind === 'probe') return '探测队列'
+  if (kind === 'person') return '人物队列'
   return ''
 }
 
@@ -112,6 +114,11 @@ const RESULT_LABEL: [string, string][] = [
   ['reused', '复用已下载图片'],
   ['placeholder', '占位剧照未写'],
   ['reclaimed', '收回孤儿文件'],
+  // 演职人员补全（embypeople.go 的 personJobResult）
+  ['people', '处理人物'],
+  ['images', '补头像'],
+  ['renamed', '改中文名'],
+  ['bios', '补中文简介'],
 ]
 
 /** 刮削结果里嵌套的产物计数 */

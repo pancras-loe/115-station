@@ -5,14 +5,16 @@ import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, Images, Play, Settings2 } from '@lucide/vue'
+import { CalendarCheck, Images, Play, Settings2, UsersRound } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
+import PersonFillModal from '@/components/plugins/PersonFillModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useQueueStore } from '@/stores/queue'
 
 const { message } = useFeedback()
 
@@ -79,6 +81,24 @@ async function cgRun() {
   }
 }
 
+// ============ 演职人员补全 ============
+// 跑一次可能几十分钟，入任务队列（人物队列）后立即返回，进度在顶栏任务面板 / 任务中心
+const pfShow = ref(false)
+const queue = useQueueStore()
+
+async function pfRun() {
+  busy.value.personfill = true
+  try {
+    const d = await pluginsApi.runPersonFill()
+    results.value.personfill = { status: 'ok', title: d.message || '已加入任务队列', detail: '进度见顶栏任务面板或任务中心' }
+    await queue.submitted(d.job_id)
+  } catch (e) {
+    results.value.personfill = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    busy.value.personfill = false
+  }
+}
+
 // ============ 插件清单 ============
 const plugins = [
   {
@@ -100,6 +120,16 @@ const plugins = [
     runLabel: '立即生成',
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
+  },
+  {
+    key: 'personfill',
+    name: '演职人员补全',
+    icon: UsersRound,
+    desc: '给 Emby 里缺头像、名字不是中文的演员 / 导演 / 编剧补上 TMDB 头像、中文名与中文简介。头像经本站代理下载后通过 Emby API 写入，支持定时。',
+    available: true,
+    runLabel: '立即运行',
+    onConfig: () => (pfShow.value = true),
+    onRun: pfRun,
   },
 ]
 
@@ -158,6 +188,7 @@ const availableCount = plugins.filter((p) => p.available).length
     </HModal>
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
+    <PersonFillModal v-model:show="pfShow" />
   </SectionCard>
 </template>
 

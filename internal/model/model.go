@@ -232,6 +232,32 @@ type EmbyExtractMark struct {
 	Label string `json:"label" gorm:"size:255"`
 }
 
+// PersonMeta TMDB 人物的中文名 / 头像 / 中文简介缓存（按 TMDB 人物 id，见 api/embypeople.go）。
+// 演职人员补全任务查过一次就落这里：下次任务、以及刮削写 NFO 的演员名都读它，
+// 同一个人不必再问 TMDB。ZhName 为空 = 查过但 TMDB 没有中文名
+type PersonMeta struct {
+	TmdbID      int       `json:"tmdb_id" gorm:"primaryKey;autoIncrement:false"`
+	Name        string    `json:"name" gorm:"size:255"` // TMDB 原名
+	ZhName      string    `json:"zh_name" gorm:"size:255"`
+	ProfilePath string    `json:"profile_path" gorm:"size:128"`
+	ZhBio       string    `json:"zh_bio" gorm:"type:text"`
+	FetchedAt   time.Time `json:"fetched_at"`
+}
+
+// EmbyPersonMark 演职人员补全对 Emby 人物条目的记账（按 Emby 人物 id）。
+// TMDB 上没有头像 / 没有中文名 / 对不上号的人物很多，不记账的话每晚都要把它们重新问一遍。
+// 补全成功（头像、中文名都有了）即删行
+type EmbyPersonMark struct {
+	PersonID  string    `json:"person_id" gorm:"primaryKey;size:64"`
+	Name      string    `json:"name" gorm:"size:255"`
+	TmdbID    int       `json:"tmdb_id"`
+	State     string    `json:"state" gorm:"size:32"` // no_match / no_image / no_zh / failed
+	Tries     int       `json:"tries"`
+	NextAt    time.Time `json:"next_at" gorm:"index"` // 此前不再处理
+	Note      string    `json:"note" gorm:"size:255"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -402,6 +428,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&RecognizeMemory{},
 		&TaskJob{},
 		&EmbyExtractMark{},
+		&PersonMeta{},
+		&EmbyPersonMark{},
 	); err != nil {
 		return nil, err
 	}

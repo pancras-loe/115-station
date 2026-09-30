@@ -359,14 +359,8 @@ func (r *titleRun) movieNFO(body []byte) {
 			Name string `json:"name"`
 		} `json:"genres"`
 		Credits struct {
-			Cast []struct {
-				Name      string `json:"name"`
-				Character string `json:"character"`
-			} `json:"cast"`
-			Crew []struct {
-				Job  string `json:"job"`
-				Name string `json:"name"`
-			} `json:"crew"`
+			Cast []tmdbCastMember `json:"cast"`
+			Crew []tmdbCrewMember `json:"crew"`
 		} `json:"credits"`
 		ProductionCompanies []struct {
 			Name string `json:"name"`
@@ -390,17 +384,9 @@ func (r *titleRun) movieNFO(body []byte) {
 	for _, g := range d.Genres {
 		nfo.Genres = append(nfo.Genres, g.Name)
 	}
-	for _, c := range d.Credits.Crew {
-		if c.Job == "Director" {
-			nfo.Directors = append(nfo.Directors, c.Name)
-		}
-	}
-	for _, cc := range d.Credits.Cast {
-		if cc.Name == "" {
-			continue
-		}
-		nfo.Actors = append(nfo.Actors, nfoActor{Name: cc.Name, Role: cc.Character})
-	}
+	nfo.Directors = nfoCrewNames(d.Credits.Crew, crewIsDirector)
+	nfo.Writers = nfoCrewNames(d.Credits.Crew, crewIsWriter)
+	nfo.Actors = nfoActorsOf(d.Credits.Cast)
 	for _, pc := range d.ProductionCompanies {
 		nfo.Studios = append(nfo.Studios, pc.Name)
 	}
@@ -439,10 +425,7 @@ func (r *titleRun) tvNFO(body []byte) {
 			Name string `json:"name"`
 		} `json:"networks"`
 		Credits struct {
-			Cast []struct {
-				Name      string `json:"name"`
-				Character string `json:"character"`
-			} `json:"cast"`
+			Cast []tmdbCastMember `json:"cast"`
 		} `json:"credits"`
 		Seasons []struct {
 			SeasonNumber int    `json:"season_number"`
@@ -469,11 +452,7 @@ func (r *titleRun) tvNFO(body []byte) {
 		nfo.Studios = append(nfo.Studios, nw.Name)
 	}
 	// 演员取 credits.cast。此前取的是 created_by（主创）当演员写，剧的演员表基本是空的
-	for _, cc := range d.Credits.Cast {
-		if cc.Name != "" {
-			nfo.Actors = append(nfo.Actors, nfoActor{Name: cc.Name, Role: cc.Character})
-		}
-	}
+	nfo.Actors = nfoActorsOf(d.Credits.Cast)
 	r.s.rep.sub("剧 / 季 NFO", 0, 0, "tvshow.nfo")
 	if !r.skip(t.Dir, "tvshow.nfo") {
 		if b, err := marshalNFO(nfo); err == nil {

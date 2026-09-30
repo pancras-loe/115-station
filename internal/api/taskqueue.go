@@ -145,6 +145,9 @@ func jobStoppable(job *model.TaskJob) bool {
 	case jobKindProbe:
 		// 探测逐个条目，正在请求的那一集探完就停
 		return true
+	case jobKindPerson:
+		// 逐个人物处理，手上这个写完就停
+		return true
 	case "orgpick":
 		// 网盘文件页勾选的一批：整理逐个条目，两个之间能停
 		if f := decodeJobParams(job).Files; f != nil {
@@ -203,6 +206,7 @@ var jobWakes = map[*jobLane]chan struct{}{
 	mainLane:   make(chan struct{}, 1),
 	scrapeLane: make(chan struct{}, 1),
 	probeLane:  make(chan struct{}, 1),
+	personLane: make(chan struct{}, 1),
 }
 
 // jobKindScrape 走刮削队列的任务类型
@@ -215,6 +219,8 @@ func laneOfKind(kind string) *jobLane {
 		return scrapeLane
 	case jobKindProbe:
 		return probeLane
+	case jobKindPerson:
+		return personLane
 	}
 	return mainLane
 }
@@ -226,8 +232,10 @@ func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
 		return db.Where("kind = ?", jobKindScrape)
 	case probeLane:
 		return db.Where("kind = ?", jobKindProbe)
+	case personLane:
+		return db.Where("kind = ?", jobKindPerson)
 	}
-	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindProbe})
+	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindProbe, jobKindPerson})
 }
 
 func wakeJobWorker() {
@@ -347,6 +355,7 @@ func StartTaskWorker(h *Handler) {
 	go h.taskWorkerLoop(mainLane)
 	go h.taskWorkerLoop(scrapeLane)
 	go h.taskWorkerLoop(probeLane)
+	go h.taskWorkerLoop(personLane)
 	if n := len(queuedJobs(h.DB)); n > 0 {
 		log.Printf("[队列] ○ 启动时有 %d 个排队中的任务，稍后依次执行", n)
 	}

@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -206,9 +207,96 @@ type nfoRating struct {
 	Value   float64  `xml:"value"`
 }
 
+// nfoActor 演员。带上 type / thumb / tmdbid（MoviePilot themoviedb/scraper.py 同口径）：
+// 此前只写 name + role，Emby 据此建的人物条目没有 TMDB id，演职人员补全只能再拿片目 credits 按名字对一遍
 type nfoActor struct {
-	Name string `xml:"name"`
-	Role string `xml:"role"`
+	Name   string `xml:"name"`
+	Role   string `xml:"role"`
+	Type   string `xml:"type,omitempty"`
+	Order  *int   `xml:"order,omitempty"`
+	Thumb  string `xml:"thumb,omitempty"`
+	TmdbID string `xml:"tmdbid,omitempty"`
+}
+
+// tmdbCastMember credits.cast 里写 NFO 要用的字段
+type tmdbCastMember struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Character   string `json:"character"`
+	ProfilePath string `json:"profile_path"`
+}
+
+// tmdbCrewMember credits.crew 里写 NFO 要用的字段
+type tmdbCrewMember struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Job        string `json:"job"`
+	Department string `json:"department"`
+}
+
+// nfoActorsOf credits.cast → NFO 演员。名字优先用演职人员补全缓存过的中文名（不发请求，查不到用 TMDB 原名），
+// 与 Emby 里被补全改成中文名的人物条目对得上 —— 否则重刮一次 NFO，Emby 又按英文名建出一个新人物
+func nfoActorsOf(cast []tmdbCastMember) []nfoActor {
+	ids := make([]int, 0, len(cast))
+	for _, c := range cast {
+		ids = append(ids, c.ID)
+	}
+	zh := cachedZhNames(ids)
+	imgBase := tmdbImageBase()
+	out := make([]nfoActor, 0, len(cast))
+	for _, c := range cast {
+		if c.Name == "" {
+			continue
+		}
+		a := nfoActor{Name: c.Name, Role: c.Character, Type: "Actor"}
+		if n := zh[c.ID]; n != "" {
+			a.Name = n
+		}
+		order := len(out)
+		a.Order = &order
+		if c.ProfilePath != "" {
+			a.Thumb = tmdbImageURL(imgBase, "h632", c.ProfilePath)
+		}
+		if c.ID > 0 {
+			a.TmdbID = strconv.Itoa(c.ID)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// nfoCrewNames crew 里某个部门（Directing / Writing）的人名，去重保序，中文名同上
+func nfoCrewNames(crew []tmdbCrewMember, keep func(tmdbCrewMember) bool) []string {
+	ids := make([]int, 0, len(crew))
+	for _, c := range crew {
+		ids = append(ids, c.ID)
+	}
+	zh := cachedZhNames(ids)
+	seen := map[int]bool{}
+	var out []string
+	for _, c := range crew {
+		if c.Name == "" || !keep(c) || seen[c.ID] {
+			continue
+		}
+		seen[c.ID] = true
+		if n := zh[c.ID]; n != "" {
+			out = append(out, n)
+		} else {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+func crewIsDirector(c tmdbCrewMember) bool { return c.Job == "Director" }
+
+// crewIsWriter 编剧：Writing 部门里写剧本 / 故事的，原著（Novel）不算
+func crewIsWriter(c tmdbCrewMember) bool {
+	switch c.Job {
+	case "Screenplay", "Writer", "Story", "Teleplay":
+		return true
+	}
+	return false
 }
 
 // nfoUniqueID Kodi 多唯一 ID 元素（同名不同 type 属性）；encoding/xml
@@ -230,6 +318,7 @@ type nfoMovie struct {
 	UniqueIDs     []nfoUniqueID `xml:"uniqueid"`
 	Genres        []string      `xml:"genre"`
 	Directors     []string      `xml:"director"`
+	Writers       []string      `xml:"credits"` // Kodi / Emby 的编剧字段就叫 credits
 	Studios       []string      `xml:"studio"`
 	Actors        []nfoActor    `xml:"actor"`
 	Plot          string        `xml:"plot"`
