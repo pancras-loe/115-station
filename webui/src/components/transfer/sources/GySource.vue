@@ -78,7 +78,9 @@ onMounted(load)
     tip="观影站内账号（搜索 / 详情需登录）。登录即测试账号有效性；服务端自动通过站点反爬验证并保持登录态，会话失效后自动重登。"
   >
     <div class="auth-row">
-      <div class="h-field-row">
+      <!-- 不用 .h-field-row：它只让第一个子项伸缩，SecretInput 的根是 width:100% 的输入框组，
+           两个输入框会互相挤，其中一个被压成 0 宽（现场：只看得到账号框，没有密码框） -->
+      <div class="cred-row">
         <HInput v-model="form.username" placeholder="用户名 / 邮箱" :input-attrs="plainProps('gy-account')" />
         <SecretInput v-model="form.password" name="gy-secret" :reveal="{ key: 'guanying', field: 'password' }" placeholder="密码" />
         <HButton :variant="loggedIn ? 'tertiary' : 'primary'" :loading="authing" @click="auth">
@@ -99,5 +101,16 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+.cred-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .cred-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>
