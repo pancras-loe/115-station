@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -84,16 +83,6 @@ func libTitleOf(chain []browseCrumb, roles map[string]string, layout libCategory
 	}
 	libName, rel = itemLibRel(chain, idx, it)
 	return libName, rel, layout.isTitleRel(rel)
-}
-
-// libCategories 当前分类目录列表（前端据此判断哪一行是片目目录）
-func libCategories(l libCategoryLayout) []string {
-	out := make([]string, 0, len(l))
-	for c := range l {
-		out = append(out, c)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // ---- 媒体库内整理 ----

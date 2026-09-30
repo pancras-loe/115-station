@@ -48,6 +48,8 @@ const count = computed(() => props.body?.items.length ?? 0)
 const firstName = computed(() => props.body?.items[0]?.name ?? '')
 const fromLibrary = computed(() => props.zone === 'library')
 const note = computed(() => TARGETS.find((t) => t.value === target.value)?.note ?? '')
+/** 没配置的目标只是灰掉的话，用户不知道为什么点不了 */
+const unconfigured = computed(() => options.value.filter((o) => o.disabled).map((o) => o.label))
 
 watch(show, (v) => {
   if (!v) return
@@ -80,7 +82,7 @@ async function submit() {
 </script>
 
 <template>
-  <HModal v-model:show="show" title="移动" width="520px">
+  <HModal v-model:show="show" :title="fromLibrary ? '移出媒体库' : '移动'" width="520px">
     <div class="body">
       <p class="src">
         所选：<b>{{ firstName }}</b>
@@ -91,6 +93,9 @@ async function submit() {
         <HSegmented v-model="target" :options="options" />
       </FieldRow>
       <p class="note">{{ note }}</p>
+      <p v-if="unconfigured.length" class="note">
+        {{ unconfigured.join('、') }}目录还没配置，不能选：到「自动整理 → 基础配置」里设置。
+      </p>
 
       <template v-if="fromLibrary">
         <HAlert status="warning">

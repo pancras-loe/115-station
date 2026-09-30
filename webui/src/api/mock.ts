@@ -435,7 +435,20 @@ const ROUTES: Record<string, Route> = {
   },
   '/files/115': (q: URLSearchParams) => {
     const cid = q.get('cid') ?? '0'
-    return { cid, data: FILE_TREE[cid] ?? [], roots: FILE_ROOTS, categories: ['电影/科幻电影', '电影/动画电影'] }
+    // 每行能做什么本来由后端按面包屑算（rowActionsOf），这里按目录粗略写死
+    const lib = ['2894561234', '201', '2011'].includes(cid)
+    const data = (FILE_TREE[cid] ?? []).map((raw) => {
+      const it = raw as { id: string; name: string; is_dir: boolean; root?: string }
+      const video = !it.is_dir && /\.(mkv|mp4)$/i.test(it.name)
+      if (it.root) return { ...it, block: '整理工作区目录不能整理或移动' }
+      if (lib) {
+        if (cid !== '2011') return { ...it, block: '媒体库里只有分类目录下的片目目录能整理和移动' }
+        return { ...it, organize: true, move: true, title: true, title_key: `媒体库/电影/科幻电影/${it.name}`, title_rel: `电影/科幻电影/${it.name}` }
+      }
+      if (!it.is_dir && !video) return { ...it, move: true, organize_block: '不是视频文件' }
+      return { ...it, video, organize: true, move: true }
+    })
+    return { cid, data, roots: FILE_ROOTS }
   },
   '/local/titles': (q: URLSearchParams) => {
     const all = TITLES.map(([title, year, cat], i) => {

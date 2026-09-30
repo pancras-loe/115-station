@@ -15,6 +15,27 @@ export interface FileItem {
   pickcode?: string
   /** 这个目录本身是哪个工作区根 */
   root?: WorkspaceRole
+  /** 按整理认的视频后缀判（只用来挑图标） */
+  video?: boolean
+  /**
+   * 这一行能做什么：后端按面包屑、用入队时同一套校验算好的，前端别再自己判。
+   * title = 媒体库里的片目目录（整理 = 重新整理，移动 = 移出媒体库）
+   */
+  organize?: boolean
+  move?: boolean
+  title?: boolean
+  /** 片目在本地文件页的 key（?title=） */
+  title_key?: string
+  /** 片目的库内相对路径（整理记录 ?target_dir=） */
+  title_rel?: string
+  /** 什么都不能做的原因 */
+  block?: string
+  /** 能移动、不能整理的原因 */
+  organize_block?: string
+  /** 本页发起、还没跑完的任务里有它 */
+  busy?: 'organize' | 'move'
+  /** 那个任务的 id：排队中 / 执行中按任务队列的实时状态显示 */
+  busy_job?: number
 }
 
 export interface FileList {
@@ -26,18 +47,18 @@ export interface FileList {
   roots: Record<string, WorkspaceRole>
   /** 工作区根目录：cid → 网盘绝对路径（解析不出的不在表里）。用来给它的祖先目录标「含 xx」 */
   root_paths?: Record<string, string>
-  /** 当前二级分类目录（库内相对路径）：分类目录的下一层是片目目录 */
-  categories?: string[]
 }
-
-/** refresh 跳过后端 2 分钟的浏览缓存 */
-export const list = (cid: string, refresh = false) =>
-  http.get<FileList>('/files/115', { params: refresh ? { cid, refresh: 1 } : { cid } })
 
 export interface Crumb {
   cid: string
   name: string
 }
+
+/** refresh 跳过后端 2 分钟的浏览缓存；chain 是面包屑，后端据此算每一行能做什么 */
+export const list = (cid: string, chain: Crumb[], refresh = false) =>
+  http.get<FileList>('/files/115', {
+    params: { cid, chain: JSON.stringify(chain), ...(refresh ? { refresh: 1 } : {}) },
+  })
 
 export interface FileJobBody {
   /** 所选条目所在目录 */

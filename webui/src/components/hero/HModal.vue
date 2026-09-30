@@ -32,8 +32,14 @@ const props = withDefaults(
      * 挂载时就定了：App 一启动就挂上的确认框排在后来打开的抽屉 / 弹窗前面，会被它们的遮罩盖住
      */
     top?: boolean
+    /**
+     * 关闭后把焦点还给打开它的那个按钮（Reka 默认行为，键盘用户靠它回到原处）。
+     * 鼠标点开的弹窗可以关掉：Chrome 会把脚本还回去的焦点也算成 :focus-visible，
+     * 那颗按钮一直带着焦点样式（网盘文件页的行内按钮因此常亮，要点别处才消失）
+     */
+    returnFocus?: boolean
   }>(),
-  { width: '560px' },
+  { width: '560px', returnFocus: true },
 )
 const open = defineModel<boolean>('show', { required: true })
 
@@ -51,6 +57,7 @@ const dialogStyle = computed(() => ({ maxWidth: props.width }))
         v-bind="description ? {} : { 'aria-describedby': undefined }"
         @pointer-down-outside="(e) => persistent && e.preventDefault()"
         @interact-outside="(e) => persistent && e.preventDefault()"
+        @close-auto-focus="(e) => !returnFocus && e.preventDefault()"
       >
         <div class="modal__dialog modal__dialog--scroll-inside h-modal-dialog" data-placement="auto" :style="dialogStyle">
           <header v-if="title || $slots.header" class="modal__header h-modal-header">

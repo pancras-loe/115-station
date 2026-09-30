@@ -2,6 +2,7 @@ package api
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -132,5 +133,72 @@ func TestFileJobDedupeOrderIndependent(t *testing.T) {
 	b := fileJobDedupe(fileJobParams{Cid: "1", Items: []fileJobItem{{ID: "a"}, {ID: "b"}}})
 	if a != b {
 		t.Fatalf("勾选顺序不同也是同一批: %q vs %q", a, b)
+	}
+}
+
+func TestRowActionsOf(t *testing.T) {
+	roles := map[string]string{"100": "library", "200": "pending", "300": "redundant"}
+	layout := libCategoryLayout{"电影/华语电影": "movie", "剧集/国产剧": "tv"}
+	dir := func(id, name string) fileEntry { return fileEntry{ID: id, Name: name, IsDir: true} }
+	file := func(id, name string) fileEntry {
+		return fileEntry{ID: id, Name: name, Video: videoExts[strings.ToLower(pathExt(name))]}
+	}
+
+	if a := rowActionsOf(nil, roles, layout, dir("9", "x")); a.Organize || a.Move || a.Block == "" {
+		t.Fatalf("位置未知必须什么都不给做: %+v", a)
+	}
+	if a := rowActionsOf([]browseCrumb{}, roles, layout, dir("200", "待整理")); a.Organize || a.Move || a.Block == "" {
+		t.Fatalf("工作区根不能动: %+v", a)
+	}
+	// 网盘根下的普通目录：整理 + 移动
+	if a := rowActionsOf([]browseCrumb{}, roles, layout, dir("9", "某片")); !a.Organize || !a.Move || a.Title {
+		t.Fatalf("普通目录: %+v", a)
+	}
+	// 前端曾把 .strm / .vob 当视频，后端不认：按钮点下去 400
+	for _, n := range []string{"a.strm", "a.vob", "说明.txt"} {
+		if a := rowActionsOf([]browseCrumb{}, roles, layout, file("f", n)); a.Organize || !a.Move || a.OrganizeBlock == "" {
+			t.Fatalf("%s 只能移动: %+v", n, a)
+		}
+	}
+	if a := rowActionsOf([]browseCrumb{}, roles, layout, file("f", "某片.2020.mkv")); !a.Organize || !a.Move {
+		t.Fatalf("视频: %+v", a)
+	}
+	// 冗余里：不能再移到冗余，但还能去已存在 / 待整理
+	if a := rowActionsOf([]browseCrumb{{"300", "冗余"}}, roles, layout, dir("9", "某片")); !a.Move {
+		t.Fatalf("冗余里的目录应能移走: %+v", a)
+	}
+	// 只配了冗余、又正在冗余里：无处可移
+	only := map[string]string{"300": "redundant"}
+	if a := rowActionsOf([]browseCrumb{{"300", "冗余"}}, only, layout, file("f", "说明.txt")); a.Move || a.Block == "" {
+		t.Fatalf("无处可移的非视频文件: %+v", a)
+	}
+
+	// 媒体库：分类目录的下一层才是片目
+	lib := []browseCrumb{{"100", "影视"}, {"101", "电影"}, {"102", "华语电影"}}
+	a := rowActionsOf(lib, roles, layout, dir("103", "流浪地球 (2019)"))
+	if !a.Title || !a.Organize || !a.Move || a.TitleKey != "影视/电影/华语电影/流浪地球 (2019)" || a.TitleRel != "电影/华语电影/流浪地球 (2019)" {
+		t.Fatalf("片目: %+v", a)
+	}
+	if a := rowActionsOf(lib[:2], roles, layout, dir("102", "华语电影")); a.Organize || a.Move || a.Block == "" {
+		t.Fatalf("分类目录不能动: %+v", a)
+	}
+	inTitle := append(append([]browseCrumb{}, lib...), browseCrumb{"103", "流浪地球 (2019)"})
+	if a := rowActionsOf(inTitle, roles, layout, file("f", "流浪地球.mkv")); a.Organize || a.Move || a.Block == "" {
+		t.Fatalf("片目里的文件不能动: %+v", a)
+	}
+}
+
+func TestBrowseChainHint(t *testing.T) {
+	if c := browseChainHint("", "0"); c == nil || len(c) != 0 {
+		t.Fatalf("网盘根是已知位置: %v", c)
+	}
+	if c := browseChainHint(`[{"cid":"1","name":"a"},{"cid":"2","name":"b"}]`, "2"); len(c) != 2 {
+		t.Fatalf("对得上的面包屑: %v", c)
+	}
+	if c := browseChainHint(`[{"cid":"1","name":"a"}]`, "2"); c != nil {
+		t.Fatalf("末元素对不上要作废: %v", c)
+	}
+	if c := browseChainHint(`oops`, "2"); c != nil {
+		t.Fatalf("坏 JSON 要作废: %v", c)
 	}
 }

@@ -123,6 +123,8 @@ export const listRecords = (params: {
   q?: string
   /** 只看某个任务涉及的记录（任务中心跳过来） */
   job_id?: number
+  /** 只看落在这个片目里的记录（库内相对路径，网盘文件页跳过来） */
+  target_dir?: string
   page?: number
   size?: number
 }) => http.get<OrganizeRecordPage>('/organize/records', { params })

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"115-station/internal/model"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,6 +39,30 @@ type fileEntry struct {
 	PickCode string `json:"pickcode,omitempty"`
 	// Root 这个目录本身是哪个工作区根（library / pending / share / existing / redundant），不是则空
 	Root string `json:"root,omitempty"`
+	// Video 按整理认的视频后缀（videoExts）判，前端只拿它挑图标，别另写一份后缀表
+	Video bool `json:"video,omitempty"`
+
+	fileRowActions
+	// Busy 正在排队 / 执行的本页任务里有它：organize / move；BusyJob 是那个任务（前端按它读实时状态）
+	Busy    string `json:"busy,omitempty"`
+	BusyJob uint   `json:"busy_job,omitempty"`
+}
+
+// fileRowActions 这一行能做什么。列目录时按面包屑算好交给前端（显隐、能不能勾选都看它），
+// 用的是入队 / 执行时同一套纯函数（orgPickPrecheck / moveItemBlock / libTitleOf）——
+// 此前前端自己抄了一份视频后缀和片目判定，两边对不上时按钮点下去就是 400
+type fileRowActions struct {
+	Organize bool `json:"organize,omitempty"`
+	Move     bool `json:"move,omitempty"`
+	// Title 媒体库里的片目目录：整理 = 重新整理，移动 = 移出媒体库
+	Title bool `json:"title,omitempty"`
+	// TitleKey 本地文件页的片目 key（库名/库内路径，与 cleanupMovedTitle 同口径）
+	TitleKey string `json:"title_key,omitempty"`
+	// TitleRel 库内相对路径（整理记录的 target_dir 按它筛）
+	TitleRel string `json:"title_rel,omitempty"`
+	// Block 这一行什么都不能做的原因；OrganizeBlock 能移动但不能整理的原因
+	Block         string `json:"block,omitempty"`
+	OrganizeBlock string `json:"organize_block,omitempty"`
 }
 
 // fileListLimit 单个目录最多列多少项。每页 1000 多条、每页一次节流，
@@ -142,19 +168,27 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 		cid = "0"
 	}
 	roles := h.workspaceRoles()
-	// categories：当前分类目录（库内相对路径）。前端据此判断媒体库里哪一行是片目目录，
-	// 显示「整理 / 移动」按钮；执行时后端按网盘上的真实位置再判一次
-	categories := libCategories(loadLibCategoryLayout())
+	// 每行能做什么按前端的面包屑算（不为这个多打一次祖先链请求）；执行时后端按网盘上的真实位置再判一次
+	chain := browseChainHint(c.Query("chain"), cid)
+	layout := loadLibCategoryLayout()
 	rootPaths := h.workspaceRootPaths(roles)
+	busy := activeFileJobItems(h)
 	reply := func(items []fileEntry, truncated bool) {
-		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": items, "truncated": truncated, "roots": roles, "root_paths": rootPaths, "categories": categories})
+		out := withRoles(items, roles)
+		for i := range out {
+			out[i].fileRowActions = rowActionsOf(chain, roles, layout, out[i])
+			if b, ok := busy[out[i].ID]; ok {
+				out[i].Busy, out[i].BusyJob = b.kind, b.job
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": out, "truncated": truncated, "roots": roles, "root_paths": rootPaths})
 	}
 	if c.Query("refresh") != "1" {
 		fileListMu.Lock()
 		e, ok := fileListCache[cid]
 		fileListMu.Unlock()
 		if ok && time.Now().Before(e.expires) {
-			reply(withRoles(e.items, roles), e.truncated)
+			reply(e.items, e.truncated)
 			return
 		}
 	}
@@ -178,7 +212,85 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 	}
 	fileListCache[cid] = fileListCacheEntry{items: items, truncated: truncated, expires: time.Now().Add(fileListCacheTTL)}
 	fileListMu.Unlock()
-	reply(withRoles(items, roles), truncated)
+	reply(items, truncated)
+}
+
+// browseChainHint 前端带来的面包屑（JSON）。末元素必须是当前目录，对不上返回 nil（按位置未知处理）
+func browseChainHint(raw, cid string) []browseCrumb {
+	if cid == "0" {
+		return []browseCrumb{}
+	}
+	var chain []browseCrumb
+	if json.Unmarshal([]byte(raw), &chain) != nil || len(chain) == 0 || chain[len(chain)-1].Cid != cid {
+		return nil
+	}
+	return chain
+}
+
+// fileMoveTargetOrder 移动目标（与 MoveDialog 同序）
+var fileMoveTargetOrder = []string{"redundant", "existing", "pending"}
+
+// rowActionsOf 这一行能做什么（纯函数）。chain 为 nil 表示当前位置未知：什么都不给做
+func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCategoryLayout, e fileEntry) fileRowActions {
+	if chain == nil {
+		return fileRowActions{Block: "当前位置未知，请从根目录重新点进来"}
+	}
+	it := fileJobItem{ID: e.ID, Name: e.Name, IsDir: e.IsDir, PickCode: e.PickCode}
+	if r := roles[it.ID]; r != "" {
+		return fileRowActions{Block: "整理工作区目录（" + workspaceRoleText(r) + "）不能整理或移动"}
+	}
+	if chainRoleIndex(chain, roles, "library") >= 0 {
+		if libName, rel, ok := libTitleOf(chain, roles, layout, it); ok {
+			return fileRowActions{Organize: true, Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
+		}
+		if it.IsDir {
+			return fileRowActions{Block: "媒体库里只有分类目录下的片目目录能整理和移动"}
+		}
+		return fileRowActions{Block: "媒体库里的文件跟着片目走，请在片目那一层操作"}
+	}
+	var a fileRowActions
+	for _, t := range fileMoveTargetOrder {
+		if _, err := roleCid(roles, t); err == nil && moveItemBlock(chain, roles, layout, it, t) == "" {
+			a.Move = true
+			break
+		}
+	}
+	if orgPickPrecheck(chain, roles, []fileJobItem{it}) == nil {
+		a.Organize = true
+	} else if !it.IsDir {
+		a.OrganizeBlock = "不是视频文件"
+	}
+	if !a.Organize && !a.Move {
+		a.Block = "不是视频文件，也没有可移动到的目录（冗余 / 已存在 / 待整理未配置）"
+	}
+	return a
+}
+
+type fileBusy struct {
+	kind string
+	job  uint
+}
+
+// activeFileJobItems 本页发起、还没跑完的任务里点名的条目 → 在做什么。
+// 行上挂「排队整理 / 移动中」，免得用户以为没提交上又点一次（后端虽有去重，但换个勾选组合就去不掉）
+func activeFileJobItems(h *Handler) map[string]fileBusy {
+	var jobs []model.TaskJob
+	h.DB.Where("status IN ? AND kind IN ?", []string{"queued", "running"}, []string{"orgpick", "libredo", "filemove"}).Find(&jobs)
+	out := map[string]fileBusy{}
+	for i := range jobs {
+		p := decodeJobParams(&jobs[i])
+		if p.Files == nil {
+			continue
+		}
+		kind := "organize"
+		if jobs[i].Kind == "filemove" {
+			kind = "move"
+		}
+		for _, it := range p.Files.Items {
+			out[it.ID] = fileBusy{kind: kind, job: jobs[i].ID}
+		}
+	}
+	return out
 }
 
 // withRoles 给目录项标上工作区角色（拷贝一份，缓存里的不改：配置可能中途改过）
@@ -242,6 +354,7 @@ func toFileEntry(d map[string]interface{}) fileEntry {
 	}
 	e.ID = nilSprint(d["fid"])
 	e.PickCode = nilSprint(d["pc"])
+	e.Video = videoExts[strings.ToLower(pathExt(e.Name))]
 	if s, ok := d["s"].(float64); ok {
 		e.Size = int64(s)
 	}

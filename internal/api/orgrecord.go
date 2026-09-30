@@ -47,7 +47,7 @@ func (h *Handler) recordDTO(r model.OrganizeRecord) orgRecordDTO {
 	return toRecordDTO(r, recordLinks(h.DB, []model.OrganizeRecord{r}))
 }
 
-// ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&page=&size=
+// ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&target_dir=&page=&size=
 func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	q := h.DB.Model(&model.OrganizeRecord{})
 	if st := strings.TrimSpace(c.Query("status")); st != "" && st != "all" {
@@ -63,6 +63,10 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	}
 	if mt := strings.TrimSpace(c.Query("type")); mt == "movie" || mt == "tv" {
 		q = q.Where("media_type = ?", mt)
+	}
+	// 网盘文件页片目「整理记录」跳过来时带 target_dir（库内相对路径）：只看落在这个片目里的记录
+	if td := strings.Trim(c.Query("target_dir"), "/"); td != "" {
+		q = q.Where(`target_dir = ? OR target_dir LIKE ? ESCAPE ''`, td, likeEscape(td)+"/%")
 	}
 	// 任务中心「查看这次任务涉及的记录」跳过来时带 job_id
 	if jid, _ := strconv.Atoi(c.Query("job_id")); jid > 0 {

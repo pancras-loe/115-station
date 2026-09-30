@@ -59,6 +59,8 @@ const jobFilter = computed(() => {
   const n = Number(route.query.job_id)
   return Number.isInteger(n) && n > 0 ? n : 0
 })
+/** 网盘文件页片目「整理记录」跳过来时带 ?target_dir=：只看这个片目的记录 */
+const dirFilter = computed(() => (typeof route.query.target_dir === 'string' ? route.query.target_dir : ''))
 
 type TagType = 'success' | 'warning' | 'error' | 'info' | 'default'
 
@@ -132,6 +134,7 @@ async function load() {
       type: mediaType.value === 'all' ? '' : mediaType.value,
       q: keyword.value.trim(),
       job_id: jobFilter.value || undefined,
+      target_dir: dirFilter.value || undefined,
       page: page.value,
       size: size.value,
     })
@@ -175,10 +178,14 @@ function onSizeChange(n: number) {
 }
 
 onMounted(reload)
-watch(jobFilter, refilter)
+watch([jobFilter, dirFilter], refilter)
 
 function clearJobFilter() {
   const { job_id: _jobId, ...rest } = route.query
+  void router.replace({ query: rest })
+}
+function clearDirFilter() {
+  const { target_dir: _dir, ...rest } = route.query
   void router.replace({ query: rest })
 }
 // 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
@@ -427,6 +434,12 @@ async function clearAll() {
         <span>只看任务 #{{ jobFilter }} 涉及的记录</span>
         <button type="button" class="job-link" @click="emit('openJob', jobFilter)">任务详情</button>
         <HButton size="sm" variant="ghost" icon-only aria-label="取消任务筛选" @click="clearJobFilter">
+          <X :size="14" />
+        </HButton>
+      </div>
+      <div v-if="dirFilter" class="job-filter">
+        <span>只看片目「{{ dirFilter }}」的记录</span>
+        <HButton size="sm" variant="ghost" icon-only aria-label="取消片目筛选" @click="clearDirFilter">
           <X :size="14" />
         </HButton>
       </div>
