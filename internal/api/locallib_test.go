@@ -78,6 +78,11 @@ func TestInspectLocalTitle(t *testing.T) {
 	touch(t, filepath.Join(root, "影视/电影/流浪地球 (2019)/folder.jpg"), "x")
 	// 空海报文件不算（下载中断留下的）
 	touch(t, filepath.Join(root, "影视/电影/空图 (2020)/poster.jpg"), "")
+	// 多版本电影：Emby 把 poster.jpg 换成了「视频名-poster.jpg」
+	touch(t, filepath.Join(root, "影视/电影/夏洛特烦恼 (2015)/夏洛特烦恼.1080p.nfo"), "x")
+	touch(t, filepath.Join(root, "影视/电影/夏洛特烦恼 (2015)/夏洛特烦恼.1080p-poster.jpg"), "x")
+	// 只有季海报不算片目海报
+	touch(t, filepath.Join(root, "影视/剧集/漫长的季节 (2023)/season01-poster.jpg"), "x")
 
 	cases := []struct {
 		key, kind   string
@@ -87,6 +92,8 @@ func TestInspectLocalTitle(t *testing.T) {
 		{"影视/剧集/狂飙 (2023)", "tv", false, true, false},
 		{"影视/电影/流浪地球 (2019)", "movie", true, true, false},
 		{"影视/电影/空图 (2020)", "movie", false, false, false},
+		{"影视/电影/夏洛特烦恼 (2015)", "movie", true, true, false},
+		{"影视/剧集/漫长的季节 (2023)", "tv", false, false, false},
 		{"影视/电影/不存在 (2021)", "movie", false, false, true},
 	}
 	for _, c := range cases {

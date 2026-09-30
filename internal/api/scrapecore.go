@@ -146,6 +146,27 @@ func (r *titleRun) skip(d metaDest, name string) bool {
 	return false
 }
 
+// skipPerVideo 电影的 poster.jpg / fanart.jpg：Emby 已按视频名另存了一份（<视频名>-poster.jpg）就算有。
+// 多版本电影 Emby 存图用这个名字并删掉我们的 poster.jpg（见 perVideoImage），
+// 不认的话每次刮削补一张、Emby 刷新删一张，来回折腾
+func (r *titleRun) skipPerVideo(name string) bool {
+	if r.t.Kind == "tv" {
+		return false
+	}
+	kind := strings.TrimSuffix(name, filepath.Ext(name))
+	if kind != "poster" && kind != "fanart" {
+		return false
+	}
+	for _, v := range r.t.Videos {
+		for _, ext := range []string{".jpg", ".png"} {
+			if r.skip(v.Dir, v.Name+"-"+kind+ext) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // put 写一个产物；how 是日志里「怎么来的」那一截
 func (r *titleRun) put(d metaDest, name string, data []byte, how string) bool {
 	wrote, err := r.s.w.put(d, name, data)
@@ -565,7 +586,7 @@ func (r *titleRun) images(body []byte) {
 			r.logv("○ %s：TMDB 上没有这张图", img[1])
 			continue
 		}
-		if r.skip(t.Dir, img[1]) {
+		if r.skip(t.Dir, img[1]) || r.skipPerVideo(img[1]) {
 			continue
 		}
 		reqs = append(reqs, imgReq{path: img[0], size: "original"})

@@ -114,6 +114,29 @@ type inspectedTitle struct {
 // 其余是 Emby / 别的刮削器常见写法
 var localPosterNames = []string{"poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg"}
 
+// perVideoImage 标准名都没有时，认 Emby 按视频名存的图（<视频名>-poster.jpg / -fanart.jpg），
+// names 是目录里的小写文件名，kind 是 poster / fanart。按名字排序取第一个，结果稳定。
+//
+// 一个目录里有多个视频（多版本电影）时，Emby 存图用的是「视频名-poster.jpg」，
+// 还会把我们刮削写的 poster.jpg 删掉（2026-09-30《夏洛特烦恼》两个版本现场）。
+// 只认 poster.jpg 的话，这个片目刮完 Emby 一刷新就又变回「未刮全」，重刮也只是再被删一次。
+// seasonNN-poster.jpg / season-specials-poster.jpg 是季海报，不算
+func perVideoImage(names []string, kind string) string {
+	var hit []string
+	for _, n := range names {
+		for _, ext := range []string{".jpg", ".png"} {
+			if strings.HasSuffix(n, "-"+kind+ext) && !strings.HasPrefix(n, "season") {
+				hit = append(hit, n)
+			}
+		}
+	}
+	if len(hit) == 0 {
+		return ""
+	}
+	sort.Strings(hit)
+	return hit[0]
+}
+
 // inspectLocalTitle 读一次标题目录，看片目级 NFO 与海报在不在。Status 由 inspectLocalTitleDetail 的 grade 定
 func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 	t := inspectedTitle{localTitle: localTitle{
@@ -148,7 +171,17 @@ func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 			}
 		}
 	}
-	for _, n := range localPosterNames {
+	candidates := localPosterNames
+	if len(names) > 0 {
+		lower := make([]string, 0, len(names))
+		for n := range names {
+			lower = append(lower, n)
+		}
+		if n := perVideoImage(lower, "poster"); n != "" {
+			candidates = append(append([]string{}, localPosterNames...), n)
+		}
+	}
+	for _, n := range candidates {
 		if d, ok := names[n]; ok {
 			if info, err := d.Info(); err == nil && info.Size() > 0 {
 				t.HasPoster = true
@@ -371,11 +404,11 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 		c.Status(http.StatusForbidden)
 		return
 	}
-	names, width := localPosterNames, localPosterThumbW
+	names, kind, width := localPosterNames, "poster", localPosterThumbW
 	if c.Query("img") == "fanart" {
-		names, width = localFanartNames, localFanartThumbW
+		names, kind, width = localFanartNames, "fanart", localFanartThumbW
 	}
-	file, info := findLocalImage(dir, names)
+	file, info := findLocalImage(dir, names, kind)
 	if file == "" {
 		c.Status(http.StatusNotFound)
 		return
@@ -432,7 +465,7 @@ func underRoot(root, key string) (string, bool) {
 	return p, true
 }
 
-func findLocalImage(dir string, names []string) (string, os.FileInfo) {
+func findLocalImage(dir string, names []string, kind string) (string, os.FileInfo) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return "", nil
@@ -442,6 +475,13 @@ func findLocalImage(dir string, names []string) (string, os.FileInfo) {
 		if !d.IsDir() {
 			byLower[strings.ToLower(d.Name())] = d
 		}
+	}
+	all := make([]string, 0, len(byLower))
+	for n := range byLower {
+		all = append(all, n)
+	}
+	if n := perVideoImage(all, kind); n != "" {
+		names = append(append([]string{}, names...), n)
 	}
 	for _, n := range names {
 		if d, ok := byLower[n]; ok {

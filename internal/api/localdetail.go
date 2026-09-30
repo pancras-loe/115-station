@@ -122,6 +122,19 @@ func (x localDirIndex) find(dir, label string, optional bool, names ...string) l
 	return localFile{Name: names[0], Label: label, Optional: optional}
 }
 
+// findImage 同 find，标准名都没有时再认 Emby 按视频名存的图（perVideoImage，多版本电影）
+func (x localDirIndex) findImage(dir, label, kind string, names ...string) localFile {
+	m := x.files(dir)
+	all := make([]string, 0, len(m))
+	for n := range m {
+		all = append(all, n)
+	}
+	if n := perVideoImage(all, kind); n != "" {
+		names = append(append([]string{}, names...), n)
+	}
+	return x.find(dir, label, false, names...)
+}
+
 // inspectLocalTitleDetail 读片目目录，列出每个刮削产物在不在。rows 是台账里这个片目的视频行
 func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.SyncedFile) localTitleDetail {
 	it := inspectLocalTitle(root, e)
@@ -135,8 +148,8 @@ func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.Sync
 		d.Files = append(d.Files, idx.find(titleAbs, "剧集 NFO", false, "tvshow.nfo"))
 	}
 	d.Files = append(d.Files,
-		idx.find(titleAbs, "海报", false, localPosterNames...),
-		idx.find(titleAbs, "背景图", false, "fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png"),
+		idx.findImage(titleAbs, "海报", "poster", localPosterNames...),
+		idx.findImage(titleAbs, "背景图", "fanart", "fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png"),
 		idx.find(titleAbs, "透明 Logo", true, "clearlogo.png", "logo.png"),
 		idx.find(titleAbs, "横版图", true, "landscape.jpg"),
 	)
