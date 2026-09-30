@@ -17,6 +17,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -30,11 +31,13 @@ const tgResMaxChannels = 20
 // 这里有人在页面上等着，放开到 3 个并发，但不全开
 const tgResConcurrency = 3
 
-// tgResChannels 频道清单：每行一个，@xxx / xxx / https://t.me/xxx 都认，去重保序
+// tgResChannels 频道清单：每行一个，@xxx / xxx / https://t.me/xxx 都认，去重保序。
+// 也认 p115strmhelper 导出的 JSON（[{"name":"显示名","id":"频道用户名"}]，
+// 它拼的是 t.me/s/{id}），从那边搬过来不用手抄
 func tgResChannels(raw string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == ',' || r == '，' || r == ' ' }) {
+	for _, line := range tgResChannelTokens(raw) {
 		ch := tgSubParseChannel(line)
 		if ch == "" || seen[strings.ToLower(ch)] {
 			continue
@@ -43,6 +46,26 @@ func tgResChannels(raw string) []string {
 		out = append(out, ch)
 	}
 	return out
+}
+
+// tgResChannelTokens 拆出一个个频道写法。不是合法 JSON 就当普通文本拆
+func tgResChannelTokens(raw string) []string {
+	if t := strings.TrimSpace(raw); strings.HasPrefix(t, "[") {
+		var list []map[string]any
+		if json.Unmarshal([]byte(t), &list) == nil {
+			var ids []string
+			for _, it := range list {
+				switch v := it["id"].(type) {
+				case string:
+					ids = append(ids, v)
+				case float64: // 纯数字 id 被 JSON 解成浮点
+					ids = append(ids, strconv.FormatInt(int64(v), 10))
+				}
+			}
+			return ids
+		}
+	}
+	return strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == '\r' || r == ',' || r == '，' || r == ' ' })
 }
 
 func tgResReady() string {

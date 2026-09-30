@@ -15,6 +15,15 @@ func TestTgResChannels(t *testing.T) {
 	if strings.Join(got, ",") != "quanquan_115,Share115,xyz" {
 		t.Fatalf("频道解析: %v", got)
 	}
+	// p115strmhelper 导出的 JSON：取 id（频道用户名），name 只是显示名
+	got = tgResChannels(`[{"name":"115 分享","id":"Channel_Shares_115"},{"name":"数字","id":12345},{"name":"没 id"},{"name":"重复","id":"@channel_shares_115"}]`)
+	if strings.Join(got, ",") != "Channel_Shares_115,12345" {
+		t.Fatalf("JSON 导入: %v", got)
+	}
+	// 以 [ 开头但不是 JSON：照普通文本拆
+	if got = tgResChannels("[abc\nxyz"); strings.Join(got, ",") != "[abc,xyz" {
+		t.Fatalf("非 JSON 回落: %v", got)
+	}
 }
 
 // 一条消息挂几个链接就拆成几条资源；「名称：」前缀去掉；话题标签补画质；提取码只给 115 分享
