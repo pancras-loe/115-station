@@ -335,7 +335,9 @@ func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 		"SortBy":           {"DateCreated"},
 		"SortOrder":        {"Descending"},
 		"Limit":            {"12"},
-		"Fields":           {"ProductionYear"},
+		// 总览顶部横幅要简介 / 类型 / 评分，以及「有没有背景图、Logo」——
+		// 没有就不去请求，免得图片代理白跑一趟再回 404
+		"Fields": {"ProductionYear,Overview,Genres,CommunityRating,OfficialRating,DateCreated,BackdropImageTags,ImageTags"},
 	}); err == nil {
 		if items, _ := res["Items"].([]interface{}); items != nil {
 			for _, it := range items {
@@ -350,7 +352,28 @@ func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 				if year > 0 {
 					yearStr = fmt.Sprintf("%d", int(year))
 				}
-				recent = append(recent, gin.H{"id": id, "name": name, "year": yearStr})
+				typ, _ := m["Type"].(string)
+				overview, _ := m["Overview"].(string)
+				rating, _ := m["CommunityRating"].(float64)
+				official, _ := m["OfficialRating"].(string)
+				created, _ := m["DateCreated"].(string)
+				var genres []string
+				if gs, _ := m["Genres"].([]interface{}); gs != nil {
+					for _, g := range gs {
+						if gstr, _ := g.(string); gstr != "" && len(genres) < 3 {
+							genres = append(genres, gstr)
+						}
+					}
+				}
+				backdrops, _ := m["BackdropImageTags"].([]interface{})
+				tags, _ := m["ImageTags"].(map[string]interface{})
+				_, hasLogo := tags["Logo"]
+				recent = append(recent, gin.H{
+					"id": id, "name": name, "year": yearStr, "type": typ,
+					"overview": overview, "rating": rating, "official_rating": official,
+					"genres": genres, "created": created,
+					"has_backdrop": len(backdrops) > 0, "has_logo": hasLogo,
+				})
 			}
 		}
 	}
@@ -512,6 +535,7 @@ func (h *Handler) DashboardEnhanced(c *gin.Context) {
 		recent = append(recent, gin.H{
 			"title": m.Title, "year": m.Year, "category": m.Category,
 			"type": m.MediaType, "poster": m.PosterPath, "at": m.CreatedAt.Format("01-02 15:04"),
+			"overview": m.Overview, "rating": m.VoteAverage,
 		})
 	}
 

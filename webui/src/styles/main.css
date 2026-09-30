@@ -109,6 +109,77 @@
   --z-index-toast: calc(var(--z-index-overlay) + 2);
 }
 
+/* ============================================================
+   影院风配色（2026-09-30）
+   在 HeroUI 默认主题之上只改「色相」：强调色换成放映厅的琥珀橙，中性色带一点暖调，
+   暗色是主场（默认主题跟着改成暗色，见 stores/theme.ts）。
+   这里不在 @layer 里，天然压过 HeroUI 写在 @layer base 的同名变量；
+   --accent-hover / --accent-soft 等派生色是在同一元素上用 var(--accent) 算的，会跟着变。
+   强调色特意偏橙（色相 ~48）而不是金黄：HeroUI 的 warning 是黄（~75），挨太近状态色就认不出了。
+   ============================================================ */
+:root {
+  --accent: oklch(0.64 0.175 46);
+  --accent-foreground: var(--snow);
+
+  --background: oklch(0.972 0.004 75);
+  --surface-secondary: oklch(0.955 0.005 75);
+  --surface-tertiary: oklch(0.94 0.006 75);
+  --default: oklch(0.938 0.006 75);
+  --border: oklch(0.9 0.008 75);
+  --separator: oklch(0.92 0.007 75);
+  --muted: oklch(0.54 0.014 70);
+}
+html.dark {
+  /* 暗底上的橙要更亮才压得住；字改深色，白字压在亮橙上对比度不够 */
+  --accent: oklch(0.74 0.16 52);
+  --accent-foreground: var(--eclipse);
+
+  --background: oklch(0.145 0.004 60);
+  --surface: oklch(0.192 0.005 60);
+  --surface-secondary: oklch(0.235 0.006 60);
+  --surface-tertiary: oklch(0.262 0.006 60);
+  --overlay: oklch(0.215 0.006 60);
+  --default: oklch(0.252 0.006 60);
+  --segment: oklch(0.36 0.008 60);
+  --border: oklch(0.27 0.006 60);
+  --separator: oklch(0.24 0.006 60);
+  --muted: oklch(0.7 0.012 70);
+}
+
+/* 第二套亮色「清爽」：冷调青蓝，给不喜欢暖橙的人。只在亮色下生效（:not(.dark)），
+   暗色永远是上面那套影院琥珀。data-palette 由 stores/theme.ts 挂在 <html> 上，
+   index.html 的首帧脚本也会先挂一次，免得刷新时先闪一下暖橙 */
+html[data-palette='fresh']:not(.dark) {
+  --accent: oklch(0.6 0.13 218);
+  --accent-foreground: var(--snow);
+
+  --background: oklch(0.975 0.004 230);
+  --surface-secondary: oklch(0.956 0.007 230);
+  --surface-tertiary: oklch(0.942 0.008 230);
+  --default: oklch(0.938 0.008 230);
+  --border: oklch(0.9 0.011 230);
+  --separator: oklch(0.92 0.009 230);
+  --muted: oklch(0.54 0.02 240);
+}
+
+/* 暗色下 HeroUI 把卡片阴影置空，卡片和页面只差一点亮度，看久了糊成一片。
+   补一圈极淡的内描边，勾出边界又不抢眼 */
+html.dark .card--default {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+/* 压在深色画面（海报背景图）上的区域：总览的横幅、横幅上方透明的顶栏。
+   不管亮暗主题，这里的底都是暗的，所以前景一律浅色 —— 这是全站唯一允许写死浅色的地方。
+   --default-hover 是在 :root 上用 --default 算好的，局部改 --default 不会带着它变，两个都要写 */
+.on-dark {
+  --foreground: var(--snow);
+  --muted: oklch(0.84 0.01 70);
+  --default: rgb(255 255 255 / 0.13);
+  --default-hover: rgb(255 255 255 / 0.2);
+  --default-foreground: var(--snow);
+  color: var(--foreground);
+}
+
 /* HeroUI 暗色主题里输入框底色与卡片同色（它的表单默认摆在页面底色上），
    而我们的表单几乎全在卡片里——不改的话暗色下输入框整个隐形。抬一档到 surface-secondary */
 html.dark {

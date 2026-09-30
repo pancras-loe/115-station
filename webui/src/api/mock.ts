@@ -22,8 +22,47 @@ const TITLES: [string, string, string][] = [
   ['继承之战', '2023', '欧美剧集'],
 ]
 
+/** Emby 的最新入库：横幅要用的简介 / 类型 / 评分都带上，图片 id 从 1001 起（预览时由本地图片桩返回） */
+const EMBY_RECENT: [string, string, string, string, number, string[], string, boolean, boolean][] = [
+  ['沙丘：第二部', '2024', 'Movie', '保罗·厄崔迪与弗雷曼人联手，踏上向毁灭他家族的阴谋者复仇的征程。在一生挚爱与已知宇宙命运之间，他必须做出抉择，阻止只有他能预见的可怕未来。', 8.2, ['科幻', '冒险'], 'PG-13', true, true],
+  ['三体', '2023', 'Series', '纳米物理学家汪淼卷入一连串科学家离奇死亡的调查，一个神秘的倒计时出现在他眼前，把他引向一场跨越四百年的文明对决。', 7.9, ['剧情', '科幻', '悬疑'], 'TV-14', true, false],
+  ['奥本海默', '2023', 'Movie', '二战期间，物理学家罗伯特·奥本海默受命领导曼哈顿计划，在新墨西哥州的沙漠里造出了改变世界的武器。', 8.1, ['剧情', '历史'], 'R', true, true],
+  ['最后生还者', '2023', 'Series', '真菌疫情爆发二十年后，走私者乔尔受托护送少女艾莉穿越满目疮痍的美国，一场本该简单的任务变成了残酷而心碎的旅程。', 8.6, ['剧情', '动作'], 'TV-MA', true, false],
+  ['蜘蛛侠：纵横宇宙', '2023', 'Movie', '迈尔斯·莫拉莱斯穿越多元宇宙，遇见了一群守护多元宇宙存在的蜘蛛侠，却与他们在如何应对新威胁上产生了分歧。', 8.4, ['动画', '动作'], 'PG', false, false],
+  ['漫长的季节', '2023', 'Series', '东北小城桦林，出租车司机王响在一桩碎尸案里发现了儿子死亡的线索，一段横跨十八年的往事被慢慢揭开。', 9.0, ['剧情', '犯罪'], '', true, false],
+  ['疾速追杀 4', '2023', 'Movie', '约翰·威克找到了击败高桌会的方法，但在赢得自由之前，他必须面对一个在全球拥有强大盟友的新敌人。', 7.7, ['动作', '惊悚'], 'R', true, false],
+  ['铃芽之旅', '2022', 'Movie', '少女铃芽在九州小镇遇见了寻找「门」的青年草太，两人踏上关闭灾难之门的旅程，从九州一路北上。', 7.6, ['动画', '奇幻'], 'PG', true, false],
+]
+
 const dashboard: Dashboard = {
-  emby: null,
+  emby: {
+    counts: { movies: 619, series: 212, episodes: 9_841 },
+    recent: EMBY_RECENT.map(([name, year, type, overview, rating, genres, official, backdrop, logo], i) => ({
+      id: String(1001 + i),
+      name,
+      year,
+      type,
+      overview,
+      rating,
+      genres,
+      official_rating: official,
+      created: new Date(Date.now() - (i * 7 + 2) * 3_600_000).toISOString(),
+      has_backdrop: backdrop,
+      has_logo: logo,
+    })),
+    libraries: [
+      ['电影', 'movies', '电影'],
+      ['剧集', 'tvshows', '剧集'],
+      ['动漫', 'tvshows', '剧集'],
+      ['纪录片', 'movies', '电影'],
+    ].map(([name, type, label], i) => ({
+      name,
+      count: [619, 164, 48, 43][i],
+      type,
+      type_label: label,
+      collage: [0, 1, 2, 3].map((k) => `Items/${1001 + ((i * 3 + k) % 8)}/Images/Primary`),
+    })),
+  },
   storage: {
     username: 'demo_user',
     used: 8_243_000_000_000,
@@ -40,7 +79,7 @@ const dashboard: Dashboard = {
     tvs_month: 9,
     local_movies: 1284,
     local_tvs: 312,
-    source: 'local',
+    source: 'emby',
   },
   strm: { total: 18_432, orphan: 26, missing: 4, missing_sampled: 500, active: 18_406 },
   synced_files: 41_209,

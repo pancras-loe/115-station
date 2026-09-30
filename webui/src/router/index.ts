@@ -20,7 +20,7 @@ const routes: RouteRecordRaw[] = [
         path: '',
         name: 'dashboard',
         component: () => import('@/pages/DashboardPage.vue'),
-        meta: { title: '总览面板', desc: '容量 / STRM / 整理 / 任务总览', icon: 'dashboard' },
+        meta: { title: '总览面板', desc: '最新入库 / 媒体库 / 容量与任务', icon: 'dashboard', immersive: true },
       },
       {
         path: 'tasks',

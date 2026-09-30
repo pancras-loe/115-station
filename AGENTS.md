@@ -184,6 +184,11 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
   （`--accent` / `--surface` / `--muted` / `--foreground` …，明暗由它按 `html.dark` 切换）；
   `main.css` 里的 `--c-*` 只是给老样式用的别名，新代码直接写 HeroUI 变量。
   圆角用 `--r-sm/lg/xl/card`，**不要**写 `--radius-sm/lg/xl`——那几个名字被 HeroUI 的 `@theme` 占用、刻度也不同。
+  配色是「影院风」（2026-09-30）：`main.css` 在 HeroUI 默认主题上只改色相——暗色（默认）琥珀橙，亮色两套，
+  暖橙与清爽青蓝（`html[data-palette='fresh']:not(.dark)`，由 `stores/theme.ts` 与 `index.html` 首帧脚本挂上）。
+  压在海报背景图上的区域（总览横幅、横幅上方透明的顶栏）加全局类 `.on-dark`，前景一律浅色，是唯一允许写死浅色的地方。
+  侧栏桌面端是 72px 图标栏、悬停浮出、图钉固定（`AppSidebar.vue` 的 `docked` / `pinned`）：展开状态由脚本判定，
+  **两种状态下布局必须一致、只动宽度与透明度**，否则展开动画第一帧会跳位。
 - **界面一律用 `webui/src/components/hero/`**（`HButton` / `HInput` / `HSelect` / `HModal` / `HTabs` …）：
   HeroUI 的 BEM 类负责外观，Reka UI 负责交互；Reka 的状态属性与 HeroUI 选择器之间的桥在
   `styles/hero-adapter.css`。要用 HeroUI 新组件时先在 `main.css` 按需 `@import` 它的 CSS（全量 400KB+，我们打单文件）。

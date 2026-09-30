@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import {
+  ChevronRight,
   Clapperboard,
   Cpu,
   Database,
@@ -13,7 +15,6 @@ import {
 import { dashboardApi } from '@/api'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
-import HChip from '@/components/hero/HChip.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import type { Dashboard } from '@/types/dashboard'
@@ -24,6 +25,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import WeeklyChart from '@/components/ui/WeeklyChart.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CalibrateModal from '@/components/dashboard/CalibrateModal.vue'
+import HeroBanner, { type HeroSlide } from '@/components/dashboard/HeroBanner.vue'
 import { bytes, num, percent } from '@/utils/format'
 import { embyImageUrl, posterUrl } from '@/utils/media'
 import { toastError } from '@/composables/useFeedback'
@@ -80,6 +82,54 @@ const drift = computed(() => {
 })
 const driftNotable = computed(() => drift.value >= 10)
 
+/** 「3 小时前」：Emby 给的是 ISO 时间；本地台账已经是「09-30 12:00」这种短格式，原样用 */
+function ago(iso?: string): string {
+  if (!iso) return ''
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return ''
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000))
+  if (m < 1) return '刚刚'
+  if (m < 60) return `${m} 分钟前`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} 小时前`
+  const d = Math.round(h / 24)
+  return d < 30 ? `${d} 天前` : new Date(t).toLocaleDateString()
+}
+
+const kindLabel = (t?: string) =>
+  ({ Movie: '电影', Series: '剧集', movie: '电影', tv: '剧集' })[t ?? ''] ?? ''
+
+/** 横幅：Emby 的最新入库优先（有背景图、Logo），退回本地最近整理（只有 TMDB 海报） */
+const heroSlides = computed<HeroSlide[]>(() => {
+  const emby = data.value?.emby
+  if (emby?.recent?.length) {
+    return emby.recent.slice(0, 6).map((m) => ({
+      key: m.id,
+      title: m.name,
+      year: m.year,
+      kind: kindLabel(m.type),
+      overview: m.overview,
+      rating: m.rating || undefined,
+      genres: m.genres ?? undefined,
+      badge: m.official_rating || undefined,
+      when: ago(m.created),
+      backdrop: m.has_backdrop ? embyImageUrl(`Items/${m.id}/Images/Backdrop`, 1600) : null,
+      poster: embyImageUrl(`Items/${m.id}/Images/Primary`, 400),
+      logo: m.has_logo ? embyImageUrl(`Items/${m.id}/Images/Logo`, 600) : null,
+    }))
+  }
+  return (data.value?.recent_media ?? []).slice(0, 6).map((m, i) => ({
+    key: `${m.title}-${i}`,
+    title: m.title,
+    year: m.year,
+    kind: kindLabel(m.type) || m.category,
+    overview: m.overview,
+    rating: m.rating || undefined,
+    when: m.at,
+    poster: posterUrl(m.poster, 'w342'),
+  }))
+})
+
 /** Emby 接上了就以 Emby 媒体库为准，否则退回本地整理台账的分类 */
 const categories = computed(() => {
   const emby = data.value?.emby
@@ -88,33 +138,33 @@ const categories = computed(() => {
       name: l.name,
       count: l.count,
       label: l.type_label ?? '',
-      posters: (l.collage ?? []).map((p) => embyImageUrl(p, 160)),
+      posters: (l.collage ?? []).map((p) => embyImageUrl(p, 200)),
     }))
   }
   return (data.value?.categories ?? []).map((c) => ({
     name: c.name,
     count: c.count,
     label: '',
-    posters: (c.posters ?? []).map((p) => posterUrl(p, 'w154') as string),
+    posters: (c.posters ?? []).map((p) => posterUrl(p, 'w185') as string),
   }))
 })
 
-/** 海报墙同理：Emby 的最新入库优先，退回本地最近整理 */
+/** 海报行同理：Emby 的最新入库优先，退回本地最近整理 */
 const wall = computed(() => {
   const emby = data.value?.emby
   if (emby?.recent?.length) {
     return emby.recent.map((m) => ({
       key: m.id,
       title: m.name,
-      sub: m.year,
-      src: embyImageUrl('Items/' + m.id + '/Images/Primary'),
+      sub: [m.year, kindLabel(m.type)].filter(Boolean).join(' · '),
+      src: embyImageUrl('Items/' + m.id + '/Images/Primary', 320),
     }))
   }
   return (data.value?.recent_media ?? []).map((m, i) => ({
     key: m.title + '-' + i,
     title: m.title,
-    sub: m.year,
-    src: posterUrl(m.poster),
+    sub: [m.year, kindLabel(m.type)].filter(Boolean).join(' · '),
+    src: posterUrl(m.poster, 'w342'),
   }))
 })
 
@@ -133,45 +183,35 @@ const strmSub = computed(() => {
 
 <template>
   <div class="dash">
-    <!-- ==== 数据来源与动作 ==== -->
-    <div class="bar">
-      <HTooltip
-        :content="
-          fromEmby
-            ? 'Emby 已接入，电影/剧集数量与媒体库卡片都直接读 Emby，和 Emby 界面上的一致'
-            : '未配置 Emby 或暂时不可达，只能按本地整理台账统计'
-        "
-        side="bottom"
-      >
-        <span class="bar-src" tabindex="0">
-          <span class="bar-dot" :class="fromEmby ? 'is-emby' : 'is-local'" />
-          <span class="bar-label">数量来自</span>
-          <span class="bar-value">{{ fromEmby ? 'Emby 媒体库' : '本地整理台账' }}</span>
-        </span>
-      </HTooltip>
-      <div class="bar-actions">
+    <!-- ==== 影院横幅 ==== -->
+    <HeroBanner :slides="heroSlides" :loading="loading">
+      <template #extra>
+        <HTooltip
+          :content="
+            fromEmby
+              ? 'Emby 已接入，电影/剧集数量与媒体库卡片都直接读 Emby，和 Emby 界面上的一致'
+              : '未配置 Emby 或暂时不可达，只能按本地整理台账统计'
+          "
+          side="top"
+        >
+          <span class="src" tabindex="0">
+            <span class="src-dot" :class="fromEmby ? 'is-emby' : 'is-local'" />
+            <span class="src-label">数量来自</span>
+            <span class="src-value">{{ fromEmby ? 'Emby 媒体库' : '本地整理台账' }}</span>
+          </span>
+        </HTooltip>
         <HButton size="sm" variant="tertiary" :loading="refreshing" aria-label="刷新" @click="load(true, true)">
           <template #icon><RefreshCw /></template>
-          <span class="bar-btn-text">刷新</span>
+          <span class="btn-text">刷新</span>
         </HButton>
         <HButton size="sm" variant="tertiary" aria-label="校准台账" @click="calibrating = true">
           <template #icon><SlidersHorizontal /></template>
-          <span class="bar-btn-text">校准台账</span>
+          <span class="btn-text">校准台账</span>
         </HButton>
-      </div>
-    </div>
-
-    <!-- ==== 台账虚高提示 ==== -->
-    <HAlert v-if="driftNotable" status="warning" :title="`台账比 Emby 多出 ${num(drift)} 部`">
-      本地整理台账记着 {{ num(localTotal) }} 部，Emby 实际只有 {{ num(media?.total) }} 部，
-      多出的多半是手工删片、解除媒体库目录关联之后留下的幽灵记录。
-      按本地 STRM 目录核对一遍即可（只删台账行，不动网盘与 Emby）。
-      <template #actions>
-        <HButton size="sm" variant="primary" @click="calibrating = true">校准台账</HButton>
       </template>
-    </HAlert>
+    </HeroBanner>
 
-    <!-- ==== 指标行 ==== -->
+    <!-- ==== 指标行：往上浮，压住横幅的下沿 ==== -->
     <div class="stats">
       <template v-if="loading">
         <div v-for="i in 4" :key="i" class="card card--default stat-skel">
@@ -216,33 +256,62 @@ const strmSub = computed(() => {
       </template>
     </div>
 
+    <!-- ==== 台账虚高提示 ==== -->
+    <HAlert v-if="driftNotable" status="warning" :title="`台账比 Emby 多出 ${num(drift)} 部`">
+      本地整理台账记着 {{ num(localTotal) }} 部，Emby 实际只有 {{ num(media?.total) }} 部，
+      多出的多半是手工删片、解除媒体库目录关联之后留下的幽灵记录。
+      按本地 STRM 目录核对一遍即可（只删台账行，不动网盘与 Emby）。
+      <template #actions>
+        <HButton size="sm" variant="primary" @click="calibrating = true">校准台账</HButton>
+      </template>
+    </HAlert>
+
+    <!-- ==== 最新入库：海报行 ==== -->
+    <section class="row">
+      <header class="row-head">
+        <h2 class="row-title">最新入库</h2>
+        <span class="row-hint">{{ fromEmby ? '来自 Emby' : '来自本地整理记录' }}</span>
+        <RouterLink :to="{ name: 'local' }" class="row-more">
+          本地文件<ChevronRight :size="15" />
+        </RouterLink>
+      </header>
+      <div v-if="loading" class="shelf">
+        <HSkeleton v-for="i in 8" :key="i" class="shelf-skel" radius="14px" />
+      </div>
+      <div v-else-if="wall.length" class="shelf">
+        <div v-for="m in wall" :key="m.key" class="shelf-item" :title="m.title">
+          <PosterImage class="shelf-poster" :src="m.src" :alt="m.title" :icon-size="24" />
+          <div class="shelf-title">{{ m.title }}</div>
+          <div class="shelf-sub">{{ m.sub }}</div>
+        </div>
+      </div>
+      <EmptyState v-else text="暂无入库 · 整理或同步后这里会显示最新的影片" />
+    </section>
+
     <!-- ==== 我的媒体库 ==== -->
-    <SectionCard
-      title="我的媒体库"
-      :hint="fromEmby ? '直接读 Emby 媒体库，按库类型计数（一部影视算一条）' : '按本地整理台账的分类聚合'"
-    >
-      <!-- 手机上一行横滑，而不是折成两列一路往下排：媒体库多的时候能少滚好几屏 -->
-      <div v-if="categories.length" class="cats rail">
-        <div
-          v-for="c in categories"
-          :key="c.name"
-          class="cat"
-          :title="c.name + ' · ' + c.count + ' 部'"
-        >
-          <div class="collage">
-            <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" />
+    <section class="row">
+      <header class="row-head">
+        <h2 class="row-title">我的媒体库</h2>
+        <span class="row-hint">
+          {{ fromEmby ? '直接读 Emby 媒体库，按库类型计数' : '按本地整理台账的分类聚合' }}
+        </span>
+      </header>
+      <div v-if="categories.length" class="libs">
+        <div v-for="c in categories" :key="c.name" class="lib" :title="c.name + ' · ' + c.count + ' 部'">
+          <div class="lib-strip">
+            <PosterImage v-for="i in 4" :key="i" :src="c.posters[i - 1]" :alt="c.name" :icon-size="16" />
           </div>
-          <div class="cat-foot">
-            <div class="cat-text">
-              <span class="cat-name">{{ c.name }}</span>
-              <span v-if="c.label" class="cat-type">{{ c.label }}</span>
+          <div class="lib-shade on-dark">
+            <div class="lib-text">
+              <span class="lib-name">{{ c.name }}</span>
+              <span v-if="c.label && c.label !== c.name" class="lib-type">{{ c.label }}</span>
             </div>
-            <HChip size="sm">{{ num(c.count) }}</HChip>
+            <span class="lib-count">{{ num(c.count) }}</span>
           </div>
         </div>
       </div>
-      <EmptyState v-else text="暂无入库记录 · 整理或同步后这里会显示分类卡片" />
-    </SectionCard>
+      <EmptyState v-else-if="!loading" text="暂无入库记录 · 整理或同步后这里会显示分类卡片" />
+    </section>
 
     <!-- ==== 容量 / 系统 / 趋势 ==== -->
     <div class="grid-3">
@@ -296,39 +365,22 @@ const strmSub = computed(() => {
       </SectionCard>
     </div>
 
-    <!-- ==== 海报墙 + 最近整理 ==== -->
-    <div class="grid-2">
-      <SectionCard title="最新入库" :hint="fromEmby ? '来自 Emby' : '来自本地整理记录'">
-        <div v-if="wall.length" class="wall rail">
-          <div
-            v-for="m in wall"
-            :key="m.key"
-            class="wall-item"
-            :title="m.title + ' ' + (m.sub || '')"
-          >
-            <PosterImage :src="m.src" :alt="m.title" />
-            <div class="wall-title">{{ m.title }}</div>
-          </div>
-        </div>
-        <EmptyState v-else text="暂无入库" />
-      </SectionCard>
-
-      <SectionCard title="最近整理">
-        <div v-if="recent.length" class="recent">
-          <div v-for="(m, i) in recent" :key="m.title + '-' + i" class="recent-item">
-            <PosterImage class="recent-poster" :src="posterUrl(m.poster, 'w92')" :alt="m.title" />
-            <div class="recent-body">
-              <div class="recent-title">
-                {{ m.title }} <span class="recent-year">{{ m.year }}</span>
-              </div>
-              <div class="recent-cat">{{ m.category || m.type }}</div>
+    <!-- ==== 最近整理 ==== -->
+    <SectionCard title="最近整理" hint="本站整理流水线最近处理完的影片">
+      <div v-if="recent.length" class="recent">
+        <div v-for="(m, i) in recent" :key="m.title + '-' + i" class="recent-item">
+          <PosterImage class="recent-poster" :src="posterUrl(m.poster, 'w92')" :alt="m.title" />
+          <div class="recent-body">
+            <div class="recent-title">
+              {{ m.title }} <span class="recent-year">{{ m.year }}</span>
             </div>
-            <div class="recent-at">{{ m.at }}</div>
+            <div class="recent-cat">{{ m.category || m.type }}</div>
           </div>
+          <div class="recent-at">{{ m.at }}</div>
         </div>
-        <EmptyState v-else text="暂无整理记录" />
-      </SectionCard>
-    </div>
+      </div>
+      <EmptyState v-else text="暂无整理记录" />
+    </SectionCard>
 
     <CalibrateModal v-model:show="calibrating" @done="load(true, true)" />
   </div>
@@ -338,16 +390,11 @@ const strmSub = computed(() => {
 .dash {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 28px;
 }
 
-/* ---- 来源与动作 ---- */
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.bar-src {
+/* ---- 横幅右下角：数据来源胶囊（毛玻璃，压在暗图上） ---- */
+.src {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -355,66 +402,280 @@ const strmSub = computed(() => {
   height: 32px;
   padding: 0 12px;
   border-radius: 999px;
-  background: var(--surface);
-  box-shadow: var(--surface-shadow);
+  background: rgb(0 0 0 / 0.3);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   font-size: 12.5px;
   outline: none;
 }
-.bar-src:focus-visible {
+.src:focus-visible {
   box-shadow: 0 0 0 2px var(--focus);
 }
-.bar-dot {
+.src-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
   flex-shrink: 0;
 }
-.bar-dot.is-emby {
+.src-dot.is-emby {
   background: var(--success);
-  box-shadow: 0 0 0 3px var(--success-soft);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 30%, transparent);
 }
-.bar-dot.is-local {
+.src-dot.is-local {
   background: var(--muted);
 }
-.bar-label {
+.src-label {
   color: var(--muted);
 }
-.bar-value {
+.src-value {
   font-weight: 500;
-  color: var(--foreground);
   white-space: nowrap;
 }
-.bar-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 6px;
+.dash :deep(.hero .button--tertiary) {
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
-/* ---- 栅格 ---- */
+/* ---- 指标行：上移压住横幅底部的渐隐区，卡片半透明 + 模糊 ---- */
 .stats {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
+  margin-top: -84px;
+}
+.stats > * {
+  background: color-mix(in oklab, var(--surface) 82%, transparent);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease;
+}
+@media (hover: hover) {
+  .stats > :hover {
+    transform: translateY(-2px);
+  }
 }
 .stat-skel {
   gap: 10px;
   padding: 20px;
 }
+
+/* ---- 横向「货架」：标题行 ---- */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.row-title {
+  position: relative;
+  margin: 0;
+  padding-left: 12px;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+.row-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.row-hint {
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-more {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color 150ms ease;
+}
+.row-more:hover {
+  color: var(--accent);
+}
+
+/* ---- 海报货架：一行横滑，左右边缘渐隐提示还能滑 ---- */
+.shelf {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 150px;
+  gap: 18px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  margin: -12px calc(-1 * var(--content-px, 28px)) -8px;
+  padding: 12px var(--content-px, 28px) 8px;
+  scroll-padding-inline: var(--content-px, 28px);
+  scrollbar-width: none;
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--content-px, 28px),
+    #000 calc(100% - var(--content-px, 28px) * 2),
+    transparent 100%
+  );
+}
+.shelf::-webkit-scrollbar {
+  display: none;
+}
+.shelf-item {
+  min-width: 0;
+  scroll-snap-align: start;
+}
+.shelf-poster {
+  border-radius: 14px;
+  box-shadow:
+    0 10px 24px -14px rgb(0 0 0 / 0.6),
+    0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent);
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 260ms ease;
+}
+@media (hover: hover) {
+  .shelf-item:hover .shelf-poster {
+    transform: translateY(-6px) scale(1.03);
+    box-shadow:
+      0 22px 40px -18px rgb(0 0 0 / 0.75),
+      0 0 0 2px var(--accent);
+  }
+}
+.shelf-skel {
+  aspect-ratio: 2 / 3;
+  height: auto !important;
+}
+.shelf-title {
+  margin-top: 10px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shelf-sub {
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---- 媒体库：四张海报并排成一条「胶片」，底部压暗写库名 ---- */
+.libs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+.lib {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--surface-secondary);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 6%, transparent);
+  transition:
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 260ms ease;
+}
+/* 四张竖版海报并排本来是 8:3 的扁条，叠上库名就挤；固定成 16:9，海报裁掉下半截（片名那一截） */
+.lib-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 2px;
+  aspect-ratio: 16 / 9;
+}
+.lib-strip :deep(.pimg) {
+  aspect-ratio: auto;
+  height: 100%;
+}
+.lib-strip :deep(img) {
+  object-position: center top;
+}
+/* 拼贴里每张小海报自带圆角，拼起来缝隙处会露出一圈锯齿，统一抹平 */
+.lib-strip :deep(.pimg) {
+  border-radius: 0;
+}
+.lib-strip :deep(img) {
+  transition: transform 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (hover: hover) {
+  .lib:hover {
+    transform: translateY(-3px);
+    box-shadow:
+      0 18px 36px -18px rgb(0 0 0 / 0.6),
+      0 0 0 2px var(--accent);
+  }
+  .lib:hover .lib-strip :deep(img) {
+    transform: scale(1.06);
+  }
+}
+.lib-shade {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 48px 16px 14px;
+  background: linear-gradient(to bottom, transparent, rgb(0 0 0 / 0.7) 45%, rgb(0 0 0 / 0.92));
+}
+.lib-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lib-name {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-type {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.lib-count {
+  flex-shrink: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 下半部：卡片栅格 ---- */
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
-.grid-2 {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-/* ---- 存储 / 负载 ---- */
 .big-num {
   font-size: 30px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.1;
   color: var(--foreground);
@@ -433,7 +694,6 @@ const strmSub = computed(() => {
   font-size: 12px;
   color: var(--muted);
 }
-
 .load {
   display: flex;
   flex-direction: column;
@@ -454,77 +714,18 @@ const strmSub = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- 媒体库卡片 ---- */
-.cats {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 16px;
-}
-.collage {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  border-radius: 16px;
-  overflow: hidden;
-  background: var(--surface-secondary);
-}
-/* 拼贴里每张小海报自带圆角，拼起来缝隙处会露出一圈锯齿，统一抹平 */
-.collage :deep(*) {
-  border-radius: 0;
-}
-.cat-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-.cat-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.cat-name {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cat-type {
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-/* ---- 海报墙 ---- */
-.wall {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
-  gap: 14px 12px;
-}
-.wall-item > :first-child {
-  border-radius: 12px;
-}
-.wall-title {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ---- 最近整理 ---- */
+/* ---- 最近整理：宽屏两列 ---- */
 .recent {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
   margin: -6px -8px;
 }
 .recent-item {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   padding: 8px;
   border-radius: 14px;
   transition: background-color 150ms ease;
@@ -576,62 +777,56 @@ const strmSub = computed(() => {
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .grid-2 {
+  .recent {
     grid-template-columns: 1fr;
   }
 }
 @media (max-width: 720px) {
   .dash {
-    gap: 12px;
+    gap: 20px;
   }
   .stats {
-    gap: 12px;
+    gap: 10px;
+    margin-top: -72px;
   }
   .grid-3 {
     grid-template-columns: 1fr;
     gap: 12px;
   }
-  .grid-2 {
+  .row-title {
+    font-size: 16px;
+  }
+  .shelf {
+    grid-auto-columns: 30%;
     gap: 12px;
   }
-  /* 按钮只留图标，给来源胶囊让出宽度 */
-  .bar-btn-text {
-    display: none;
-  }
-  .bar-actions :deep(.button) {
-    width: 36px;
-    padding: 0;
-  }
-  .bar-label {
-    display: none;
-  }
-
-  /* 横滑轨道：左右出血到卡片边缘，滑动时内容从边缘露出来，暗示还能再滑 */
-  .rail {
-    display: grid;
+  /* 媒体库在手机上也横滑，省得一路往下排好几屏 */
+  .libs {
     grid-auto-flow: column;
     grid-template-columns: none;
+    grid-auto-columns: 78%;
+    gap: 12px;
     overflow-x: auto;
-    overscroll-behavior-x: contain;
     scroll-snap-type: x mandatory;
-    scroll-padding-inline: 16px;
-    margin-inline: -16px;
-    padding-inline: 16px;
+    margin-inline: calc(-1 * var(--content-px, 16px));
+    padding-inline: var(--content-px, 16px);
+    scroll-padding-inline: var(--content-px, 16px);
     scrollbar-width: none;
   }
-  .rail::-webkit-scrollbar {
+  .libs::-webkit-scrollbar {
     display: none;
   }
-  .rail > * {
+  .lib {
     scroll-snap-align: start;
   }
-  .cats.rail {
-    grid-auto-columns: 42%;
-    gap: 12px;
+  /* 横幅上的按钮只留图标，给来源胶囊让出宽度 */
+  .btn-text,
+  .src-label {
+    display: none;
   }
-  .wall.rail {
-    grid-auto-columns: 28%;
-    gap: 10px;
+  .dash :deep(.hero .button) {
+    width: 32px;
+    padding: 0;
   }
 }
 </style>

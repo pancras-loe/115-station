@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
+import { Check } from '@lucide/vue'
 import {
   DropdownMenuContent,
   DropdownMenuItem,
@@ -17,6 +18,8 @@ export interface MenuOption {
   label: string
   icon?: Component
   danger?: boolean
+  /** 单选语义的菜单（主题选择之类）：当前选中项右侧打勾 */
+  checked?: boolean
 }
 
 defineProps<{ options: MenuOption[]; align?: 'start' | 'center' | 'end' }>()
@@ -42,6 +45,7 @@ const emit = defineEmits<{ select: [string] }>()
         >
           <component :is="o.icon" v-if="o.icon" :size="16" />
           <span data-slot="label">{{ o.label }}</span>
+          <Check v-if="o.checked" class="h-menu-check" :size="15" />
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenuPortal>
@@ -60,6 +64,12 @@ const emit = defineEmits<{ select: [string] }>()
 }
 .h-menu-item[data-highlighted] {
   background: var(--default);
+}
+.h-menu-check {
+  margin-left: auto;
+  padding-left: 12px;
+  box-sizing: content-box;
+  color: var(--accent);
 }
 .h-menu-item.menu-item--danger {
   color: var(--danger);

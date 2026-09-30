@@ -42,6 +42,9 @@ export interface RecentMedia {
   type: string
   poster: string
   at: string
+  overview?: string
+  /** TMDB 评分，0 = 没有 */
+  rating?: number
 }
 
 export interface WeeklyPoint {
@@ -71,9 +74,25 @@ export interface EmbyLibrary {
   type_label?: string
 }
 
+export interface EmbyRecent {
+  id: string
+  name: string
+  year: string
+  /** Movie / Series */
+  type?: string
+  overview?: string
+  rating?: number
+  official_rating?: string
+  genres?: string[] | null
+  /** ISO 时间，Emby 的入库时间 */
+  created?: string
+  has_backdrop?: boolean
+  has_logo?: boolean
+}
+
 export interface EmbyDashboard {
   counts: { movies: number; series: number; episodes: number }
-  recent: { id: string; name: string; year: string }[]
+  recent: EmbyRecent[]
   libraries: EmbyLibrary[]
 }
 

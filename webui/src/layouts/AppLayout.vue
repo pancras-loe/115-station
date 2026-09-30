@@ -40,6 +40,39 @@ onMounted(async () => {
   }
 })
 
+// 侧栏：默认收成图标栏（悬停浮出），用户点图钉可以固定展开
+const PIN_KEY = 'ui.sidebar.pinned'
+function readPinned() {
+  try {
+    return localStorage.getItem(PIN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const pinned = ref(readPinned())
+function togglePin() {
+  pinned.value = !pinned.value
+  try {
+    localStorage.setItem(PIN_KEY, pinned.value ? '1' : '0')
+  } catch {
+    // 无痕模式写不进去就只管这一次
+  }
+}
+
+// 沉浸页（总览）：页面顶部的大图横幅一直铺到顶栏底下，顶栏在没滚动时透明、字变浅色。
+// 滚过横幅上沿就恢复成普通的毛玻璃顶栏
+const immersive = computed(() => route.meta.immersive === true)
+const scrolled = ref(false)
+function onScroll() {
+  scrolled.value = window.scrollY > 24
+}
+onMounted(() => {
+  onScroll()
+  window.addEventListener('scroll', onScroll, { passive: true })
+})
+onUnmounted(() => window.removeEventListener('scroll', onScroll))
+const overHero = computed(() => immersive.value && !scrolled.value)
+
 const title = computed(() => (route.meta.title as string) ?? '')
 const desc = computed(() => (route.meta.desc as string) ?? '')
 
@@ -59,15 +92,17 @@ function onAccount(key: string) {
 <template>
   <div class="layout">
     <!-- 桌面端固定侧栏 -->
-    <AppSidebar class="sidebar-desktop" :version="version" />
+    <div class="sidebar-desktop" :class="{ 'is-pinned': pinned }">
+      <AppSidebar :version="version" :docked="true" :pinned="pinned" @toggle-pin="togglePin" />
+    </div>
 
     <!-- 移动端抽屉 -->
     <HDrawer v-model:show="drawerOpen" width="252px" title="导航菜单">
       <AppSidebar :version="version" @navigate="drawerOpen = false" />
     </HDrawer>
 
-    <div class="main">
-      <header class="topbar">
+    <div class="main" :class="{ 'is-immersive': immersive }">
+      <header class="topbar" :class="{ 'on-dark': overHero, 'is-over-hero': overHero }">
         <HButton class="menu-btn" variant="ghost" icon-only aria-label="菜单" @click="drawerOpen = true">
           <Menu :size="19" />
         </HButton>
@@ -118,11 +153,19 @@ function onAccount(key: string) {
   background: var(--background);
 }
 
+/* 占位列：未固定时只占 72px，悬停展开的侧栏是绝对定位浮在内容上的；固定后占位列展开到完整宽度（见 AppSidebar） */
 .sidebar-desktop {
   position: sticky;
   top: 0;
+  z-index: 30;
+  width: 72px;
   height: 100vh;
   flex-shrink: 0;
+  /* 和侧栏自己的宽度同一条曲线、同一个时长：固定 / 取消固定时两者一起走，内容区平滑让位 */
+  transition: width 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sidebar-desktop.is-pinned {
+  width: var(--sidebar-w);
 }
 
 .main {
@@ -132,19 +175,35 @@ function onAccount(key: string) {
   flex-direction: column;
 }
 
-/* 顶栏与页面同底色、不画分隔线；滚动时靠半透明 + 模糊和内容区分开 */
+/* 顶栏固定高度（--topbar-real）：沉浸页要把横幅往上拉整整一个顶栏高，高度不能随内容浮动 */
 .topbar {
+  --topbar-real: 68px;
   position: sticky;
   top: 0;
   z-index: 10;
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: var(--topbar-h);
-  padding: 12px 28px 8px;
-  background: color-mix(in oklab, var(--background) 80%, transparent);
-  backdrop-filter: saturate(180%) blur(16px);
-  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  height: var(--topbar-real);
+  padding: 0 28px;
+  box-sizing: border-box;
+  background: color-mix(in oklab, var(--background) 78%, transparent);
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border-bottom: 1px solid color-mix(in oklab, var(--separator) 70%, transparent);
+  transition:
+    background-color 240ms ease,
+    border-color 240ms ease;
+}
+/* 沉浸页：顶栏不占位（负的下外边距），横幅从页面最顶上开始 */
+.is-immersive .topbar {
+  margin-bottom: calc(-1 * var(--topbar-real));
+}
+.topbar.is-over-hero {
+  background: transparent;
+  border-bottom-color: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .menu-btn {
@@ -158,7 +217,8 @@ function onAccount(key: string) {
 .title {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 650;
+  line-height: 1.3;
   letter-spacing: -0.02em;
   color: var(--foreground);
   white-space: nowrap;
@@ -166,12 +226,16 @@ function onAccount(key: string) {
   text-overflow: ellipsis;
 }
 .desc {
-  margin: 2px 0 0;
-  font-size: 13px;
+  margin: 1px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.is-over-hero .title {
+  text-shadow: 0 1px 12px rgb(0 0 0 / 0.45);
 }
 
 .actions {
@@ -187,10 +251,15 @@ function onAccount(key: string) {
   white-space: nowrap;
 }
 
+/* --content-px 让沉浸页的横幅能按同一个数值左右出血到边 */
 .content {
+  --content-px: 28px;
   flex: 1;
-  padding: 12px 28px 28px;
+  padding: 20px var(--content-px) 36px;
   min-width: 0;
+}
+.is-immersive .content {
+  padding-top: 0;
 }
 
 .tabbar-mobile {
@@ -225,10 +294,12 @@ function onAccount(key: string) {
     display: none;
   }
   .content {
-    padding: 8px 20px 24px;
+    --content-px: 20px;
+    padding-top: 12px;
   }
   .topbar {
-    padding: 10px 20px 6px;
+    --topbar-real: 60px;
+    padding: 0 20px;
   }
 }
 
@@ -241,14 +312,15 @@ function onAccount(key: string) {
     display: grid;
   }
   .topbar {
-    min-height: 52px;
-    padding: calc(8px + env(safe-area-inset-top)) 16px 6px;
+    --topbar-real: calc(52px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 16px 0;
   }
   .title {
     font-size: 18px;
   }
   .content {
-    padding: 4px 16px calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 20px);
+    --content-px: 16px;
+    padding: 8px var(--content-px) calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 20px);
   }
 }
 </style>
