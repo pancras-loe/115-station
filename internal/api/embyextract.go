@@ -1012,7 +1012,90 @@ func embyMediaItemsAt(cfg embyRefreshCfg, embyPath string) (found bool, items []
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return true, nil, err
 	}
+	if q.Get("ParentId") != "" {
+		out.Items = append(out.Items, embyAltVersionItems(cfg, embyPath, out.Items)...)
+	}
 	return true, out.Items, nil
+}
+
+// embyAltVersionMax 一个目录里最多按路径补查几个 .strm（Emby 还没扫进去的每个都是一次白查）
+const embyAltVersionMax = 10
+
+// embyAltVersionItems 目录直属、却没被按目录列出来的 .strm，按路径逐个补查。
+//
+// 同目录多版本电影在 Emby 里是几个独立的 Movie 条目（各带一个 MediaSources），界面上合成一部、
+// 可以切版本；按 ParentId 列目录时只给主版本。2026-09-30《夏洛特烦恼》现场：REMUX 是 882、
+// 6Audios 是 883，按搜索列两条都在，探测按目录列只探了 882，883 从来没进过名单
+// （连「跳过」都没有），一直缺媒体信息。只看目录直属的：Emby 只合并同一目录里的版本。
+// 读本地目录 + 只读查询，零 115 请求
+func embyAltVersionItems(cfg embyRefreshCfg, dirPath string, listed []embyExtractItem) []embyExtractItem {
+	local := embyPathToLocal(cfg.PathMapping, dirPath)
+	ents, err := os.ReadDir(filepath.FromSlash(local))
+	if err != nil {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, it := range listed {
+		have[strings.ToLower(embyPathBase(it.Path))] = true
+	}
+	sep := "/"
+	if strings.Contains(dirPath, "\\") && !strings.Contains(dirPath, "/") {
+		sep = "\\"
+	}
+	base := strings.TrimRight(dirPath, "/\\")
+	var out []embyExtractItem
+	tried := 0
+	for _, d := range ents {
+		name := d.Name()
+		if d.IsDir() || !strings.EqualFold(path.Ext(name), ".strm") || have[strings.ToLower(name)] {
+			continue
+		}
+		if tried >= embyAltVersionMax {
+			break
+		}
+		tried++
+		if it, ok := embyExtractItemAt(cfg, base+sep+name); ok {
+			have[strings.ToLower(name)] = true
+			out = append(out, it)
+		}
+	}
+	if len(out) > 0 {
+		vlog("[Emby探测] %s：按目录没列出的 %d 个版本按路径补上了", embyPathBase(dirPath), len(out))
+	}
+	return out
+}
+
+// embyExtractItemAt 按路径精确查一个影视条目（带轨道信息）
+func embyExtractItemAt(cfg embyRefreshCfg, embyPath string) (embyExtractItem, bool) {
+	q := url.Values{
+		"Path":                   {embyPath},
+		"Recursive":              {"true"},
+		"IncludeItemTypes":       {"Movie,Episode,Video"},
+		"Fields":                 {"MediaStreams,MediaSources,Path"},
+		"Limit":                  {"5"},
+		"EnableTotalRecordCount": {"false"},
+	}
+	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Items", q, nil)
+	if err != nil {
+		return embyExtractItem{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return embyExtractItem{}, false
+	}
+	var out struct {
+		Items []embyExtractItem `json:"Items"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return embyExtractItem{}, false
+	}
+	want := strings.TrimRight(strings.ReplaceAll(embyPath, "\\", "/"), "/")
+	for _, it := range out.Items {
+		if it.ID != "" && strings.ReplaceAll(it.Path, "\\", "/") == want {
+			return it, true
+		}
+	}
+	return embyExtractItem{}, false
 }
 
 func embyPathBase(p string) string {

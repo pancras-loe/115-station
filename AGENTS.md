@@ -406,6 +406,10 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       **多版本**（同一片目目录两个 `.strm`）在 Emby 里是一个条目、`MediaSources` 各一份：「有媒体信息」要每个版本都齐（`lackingSources`），
       探测时逐个缺的版本带 `MediaSourceId` 各发一次（不点名时 Emby 只探它自己挑的那个，另一个永远「未探测」），记账仍按条目记一笔；
       卡片快照因此必须带 `MediaSources` 字段，片目详情按版本拆行（`embyDetailsOf`）。测试 `embyextract_versions_test.go`。
+      **但 2026-09-30 实测的 Emby 不是上面这种形态**：同目录两个 `.strm` 是两个独立的 Movie 条目（各带一个 `MediaSources`），
+      界面上合成一部可切版本，**按 `ParentId` 列目录只给主版本**，另一个只有按搜索 / 按路径才查得到。所以按目录列完后，
+      `embyAltVersionItems` 拿本地目录直属的 `.strm` 对一遍，没列出来的按 `Path` 逐个补查（零 115 请求）。两种形态都要认，别删任何一边。
+      多版本时 Emby 存图写 `视频名-poster.jpg` 并删掉 `poster.jpg`，本地文件页与刮削的「已有」都要认它（`perVideoImage`）。
       **光盘结构（ISO / BDMV / VIDEO_TS）不探**，同样按版本判（`probeSources` / `discSource`：一个 ISO 版本一个 mkv 版本时 mkv 照探）。
       STRM 名不带扩展名之后（§6.15）文件名上认不出 ISO，所以 **ISO 的直链不看「保留文件后缀」一律带 `.iso`**（`writeStrmNamed`，qmediasync 同款），
       判断时除了 Emby 给的路径还读一次本地 STRM 里的直链（Emby 记的直链要等它重扫才更新）。存量由 `strmiso.go` 启动时一次性补：
