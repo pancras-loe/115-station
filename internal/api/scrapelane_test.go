@@ -145,18 +145,28 @@ func TestScrapeEmbyRefreshTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
+	var gotIngest bool
 	prev := scrapeEmbyNotify
-	scrapeEmbyNotify = func(dirs []string, verify ...string) { got = dirs }
+	scrapeEmbyNotify = func(dirs []string, ingest bool, verify ...string) { got, gotIngest = dirs, ingest }
 	t.Cleanup(func() { scrapeEmbyNotify = prev })
 
 	scrapeEmbyRefresh(&localScrapeParams{EmbyRefresh: []string{alive, filepath.Join(root, "没了")}}, nil)
 	if !reflect.DeepEqual(got, []string{alive}) {
 		t.Fatalf("应只刷还在的目录：%v", got)
 	}
+	if !gotIngest {
+		t.Fatal("整理交过来的刷新是入库，要回查")
+	}
 	got = nil
 	scrapeEmbyRefresh(&localScrapeParams{}, map[string]bool{})
 	if got != nil {
 		t.Fatalf("没有交接、也没写东西就不该刷：%v", got)
+	}
+
+	// 手动刮削只写了元数据：照刷，但不是入库，不回查（回查会按全局「轨道探测」自动探，顶掉弹窗里关掉的选择）
+	scrapeEmbyRefresh(&localScrapeParams{Keys: []string{"剧集/甲"}}, map[string]bool{alive: true})
+	if !reflect.DeepEqual(got, []string{alive}) || gotIngest {
+		t.Fatalf("手动刮削应只刷不回查：dirs=%v ingest=%v", got, gotIngest)
 	}
 }
 

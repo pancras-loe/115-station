@@ -400,6 +400,8 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
       自动入口排的一律是**片目目录**（`embyExtractTitleTargets`，按 `libCategoryLayout.titleOf` 归）：入库确认的样本只有 3 个 `.strm`，
       直接排就只探 3 集；没点名时回查的是刷新目标（全量的同步根、迁移时的整个媒体库），直接排就是递归探整片库 ——
       所以片目之上的目录**不自动探**，不属于任何片目的单个 `.strm` 只探它自己。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
+      **手动刮削收尾的 Emby 刷新不走入库回查**（`scrapeEmbyRefresh` 的 `ingest`，只有整理交过来的刷新才算入库）：
+      回查确认后会按全局开关自动探，弹窗里关掉的「轨道探测」会被它顶回来（2026-09-30 现场）。
       新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
       **多版本**（同一片目目录两个 `.strm`）在 Emby 里是一个条目、`MediaSources` 各一份：「有媒体信息」要每个版本都齐（`lackingSources`），
       探测时逐个缺的版本带 `MediaSourceId` 各发一次（不点名时 Emby 只探它自己挑的那个，另一个永远「未探测」），记账仍按条目记一笔；

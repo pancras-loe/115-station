@@ -831,15 +831,19 @@ func scrapeEmbyRefresh(lp *localScrapeParams, wrote map[string]bool) {
 	}
 	sort.Strings(dirs)
 	var verify []string
+	// 只有整理交过来的刷新才是入库，要回查（回查确认后按全局「轨道探测」自动探）；
+	// 手动刮削只补元数据，不回查，探不探只由这一次的 Probe 决定（execScrapeJob 另建探测任务）
+	ingest := false
 	if lp != nil {
 		verify = lp.EmbyVerify
+		ingest = len(lp.EmbyRefresh) > 0 || len(lp.EmbyVerify) > 0
 	}
-	scrapeEmbyNotify(dirs, verify...)
+	scrapeEmbyNotify(dirs, ingest, verify...)
 }
 
 // scrapeEmbyNotify 测试替身的缝
-var scrapeEmbyNotify = func(dirs []string, verify ...string) {
-	notifyEmbyPaths(dirs, embyRefreshAdded, verify...)
+var scrapeEmbyNotify = func(dirs []string, ingest bool, verify ...string) {
+	notifyEmbyPathsWith(dirs, embyRefreshAdded, ingest, verify...)
 }
 
 // mergeAutoScrape 排着的整理后刮削还没开始，又来一轮：片目取并集，选项以新的为准

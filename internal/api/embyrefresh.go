@@ -155,6 +155,14 @@ func notifyEmbyDeleted(localPaths ...string) {
 //  2. 定位不到（或不该只刷条目）就刷该路径所属的媒体库条目
 //  3. 路径不属于任何媒体库（路径映射配错了？）→ /Library/Media/Updated 报路径
 func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...string) {
+	notifyEmbyPathsWith(localPaths, kind, true, verifyLocal...)
+}
+
+// notifyEmbyPathsWith ingest=false：只刷新、不做入库回查。
+// 入库回查确认到的片目会交给自动提前探测（embyVerifyIngest → queueEmbyExtract，只看全局「轨道探测」），
+// 本地文件页手动刮削只是给已在库的片目补元数据，不是入库：走回查的话，用户在刮削弹窗里关掉的
+// 「轨道探测」会被全局开关顶回来（2026-09-30 现场：剧集全选刮削、弹窗关了探测，照样探了一遍）
+func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool, verifyLocal ...string) {
 	if len(localPaths) == 0 {
 		return
 	}
@@ -291,7 +299,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 	}
 
 	// 入库提交完回查一次，结论写进日志（纯只读，不改变 Emby 行为）
-	if kind == embyRefreshAdded && len(verify) > 0 {
+	if kind == embyRefreshAdded && ingest && len(verify) > 0 {
 		go embyVerifyIngest(cfg, dedupeStrings(verify))
 	}
 
