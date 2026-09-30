@@ -3,9 +3,14 @@ package api
 import (
 	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // TestGyPowLoopMath 验证 RSW 求解循环（t 次平方取模）等价于 x^(2^t) mod N
@@ -94,5 +99,43 @@ func TestGyObjJSONBalanced(t *testing.T) {
 	}
 	if !strings.HasPrefix(objStr, `{"title"`) || !strings.HasSuffix(objStr, `"n":2}`) {
 		t.Errorf("提取范围异常: %q", objStr)
+	}
+}
+
+// 登录按钮先保存配置、再发登录请求：请求体里没带账号密码时要用已保存的，
+// 不能回「请填写账号和密码」（此前前端发空请求体，登录永远失败）
+func TestGyLoginFallsBackToSavedCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError) // 登录走不下去即可，只看有没有被参数校验拦下
+	}))
+	defer site.Close()
+	setCfg := func(c *gyCfg) {
+		gyCfgMu.Lock()
+		gyCfgV, gyCfgAt = c, time.Now()
+		gyCfgMu.Unlock()
+	}
+	t.Cleanup(func() { setCfg(nil) })
+	h := &Handler{}
+	post := func(body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/guanying/login", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.GyLogin(c)
+		return w
+	}
+
+	setCfg(&gyCfg{BaseURL: site.URL, Cookies: map[string]string{}})
+	if w := post(`{}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("没有已保存的账号时应当 400: %d %s", w.Code, w.Body)
+	}
+	setCfg(&gyCfg{BaseURL: site.URL, Username: "u", Password: "p", Cookies: map[string]string{}})
+	if w := post(`{}`); w.Code == http.StatusBadRequest {
+		t.Fatalf("空请求体应当用已保存的账号去登录: %s", w.Body)
+	}
+	setCfg(&gyCfg{BaseURL: site.URL, Username: "u", Password: "p", Cookies: map[string]string{}})
+	if w := post(`{"username":"u","password":"` + settingMask + `"}`); w.Code == http.StatusBadRequest {
+		t.Fatalf("密码是掩码时应当用已存密码: %s", w.Body)
 	}
 }

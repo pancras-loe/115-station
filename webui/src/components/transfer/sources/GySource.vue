@@ -44,6 +44,10 @@ async function save() {
 }
 
 async function auth() {
+  if (!loggedIn.value && (!form.value.username.trim() || !form.value.password)) {
+    message.warning('请填写观影账号和密码')
+    return
+  }
   authing.value = true
   try {
     if (loggedIn.value) {
@@ -53,7 +57,7 @@ async function auth() {
       return
     }
     await resourcesApi.gySaveConfig(form.value)
-    const d = await resourcesApi.gyLogin()
+    const d = await resourcesApi.gyLogin(form.value)
     loggedIn.value = true
     message.success(d.message || '登录成功')
   } catch (e) {

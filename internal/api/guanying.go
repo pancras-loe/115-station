@@ -578,18 +578,22 @@ func (h *Handler) GyLogin(c *gin.Context) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Username == "" || req.Password == "" {
+	_ = c.ShouldBindJSON(&req)
+	// 请求里没带的一律用已保存的：前端「登录」按钮先保存配置再调这里，
+	// 此前它发的是空请求体，这里又要求账号密码必填，于是永远回「请填写账号和密码」
+	cfg := loadGyCfg()
+	if strings.TrimSpace(req.BaseURL) != "" {
+		cfg.BaseURL = gyNormalizeBase(req.BaseURL)
+	}
+	if u := strings.TrimSpace(req.Username); u != "" {
+		cfg.Username = u
+	}
+	if req.Password != "" && req.Password != settingMask { // 掩码 = 配置页没改动，用已存密码
+		cfg.Password = req.Password
+	}
+	if cfg.Username == "" || cfg.Password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写账号和密码"})
 		return
-	}
-	cfg := loadGyCfg()
-	if b := gyNormalizeBase(req.BaseURL); b != "" {
-		cfg.BaseURL = b
-	}
-	cfg.Username = strings.TrimSpace(req.Username)
-	cfg.Password = req.Password
-	if req.Password == settingMask {
-		cfg.Password = loadGyCfg().Password // 配置页掩码未改动直接点登录：用已存密码
 	}
 
 	jar := &gyJar{m: map[string]string{}}

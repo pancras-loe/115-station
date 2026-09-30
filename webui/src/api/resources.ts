@@ -39,7 +39,8 @@ export const gyConfig = () => http.get<GyConfig>('/guanying/config')
 export const gyCheck = () => http.get<{ logged_in: boolean }>('/guanying/check')
 export const gySaveConfig = (body: { base_url: string; username: string; password: string }) =>
   http.post('/guanying/config', body)
-export const gyLogin = () => http.post<{ message?: string }>('/guanying/login', {}, { timeoutMs: 120_000 })
+export const gyLogin = (body: { base_url: string; username: string; password: string }) =>
+  http.post<{ message?: string }>('/guanying/login', body, { timeoutMs: 120_000 })
 export const gyLogout = () => http.post('/guanying/logout')
 
 // ============ 不太灵影视 ============
