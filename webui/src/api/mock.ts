@@ -224,6 +224,25 @@ const records: OrganizeRecord[] = [
   },
 ]
 
+/** 任务历史（/tasks/history）：整理 / 重新整理 / 全量各一条，覆盖成功与失败 */
+const HISTORY = [
+  {
+    id: 11, kind: 'organize', title: '定时整理', priority: 1, status: 'success', source: 'cron',
+    message: '整理 5 项：成功 3，已存在 1，待确认 1', result: { success: 3, exists: 1, failed: 0, awaiting: 1 },
+    created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
+  },
+  {
+    id: 10, kind: 'redo', title: '重新整理《漫长的季节》→ 漫长的季节 (2023)', priority: 0, status: 'failed', source: 'web',
+    message: '剧集两集算出同一个新名字：E01.mkv 与 Season 2/E01.mkv，请加替换规则', record_ids: [2],
+    created_at: '2026-09-26T09:30:00+08:00', started_at: '2026-09-26T09:30:01+08:00', finished_at: '2026-09-26T09:30:09+08:00',
+  },
+  {
+    id: 9, kind: 'full', title: '全量同步', priority: 0, status: 'success', source: 'wecom', message: '新增 STRM 42 个',
+    result: { mode_used: 'fast', scan_complete: true, orphans: 3 },
+    created_at: '2026-09-26T04:00:00+08:00', started_at: '2026-09-26T04:00:01+08:00', finished_at: '2026-09-26T04:12:40+08:00',
+  },
+]
+
 /** 配置项（/config/setting?key=…）：后端存的是 JSON 字符串，原样模拟 */
 const SETTINGS: Record<string, unknown> = {
   strm: { domain: 'http://192.168.1.10:6086', format: 'pick_code_name', keep_ext: 'true', exist: 'overwrite' },
@@ -243,7 +262,16 @@ const SETTINGS: Record<string, unknown> = {
   incr: { cron: '*/30 * * * *', interval_sec: 30 },
   deepdel: { enabled: true, prune_pan_dirs: true, notify: false },
   monitor: { enabled: false },
-  'org-basic': { manual_confirm: true },
+  'org-basic': {
+    manual_confirm: true,
+    pending: '301',
+    pending_path: '/StrmStation/待整理',
+    existing: '303',
+    existing_path: '/StrmStation/已存在',
+    redundant: '',
+    redundant_path: '',
+  },
+  share: { folder: '302', folder_path: '/StrmStation/转存' },
 }
 
 /** 网盘文件页（/files/115?cid=…）：一棵小目录树 */
@@ -295,26 +323,11 @@ const ROUTES: Record<string, Route> = {
       },
     ],
   },
-  '/tasks/history': {
-    total: 3,
-    counts: { all: 3, success: 2, failed: 1, canceled: 0, interrupted: 0 },
-    data: [
-      {
-        id: 11, kind: 'organize', title: '定时整理', priority: 1, status: 'success', source: 'cron',
-        message: '整理 5 项：成功 3，已存在 1，待确认 1', result: { success: 3, exists: 1, failed: 0, awaiting: 1 },
-        created_at: '2026-09-26T09:50:00+08:00', started_at: '2026-09-26T09:50:00+08:00', finished_at: '2026-09-26T09:51:12+08:00',
-      },
-      {
-        id: 10, kind: 'redo', title: '重新整理《漫长的季节》→ 漫长的季节 (2023)', priority: 0, status: 'failed', source: 'web',
-        message: '剧集两集算出同一个新名字：E01.mkv 与 Season 2/E01.mkv，请加替换规则', record_ids: [2],
-        created_at: '2026-09-26T09:30:00+08:00', started_at: '2026-09-26T09:30:01+08:00', finished_at: '2026-09-26T09:30:09+08:00',
-      },
-      {
-        id: 9, kind: 'full', title: '全量同步', priority: 0, status: 'success', source: 'wecom', message: '新增 STRM 42 个',
-        result: { mode_used: 'fast', scan_complete: true, orphans: 3 },
-        created_at: '2026-09-26T04:00:00+08:00', started_at: '2026-09-26T04:00:01+08:00', finished_at: '2026-09-26T04:12:40+08:00',
-      },
-    ],
+  // 按 kind 筛（Strm 管理页的状态总览只要最近一次全量），其余筛选条件演示里不区分
+  '/tasks/history': (q: URLSearchParams) => {
+    const kind = q.get('kind')
+    const data = HISTORY.filter((j) => !kind || j.kind === kind)
+    return { total: data.length, counts: { all: data.length, success: 2, failed: 1, canceled: 0, interrupted: 0 }, data }
   },
   '/tasks/11': {
     data: {
@@ -330,7 +343,7 @@ const ROUTES: Record<string, Route> = {
       ],
     },
   },
-  '/sync/cron-preview': { next: ['09-25 04:00', '09-26 04:00', '09-27 04:00'] },
+  '/sync/cron-preview': { next: ['10-01 04:00', '10-02 04:00', '10-03 04:00'] },
   '/sync/capabilities': { fast_available: true, reason: '' },
   '/sync/orphans': {
     enabled: true,
@@ -365,8 +378,8 @@ const ROUTES: Record<string, Route> = {
   },
   '/sync/deep-delete/records': {
     data: [
-      { id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, created_at: '09-23 21:04', message: '' },
-      { id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, created_at: '09-22 18:40', message: '剧/季目录缺少台账布局证据，已拦截' },
+      { id: 3, status: 'done', title: '星际穿越 (2014)', reason: 'emby_webhook', video_cnt: 1, asset_cnt: 4, created_at: '2026-09-23 21:04:12', message: '' },
+      { id: 2, status: 'rejected', title: '漫长的季节', reason: 'emby_webhook', video_cnt: 0, asset_cnt: 0, created_at: '2026-09-22 18:40:05', message: '剧/季目录缺少台账布局证据，已拦截' },
     ],
     total: 2, page: 1, size: 20,
   },
@@ -449,6 +462,25 @@ const ROUTES: Record<string, Route> = {
     }
   },
   '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true } },
+  '/storage': {
+    data: [{ id: 1, name: '115主号', type: '115', cookie_path: '/config/115-cookies.txt', device: 'web', interval: 3, openapi_enabled: false, app_id: '' }],
+  },
+  '/storage/check': {
+    valid: true,
+    channel: 'Cookie',
+    username: '影迷小王',
+    capacity: '7.50 TB / 10.00 TB',
+    user_id: 38_120_456,
+    vip: 1,
+    vip_expire: Math.floor(Date.now() / 1000) + 86_400 * 212,
+    used_size: 8_243_000_000_000,
+    total_size: 11_000_000_000_000,
+    devices: [
+      { name: '网页端', device: 'web', ip: '203.0.113.24', city: '上海', utime: Math.floor(Date.now() / 1000) - 120, is_current: true },
+      { name: 'iPhone 16 Pro', device: 'ios', ip: '198.51.100.7', city: '上海', utime: Math.floor(Date.now() / 1000) - 86_400 * 2 },
+      { name: 'Windows 客户端', device: 'windows', ip: '192.0.2.61', city: '杭州', utime: Math.floor(Date.now() / 1000) - 86_400 * 9 },
+    ],
+  },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },
   '/version': { version: '2.4.1-preview' },

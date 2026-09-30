@@ -116,6 +116,16 @@
 .checkbox__control:focus-visible {
   @apply status-focused;
 }
+/* 未勾选的方框：HeroUI 的 secondary 变体只填一层 --default、不画边框，
+   放在同样是灰底的条上（本地文件的批量栏 = surface-secondary）两者只差一点亮度，方框整个隐形。
+   补一圈描边，底色改成输入框底色，亮暗三套配色下都看得清 */
+.checkbox--secondary:not([data-selected='true']):not([data-indeterminate='true']) .checkbox__control {
+  background-color: var(--field-background);
+  box-shadow: inset 0 0 0 1.5px var(--border-tertiary);
+}
+.checkbox--secondary:not([data-selected='true']):not([data-indeterminate='true']):hover .checkbox__control {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
 
 /* ---- Modal：Overlay 与 Content 是兄弟节点，各自按 data-state 播进出场 ---- */
 .modal__backdrop {

@@ -44,7 +44,7 @@ const routes: RouteRecordRaw[] = [
         path: 'sync',
         name: 'sync',
         component: () => import('@/pages/SyncPage.vue'),
-        meta: { title: 'Strm 管理', desc: 'STRM 配置 / 全量同步 / 增量同步', icon: 'sync' },
+        meta: { title: 'Strm 管理', desc: '同步状态 / STRM 配置 / 全量 · 增量 · 深度删除', icon: 'sync' },
       },
       {
         path: 'organize',

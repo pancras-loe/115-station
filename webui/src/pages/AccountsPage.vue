@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
-import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
-import { ChevronRight, FolderPlus, QrCode, ShieldCheck } from '@lucide/vue'
+import { Info, QrCode, ShieldCheck } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import MeterBar from '@/components/ui/MeterBar.vue'
+import AccountHero from '@/components/accounts/AccountHero.vue'
+import WorkspaceCard, { type WsSlot } from '@/components/accounts/WorkspaceCard.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import LocalPathInput from '@/components/LocalPathInput.vue'
@@ -20,7 +19,6 @@ import { useFullSetting } from '@/pages/strm/fullSetting'
 import { plainProps } from '@/utils/autofill'
 import { DEVICE_OPTIONS } from '@/types/storage'
 import type { StorageCheck } from '@/types/storage'
-import { bytes } from '@/utils/format'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message, dialog } = useFeedback()
@@ -55,10 +53,10 @@ watch(
 )
 
 /**
- * 还没配置的工作目录（转存 / 待整理 / 已存在 / 冗余）。
- * 四个都配好了就不显示一键创建；媒体库没保存时后端会拒绝，按钮也不出。
+ * 工作目录（转存 / 待整理 / 已存在 / 冗余）的现状，连同媒体库一起在「工作目录」卡里列出来。
+ * 路径只为显示而存（*_path / folder_path）；没存路径的老配置退回显示 cid。
  */
-const missingWs = ref<string[]>([])
+const wsRaw = ref<{ org: Record<string, string>; share: Record<string, string> } | null>(null)
 const creatingWs = ref(false)
 
 async function loadMissingWs() {
@@ -67,16 +65,34 @@ async function loadMissingWs() {
       configApi.getSetting<Record<string, string>>('org-basic', {}),
       configApi.getSetting<Record<string, string>>('share', {}),
     ])
-    const out: string[] = []
-    if (!share.folder) out.push('转存')
-    if (!org.pending) out.push('待整理')
-    if (!org.existing) out.push('已存在')
-    if (!org.redundant) out.push('冗余')
-    missingWs.value = out
+    wsRaw.value = { org, share }
   } catch {
-    missingWs.value = []
+    wsRaw.value = null
   }
 }
+
+const wsSlots = computed<WsSlot[]>(() => {
+  const org = wsRaw.value?.org ?? {}
+  const share = wsRaw.value?.share ?? {}
+  const lib = media.saved.value
+  const slot = (key: WsSlot['key'], cid?: string, path?: string): WsSlot => ({
+    key,
+    configured: !!cid && cid !== '0',
+    path: path || (cid ? `cid ${cid}` : ''),
+  })
+  return [
+    slot('library', lib.cid, lib.cid_path),
+    slot('share', share.folder, share.folder_path),
+    slot('pending', org.pending, org.pending_path),
+    slot('existing', org.existing, org.existing_path),
+    slot('redundant', org.redundant, org.redundant_path),
+  ]
+})
+const LABELS: Record<string, string> = { share: '转存', pending: '待整理', existing: '已存在', redundant: '冗余' }
+/** 媒体库以外还缺的；媒体库没保存时后端会拒绝一键创建，按钮也不出 */
+const missingWs = computed(() =>
+  wsRaw.value ? wsSlots.value.filter((s) => s.key !== 'library' && !s.configured).map((s) => LABELS[s.key]) : [],
+)
 
 async function createWs() {
   const ok = await dialog.confirm({
@@ -111,6 +127,8 @@ const form = ref({
 })
 
 const account = ref<StorageCheck | null>(null)
+/** 首次静默检测还没回来：账号卡显示骨架，而不是先闪一下「未绑定」 */
+const accountLoading = ref(true)
 const checking = ref(false)
 const saving = ref(false)
 const qrShow = ref(false)
@@ -119,31 +137,6 @@ const qrShow = ref(false)
 const qrChannel = computed<'openapi' | 'cookie'>(() =>
   form.value.openapi_enabled && form.value.app_id.trim() ? 'openapi' : 'cookie',
 )
-
-const usedPct = computed(() => {
-  const a = account.value
-  if (!a?.total_size) return 0
-  return Math.min(100, ((a.used_size ?? 0) / a.total_size) * 100)
-})
-
-const vipLabel = computed(() => {
-  const a = account.value
-  if (!a) return '-'
-  if (a.vip_forever === 1 || a.vip_forever === true) return '终身会员'
-  if ((a.vip ?? 0) > 0) {
-    return a.vip_expire && a.vip_expire > 0
-      ? `会员，到期 ${new Date(a.vip_expire * 1000).toLocaleDateString('zh-CN')}`
-      : '会员'
-  }
-  return '非会员'
-})
-
-const vipBadge = computed(() => {
-  const a = account.value
-  if (!a) return null
-  if (a.vip_forever === 1 || a.vip_forever === true) return '终身VIP'
-  return (a.vip ?? 0) > 0 ? 'VIP' : null
-})
 
 async function load() {
   try {
@@ -164,6 +157,8 @@ async function load() {
     if (chk?.valid) account.value = chk
   } catch {
     // 列表拿不到就保持默认表单，不打断页面
+  } finally {
+    accountLoading.value = false
   }
 }
 
@@ -243,7 +238,6 @@ function reset() {
     openapi_enabled: false,
     app_id: '',
   }
-  account.value = null
   message.info('配置已重置（尚未保存）')
 }
 
@@ -255,154 +249,115 @@ onMounted(() => {
 
 <template>
   <div class="page">
-    <SectionCard title="115 账号" hint="扫码绑定 · 通道与风控参数">
-      <FieldRow
-        label="Cookie 路径"
-        tip="指定 115 Cookie 文件路径，扫码登录后自动写入该文件。"
-      >
-        <div class="h-field-row">
-          <HInput v-model="form.cookie_path" placeholder="/config/115-cookies.txt" :input-attrs="plainProps('acc-cookie-path')" />
-          <HButton variant="secondary" :loading="checking" @click="check">
-            <template #icon><ShieldCheck :size="15" /></template>
-            检测可用性
-          </HButton>
-        </div>
-      </FieldRow>
+    <AccountHero
+      :account="account"
+      :loading="accountLoading"
+      :checking="checking"
+      @check="check"
+      @scan="qrShow = true"
+    />
 
-      <FieldRow
-        label="Cookie 设备"
-        tip="网页端 Cookie 与 115Browser UA 配套，兼容性最好（默认推荐）。App 端 Cookie 有设备槽位校验，与桌面 UA 不匹配会报“服务器开小差”。避免选常用设备导致被挤下线。"
-      >
-        <div class="h-field-row">
-          <HSelect v-model="form.device" :options="DEVICE_OPTIONS" />
-          <HButton variant="primary" @click="qrShow = true">
-            <template #icon><QrCode :size="15" /></template>
-            二维码登录
-          </HButton>
-        </div>
-      </FieldRow>
-
-      <FieldRow
-        label="启用 OPENAPI"
-        tip="需先在 115 开放平台（open.115.com）申请应用拿到 AppID。没有 AppID 请保持「禁用」——Cookie 通道功能完整，且全量同步可用「快速模式」。"
-      >
-        <HSegmented v-model="form.openapi_enabled" :options="[{ label: '启用', value: true }, { label: '禁用（默认）', value: false }]" />
-      </FieldRow>
-
-      <FieldRow
-        v-if="form.openapi_enabled"
-        label="开放平台 AppID"
-        required
-        tip="在 115 开放平台（open.115.com）申请应用后获取。填入后点击“保存并扫码授权”，用 115 App 扫码完成 OAuth 授权。"
-      >
-        <div class="h-field-row">
-          <HInput v-model="form.app_id" placeholder="请输入 115 开放平台 AppID" :input-attrs="plainProps('acc-open-app-id')" />
-          <HButton variant="secondary" @click="saveAndScan">保存并扫码授权</HButton>
-        </div>
-      </FieldRow>
-
-      <FieldRow
-        label="API 请求间隔"
-        tip="设置 API 请求间隔可以减少风控概率。读接口默认 1s，写接口建议 ≥3s。"
-      >
-        <HNumberInput v-model="form.interval" :min="0.5" :step="0.5" style="width: 150px">
-          <template #suffix>秒</template>
-        </HNumberInput>
-      </FieldRow>
-
-      <FormActions>
-        <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
-        <HButton variant="tertiary" @click="reset">重置配置</HButton>
-      </FormActions>
-    </SectionCard>
-
-    <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
-      <HAlert status="accent" class="media-note">
-        此处是全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共同使用的统一位置配置。
-      </HAlert>
-
-      <FieldRow
-        label="115 媒体库目录"
-        required
-        tip="全量同步、增量同步、整理入库与洗版判定共同锚定此目录。"
-      >
-        <Cid115Input ref="cidInput" v-model="cidValue" />
-      </FieldRow>
-
-      <HAlert status="warning" v-if="media.saved.value.cid && missingWs.length" class="ws-note">
-        <div class="ws-row">
-          <span>
-            还没有配置{{ missingWs.join('、') }}目录。它们与媒体库目录必须互不包含，
-            可一键在网盘根目录下创建 /StrmStation 统一存放。
-          </span>
-          <HButton variant="secondary" size="sm" :loading="creatingWs" @click="createWs">
-            <template #icon><FolderPlus :size="15" /></template>
-            一键创建
-          </HButton>
-        </div>
-      </HAlert>
-
-      <FieldRow
-        label="本地媒体库根目录"
-        required
-        tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
-      >
-        <LocalPathInput v-model="media.model.value.local_path" />
-      </FieldRow>
-
-      <FormActions>
-        <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
-      </FormActions>
-    </SectionCard>
-
-    <SectionCard v-if="account" title="账号状态">
-      <div class="acc">
-        <div class="acc-avatar">
-          <img v-if="account.avatar" :src="account.avatar" alt="" />
-          <span v-else>115</span>
-        </div>
-
-        <div class="acc-body">
-          <div class="acc-head">
-            <span class="acc-name">{{ account.username || '-' }}</span>
-            <HChip color="warning" v-if="vipBadge">{{ vipBadge }}</HChip>
-            <span class="acc-channel">通道：{{ account.channel || 'Cookie' }}</span>
-          </div>
-
-          <dl class="acc-meta">
-            <div><dt>UID</dt><dd>{{ account.user_id ?? '-' }}</dd></div>
-            <div><dt>会员</dt><dd>{{ vipLabel }}</dd></div>
-            <div><dt>容量</dt><dd>{{ account.capacity || '-' }}</dd></div>
-          </dl>
-
-          <template v-if="account.total_size">
-            <MeterBar :percent="usedPct" />
-            <div class="acc-usage">
-              已用 {{ usedPct.toFixed(1) }}% · {{ bytes(account.used_size) }} /
-              {{ bytes(account.total_size) }}
+    <div class="cols">
+      <!-- ==== 左：连接设置 + 媒体库位置（都是表单） ==== -->
+      <div class="col">
+        <SectionCard title="连接设置" hint="Cookie 文件 · 登录设备 · 开放平台 · 风控间隔" class="col-conn">
+          <FieldRow
+            label="Cookie 路径"
+            tip="指定 115 Cookie 文件路径，扫码登录后自动写入该文件。"
+          >
+            <div class="h-field-row">
+              <HInput v-model="form.cookie_path" placeholder="/config/115-cookies.txt" :input-attrs="plainProps('acc-cookie-path')" />
+              <HButton variant="secondary" :loading="checking" @click="check">
+                <template #icon><ShieldCheck :size="15" /></template>
+                检测
+              </HButton>
             </div>
-          </template>
+          </FieldRow>
 
-          <!-- 原生 details：展开收起不需要任何脚本，键盘和读屏也天然可用 -->
-          <details v-if="account.devices?.length" class="acc-devices">
-            <summary class="acc-devices-sum">
-              <ChevronRight :size="15" class="acc-devices-chev" />
-              登录设备（{{ account.devices.length }}）
-            </summary>
-            <div class="acc-devices-list">
-              <div v-for="(d, i) in account.devices" :key="i" class="dev">
-                <span class="dev-dot" :class="{ current: d.is_current }" />
-                <span class="dev-name">{{ d.name || d.device || '未知设备' }}</span>
-                <span class="dev-ip">{{ d.ip }}{{ d.city ? `（${d.city}）` : '' }}</span>
-                <span class="dev-time">
-                  {{ d.utime && d.utime > 0 ? new Date(d.utime * 1000).toLocaleString('zh-CN') : '' }}
-                </span>
-              </div>
+          <FieldRow
+            label="Cookie 设备"
+            tip="网页端 Cookie 与 115Browser UA 配套，兼容性最好（默认推荐）。App 端 Cookie 有设备槽位校验，与桌面 UA 不匹配会报“服务器开小差”。避免选常用设备导致被挤下线。"
+          >
+            <div class="h-field-row">
+              <HSelect v-model="form.device" :options="DEVICE_OPTIONS" />
+              <HButton variant="secondary" @click="qrShow = true">
+                <template #icon><QrCode :size="15" /></template>
+                扫码登录
+              </HButton>
             </div>
-          </details>
-        </div>
+          </FieldRow>
+
+          <FieldRow
+            label="启用 OPENAPI"
+            tip="需先在 115 开放平台（open.115.com）申请应用拿到 AppID。没有 AppID 请保持「禁用」——Cookie 通道功能完整，且全量同步可用「快速模式」。"
+          >
+            <HSegmented v-model="form.openapi_enabled" :options="[{ label: '启用', value: true }, { label: '禁用（默认）', value: false }]" />
+          </FieldRow>
+
+          <FieldRow
+            v-if="form.openapi_enabled"
+            label="开放平台 AppID"
+            required
+            tip="在 115 开放平台（open.115.com）申请应用后获取。填入后点击“保存并扫码授权”，用 115 App 扫码完成 OAuth 授权。"
+          >
+            <div class="h-field-row">
+              <HInput v-model="form.app_id" placeholder="请输入 115 开放平台 AppID" :input-attrs="plainProps('acc-open-app-id')" />
+              <HButton variant="secondary" @click="saveAndScan">保存并扫码授权</HButton>
+            </div>
+          </FieldRow>
+
+          <FieldRow
+            label="API 请求间隔"
+            tip="设置 API 请求间隔可以减少风控概率。读接口默认 1s，写接口建议 ≥3s。"
+          >
+            <HNumberInput v-model="form.interval" :min="0.5" :step="0.5" style="width: 150px">
+              <template #suffix>秒</template>
+            </HNumberInput>
+          </FieldRow>
+
+          <FormActions>
+            <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
+            <HButton variant="tertiary" @click="reset">重置配置</HButton>
+          </FormActions>
+        </SectionCard>
+
+        <SectionCard title="媒体库位置" hint="115 源目录 → 本地 STRM 根目录">
+          <p class="media-note">
+            <Info :size="14" />全量同步、增量同步、自动整理、影视刮削和 Emby 路径映射共用这一处位置配置。
+          </p>
+
+          <FieldRow
+            label="115 媒体库目录"
+            required
+            tip="全量同步、增量同步、整理入库与洗版判定共同锚定此目录。"
+          >
+            <Cid115Input ref="cidInput" v-model="cidValue" />
+          </FieldRow>
+
+          <FieldRow
+            label="本地媒体库根目录"
+            required
+            tip="STRM、字幕、NFO 与图片的统一本地保存根目录，也是影视刮削使用的根目录。"
+          >
+            <LocalPathInput v-model="media.model.value.local_path" />
+          </FieldRow>
+
+          <FormActions>
+            <HButton variant="primary" :loading="media.saving.value" @click="saveMedia">保存媒体库位置</HButton>
+          </FormActions>
+        </SectionCard>
       </div>
-    </SectionCard>
+
+      <!-- ==== 右：工作目录一览（宽屏吸顶，左边表单滚动时一直看得见） ==== -->
+      <div class="col col-side">
+        <WorkspaceCard
+          :slots="wsSlots"
+          :can-create="!!media.saved.value.cid && missingWs.length > 0"
+          :creating="creatingWs"
+          @create="createWs"
+        />
+      </div>
+    </div>
 
     <QrLoginModal
       v-model:show="qrShow"
@@ -421,152 +376,43 @@ onMounted(() => {
   gap: 16px;
 }
 
-.acc {
-  display: flex;
-  gap: 16px;
-}
-.media-note {
-  margin-bottom: 12px;
-}
-.ws-note {
-  margin-bottom: 12px;
-}
-.ws-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.ws-row > span {
-  flex: 1;
-  min-width: 200px;
-}
-.acc-avatar {
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  overflow: hidden;
+/* ---- 两栏：左连接设置，右媒体库与工作目录 ---- */
+.cols {
   display: grid;
-  place-items: center;
-  background: var(--c-primary-soft);
-  color: var(--c-primary);
-  font-size: 13px;
-  font-weight: 700;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
 }
-.acc-avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.acc-body {
-  flex: 1;
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   min-width: 0;
 }
-.acc-head {
+.col-side {
+  position: sticky;
+  top: calc(68px + 16px);
+}
+.media-note {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.acc-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--c-text-1);
-}
-.acc-channel {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--c-text-3);
-}
-
-.acc-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 26px;
-  margin: 0 0 12px;
-}
-.acc-meta > div {
-  display: flex;
+  align-items: flex-start;
   gap: 6px;
-  font-size: 13px;
-}
-.acc-meta dt {
-  color: var(--c-text-3);
-}
-.acc-meta dd {
-  margin: 0;
-  color: var(--c-text-1);
-}
-
-.acc-usage {
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--c-text-3);
-}
-
-.acc-devices {
-  margin-top: 12px;
-}
-.dev {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 12px;
-  color: var(--c-text-2);
-}
-.dev-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--c-text-4);
-}
-.dev-dot.current {
-  background: var(--c-success);
-}
-.dev-name {
-  font-weight: 500;
-  color: var(--c-text-1);
-}
-.dev-ip {
-  color: var(--c-text-3);
-}
-.dev-time {
-  margin-left: auto;
-  color: var(--c-text-3);
-  font-variant-numeric: tabular-nums;
-}
-
-@media (max-width: 720px) {
-  .dev-time {
-    display: none;
-  }
-}
-.acc-devices-sum {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 0;
-  list-style: none;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--foreground);
-}
-.acc-devices-sum::-webkit-details-marker {
-  display: none;
-}
-.acc-devices-chev {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--muted);
-  transition: transform 150ms ease;
 }
-.acc-devices[open] .acc-devices-chev {
-  transform: rotate(90deg);
+.media-note :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 3px;
 }
-.acc-devices-list {
-  padding: 4px 0 4px 21px;
+
+@media (max-width: 1280px) {
+  .cols {
+    grid-template-columns: 1fr;
+  }
+  .col-side {
+    position: static;
+  }
 }
 </style>

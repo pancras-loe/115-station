@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import HAlert from '@/components/hero/HAlert.vue'
+import { Info } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
@@ -141,14 +141,13 @@ async function saveChecked() {
 
 <template>
   <SectionCard title="AI 增强识别" hint="TMDB 识别失败时的兜底">
-    <HAlert status="accent" class="note">
-      规则识别全部落空时的最后一环：先把原始文件名和所在目录交给大模型，让它说出片名、年份、类型和季集再搜
-      TMDB；还搜不中，就把 TMDB 搜到的几个候选交给它挑。每个条目最多调用两次。接口按 OpenAI
-      协议标准调用：地址即各家文档里给的 base_url，后面追加 <code>/chat/completions</code>。
-      DeepSeek、硅基流动、Ollama、vLLM 等兼容实现都能直接填。
-    </HAlert>
+    <!-- 原来是一整块提示框；收成一行，细节进「启用」的问号 -->
+    <p class="lead">
+      <Info :size="14" />
+      <span>规则识别全部落空时才调用大模型（每个条目最多两次），OpenAI 兼容接口都能填：DeepSeek、硅基流动、Ollama、vLLM…</span>
+    </p>
 
-    <FieldRow label="启用" tip="关闭后整理流程完全不碰模型接口，下面填好的配置原样留着，随时能开回来。开启时保存会先校验三项必填与接口连通性，通不过不落库。">
+    <FieldRow label="启用" tip="规则识别全部落空时的最后一环：先把原始文件名和所在目录交给大模型，让它说出片名、年份、类型和季集再搜 TMDB；还搜不中，就把 TMDB 搜到的几个候选交给它挑。接口按 OpenAI 协议调用：地址即各家文档里给的 base_url，后面追加 /chat/completions。关闭后整理流程完全不碰模型接口，下面填好的配置原样留着。开启时保存会先校验三项必填与接口连通性，通不过不落库。">
       <HSwitch v-model="model.enabled" />
     </FieldRow>
     <FieldRow :required="model.enabled" :error="errorOf('url')" label="API 地址" tip="填各家文档给的 base_url：DeepSeek 是 https://api.deepseek.com，OpenAI 是 https://api.openai.com/v1（/v1 属于地址的一部分，这里不会替你猜）。填整条完整路径也认。">
@@ -183,10 +182,12 @@ async function saveChecked() {
         <template #suffix>分</template>
       </HNumberInput>
     </FieldRow>
-    <HAlert status="default" v-if="model.confirm_mode !== 'off'" class="note">
-      「基础配置 → 人工确认」打开时，所有识别结果本来就都要确认，这里的设置不改变那一点。
-      因 AI 判定停下的条目，关掉那个开关后也不会被自动整理接手，仍然等你处理。
-    </HAlert>
+    <p v-if="model.confirm_mode !== 'off'" class="lead lead-sub">
+      <Info :size="14" />
+      <span>
+        「基础配置 → 人工确认」打开时所有识别结果本来就要确认；因 AI 判定停下的条目，关掉那个开关后也不会被自动整理接手，仍然等你处理。
+      </span>
+    </p>
 
     <FormActions>
       <HButton variant="primary" :loading="checking || saving" :disabled="testing" @click="saveChecked">
@@ -200,10 +201,20 @@ async function saveChecked() {
 </template>
 
 <style scoped>
-.note {
-  margin-bottom: 12px;
+.lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
 }
-.note code {
-  font-size: 0.92em;
+.lead :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+.lead-sub {
+  margin: -4px 0 8px;
 }
 </style>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { Info } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
@@ -90,7 +91,8 @@ onMounted(read)
       </div>
     </template>
 
-    <HAlert status="accent" class="note">{{ note }}</HAlert>
+    <!-- 说明原来是一整块强调色提示框，编辑器被往下推；收成一行灰字 -->
+    <p class="lead"><Info :size="14" /><span>{{ note }}</span></p>
     <HAlert status="warning" v-if="kind === 'wash' && !loading && !yaml.trim()" class="note">
       策略为空时不做版本比较或替换。编辑后请保存，保存后立即生效；重启不会恢复默认策略。
     </HAlert>
@@ -158,6 +160,19 @@ onMounted(read)
 }
 .note {
   margin-bottom: 12px;
+}
+.lead {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.lead :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 4px;
 }
 .yr-skeleton {
   height: 460px;

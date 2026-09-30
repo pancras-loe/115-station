@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
+import { ChevronRight, Info, Play } from '@lucide/vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import FormActions from '@/components/ui/FormActions.vue'
 import CronField from '@/components/ui/CronField.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import { configApi, organizeApi } from '@/api'
@@ -221,6 +221,23 @@ async function runOrganize() {
     running.value = false
   }
 }
+
+/** 流水线各步：一行画出来，比原来一段话描述「识别 → 二级分类 → …」好扫 */
+const PIPELINE = ['识别', '二级分类', '洗版', '重命名', '搬入媒体库', '写 STRM', '刮削', '刷新 Emby']
+
+/**
+ * 什么时候会整理。原来是一整块常驻的提示框（六条 + 两段话），把配置项挤到折叠线以下；
+ * 收进默认折起的 details。内容按 2026-09 入队改造后的真实行为写（AGENTS.md §6.12）：
+ * 所有触发都只入任务队列，排着就不会丢 —— 原文里「每分钟重试补上」「5 分钟冷却」已随改造删除
+ */
+const TRIGGERS: { name: string; text: string }[] = [
+  { name: '定时', text: '上面的 cron 到点入队，扫待整理目录（顺带扫一次转存目录）；留空只是不定时跑，其余触发照常' },
+  { name: '手动', text: '下面的「开始整理」，扫的目录同上；排队时优先于后台任务' },
+  { name: '机器人', text: '给企微 / TG 机器人发「整理」，和手动一样' },
+  { name: '转存完成', text: '影视转存（含机器人找资源）的分享转存成功后入队' },
+  { name: '离线下载', text: '离线任务下载完成后入队（同时发完成通知）' },
+  { name: '守望者', text: '每分钟看一眼转存目录，有内容就接管，兜住上面两种扑空的情况' },
+]
 </script>
 
 <template>
@@ -234,94 +251,141 @@ async function runOrganize() {
       <div class="alert-action"><HButton variant="tertiary" size="sm" :loading="checkingTmdb" @click="checkTmdb">重新检查</HButton></div>
     </HAlert>
 
-    <SectionCard title="基础配置" hint="整理引擎的工作目录与定时">
-      <HAlert status="warning" class="note">
-        自动整理前必须先创建好二级分类策略，并完成一次全量同步。
-      </HAlert>
+    <div class="grid">
+      <!-- ==== 左：怎么跑 ==== -->
+      <SectionCard title="运行方式" hint="人工确认与定时；每次整理都走同一条流水线">
+        <ol class="pipe" aria-label="整理流水线">
+          <li v-for="(s, i) in PIPELINE" :key="s" :class="{ 'is-stop': model.manual_confirm && i === 0 }">
+            {{ s }}<ChevronRight v-if="i < PIPELINE.length - 1" :size="12" class="pipe-arrow" />
+          </li>
+        </ol>
+        <p v-if="model.manual_confirm" class="pipe-note">人工确认已开：识别之后停下，等你在整理记录里确认再往下走</p>
 
-      <FieldRow v-for="d in DIRS" :key="d.key" :label="d.label" :tip="d.tip">
-        <Cid115Input
-          :ref="(el) => (inputs[d.key] = el as never)"
-          v-model="cids[d.key]"
-          placeholder="115 目录 cid"
-        />
-      </FieldRow>
+        <FieldRow
+          label="人工确认"
+          tip="打开后整理识别完就停下：条目原地留在待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
+        >
+          <div class="switch-row">
+            <HSwitch v-model="model.manual_confirm" />
+            <span class="switch-hint">
+              {{ model.manual_confirm ? '识别完先停在「待确认」，确认后才入库' : '识别完直接入库（全自动）' }}
+            </span>
+          </div>
+        </FieldRow>
 
-      <FieldRow
-        label="人工确认"
-        tip="打开后整理识别完就停下：条目原地留在待整理目录，显示在「整理记录 → 待确认」里。确认识别结果，或用 TMDB ID / 片名重新指定后，才继续洗版、重命名、搬移入库、写 STRM 和刮削。没识别出来的也会停在那里等你指定，不再直接移进冗余。"
-      >
-        <div class="switch-row">
-          <HSwitch v-model="model.manual_confirm" />
-          <span class="switch-hint">
-            {{
-              model.manual_confirm
-                ? '识别完先停在「整理记录 → 待确认」，确认后才入库'
-                : '识别完直接入库（全自动）'
-            }}
+        <FieldRow
+          label="自动整理 Cron"
+          tip="标准 5 字段 cron（分 时 日 月 周）。它只负责「到点跑一遍」，留空不影响转存完成、离线下载、守望者这些即时触发。"
+        >
+          <CronField v-model="cron" placeholder="*/10 8-23 * * *" />
+        </FieldRow>
+
+        <!-- 原生 details：展开收起不需要脚本，键盘和读屏也天然可用 -->
+        <details class="more">
+          <summary><ChevronRight :size="14" class="more-chev" />什么时候会整理（6 种触发）</summary>
+          <ul class="triggers">
+            <li v-for="t in TRIGGERS" :key="t.name"><b>{{ t.name }}</b><span>{{ t.text }}</span></li>
+          </ul>
+          <p class="more-foot">
+            后三种走同一个「转存触发」任务：扫转存目录（没配才退回待整理目录），整理完再跑一轮增量同步，
+            几路同时触发会合并成一个。所有触发都只进任务队列，和同步、深删排同一条队，同一时刻只跑一个，排着不会丢。
+          </p>
+        </details>
+      </SectionCard>
+
+      <!-- ==== 右：在哪些目录之间搬 ==== -->
+      <SectionCard title="工作目录" hint="整理从待整理目录取素材，按结果搬到媒体库 / 已存在 / 冗余">
+        <FieldRow v-for="d in DIRS" :key="d.key" :label="d.label" :tip="d.tip">
+          <Cid115Input
+            :ref="(el) => (inputs[d.key] = el as never)"
+            v-model="cids[d.key]"
+            placeholder="115 目录 cid"
+          />
+        </FieldRow>
+        <p class="dir-note">
+          <Info :size="14" />
+          <span>
+            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」，转存目录在「<RouterLink :to="{ name: 'media-transfer', query: { tab: 'link' } }">影视转存 → 链接转存</RouterLink>」。
+            第一次用之前，先配好二级分类策略并跑一次全量同步。
           </span>
-        </div>
-      </FieldRow>
-
-      <FieldRow
-        label="自动整理 Cron"
-        tip="标准 5 字段 cron（分 时 日 月 周）。它只负责「到点跑一遍」，留空不影响下面列出的即时触发。"
-      >
-        <CronField v-model="cron" placeholder="*/10 8-23 * * *" />
-      </FieldRow>
-
-      <HAlert status="accent" class="note-top" title="自动整理的六种触发方式">
-        <p class="al-p">
-          不管哪种触发，跑的都是同一条流水线：识别 → 二级分类 → 洗版 → 重命名 → 搬入媒体库 →
-          写 STRM / 下字幕封面 → 刮削 → 刷新 Emby。区别只在<strong>什么时候开始</strong>和<strong>扫哪个目录</strong>。
-          打开「人工确认」后，流水线在识别之后停下，等你在整理记录里确认才接着走。
         </p>
-        <ul class="al-ul">
-          <li>
-            <strong>定时</strong> —— 上面这条 cron，到点扫<strong>待整理目录</strong>（顺带扫一次转存目录）。
-            留空只是不再定时跑，下面五种照常工作
-          </li>
-          <li><strong>手动</strong> —— 下面的「开始整理」按钮，扫的目录同上</li>
-          <li>
-            <strong>转存完成</strong> —— 影视转存（含机器人）的分享转存成功后，3 秒后立即开整
-          </li>
-          <li>
-            <strong>离线下载</strong> —— 提交后 10 秒先探一次
-            （115 秒传命中说明文件已到位，当场整理），没命中 60 秒后再试；
-            任务真正下载完成时，离线监视器会再触发一次（同时发完成通知）
-          </li>
-          <li>
-            <strong>守望者兜底</strong> —— 每分钟看一眼转存目录，有内容且没有别的任务在跑就接管。
-            下载完成时间不可控，上面那两次探测扑空时靠它接住，下载完成后约 1 分钟内必被处理（5 分钟冷却）
-          </li>
-          <li><strong>企微机器人</strong> —— 给机器人发「整理」，或点底部菜单的「自动整理」</li>
-        </ul>
-        <p class="al-p">
-          后三种扫的是<strong>转存目录</strong>（没配转存目录才退回待整理目录），并且整理完会顺手跑一次
-          增量同步收尾。整理、增量、全量共用一把任务锁，同一时刻只跑一个；cron 命中时撞上别的任务
-          不会整轮丢掉，会在之后每分钟重试直到补上。
-        </p>
-      </HAlert>
+      </SectionCard>
+    </div>
 
-      <FormActions>
-        <HButton variant="primary" :loading="saving" @click="saveAll">保存配置</HButton>
-        <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
-        <HButton variant="primary" v-if="tmdbReady === false" @click="configureTmdb">配置 TMDB 后开始整理</HButton>
-        <HButton variant="tertiary" v-else-if="tmdbReady === null || checkingTmdb" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</HButton>
-        <HPopconfirm v-else-if="!dirty" @confirm="void runOrganize()" danger :disabled="busy">
-<HButton variant="danger-soft" :disabled="busy" :loading="running">开始整理</HButton>
-<template #content>{{ runHint }}</template>
-</HPopconfirm>
-        <HButton variant="danger-soft" v-else :disabled="busy" :loading="running" @click="void runOrganize()">
+    <!-- 两张卡共用一次保存；「开始整理」挨着保存放，改过没保存时整条高亮 -->
+    <div class="save-bar" :class="{ 'is-dirty': dirty }">
+      <span class="save-note">{{ dirty ? '有未保存的改动' : '整理会扫描待整理目录并搬移网盘文件' }}</span>
+      <HButton variant="primary" v-if="tmdbReady === false" size="sm" @click="configureTmdb">配置 TMDB 后开始整理</HButton>
+      <HButton variant="tertiary" v-else-if="tmdbReady === null || checkingTmdb" size="sm" :loading="checkingTmdb" @click="checkTmdb">检查 TMDB 配置</HButton>
+      <!-- 改过没保存时走 runOrganize 里的确认框，那里已经问过一次，别再叠一层 popconfirm -->
+      <HPopconfirm v-else-if="!dirty" @confirm="void runOrganize()" danger :disabled="busy">
+        <HButton variant="danger-soft" size="sm" :disabled="busy" :loading="running">
+          <template #icon><Play :size="14" /></template>
           开始整理
         </HButton>
-      </FormActions>
-    </SectionCard>
+        <template #content>{{ runHint }}</template>
+      </HPopconfirm>
+      <HButton variant="danger-soft" v-else size="sm" :disabled="busy" :loading="running" @click="void runOrganize()">
+        <template #icon><Play :size="14" /></template>
+        开始整理
+      </HButton>
+      <HButton variant="primary" size="sm" :loading="saving" @click="saveAll">保存配置</HButton>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.alert-action { margin-top: 12px; }
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.alert-action {
+  margin-top: 12px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* ---- 流水线 ---- */
+.pipe {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface-secondary);
+  list-style: none;
+}
+.pipe li {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+.pipe li.is-stop {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning-soft-foreground);
+  font-weight: 500;
+}
+.pipe-arrow {
+  color: var(--muted);
+}
+.pipe-note {
+  margin: -8px 0 12px;
+  font-size: 12px;
+  color: var(--warning-soft-foreground);
+}
+
 .switch-row {
   display: flex;
   align-items: center;
@@ -330,32 +394,116 @@ async function runOrganize() {
 }
 .switch-hint {
   font-size: 12.5px;
-  color: var(--c-text-3);
+  color: var(--muted);
 }
-.note-top {
-  margin: 4px 0 12px;
+
+/* ---- 触发方式（默认折起） ---- */
+.more {
+  margin-top: 6px;
+  border-top: 1px solid var(--separator);
+  padding-top: 10px;
 }
-.al-p {
-  margin: 0;
-  line-height: 1.85;
-}
-.al-ul {
-  margin: 8px 0;
-  padding-left: 18px;
-  line-height: 1.85;
-}
-.al-ul li + li {
-  margin-top: 4px;
-}
-.al-p + .al-p {
-  margin-top: 8px;
-}
-.stack {
+.more summary {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
 }
-.note {
-  margin-bottom: 12px;
+.more summary::-webkit-details-marker {
+  display: none;
+}
+.more summary:hover {
+  color: var(--foreground);
+}
+.more-chev {
+  transition: transform 150ms ease;
+}
+.more[open] .more-chev {
+  transform: rotate(90deg);
+}
+.triggers {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.triggers li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 0;
+}
+.triggers b {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.triggers span {
+  color: var(--muted);
+}
+.more-foot {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---- 目录说明 ---- */
+.dir-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.dir-note :deep(svg) {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.dir-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.dir-note a:hover {
+  text-decoration: underline;
+}
+
+/* ---- 保存条 ---- */
+.save-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.save-bar.is-dirty {
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
+}
+.save-note {
+  margin-right: auto;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.is-dirty .save-note {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+@media (max-width: 1280px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
