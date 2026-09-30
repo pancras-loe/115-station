@@ -13,6 +13,7 @@ import TaskQueuePanel from '@/components/TaskQueuePanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useQueueStore } from '@/stores/queue'
 import { refreshRecordStats } from '@/stores/recordStats'
+import { displayVersion, refreshUpdateStatus } from '@/stores/update'
 import { systemApi } from '@/api'
 
 const route = useRoute()
@@ -34,11 +35,13 @@ const version = ref('')
 onMounted(async () => {
   try {
     const v = await systemApi.version()
-    version.value = v.version ? `v${v.version}` : ''
+    version.value = displayVersion(v.version)
   } catch {
     // 版本号拿不到不影响使用，静默降级
   }
 })
+// 更新检测结果（后端定时查，这里只读缓存）：侧栏底部版本号旁的小点
+onMounted(refreshUpdateStatus)
 
 // 侧栏：默认收成图标栏（悬停浮出），用户点图钉可以固定展开
 const PIN_KEY = 'ui.sidebar.pinned'

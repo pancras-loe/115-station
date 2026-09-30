@@ -22,8 +22,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// buildVersion 构建版本号（main 注入，侧边栏/日志确认运行版本）
-var buildVersion = "dev"
 
 // loginGuardEntry 登录防爆破计数
 type loginGuardEntry struct {
@@ -76,9 +74,6 @@ func loginGuardPass(key string) {
 	delete(loginGuard, key)
 }
 
-// SetVersion 注入构建版本号
-func SetVersion(v string) { buildVersion = v }
-
 func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 注入通知配置读取源（YAML 优先，DB 回退）
 	notifyConfigSource = cfg
@@ -116,6 +111,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	// 任务队列 worker（重新整理 / 确认入库入队后由它串行执行）
 	StartTaskWorker(h)
+	// 更新检测：每 12 小时查一次 GitHub Release，只提示不自更新（update.go）
+	StartUpdateChecker()
 
 	// 媒体卷宽松权限（存量补 chmod，异步）
 	h.RelaxedMediaPerms()
@@ -261,10 +258,12 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/scrape/categories", h.ListCategories)
 		protected.POST("/scrape/categories", h.SaveCategories)
 
-		// 版本号与日志级别
+		// 版本号、更新检测（update.go，只提示不自更新）与日志级别
 		protected.GET("/version", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"version": buildVersion})
+			c.JSON(http.StatusOK, gin.H{"version": buildVersion, "sha": buildSHA})
 		})
+		protected.GET("/system/update", h.GetUpdateStatus)
+		protected.POST("/system/update/check", h.CheckUpdateNow)
 		protected.POST("/system/log-level", func(c *gin.Context) {
 			var req struct {
 				Level string `json:"level"` // simple / verbose

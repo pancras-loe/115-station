@@ -483,7 +483,19 @@ const ROUTES: Record<string, Route> = {
   },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },
-  '/version': { version: '2.4.1-preview' },
+  '/version': { version: 'v1.2.0-3-g9596437', sha: '9596437' },
+  '/system/update/check': () => ROUTES['/system/update'],
+  '/system/update': {
+    current: 'v1.2.0-3-g9596437',
+    latest: 'v1.3.0',
+    has_update: true,
+    comparable: true,
+    notes: ['## What’s Changed', '* 整理记录支持批量重新整理', '* 修复多版本电影海报'].join('\n'),
+    url: 'https://github.com/pancras-loe/115-station/releases/tag/v1.3.0',
+    published_at: new Date(Date.now() - 86400_000).toISOString(),
+    checked_at: new Date().toISOString(),
+    enabled: true,
+  },
   '/dashboard': dashboard,
 }
 

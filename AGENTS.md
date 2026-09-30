@@ -103,7 +103,7 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 | **通知** | `notify.go` `notify_extra.go` `medianotify.go` `wecombot*.go` `wecomcrypto.go` | 企微双向机器人（AES 验签）、TG / 飞书 / OneBot / QQ 官方、入库通知防抖聚合 |
 | **演职人员补全** | `embypeople.go` `personname.go` | 扩展功能里的定时任务（`kind=person`，人物队列，零 115 请求）：按片目列 Emby 的 People，给缺头像 / 名字不是中文的演员、导演、编剧补 TMDB 头像、中文名、中文简介。**一律走 Emby API**（`POST /Items/{id}/Images/Primary` 与整条 DTO 回写 `POST /Items/{id}`，改过的字段加进 `LockedFields`）：Emby 的人物头像在它自己的 `<programdata>/metadata/people/首字母/姓名/`，还在库里记着图片标签，往目录里丢文件不生效。TMDB 人物 id 取人物自带的，否则拿片目 credits（剧集 `aggregate_credits`）**按名字精确对**，歧义就不补；**别改成 `/search/person` 按名字搜**（同名的人太多，认错一次就钉死）。中文名取 zh 翻译 → 中文原名 → 别名，OpenCC 繁转简。`PersonMeta` 缓存 TMDB 人物（刮削写 NFO 演员名也读它，与 Emby 改过的中文名对得上，否则重刮一次 Emby 又按英文名建新人物）；`EmbyPersonMark` 记账没补全的人物（查无结果 30 天、出错 1 天）。片目按加入时间排序，单次上限 / 停止 / 中断时把停下的片目序号存成续扫断点（setting `personfill_cursor`），下次从断点扫到末尾再绕回开头，看满一圈归零。头像、名字列表里就看得出，只缺中文简介的人物另按 id 批量读简介（`embyOverviews`）。**读人物一律走列表查询 `/Items?Ids=`，别改回 `/Users/{uid}/Items/{id}`**：后者对没刷新过的人物会让 Emby 当场去 TMDB 拉元数据，连不上 TMDB 时卡到超时。中文名已被另一个人物条目占用时只补头像不改名。参考 MoviePilot 官方插件 personmeta（只读）。测试 `embypeople_test.go`（假 Emby + 假 TMDB 端到端） |
 | **媒体信息补全** | `metafill.go` | 扩展功能里的定时任务（`kind=metafill`，挂在刮削队列上，不拿 `taskMu`，扫描本身零 115 请求）：本地文件页口径（`localTitlesSnapshot` + `grade`）挑出没刮全的片目，建一个刮削任务（只补缺失、不上传、不探测）；分页读 Emby 条目（`walkLocalEmby`，与卡片快照同一个遍历）挑出缺媒体信息的视频，**按条目点名**（`item:<id>`）建一个**自动规则**的探测任务（`probeJobParams.Auto`）。两道闸：单次上限（片目数 / 视频数，探测按条目点名所以上限是准的）；补刮记账 `MetaFillMark`（按片目 key 记当时缺什么，缺的没变就 30 天内不再刮）。探测不另记账，`EmbyExtractMark` 已经管着。建出的两个任务 id 写进结果的 `follow_jobs`，任务中心那一行两个都显示（`jobFollowsOf`）。前端 `webui/src/components/plugins/MetaFillModal.vue`。测试 `metafill_test.go` |
-| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` `imgcache.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到、**界面图片缓存**（`/tmdb/img` `/poster` `/embyimg` `/local/poster` 共用：落盘 `DATA_DIR/imgcache`、同图并发合并、失败记 5 分钟、60 天未用自动清；拉不到图回 404 让前端 `PosterImage.vue` 显示占位，别再回透明 GIF。界面上的海报一律用 `PosterImage`，TMDB 尺寸按显示宽度约两倍挑） |
+| **其他** | `dashboard.go` `medialib.go` `offline.go` `dllink.go` `covergen.go` `checkin115.go` `imgcache.go` `update.go` | 仪表盘、**媒体库台账校准**、离线下载、**来源链接**（整理记录的「来源」）、媒体库封面生成、115 签到、**界面图片缓存**（`/tmdb/img` `/poster` `/embyimg` `/local/poster` 共用：落盘 `DATA_DIR/imgcache`、同图并发合并、失败记 5 分钟、60 天未用自动清；拉不到图回 404 让前端 `PosterImage.vue` 显示占位，别再回透明 GIF。界面上的海报一律用 `PosterImage`，TMDB 尺寸按显示宽度约两倍挑）、**更新检测**（只提示不自更新，见 §6.7） |
 
 ### 数据模型（`internal/model/model.go`）
 
@@ -155,6 +155,16 @@ docker build -t 115-station:local .
 
 CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构建，不推送），
 产出多架构镜像 `ghcr.io/pancras-loe/115-station`（amd64 + arm64），由 `PUBLISH` 开关控制是否推送。
+打 `v*` tag 时镜像推完再由 `release` job 建 GitHub Release —— 界面的更新检测读的就是它（§6.7）。
+
+发版：
+
+```bash
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+版本号按语义化版本走：只修 bug 升 patch，加功能升 minor，要用户改配置 / 迁数据的破坏性改动升 major。
+版本号不写在任何文件里，git tag 是唯一来源（`checkout` 要 `fetch-depth: 0`，否则 `git describe` 看不到 tag）。
 
 > **关于镜像发布的两个坑**：
 > 1. 登录 ghcr 用的是内置 `secrets.GITHUB_TOKEN` + job 的 `packages: write`，**不要**换回自建 PAT
@@ -219,9 +229,15 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 6. **别用 `gin.Default()`**：它自带的访问日志会让每个 HTTP 请求刷一行，实时日志页会被淹没。
    另：代码里的 `orphan*`（`orphan115.go`、`detect_orphans`、`/sync/orphans`）在界面和日志里一律叫
    **「失效 STRM」**，改这块时别把两套词混进用户可见的文案。
-7. **没有应用内自更新**：这条链路（`selfupdate.go`、`update-finish` 子命令、Docker socket、
-   企微「更 新」菜单、前端更新弹窗）已整条删除。它依赖发布公共镜像，与本仓库的许可证立场
-   冲突。用户更新走 `docker compose pull && docker compose up -d`，**不要再把它加回来**。
+7. **只做更新检测，没有应用内自更新**：自更新链路（`selfupdate.go`、`update-finish` 子命令、Docker socket、
+   企微「更 新」菜单）已整条删除 —— 远程更新要往容器里挂 `/var/run/docker.sock`，后台被攻破一次就等于
+   宿主机 root。用户更新走 `docker compose pull && docker compose up -d`，**不要再把自更新加回来**
+   （Watchtower 之类的外部方案也别往本站里接）。
+   2026-09-30 起有**更新检测**（`update.go`，维护者明确只要到这一层）：版本号 = CI 里 `git describe --tags`
+   注入的 `main.Version`（正式版 `v1.2.0`，两版之间的 master 构建 `v1.2.0-3-gabc1234`，本地构建 `dev`），
+   后台每 12 小时读一次 GitHub `releases/latest`（走全局代理），界面「系统配置 → 版本更新」与侧栏小点提示，
+   可选推一次通知（`update_notified` 记账，同一版本只推一次）。dev / 裸提交号构建不做新旧比较。
+   **发版 = 推一个 `v*` tag**：CI 出镜像后 `release` job 自动建 Release（`--generate-notes`），带 `-` 的 tag 按预发布发、不会提示给用户。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刷 Emby → 本轮片目入刮削队列），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename/delete 以及新建目录（`mkdir` / `ensurePath`，否则 `new_folder` 会触发整目录递归遍历）都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过

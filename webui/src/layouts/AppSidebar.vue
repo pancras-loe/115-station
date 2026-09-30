@@ -4,6 +4,7 @@ import { RouterLink, useRoute } from 'vue-router'
 import { Pin, PinOff } from '@lucide/vue'
 import { navItems } from './navItems'
 import { recordStats } from '@/stores/recordStats'
+import { hasUpdate, updateStatus } from '@/stores/update'
 import BrandMark from '@/components/BrandMark.vue'
 
 /**
@@ -51,6 +52,8 @@ watch(
 
 /** 入口上的角标：任务中心挂「待确认」条数 —— 开着人工确认时，不点进去也要看得见有活 */
 const badges = computed<Record<string, number>>(() => ({ tasks: recordStats.value.awaiting || 0 }))
+/** 只挂小点不带数字的入口：系统配置在有新版本时挂一个（收成图标栏时底部版本号看不见） */
+const dots = computed<Record<string, boolean>>(() => ({ settings: hasUpdate.value }))
 const showPin = computed(() => !!props.docked)
 </script>
 
@@ -85,7 +88,7 @@ const showPin = computed(() => !!props.docked)
         >
           <span class="nav-icon-wrap">
             <component :is="item.icon" :size="18" :stroke-width="1.75" class="nav-icon" />
-            <span v-if="badges[item.name]" class="nav-dot" aria-hidden="true" />
+            <span v-if="badges[item.name] || dots[item.name]" class="nav-dot" aria-hidden="true" />
           </span>
           <span class="nav-label fade">{{ item.label }}</span>
           <span v-if="badges[item.name]" class="nav-badge" :title="`${badges[item.name]} 项待确认`">
@@ -107,7 +110,15 @@ const showPin = computed(() => !!props.docked)
         <component :is="pinned ? PinOff : Pin" :size="15" :stroke-width="1.75" />
       </button>
       <div class="foot-row fade">
-        <span class="foot-version">{{ version || 'StrmStation' }}</span>
+        <RouterLink
+          class="foot-version"
+          :class="{ 'has-update': hasUpdate }"
+          :to="{ name: 'settings', query: { tab: 'update' } }"
+          :title="hasUpdate ? `有新版本 ${updateStatus?.latest}，点击查看` : '版本更新'"
+          @click="emit('navigate')"
+        >
+          {{ version || 'StrmStation' }}<span v-if="hasUpdate" class="update-dot" aria-label="有新版本" />
+        </RouterLink>
         <a class="foot-link" href="https://t.me/+7b_HYMltYMozZTk1" target="_blank" rel="noopener">TG 交流群</a>
       </div>
     </div>
@@ -346,6 +357,24 @@ const showPin = computed(() => !!props.docked)
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: inherit;
+  text-decoration: none;
+}
+.foot-version:hover {
+  color: var(--foreground);
+}
+.foot-version.has-update {
+  color: var(--accent);
+}
+/* 有新版本：版本号后面一个小圆点，不做弹窗打扰 */
+.update-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  vertical-align: middle;
+  border-radius: 50%;
+  background: var(--danger);
 }
 .foot-link {
   flex-shrink: 0;

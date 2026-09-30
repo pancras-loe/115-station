@@ -20,8 +20,6 @@ FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 # buildx 多架构构建时自动注入目标架构（amd64/arm64）
 ARG TARGETARCH
-# CI 注入提交号（版本标识，启动日志里可确认运行的是哪个提交）
-ARG BUILD_SHA=dev
 
 WORKDIR /build
 
@@ -32,8 +30,13 @@ RUN go mod download
 # 复制源码
 COPY . .
 
+# CI 注入提交号与版本号（git describe，如 v1.2.0 / v1.2.0-3-gabc1234）。
+# 构建上下文排除了 .git，版本号只能从外面传进来；本地 docker build 不传就是 dev，不做更新提示
+# 放在 go mod download 之后声明：ARG 值每个提交都变，声明在前面会让依赖下载那层缓存每次都失效
+ARG BUILD_SHA=dev
+ARG APP_VERSION=dev
 # 编译（CGO 禁用，按目标架构交叉编译；注入版本标识）
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.BuildSHA=${BUILD_SHA}" -o 115-station .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-s -w -X main.BuildSHA=${BUILD_SHA} -X main.Version=${APP_VERSION}" -o 115-station .
 
 # 运行阶段：最小镜像
 FROM alpine:latest

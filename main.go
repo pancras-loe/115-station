@@ -23,9 +23,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// BuildSHA 构建时由 CI 注入（-ldflags "-X main.BuildSHA=xxx"），
-// 用于日志/UI 确认运行的是哪个提交（排查"更新没生效"类问题）
-var BuildSHA = "dev"
+// Version / BuildSHA 构建时由 CI 注入（-ldflags "-X main.Version=v1.2.0 -X main.BuildSHA=xxx"）。
+// Version 是 git describe 的结果（正式版 v1.2.0，两版之间的 master 构建 v1.2.0-3-gabc1234），
+// 界面显示它、更新检测拿它和 GitHub Release 比；BuildSHA 用于排查「更新没生效」
+var (
+	Version  = "dev"
+	BuildSHA = "dev"
+)
 
 // 前端采用 Vite 单文件产物，JS/CSS 均内联于 HTML。
 const nextIndexPath = "./webui/dist/index.html"
@@ -78,7 +82,7 @@ func main() {
 		return
 	}
 
-	log.Printf("115-Station 启动中... 版本:%s 管理端口:%d 代理端口:%d", BuildSHA, cfg.Port, cfg.ProxyPort)
+	log.Printf("115-Station 启动中... 版本:%s（%.7s） 管理端口:%d 代理端口:%d", Version, BuildSHA, cfg.Port, cfg.ProxyPort)
 
 	// 确保配置目录存在
 	if err := cfg.EnsureConfigDir(); err != nil {
@@ -143,7 +147,7 @@ func main() {
 	// 存量整理记录补上来源链接（只做一次；记录多时要逐条认领，放后台不拖启动）
 	go api.BackfillRecordLinks(db)
 
-	api.SetVersion(BuildSHA)
+	api.SetVersion(Version, BuildSHA)
 
 	// 启动 Gin（不用 gin.Default：其自带的请求访问日志每个 HTTP 请求一行，噪音大）
 	gin.SetMode(gin.ReleaseMode)

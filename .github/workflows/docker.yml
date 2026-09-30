@@ -67,6 +67,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # git describe 要看得到 tag：默认浅克隆只有一个提交，算不出版本号
+          fetch-depth: 0
+
+      # 版本号 = git describe：打 tag 的构建是 v1.2.0，两版之间的 master 构建是 v1.2.0-3-gabc1234。
+      # 界面显示它，更新检测拿它和最新 Release 比（internal/api/update.go）；还没打过 tag 时退回短提交号
+      - name: Compute version
+        run: |
+          echo "APP_VERSION=$(git describe --tags --match 'v*' --always)" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -110,5 +119,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILD_SHA=${{ github.sha }}
+            APP_VERSION=${{ env.APP_VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # 打 v* tag 时建 GitHub Release（更新说明按上一个 tag 以来的提交自动生成）。
+  # 界面的更新检测读的就是 releases/latest，所以发版 = 推一个 tag，不用再去网页上手点。
+  # 排在 docker 之后：Release 出现时镜像已经能拉，用户照提示 pull 不会扑空
+  release:
+    runs-on: ubuntu-latest
+    needs: docker
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 带 - 的 tag（v1.2.0-rc1）按预发布发，不会被当成 latest 推给用户
+          pre=""
+          case "${GITHUB_REF_NAME}" in *-*) pre="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag $pre
