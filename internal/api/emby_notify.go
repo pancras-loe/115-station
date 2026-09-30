@@ -137,25 +137,45 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 			return
 		}
 
-		// 事件仅处理自身命中的台账；通知去重不应吞掉神医事件的额外定位信息。
-		go h.deepDelOnEmbyDelete(payload, deepEvent)
-
-		// 本站自己删的（洗版让位、增量同步清 strm、深度删除）：这条事件是
-		// 我们动作的回声，不是「有人在 Emby 里删了片子」，不推通知
-		if embySelfDeleted(itemPath) {
+		// 通知与深删结果合成一条（embydelnotify.go）：
+		//   - 目录条目（Folder）是 Emby 在收拾空目录，不推；
+		//   - 本站自己删的（洗版让位、增量同步清 strm、深度删除）是我们动作的回声，不推；
+		//   - 装了神医助手时 deep.delete 与 library.deleted 两条都发（实测，不是替换），
+		//     按条目 id 聚成一份。两条到达只差几毫秒且顺序不保证，不能假设谁先谁后。
+		// 每条事件的深删都照跑：神医事件可能带着原生事件没有的定位信息
+		label, notifiable := embyDeleteKind(itemType)
+		title, content := "", itemName
+		switch {
+		case !notifiable:
+			log.Printf("[Emby Webhook] ○ 目录条目的删除（%s，%s），不推通知", itemType, itemName)
+		case embySelfDeleted(itemPath):
 			log.Printf("[Emby Webhook] 本站自产的删除事件（%s），跳过通知", itemName)
-			c.JSON(http.StatusOK, gin.H{"message": "ok（自产删除事件，已跳过通知）"})
-			return
+		default:
+			title = embyDeleteTitle(label)
+			if content == "" {
+				content = event
+			}
+			item, _ := payload["Item"].(map[string]interface{})
+			if y, ok := item["ProductionYear"].(float64); ok && y > 0 {
+				if ys := fmt.Sprintf("%d", int(y)); !strings.Contains(content, ys) {
+					content += " (" + ys + ")"
+				}
+			}
+			log.Printf("[Emby Webhook] %s %s", title, content)
 		}
-
-		// 装了神医助手时 deep.delete 与 library.deleted 两条都发（实测，不是替换），
-		// 同一次删除会推两条一模一样的卡片。按条目 id 去重，先到的那条赢——
-		// 两条的 Date 只差几毫秒且到达顺序不保证，不能假设谁先谁后
-		if embyDeleteDuplicate(getNested([]string{"Item"}, []string{"Id"})) {
-			log.Printf("[Emby Webhook] 同一条目的重复删除事件（%s），已跳过通知", itemName)
-			c.JSON(http.StatusOK, gin.H{"message": "ok（重复删除事件，已跳过通知）"})
-			return
+		key := getNested([]string{"Item"}, []string{"Id"})
+		if key == "" {
+			key = itemPath
 		}
+		trackEmbyDelete(key, title, content, func() deepDelOutcome {
+			out := h.deepDelOnEmbyDelete(payload, deepEvent)
+			if !h.loadDeepDelCfg().notify() {
+				return deepDelOutcome{} // 用户关了深删通知：消息里不带深删结果
+			}
+			return out
+		})
+		c.JSON(http.StatusOK, gin.H{"message": "ok"})
+		return
 	}
 	content := itemName
 	if content == "" {
@@ -243,39 +263,6 @@ func embyEventCategory(event string) (category, title string) {
 		return "play", "▶️ Emby 播放"
 	}
 	return "", ""
-}
-
-// ---- 删除事件去重 ----
-//
-// 只管删除：装了神医助手时一次删除会连发 deep.delete 与 library.deleted 两条，
-// 内容完全一样。播放/暂停那些天然就会重复出现，不能一并去重。
-
-const embyDeleteDedupeWindow = 2 * time.Minute
-
-var (
-	embyDeleteSeenMu sync.Mutex
-	embyDeleteSeen   = map[string]time.Time{}
-)
-
-// embyDeleteDuplicate 同一条目在窗口内是否已经报过一次删除。
-// 拿不到条目 id 时一律返回 false —— 宁可重复通知，也不要把两次真实删除吃掉一次
-func embyDeleteDuplicate(itemID string) bool {
-	if itemID == "" {
-		return false
-	}
-	embyDeleteSeenMu.Lock()
-	defer embyDeleteSeenMu.Unlock()
-	now := time.Now()
-	for k, t := range embyDeleteSeen {
-		if now.Sub(t) > embyDeleteDedupeWindow {
-			delete(embyDeleteSeen, k)
-		}
-	}
-	if t, ok := embyDeleteSeen[itemID]; ok && now.Sub(t) <= embyDeleteDedupeWindow {
-		return true
-	}
-	embyDeleteSeen[itemID] = now
-	return false
 }
 
 // queueEmbyAddedNotif Emby 入库事件 → 聚合队列（Emby 封面优先 + 播放链接）

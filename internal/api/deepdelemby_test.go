@@ -129,26 +129,5 @@ func deepDelEmbyTestDB(t *testing.T, localRoot string, rows []model.SyncedFile) 
 	return &Handler{DB: model.DB}
 }
 
-// 删除事件去重：同一条目窗口内只放行一次，不同条目互不影响
-func TestEmbyDeleteDuplicate(t *testing.T) {
-	embyDeleteSeenMu.Lock()
-	embyDeleteSeen = map[string]time.Time{}
-	embyDeleteSeenMu.Unlock()
-
-	if embyDeleteDuplicate("119421") {
-		t.Fatal("首次不该判为重复")
-	}
-	if !embyDeleteDuplicate("119421") {
-		t.Fatal("同一条目的第二条事件应当判为重复")
-	}
-	if embyDeleteDuplicate("108939") {
-		t.Fatal("不同条目不该互相影响")
-	}
-	// 拿不到条目 id 时宁可重复通知，也不要把两次真实删除吃掉一次
-	if embyDeleteDuplicate("") || embyDeleteDuplicate("") {
-		t.Fatal("空 id 不该被去重")
-	}
-}
-
 // timeRef 取一个可寻址的当前时刻（造数用）
 func timeRef() time.Time { return time.Now() }

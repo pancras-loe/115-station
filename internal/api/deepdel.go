@@ -146,7 +146,8 @@ func (h *Handler) runDeepDelete(rows []model.SyncedFile, reason string) (deepDel
 	log.Printf("[深度删除] ✓ %s：删除网盘文件 %d 个（视频 %d / 附属 %d），空目录 %d 个",
 		res.Title, res.Fids, res.Videos, res.Assets, res.PanDirs)
 	h.noteDeepDelete(reason, res, rels, fids, "done", "")
-	if cfg.notify() {
+	// Emby 事件触发的结果并进那次的「Emby 删除」消息（embydelnotify.go），这里只报别的入口
+	if cfg.notify() && reason != "emby_webhook" {
 		go NotifyMessage("🗑️ 深度删除", fmt.Sprintf(
 			"%s\n已删除网盘源文件 %d 个（视频 %d / 附属 %d）\n文件在 115 回收站里，可还原",
 			res.Title, res.Fids, res.Videos, res.Assets))

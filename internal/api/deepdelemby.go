@@ -15,8 +15,8 @@ import (
 // 参考 qmediasync internal/controllers/emby.go 的事件定位执行、p115strmhelper
 // helper/mediasyncdel 的 deep.delete 定位方式，独立实现仅限本次事件的台账筛选。
 // 原生 library.deleted 也可能来自扫库，仍须检查挂载并复核本地确实已缺失。
-func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool) {
-	h.processDeepDelEvent(payload, deep, h.runDeepDelete, func() bool {
+func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool) deepDelOutcome {
+	return h.processDeepDelEvent(payload, deep, h.runDeepDelete, func() bool {
 		select {
 		case <-stopCh:
 			return false
@@ -26,9 +26,17 @@ func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool)
 	})
 }
 
+// deepDelOutcome 一条 Emby 事件的联动结果，交给删除通知合并进同一条消息（embydelnotify.go）。
+// 全零 = 没动任何东西（开关关着、类型不归深删管、没命中台账、复核后不缺失）
+type deepDelOutcome struct {
+	Res      deepDelResult
+	Rejected string // 被守卫拦下的原因
+	Err      string // 执行失败
+}
+
 // 注入执行和短暂复核等待，让事件范围、重复事件及恢复场景可用假执行器验证。
 func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
-	execute func([]model.SyncedFile, string) (deepDelResult, error), pause func() bool) {
+	execute func([]model.SyncedFile, string) (deepDelResult, error), pause func() bool) (out deepDelOutcome) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[深度删除] ✗ 事件处理异常: %v", r)
@@ -66,12 +74,12 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		return
 	}
 	if err := h.checkDeepDelScope(kind, rels); err != nil {
-		h.rejectDeepDelEvent(err.Error())
+		out.Rejected = h.rejectDeepDelEvent(err.Error())
 		return
 	}
 	rows, matched, err := h.deepDelEventRows(rels, pcs)
 	if err != nil {
-		h.rejectDeepDelEvent(err.Error())
+		out.Rejected = h.rejectDeepDelEvent(err.Error())
 		return
 	}
 	if matched == 0 {
@@ -86,7 +94,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		}
 		second, _, e := h.deepDelEventRows(rels, pcs)
 		if e != nil {
-			h.rejectDeepDelEvent(e.Error())
+			out.Rejected = h.rejectDeepDelEvent(e.Error())
 			return
 		}
 		if !deep {
@@ -98,7 +106,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 				}
 				second, _, e = h.deepDelEventRows(rels, pcs)
 				if e != nil {
-					h.rejectDeepDelEvent(e.Error())
+					out.Rejected = h.rejectDeepDelEvent(e.Error())
 					return
 				}
 			}
@@ -130,7 +138,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 		targets = append(targets, row.RelPath)
 	}
 	if err := h.checkDeepDelLibraries(targets); err != nil {
-		h.rejectDeepDelEvent(err.Error())
+		out.Rejected = h.rejectDeepDelEvent(err.Error())
 		return
 	}
 	// 网络核验期间本地文件可能恢复、开关也可能关闭；最后只收缩候选。
@@ -139,7 +147,7 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	}
 	current, _, err := h.deepDelEventRows(rels, pcs)
 	if err != nil {
-		h.rejectDeepDelEvent(err.Error())
+		out.Rejected = h.rejectDeepDelEvent(err.Error())
 		return
 	}
 	missing := make(map[uint]bool, len(current))
@@ -158,17 +166,21 @@ func (h *Handler) processDeepDelEvent(payload map[string]interface{}, deep bool,
 	}
 	videos, assets := countKinds(rows)
 	log.Printf("[深度删除] ○ 处理本次 Emby 事件：视频 %d / 附属 %d", videos, assets)
-	if _, err := execute(rows, "emby_webhook"); err != nil {
+	res, err := execute(rows, "emby_webhook")
+	out.Res = res
+	if err != nil {
 		log.Printf("[深度删除] ✗ 事件删除失败: %v", err)
+		out.Err = err.Error()
 	}
+	return
 }
 
-func (h *Handler) rejectDeepDelEvent(why string) {
+// 不在这里推通知：拦截原因并进那次删除的「Emby 删除」消息（embydelnotify.go），
+// 单推一条的话一次删除要收三条消息
+func (h *Handler) rejectDeepDelEvent(why string) string {
 	log.Printf("[深度删除] ✗ 事件删除已拦下: %s", why)
 	h.noteDeepDelete("emby_webhook", deepDelResult{}, nil, nil, "rejected", why)
-	if h.loadDeepDelCfg().notify() {
-		go NotifyMessage("深度删除被拦下", why)
-	}
+	return why
 }
 
 // 只读台账校验库根；只对本次事件的路径执行文件检查，不消费旧 vanish_at 标记。
