@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -214,6 +215,23 @@ type fakePeopleServer struct {
 	tmdbHit map[string]int
 	// userGets 按用户读条目的次数，必须为 0
 	userGets int
+	// titleStarts 每次列片目请求的 StartIndex（看续扫从哪开始）
+	titleStarts []int
+}
+
+// titles 假库里的片目（按加入时间）。有 p7 时多一部片：两位已有头像、已是中文名、只缺中文简介的演员
+func (f *fakePeopleServer) titles() []map[string]any {
+	out := []map[string]any{
+		{"Id": "m1", "Name": "阿甘正传", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "13"}, "People": []any{
+			f.ref("p1", "Actor"), f.ref("p2", "Actor"), f.ref("p5", "Actor"), f.ref("p4", "Actor"), f.ref("p3", "Director"),
+		}},
+		{"Id": "s1", "Name": "某剧", "Type": "Series", "ProviderIds": map[string]string{"tmdb": "100"}, "People": []any{}},
+	}
+	if f.persons["p7"] != nil {
+		out = append(out, map[string]any{"Id": "m2", "Name": "色戒", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "14"},
+			"People": []any{f.ref("p7", "Actor"), f.ref("p8", "Actor"), f.ref("p5", "Actor")}})
+	}
+	return out
 }
 
 func (f *fakePeopleServer) ref(id, typ string) map[string]any {
@@ -246,6 +264,10 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		js(map[string]any{"id": 32, "name": "Robin Wright", "also_known_as": []string{"羅賓·懷特"}, "profile_path": "/robin.jpg"})
 	case path == "/3/person/24":
 		js(map[string]any{"id": 24, "name": "Robert Zemeckis"})
+	case path == "/3/person/70":
+		js(map[string]any{"id": 70, "name": "汤唯", "profile_path": "/tw.jpg", "biography": "汤唯，中国内地女演员。"})
+	case path == "/3/person/80":
+		js(map[string]any{"id": 80, "name": "巩俐", "profile_path": "/gl.jpg", "biography": "Gong Li is an actress."})
 	case path == "/3/person/77":
 		js(map[string]any{"id": 77, "name": "Jane Doe", "profile_path": "/jane.jpg"})
 	case strings.HasPrefix(path, "/t/p/h632/"):
@@ -253,12 +275,18 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// ---- Emby ----
 	case path == "/Items" && r.URL.Query().Get("IncludeItemTypes") == "Movie,Series":
-		js(map[string]any{"TotalRecordCount": 2, "Items": []map[string]any{
-			{"Id": "m1", "Name": "阿甘正传", "Type": "Movie", "ProviderIds": map[string]string{"Tmdb": "13"}, "People": []any{
-				f.ref("p1", "Actor"), f.ref("p2", "Actor"), f.ref("p5", "Actor"), f.ref("p4", "Actor"), f.ref("p3", "Director"),
-			}},
-			{"Id": "s1", "Name": "某剧", "Type": "Series", "ProviderIds": map[string]string{"tmdb": "100"}, "People": []any{}},
-		}})
+		titles := f.titles()
+		start, _ := strconv.Atoi(r.URL.Query().Get("StartIndex"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("Limit"))
+		f.titleStarts = append(f.titleStarts, start)
+		end := start + limit
+		if end > len(titles) {
+			end = len(titles)
+		}
+		if start > end {
+			start = end
+		}
+		js(map[string]any{"TotalRecordCount": len(titles), "Items": titles[start:end]})
 	case path == "/Items" && r.URL.Query().Get("ParentId") == "s1":
 		js(map[string]any{"TotalRecordCount": 2, "Items": []map[string]any{
 			{"Id": "e1", "People": []any{f.ref("w1", "Writer")}},
@@ -269,21 +297,29 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.userGets++
 		w.WriteHeader(http.StatusGatewayTimeout)
 	case path == "/Items" && r.URL.Query().Get("Ids") != "":
-		id := r.URL.Query().Get("Ids")
-		p := f.persons[id]
-		if p == nil || !strings.Contains(r.URL.Query().Get("Fields"), "Settings") {
+		fields := r.URL.Query().Get("Fields")
+		if strings.Contains(fields, "ProviderIds") && !strings.Contains(fields, "Settings") {
+			// 读完整人物条目却没带 Settings：回写时会把锁定字段清掉
 			js(map[string]any{"Items": []any{}, "TotalRecordCount": 0})
 			return
 		}
-		it := map[string]any{"Id": id, "Name": p.Name, "Overview": p.Overview, "Type": "Person",
-			"ProviderIds": map[string]any{}, "ImageTags": map[string]any{}, "SomeOtherField": "keep"}
-		if p.Tmdb != "" {
-			it["ProviderIds"] = map[string]any{"Tmdb": p.Tmdb}
+		var items []any
+		for _, id := range strings.Split(r.URL.Query().Get("Ids"), ",") {
+			p := f.persons[id]
+			if p == nil {
+				continue
+			}
+			it := map[string]any{"Id": id, "Name": p.Name, "Overview": p.Overview, "Type": "Person",
+				"ProviderIds": map[string]any{}, "ImageTags": map[string]any{}, "SomeOtherField": "keep"}
+			if p.Tmdb != "" {
+				it["ProviderIds"] = map[string]any{"Tmdb": p.Tmdb}
+			}
+			if p.Image != "" {
+				it["ImageTags"] = map[string]any{"Primary": p.Image}
+			}
+			items = append(items, it)
 		}
-		if p.Image != "" {
-			it["ImageTags"] = map[string]any{"Primary": p.Image}
-		}
-		js(map[string]any{"Items": []any{it}, "TotalRecordCount": 1})
+		js(map[string]any{"Items": items, "TotalRecordCount": len(items)})
 	case path == "/Persons":
 		term := r.URL.Query().Get("SearchTerm")
 		var items []map[string]any
@@ -334,13 +370,15 @@ func TestPersonFillEndToEnd(t *testing.T) {
 	newTestDB(t, "person-e2e.db")
 	f := &fakePeopleServer{
 		persons: map[string]*fakePerson{
-			"p1": {Name: "Tom Hanks"},                              // 无 TMDB id、无头像、英文名 → 全补
-			"p2": {Name: "Robin Wright", Tmdb: "32", Image: "old"}, // 有头像；中文名已被 p6 占用
-			"p3": {Name: "Robert Zemeckis"},                        // 导演：TMDB 无头像无中文名
-			"p4": {Name: "Nobody"},                                 // 演职员表里没有
-			"p5": {Name: "刘德华", Image: "x"},                        // 已补全，不该碰
-			"p6": {Name: "罗宾·怀特", Image: "x"},                      // 占着中文名的另一个条目
-			"w1": {Name: "Jane Doe"},                               // 剧集编剧（挂在集上）：有头像无中文名
+			"p1": {Name: "Tom Hanks"},                                                       // 无 TMDB id、无头像、英文名 → 全补
+			"p2": {Name: "Robin Wright", Tmdb: "32", Image: "old"},                          // 有头像；中文名已被 p6 占用
+			"p3": {Name: "Robert Zemeckis"},                                                 // 导演：TMDB 无头像无中文名
+			"p4": {Name: "Nobody"},                                                          // 演职员表里没有
+			"p5": {Name: "刘德华", Image: "x", Overview: "香港演员、歌手。"},                           // 已补全，不该碰
+			"p6": {Name: "罗宾·怀特", Image: "x"},                                               // 占着中文名的另一个条目
+			"w1": {Name: "Jane Doe"},                                                        // 剧集编剧（挂在集上）：有头像无中文名
+			"p7": {Name: "汤唯", Tmdb: "70", Image: "x", Overview: "Tang Wei is an actress."}, // 只缺中文简介，TMDB 有
+			"p8": {Name: "巩俐", Tmdb: "80", Image: "x", Overview: ""},                        // 只缺中文简介，TMDB 也没有
 		},
 		uploads: map[string]int{}, updates: map[string]int{}, tmdbHit: map[string]int{},
 	}
@@ -384,7 +422,10 @@ func TestPersonFillEndToEnd(t *testing.T) {
 		t.Fatal("剧集分集上的编剧也要补头像")
 	}
 	// p1 在剧里以客串出现：同一轮只处理一次
-	if res.Handled != 5 || res.Images != 2 || res.Renamed != 1 || res.Bios != 1 {
+	if !strings.Contains(f.persons["p7"].Overview, "中国内地") || strings.Join(f.persons["p7"].Locked, ",") != "Overview" {
+		t.Fatalf("只缺中文简介的人物也要补上并锁定: %+v", f.persons["p7"])
+	}
+	if res.Handled != 7 || res.Images != 2 || res.Renamed != 1 || res.Bios != 2 {
 		t.Fatalf("统计不对: %+v", res)
 	}
 	if !out.Partial && res.States[personStateFailed] > 0 {
@@ -400,7 +441,7 @@ func TestPersonFillEndToEnd(t *testing.T) {
 			t.Errorf("%s 查无结果应暂缓一个月: %v", m.PersonID, m.NextAt)
 		}
 	}
-	want := map[string]string{"p2": personStateNameTaken, "p3": personStateNoImage, "p4": personStateNoMatch, "w1": personStateNoZh}
+	want := map[string]string{"p8": personStateNoBio, "p2": personStateNameTaken, "p3": personStateNoImage, "p4": personStateNoMatch, "w1": personStateNoZh}
 	for id, st := range want {
 		if marks[id] != st {
 			t.Errorf("%s 记账应为 %s，实际 %q", id, st, marks[id])
@@ -434,7 +475,7 @@ func TestPersonFillMaxPerRun(t *testing.T) {
 	f := &fakePeopleServer{
 		persons: map[string]*fakePerson{
 			"p1": {Name: "Tom Hanks"}, "p2": {Name: "Robin Wright", Tmdb: "32"}, "p3": {Name: "Robert Zemeckis"},
-			"p4": {Name: "Nobody"}, "p5": {Name: "刘德华", Image: "x"}, "w1": {Name: "Jane Doe"},
+			"p4": {Name: "Nobody"}, "p5": {Name: "刘德华", Image: "x", Overview: "香港演员、歌手。"}, "w1": {Name: "Jane Doe"},
 		},
 		uploads: map[string]int{}, updates: map[string]int{}, tmdbHit: map[string]int{},
 	}
@@ -450,11 +491,41 @@ func TestPersonFillMaxPerRun(t *testing.T) {
 	b, _ := json.Marshal(cfg)
 	_ = h.Config.SaveSetting(personFillSetting, string(b))
 
-	out, err := execPersonJob(h, &model.TaskJob{Kind: jobKindPerson})
-	if err != nil {
-		t.Fatal(err)
+	run := func() (jobOutcome, []int) {
+		f.titleStarts = nil
+		out, err := execPersonJob(h, &model.TaskJob{Kind: jobKindPerson})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, f.titleStarts
 	}
+
+	// 第 1 轮：阿甘正传（第 1 部）里就用完 2 个名额 → 断点仍是第 1 部
+	out, _ := run()
 	if res := out.Result.(personJobResult); res.Handled != 2 || !strings.Contains(out.Message, "单次上限") {
 		t.Fatalf("单次上限没生效: %+v %s", res, out.Message)
+	}
+	if c := h.loadPersonFillCursor(); c != 0 {
+		t.Fatalf("在第 1 部停下，断点应为 0: %d", c)
+	}
+	// 第 2 轮：第 1 部剩下的 2 人处理完，到第 2 部（某剧）的编剧时名额用完 → 断点 1
+	out, _ = run()
+	if res := out.Result.(personJobResult); res.Handled != 2 {
+		t.Fatalf("第 2 轮应接着处理第 1 部剩下的人物: %+v", res)
+	}
+	if c := h.loadPersonFillCursor(); c != 1 {
+		t.Fatalf("在第 2 部停下，断点应为 1: %d", c)
+	}
+	// 第 3 轮：从第 2 部开始，处理完编剧后绕回第 1 部，看完一圈断点归零
+	out, starts := run()
+	if res := out.Result.(personJobResult); res.Handled != 1 || !strings.Contains(out.Message, "已看完全部") {
+		t.Fatalf("第 3 轮应只剩编剧并看完一圈: %+v %s", res, out.Message)
+	}
+	// starts[0] 是开头问总数的那次（从 0 起、只取 1 条），真正的扫描从断点开始，再绕回 0
+	if len(starts) != 3 || starts[1] != 1 || starts[2] != 0 {
+		t.Fatalf("续扫顺序不对: %v", starts)
+	}
+	if c := h.loadPersonFillCursor(); c != 0 {
+		t.Fatalf("看完一圈断点应归零: %d", c)
 	}
 }

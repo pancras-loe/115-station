@@ -71,6 +71,8 @@ export interface PersonFillInfo {
   state_text?: Record<string, string>
   cached?: number
   cached_zh?: number
+  /** 续扫位置：下次从第 cursor+1 部片目开始（按加入时间排序），0 = 从头 */
+  cursor?: number
   last_job?: { id: number; status: string; message?: string; finished_at?: string } | null
 }
 export const personFillConfig = () => http.get<{ data?: PersonFillInfo }>('/personfill/config')

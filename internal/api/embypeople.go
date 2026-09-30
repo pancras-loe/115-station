@@ -180,7 +180,8 @@ func embyTitlesPage(base, key string, start, limit int) ([]embyTitleItem, int, e
 	q := url.Values{
 		"Recursive": {"true"}, "IncludeItemTypes": {"Movie,Series"}, "Fields": {"ProviderIds,People"},
 		"StartIndex": {strconv.Itoa(start)}, "Limit": {strconv.Itoa(limit)},
-		"SortBy": {"SortName"}, "SortOrder": {"Ascending"}, "EnableUserData": {"false"},
+		// 按加入时间排：新入库的排在最后，续扫断点（片目序号）不会因为新片插到中间而整体错位
+		"SortBy": {"DateCreated,SortName"}, "SortOrder": {"Ascending"}, "EnableUserData": {"false"},
 	}
 	var page struct {
 		Items []embyTitleItem `json:"Items"`
@@ -481,6 +482,7 @@ const (
 	personStateNoImage   = "no_image"   // TMDB 上也没有头像
 	personStateNoZh      = "no_zh"      // TMDB 上没有中文名
 	personStateNameTaken = "name_taken" // 中文名已被另一个人物条目占用
+	personStateNoBio     = "no_bio"     // TMDB 上没有中文简介
 	personStateFailed    = "failed"     // 网络 / Emby 出错
 )
 
@@ -490,6 +492,7 @@ var personStateText = map[string]string{
 	personStateNoImage:   "TMDB 无头像",
 	personStateNoZh:      "TMDB 无中文名",
 	personStateNameTaken: "中文名已被别的人物占用",
+	personStateNoBio:     "TMDB 无中文简介",
 	personStateFailed:    "出错",
 }
 
@@ -546,8 +549,12 @@ func planPerson(cfg personFillCfg, name, overview string, hasImage, hasTmdbID bo
 			p.newName = meta.ZhName
 		}
 	}
-	if cfg.ZhBio && meta.ZhBio != "" && !hasHan(overview) {
-		p.newBio = meta.ZhBio
+	if cfg.ZhBio && !hasHan(overview) {
+		if meta.ZhBio != "" {
+			p.newBio = meta.ZhBio
+		} else {
+			missing = append(missing, personStateNoBio)
+		}
 	}
 	p.setTmdbID = !hasTmdbID && meta.TmdbID > 0
 	if len(missing) > 0 {
@@ -619,17 +626,20 @@ func (r *personRunner) creditsOf(t embyTitleItem) *titleCredits {
 	return c
 }
 
-// needs 人物在列表里的状态就能判断要不要处理，不用再读条目
-func (r *personRunner) needs(p embyPersonRef) bool {
-	if p.ID == "" || p.Name == "" || !r.cfg.personTypeWanted(p.Type) || r.skip[p.ID] || r.done[p.ID] {
-		return false
-	}
+// eligible 人物在不在这一轮的范围里（类型对、没在记账里暂缓、本轮没处理过）
+func (r *personRunner) eligible(p embyPersonRef) bool {
+	return p.ID != "" && p.Name != "" && r.cfg.personTypeWanted(p.Type) && !r.skip[p.ID] && !r.done[p.ID]
+}
+
+// needsListed 列表里就看得出的缺口：没头像、名字不是中文
+func (r *personRunner) needsListed(p embyPersonRef) bool {
 	return (r.cfg.Image && p.PrimaryImageTag == "") || (r.cfg.ZhName && !hasHan(p.Name))
 }
 
-// candidates 片目里这一轮要处理的人物：前 MaxCast 位演员 + 导演 / 编剧
+// candidates 片目里这一轮要处理的人物：前 MaxCast 位演员 + 导演 / 编剧。
+// 头像和名字列表里就有；简介列表里没有，只剩「缺中文简介」可能的人物再按 id 批量读一次（Emby 本地列表查询）
 func (r *personRunner) candidates(t embyTitleItem) []embyPersonRef {
-	var out []embyPersonRef
+	var out, rest []embyPersonRef
 	actors := 0
 	people := t.People
 	if t.Type == "Series" && r.cfg.wantsCrew() {
@@ -639,6 +649,7 @@ func (r *personRunner) candidates(t embyTitleItem) []embyPersonRef {
 			vlog("[演职人员] ○ 《%s》分集主创读取失败: %v", t.Name, err)
 		}
 	}
+	seen := map[string]bool{}
 	for _, p := range people {
 		if p.Type == "Actor" || p.Type == "GuestStar" {
 			actors++
@@ -646,11 +657,59 @@ func (r *personRunner) candidates(t embyTitleItem) []embyPersonRef {
 				continue
 			}
 		}
-		if r.needs(p) {
+		if seen[p.ID] || !r.eligible(p) {
+			continue
+		}
+		seen[p.ID] = true
+		if r.needsListed(p) {
 			out = append(out, p)
+		} else if r.cfg.ZhBio {
+			rest = append(rest, p)
+		}
+	}
+	if len(rest) > 0 {
+		ids := make([]string, len(rest))
+		for i, p := range rest {
+			ids[i] = p.ID
+		}
+		bios, err := embyOverviews(r.base, r.key, ids)
+		if err != nil {
+			vlog("[演职人员] ○ 《%s》人物简介读取失败，本轮不补简介: %v", t.Name, err)
+			return out
+		}
+		for _, p := range rest {
+			if bio, ok := bios[p.ID]; ok && !hasHan(bio) {
+				out = append(out, p)
+			}
 		}
 	}
 	return out
+}
+
+// embyOverviews 一批人物的简介（id → 简介；Emby 没返回的 id 不在结果里）。
+// 走列表查询，理由同 embyGetPerson：按用户读单个条目会触发按需刷新
+func embyOverviews(base, key string, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	for i := 0; i < len(ids); i += 50 {
+		j := i + 50
+		if j > len(ids) {
+			j = len(ids)
+		}
+		var page struct {
+			Items []struct {
+				ID       string `json:"Id"`
+				Overview string `json:"Overview"`
+			} `json:"Items"`
+		}
+		q := url.Values{"Ids": {strings.Join(ids[i:j], ",")}, "Fields": {"Overview"}, "EnableUserData": {"false"}, "EnableImages": {"false"}}
+		if err := embyGetJSON(base, key, "/Items", q, &page); err != nil {
+			return out, err
+		}
+		for _, it := range page.Items {
+			out[it.ID] = it.Overview
+		}
+	}
+	return out, nil
 }
 
 // handle 处理一个人物：定 TMDB id → 取人物数据 → 改 Emby → 记账
@@ -779,48 +838,78 @@ func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		r.skip[m.PersonID] = true
 	}
 
-	stopped, capped := false, false
-	titles, total := 0, 0
+	// 片目总数：先问一次（Limit=1），续扫断点超出总数（库里删了片）就从头来
+	_, total, err := embyTitlesPage(base, key, 0, 1)
+	if err != nil {
+		return jobOutcome{}, err
+	}
+	cur := h.loadPersonFillCursor()
+	if cur >= total {
+		cur = 0
+	}
+	log.Printf("[演职人员] ▶ 开始补全：从第 %d/%d 部片目起（记账中暂缓 %d 个人物，单次上限 %d）",
+		cur+1, total, len(r.skip), cfg.MaxPerRun)
+
+	// 从断点扫到末尾，再从头扫到断点，绕满一圈。中途因单次上限 / 停止 / 出错退出时，
+	// 把停下的那部片目记成新断点（那部片目下次重看一遍：已处理的人物补全了或进了记账，不会重复处理）
+	stopped, capped, broken := false, false, false
+	titles, stopAt := 0, 0
 	const pageSize = 100
-	log.Printf("[演职人员] ▶ 开始补全（记账中暂缓 %d 个人物，单次上限 %d）", len(r.skip), cfg.MaxPerRun)
+	ranges := [][2]int{{cur, total}, {0, cur}}
 scan:
-	for start := 0; ; start += pageSize {
-		items, n, err := embyTitlesPage(base, key, start, pageSize)
-		if err != nil {
-			if titles == 0 {
-				return jobOutcome{}, err
+	for _, rg := range ranges {
+		for start := rg[0]; start < rg[1]; start += pageSize {
+			limit := pageSize
+			if rg[1]-start < limit {
+				limit = rg[1] - start
 			}
-			log.Printf("[演职人员] ✗ 读取 Emby 片目中断: %v", err)
-			break
-		}
-		total = n
-		for _, t := range items {
-			titles++
-			personLane.set("扫描片目", titles, total, t.Name)
-			for _, p := range r.candidates(t) {
+			items, _, err := embyTitlesPage(base, key, start, limit)
+			if err != nil {
+				log.Printf("[演职人员] ✗ 读取 Emby 片目中断（第 %d 部起）: %v", start+1, err)
+				broken, stopAt = true, start
+				break scan
+			}
+			if len(items) == 0 {
+				break
+			}
+			for i, t := range items {
+				idx := start + i
 				if personLane.stopRequested() || stopRequestedGlobal() {
-					stopped = true
+					stopped, stopAt = true, idx
 					break scan
 				}
-				if r.handled >= cfg.MaxPerRun {
-					capped = true
-					break scan
+				titles++
+				personLane.set("扫描片目", titles, total, t.Name)
+				for _, p := range r.candidates(t) {
+					if personLane.stopRequested() || stopRequestedGlobal() {
+						stopped, stopAt = true, idx
+						break scan
+					}
+					if r.handled >= cfg.MaxPerRun {
+						capped, stopAt = true, idx
+						break scan
+					}
+					r.done[p.ID] = true
+					r.handled++
+					personLane.setSub("人物", r.handled, cfg.MaxPerRun, p.Name)
+					res := r.handle(t, p)
+					r.results = append(r.results, res)
+					logPersonResult(res)
 				}
-				r.done[p.ID] = true
-				r.handled++
-				personLane.setSub("人物", r.handled, cfg.MaxPerRun, p.Name)
-				res := r.handle(t, p)
-				r.results = append(r.results, res)
-				logPersonResult(res)
 			}
 		}
-		if len(items) == 0 || start+len(items) >= total {
-			break
-		}
+	}
+	if stopped || capped || broken {
+		h.savePersonFillCursor(stopAt)
+	} else {
+		h.savePersonFillCursor(0) // 绕满一圈，下次从头
+	}
+	if broken && titles == 0 {
+		return jobOutcome{}, errors.New("读取 Emby 片目失败，详见日志")
 	}
 
 	out := summarizePersonRun(r.results, titles)
-	msg := personRunMessage(out, total, stopped, capped)
+	msg := personRunMessage(out, total, stopAt, stopped, capped, broken)
 	partial := out.States[personStateFailed] > 0
 	idle := job.Priority == jobPriorityBackground && out.Handled == 0 && !stopped
 	return jobOutcome{Message: msg, Result: out, Canceled: stopped, Partial: partial, Idle: idle}, nil
@@ -895,31 +984,56 @@ func summarizePersonRun(results []personResult, titles int) personJobResult {
 	return out
 }
 
-func personRunMessage(out personJobResult, total int, stopped, capped bool) string {
+func personRunMessage(out personJobResult, total, stopAt int, stopped, capped, broken bool) string {
+	var msg string
 	if out.Handled == 0 {
-		msg := fmt.Sprintf("看了 %d 部片目，没有要补的人物", out.Titles)
-		if stopped {
-			msg = "已停止：" + msg
+		msg = fmt.Sprintf("看了 %d 部片目，没有要补的人物", out.Titles)
+	} else {
+		msg = fmt.Sprintf("处理 %d 个人物：头像 %d、中文名 %d、简介 %d", out.Handled, out.Images, out.Renamed, out.Bios)
+		var rest []string
+		for _, st := range []string{personStateFailed, personStateNoMatch, personStateNoImage, personStateNoZh, personStateNameTaken, personStateNoBio} {
+			if n := out.States[st]; n > 0 {
+				rest = append(rest, fmt.Sprintf("%s %d", personStateText[st], n))
+			}
 		}
-		return msg
-	}
-	msg := fmt.Sprintf("处理 %d 个人物：头像 %d、中文名 %d、简介 %d", out.Handled, out.Images, out.Renamed, out.Bios)
-	var rest []string
-	for _, st := range []string{personStateFailed, personStateNoMatch, personStateNoImage, personStateNoZh, personStateNameTaken} {
-		if n := out.States[st]; n > 0 {
-			rest = append(rest, fmt.Sprintf("%s %d", personStateText[st], n))
+		if len(rest) > 0 {
+			msg += "；" + strings.Join(rest, "、")
 		}
-	}
-	if len(rest) > 0 {
-		msg += "；" + strings.Join(rest, "、")
 	}
 	switch {
 	case stopped:
-		msg += fmt.Sprintf("；已按要求停止（片目 %d/%d）", out.Titles, total)
+		msg += fmt.Sprintf("；已按要求停止，下次从第 %d/%d 部片目接着补", stopAt+1, total)
 	case capped:
-		msg += fmt.Sprintf("；达到单次上限，停在片目 %d/%d，下次接着补", out.Titles, total)
+		msg += fmt.Sprintf("；达到单次上限，下次从第 %d/%d 部片目接着补", stopAt+1, total)
+	case broken:
+		msg += fmt.Sprintf("；读取 Emby 片目中断，下次从第 %d/%d 部片目接着补", stopAt+1, total)
+	default:
+		msg += fmt.Sprintf("（已看完全部 %d 部片目）", total)
 	}
 	return msg
+}
+
+// ---- 续扫断点 ----
+//
+// 单次上限挡住的时候，下次从停下的那部片目接着看，而不是每次从第一部重来：
+// 否则库大、上限小时，名额每次都先花在前面那些「还在记账期外、又总是补不全」的人物上。
+// 存的是片目序号（按加入时间排序），不是 id：片目被删了序号前移几位，最多重看或漏看几部，
+// 漏的绕一圈回来还会看到
+
+const personFillCursorSetting = "personfill_cursor"
+
+func (h *Handler) loadPersonFillCursor() int {
+	n, _ := strconv.Atoi(strings.TrimSpace(h.Config.GetSetting(personFillCursorSetting)))
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+func (h *Handler) savePersonFillCursor(n int) {
+	if err := h.Config.SaveSetting(personFillCursorSetting, strconv.Itoa(n)); err != nil {
+		log.Printf("[演职人员] ✗ 保存续扫位置失败: %v", err)
+	}
 }
 
 // enqueuePersonJob 入队。定时与手动共用一个去重键：排着一个就不再排第二个
@@ -997,7 +1111,7 @@ func (h *Handler) PersonFillGetConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"config": cfg, "next_run": next, "marks": marks, "state_text": personStateText,
-		"cached": metas, "cached_zh": zh, "last_job": lastJob,
+		"cached": metas, "cached_zh": zh, "last_job": lastJob, "cursor": h.loadPersonFillCursor(),
 	}})
 }
 
@@ -1037,8 +1151,9 @@ func (h *Handler) PersonFillRun(c *gin.Context) {
 	h.queuedReply(c, job, "演职人员补全")
 }
 
-// PersonFillResetMarks POST /personfill/reset：清空记账，下次任务把暂缓的人物全部重新看一遍
+// PersonFillResetMarks POST /personfill/reset：清空记账与续扫位置，下次任务从第一部片目起把暂缓的人物全部重新看一遍
 func (h *Handler) PersonFillResetMarks(c *gin.Context) {
 	res := model.DB.Where("1 = 1").Delete(&model.EmbyPersonMark{})
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清空 %d 条记账", res.RowsAffected)})
+	h.savePersonFillCursor(0)
+	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已清空 %d 条记账，下次从第一部片目开始", res.RowsAffected)})
 }

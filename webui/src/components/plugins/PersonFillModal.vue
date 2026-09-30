@@ -155,7 +155,7 @@ function openLastJob() {
     >
       <HSwitch v-model="form.zh_name" aria-label="中文名" />
     </FieldRow>
-    <FieldRow label="中文简介" tip="原简介不是中文、而 TMDB 有中文简介时替换，同样锁定字段。">
+    <FieldRow label="中文简介" tip="原简介为空或不是中文、而 TMDB 有中文简介时替换，同样锁定字段。已有头像和中文名、只缺中文简介的人物也会处理。">
       <HSwitch v-model="form.zh_bio" aria-label="中文简介" />
     </FieldRow>
     <FieldRow label="每部片演员" tip="每部片只看演员表前 N 位（导演、编剧不占名额）。龙套在 TMDB 上多半既无头像也无中文名。0 = 不限。">
@@ -175,6 +175,10 @@ function openLastJob() {
           已缓存 TMDB 人物 {{ info?.cached ?? 0 }} 个（其中有中文名 {{ info?.cached_zh ?? 0 }} 个）
         </span>
       </div>
+      <div>
+        <span v-if="info?.cursor">上次没看完（单次上限 / 手动停止 / Emby 读取中断），下次从第 {{ info.cursor + 1 }} 部片目接着补，看到末尾再从头补到这里</span>
+        <span v-else>下次从第一部片目开始（按加入时间排序）</span>
+      </div>
       <div v-if="markTotal" class="marks">
         <span>暂缓 {{ markTotal }} 个人物：</span>
         <span v-for="r in markRows" :key="r.k" class="mark">{{ r.text }} {{ r.n }}</span>
@@ -189,9 +193,9 @@ function openLastJob() {
 
     <template #footer>
       <div class="foot">
-        <HPopconfirm v-if="markTotal" side="top" @confirm="reset">
+        <HPopconfirm v-if="markTotal || info?.cursor" side="top" @confirm="reset">
           <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
-          <template #content>清空后，下次任务会把暂缓的人物全部重新查一遍 TMDB。</template>
+          <template #content>清空后，下次任务从第一部片目开始，把暂缓的人物全部重新查一遍 TMDB。</template>
         </HPopconfirm>
         <span class="spacer" />
         <HButton variant="tertiary" @click="show = false">取消</HButton>
