@@ -12,7 +12,6 @@ import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
-import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
@@ -423,11 +422,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="pageEl" class="page" :style="{ '--page-top': `${pageTop}px`, '--page-bottom': `${pageBottom}px` }">
-    <SectionCard title="本地文件" hint="本地媒体库里的影片与剧集。点海报看详情，点左上角圆圈勾选后批量刮削" class="shell">
-      <template #extra>
-        <HButton variant="ghost" size="sm" :loading="loading" @click="refreshAll"><RefreshCw :size="14" />刷新</HButton>
-      </template>
-
+    <!-- 2026-09-30 改版：卡片标题与顶栏重复，去掉；刷新挪进工具栏；批量栏挪到底部、只在勾选后出按钮；
+         海报角标只标有问题的（不完整 / 未刮削），已刮削的不再每张都挂一个绿牌子 -->
+    <section class="card card--default shell">
       <HAlert v-if="!configured" status="warning" class="tip">
         还没有配置本地媒体库根目录（STRM 输出目录）。
         <template #actions>
@@ -435,7 +432,7 @@ onBeforeUnmount(() => {
         </template>
       </HAlert>
       <div v-else class="body">
-        <!-- 固定区：筛选 + 批量 -->
+        <!-- 固定区：筛选 -->
         <div class="lf-head">
           <div class="toolbar">
             <HSearchField v-model="keyword" class="filter" placeholder="搜索片名 / 路径 / TMDB 编号" />
@@ -459,31 +456,8 @@ onBeforeUnmount(() => {
             <div class="view-sort">
               <HSegmented v-model="view" :options="VIEWS" size="sm" aria-label="显示方案" />
               <HSelect v-model="sort" :options="SORTS" aria-label="排序" class="sort" />
-            </div>
-          </div>
-
-          <div class="batch" :class="{ active: selecting }">
-            <HCheckbox
-              class="sel-all"
-              :checked="allChecked"
-              :indeterminate="someChecked"
-              :disabled="!total || selectingAll"
-              @update:checked="toggleAll"
-            >
-              <span class="sel-count">
-                <template v-if="!selecting">全选 {{ total }} 部</template>
-                <template v-else-if="allChecked && !selectedOutside">已全选 <b>{{ selected.size }}</b> 部</template>
-                <template v-else>
-                  已选 <b>{{ selected.size }}</b> 部
-                  <span v-if="selectedOutside" class="sel-tip">（{{ selectedOutside }} 部不在当前筛选里）</span>
-                </template>
-              </span>
-            </HCheckbox>
-            <span v-if="!selecting" class="sel-tip">勾选后可批量刮削</span>
-            <div class="batch-btns">
-              <HButton v-if="selecting" variant="ghost" size="sm" @click="clearSelection">清空</HButton>
-              <HButton variant="primary" size="sm" :disabled="!selecting" @click="openScrape(selectedList)">
-                <Images :size="14" />批量刮削<template v-if="selecting">（{{ selected.size }}）</template>
+              <HButton variant="ghost" size="sm" icon-only :loading="loading" aria-label="刷新" title="刷新" @click="refreshAll">
+                <RefreshCw :size="15" />
               </HButton>
             </div>
           </div>
@@ -529,9 +503,9 @@ onBeforeUnmount(() => {
                     <Clapperboard v-else :size="28" />
                   </div>
                   <img v-if="t.poster" :src="localApi.posterUrl(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
-                  <HChip :color="STATUS_TONE[t.status]" variant="primary" size="sm" class="badge" :title="statusTitle(t)">
-                    {{ statusLabel(t) }}
-                  </HChip>
+                  <span v-if="t.status !== 'ok'" class="badge" :class="`tone-${STATUS_TONE[t.status]}`" :title="statusTitle(t)">
+                    <span class="badge-dot" />{{ statusLabel(t) }}
+                  </span>
                   <HChip v-if="probeLabel(t)" color="accent" variant="primary" size="sm" class="probe-badge" :title="probeTitle(t)">
                     {{ probeLabel(t) }}
                   </HChip>
@@ -578,8 +552,35 @@ onBeforeUnmount(() => {
             </HButton>
           </div>
         </div>
+
+        <!-- 底部批量栏（手机上用 CSS order 挪回顶部，勾选后另有浮条） -->
+        <div class="batch" :class="{ active: selecting }">
+          <HCheckbox
+            class="sel-all"
+            :checked="allChecked"
+            :indeterminate="someChecked"
+            :disabled="!total || selectingAll"
+            @update:checked="toggleAll"
+          >
+            <span class="sel-count">
+              <template v-if="!selecting">全选 {{ total }} 部</template>
+              <template v-else-if="allChecked && !selectedOutside">已全选 <b>{{ selected.size }}</b> 部</template>
+              <template v-else>
+                已选 <b>{{ selected.size }}</b> 部
+                <span v-if="selectedOutside" class="sel-tip">（{{ selectedOutside }} 部不在当前筛选里）</span>
+              </template>
+            </span>
+          </HCheckbox>
+          <span v-if="!selecting" class="sel-tip">点海报看详情，点左上角圆圈勾选后批量刮削</span>
+          <div v-if="selecting" class="batch-btns">
+            <HButton variant="ghost" size="sm" @click="clearSelection">清空</HButton>
+            <HButton variant="primary" size="sm" @click="openScrape(selectedList)">
+              <Images :size="14" />批量刮削（{{ selected.size }}）
+            </HButton>
+          </div>
+        </div>
       </div>
-    </SectionCard>
+    </section>
 
     <!-- 手机：勾选后批量栏浮在底栏上方 -->
     <Transition name="float">
@@ -605,15 +606,15 @@ onBeforeUnmount(() => {
   min-height: 480px;
   min-width: 0;
 }
+/* 外壳：原来是 SectionCard（带标题），现在是一张普通卡片，底部批量栏贴边 */
 .shell {
   flex: 1;
   min-height: 0;
-}
-.shell :deep(.section-body) {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
+  gap: 0;
+  padding: 14px 16px 0;
+  overflow: hidden;
 }
 .body {
   display: flex;
@@ -663,22 +664,21 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
-/* 批量栏：单独一条浅底，按钮有呼吸空间；有勾选时换成强调色描边 */
+/* 批量栏：贴在卡片底边的一条（与网盘文件页同一做法）；平时只有全选框和一句提示，勾选后换强调色底、出按钮 */
 .batch {
+  flex: none;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  min-height: 52px;
-  padding: 8px 10px 8px 16px;
-  border-radius: var(--r-lg);
-  background: var(--surface-secondary);
-  box-shadow: inset 0 0 0 1px transparent;
-  transition: box-shadow 0.15s, background 0.15s;
+  min-height: 50px;
+  margin: 0 -16px;
+  padding: 6px 12px 6px 20px;
+  border-top: 1px solid var(--separator);
+  transition: background 0.15s;
 }
 .batch.active {
-  background: color-mix(in oklab, var(--accent) 8%, var(--surface-secondary));
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 35%, transparent);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
 }
 .sel-all {
   flex: none;
@@ -754,6 +754,14 @@ onBeforeUnmount(() => {
   overflow: hidden;
   box-shadow: 0 0 0 2px transparent;
   transition: box-shadow 0.15s, transform 0.15s;
+}
+@media (hover: hover) {
+  .title-card:not(.checked):hover {
+    transform: translateY(-3px);
+    box-shadow:
+      0 14px 28px -16px rgb(0 0 0 / 0.6),
+      0 0 0 1.5px color-mix(in oklab, var(--accent) 55%, transparent);
+  }
 }
 .title-card.checked {
   box-shadow: 0 0 0 2px var(--accent);
@@ -840,14 +848,41 @@ onBeforeUnmount(() => {
   box-shadow: none;
   color: var(--accent-foreground);
 }
+/* 刮削状态角标：只挂在「不完整 / 未刮削」上。暗色毛玻璃底 + 状态色圆点，
+   压在海报上也看得清，又不像原来那样一整块实心色牌子抢画面 */
 .badge {
+  --tone: var(--warning);
   position: absolute;
   top: 8px;
   right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   max-width: calc(100% - 16px);
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
-.badge :deep(.chip__label),
+.badge.tone-danger {
+  --tone: var(--danger);
+}
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--tone);
+}
 .probe-badge :deep(.chip__label) {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -943,6 +978,7 @@ onBeforeUnmount(() => {
 .v-sm .meta {
   display: none;
 }
+/* 小卡片放不下字：角标缩成右上角一个状态色的点 */
 .v-sm .badge {
   top: 6px;
   right: 6px;
@@ -951,9 +987,13 @@ onBeforeUnmount(() => {
   min-width: 0;
   padding: 0;
   border-radius: 999px;
+  background: var(--tone);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-size: 0;
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--background) 60%, transparent);
 }
-.v-sm .badge :deep(.chip__label) {
+.v-sm .badge-dot {
   display: none;
 }
 /* 小卡片放不下字：媒体信息也缩成左下角一个点 */
@@ -1067,11 +1107,26 @@ onBeforeUnmount(() => {
     min-height: 0;
   }
   .shell,
-  .shell :deep(.section-body),
   .body,
   .scroller {
     flex: none;
     min-height: auto;
+  }
+  .shell {
+    overflow: visible;
+    padding-bottom: 14px;
+  }
+  /* 手机是整页滚动，底部批量栏会跑到几百张卡片后面：挪回筛选下面，恢复成一条浅底圆角 */
+  .lf-head {
+    order: -2;
+  }
+  .batch {
+    order: -1;
+    margin: 0;
+    padding: 6px 10px 6px 14px;
+    border-top: 0;
+    border-radius: var(--r-lg);
+    background: var(--surface-secondary);
   }
   .scroller {
     margin: 0;
