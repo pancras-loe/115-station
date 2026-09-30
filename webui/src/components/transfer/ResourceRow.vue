@@ -31,7 +31,7 @@ const tags = computed(() => {
 
 const meta = computed(() => {
   const it = props.item
-  const out: string[] = [SOURCE_LABEL[it.source] ?? it.source]
+  const out: string[] = [(SOURCE_LABEL[it.source] ?? it.source) + (it.via ? ` ${it.via}` : '')]
   if (it.size) out.push(it.size)
   if (it.seeds) out.push(`做种 ${it.seeds}`)
   if (it.time) out.push(it.time)

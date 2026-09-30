@@ -6,6 +6,7 @@ import type { ResourceItem, SourceKey } from '@/api/transfer'
 export const SOURCE_LABEL: Record<SourceKey, string> = {
   gy: '观影',
   pansou: '盘搜',
+  tg: 'TG 频道',
   mukaku: '不太灵',
   re0: 'RE0',
 }

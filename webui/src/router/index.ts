@@ -72,8 +72,8 @@ const routes: RouteRecordRaw[] = [
         name: 'upload-download',
         component: () => import('@/pages/UploadDownloadPage.vue'),
         meta: { title: '监控上传', desc: '把本地新产生的 NFO / 图片回传 115', icon: 'transfer' },
-        // 「转存下载」页签已并进影视转存：旧地址 ?tab=download 带过去
-        beforeEnter: (to) => (to.query.tab === 'download' ? { name: 'media-transfer' } : true),
+        // 「转存下载」页签已并进影视转存的「链接转存」：旧地址 ?tab=download 带过去
+        beforeEnter: (to) => (to.query.tab === 'download' ? { name: 'media-transfer', query: { tab: 'link' } } : true),
       },
       {
         path: 'media-transfer',

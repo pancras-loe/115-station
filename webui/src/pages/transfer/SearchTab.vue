@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
-import { ArrowLeft, Search, Send } from '@lucide/vue'
+import { ArrowLeft, Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
@@ -13,78 +13,36 @@ import { resourcesApi, transferApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo, ResourceQuery } from '@/api/transfer'
 import { useTransferSources } from '@/composables/transferSources'
-import { toastError, useFeedback } from '@/composables/useFeedback'
+import { parseLinks, pendingLinkText } from '@/composables/transferLinks'
+import { useFeedback } from '@/composables/useFeedback'
 
 const router = useRouter()
-const { message, dialog } = useFeedback()
+const { message } = useFeedback()
 const { state: srcState } = useTransferSources()
 
-// ---- 输入框：贴链接就提交，否则当片名 / TMDB ID 搜 ----
+// ---- 输入框：片名 / TMDB ID。贴了链接就带去「链接转存」页签 ----
 const input = ref('')
-const code = ref('')
 const busy = ref(false)
-const lastSubmit = ref<{ ok: boolean; text: string } | null>(null)
 
-type LinkKind = 'share' | 'magnet' | 'ed2k' | 'http' | ''
+const looksLikeLink = computed(() => parseLinks(input.value).length > 0)
 
-/** 与后端 classifyLink 同口径；TMDB 的网页链接是在指定条目，不是下载链接 */
-function linkKindOf(raw: string): LinkKind {
-  const lower = raw.trim().toLowerCase()
-  if (['115.com/s/', '115cdn.com/s/', 'anxia.com/s/'].some((d) => lower.includes(d))) return 'share'
-  if (lower.startsWith('magnet:?')) return 'magnet'
-  if (lower.startsWith('ed2k://')) return 'ed2k'
-  if (/^(https?|ftp):\/\//.test(lower) && !lower.includes('themoviedb.org')) return 'http'
-  return ''
-}
-
-const linkKind = computed(() => linkKindOf(input.value))
-/** 分享链接里已经带了提取码（?password= / #xxxx / 「提取码 xxxx」）就不用再填 */
-const shareHasCode = computed(() => /[?&]password=|#[a-z0-9]{4}|提取码|访问码|密码/i.test(input.value))
-
-const LINK_LABEL: Record<Exclude<LinkKind, ''>, string> = {
-  share: '115 分享链接，将转存',
-  magnet: '磁力链接，将提交 115 离线下载',
-  ed2k: 'ed2k 链接，将提交 115 离线下载',
-  http: 'HTTP 链接，将提交 115 离线下载',
-}
-
-async function go() {
+function go() {
   const raw = input.value.trim()
   if (!raw) {
-    message.warning('输入片名、TMDB ID，或粘贴链接')
+    message.warning('输入片名或 TMDB ID')
     return
   }
-  if (linkKind.value) await submitLink(raw)
-  else await searchTmdb(raw)
+  if (looksLikeLink.value) {
+    toLinkTab()
+    return
+  }
+  void searchTmdb(raw)
 }
 
-async function submitLink(raw: string) {
-  if (linkKind.value === 'http') {
-    const ok = await dialog.confirm({
-      title: '提交 HTTP 离线下载',
-      content: '这是一个普通网页链接。115 会按链接下载文件；如果它是网页而不是文件，下载下来的就是那个网页。确定提交吗？',
-      actions: [
-        { label: '取消', value: false, variant: 'tertiary' },
-        { label: '提交离线下载', value: true, variant: 'primary' },
-      ],
-    })
-    if (!ok) return
-  }
-  busy.value = true
-  lastSubmit.value = null
-  try {
-    const r = await transferApi.submit({ url: raw, code: code.value.trim() })
-    lastSubmit.value = { ok: true, text: r.message }
-    message.success(r.message)
-    input.value = ''
-    code.value = ''
-  } catch (e) {
-    const text = e instanceof Error ? e.message : '提交失败'
-    lastSubmit.value = { ok: false, text }
-    toastError(e, '提交失败')
-  } finally {
-    busy.value = false
-  }
+function toLinkTab() {
+  pendingLinkText.value = input.value
+  input.value = ''
+  router.push({ query: { tab: 'link' } })
 }
 
 // ---- TMDB 选片 ----
@@ -99,7 +57,6 @@ async function searchTmdb(q: string) {
   stage.value = 'pick'
   cands.value = []
   candHint.value = ''
-  lastSubmit.value = null
   try {
     const d = await resourcesApi.tmdbSearch(q)
     cands.value = d.data ?? []
@@ -153,32 +110,28 @@ const selOwned = computed(() => {
         <HInput
           v-model="input"
           class="bar-input"
-          placeholder="片名、TMDB ID，或直接粘贴磁力 / ed2k / 115 分享链接"
-          :input-attrs="{ 'aria-label': '片名或链接', autocomplete: 'off' }"
-          @enter="go"
-        />
-        <HInput
-          v-if="linkKind === 'share' && !shareHasCode"
-          v-model="code"
-          class="bar-code"
-          placeholder="提取码"
-          :input-attrs="{ 'aria-label': '提取码', autocomplete: 'off' }"
+          placeholder="片名（中英文均可）或 TMDB ID"
+          :input-attrs="{ 'aria-label': '片名或 TMDB ID', autocomplete: 'off' }"
           @enter="go"
         />
         <HButton variant="primary" :loading="busy" @click="go">
-          <template #icon><Send v-if="linkKind" :size="15" /><Search v-else :size="15" /></template>
-          {{ linkKind ? (linkKind === 'share' ? '转存' : '离线下载') : '搜索' }}
+          <template #icon><Search :size="15" /></template>
+          搜索
         </HButton>
       </div>
       <div class="bar-sub">
-        <span v-if="linkKind" class="kind">{{ LINK_LABEL[linkKind] }}</span>
-        <span v-if="folderPath">转存到 <b class="mono">{{ folderPath }}</b>，完成后自动整理入库</span>
-        <span v-else-if="srcState" class="warn">还没设置转存目录，分享链接转存不了</span>
-        <button type="button" class="link" @click="router.push({ query: { tab: 'sources' } })">
-          {{ folderPath ? '更改' : '去设置' }}
-        </button>
+        <template v-if="looksLikeLink">
+          <span class="kind">这是下载链接，不是片名</span>
+          <button type="button" class="link" @click="toLinkTab">带到「链接转存」提交</button>
+        </template>
+        <template v-else>
+          <span v-if="folderPath">找到的资源转存到 <b class="mono">{{ folderPath }}</b>，完成后自动整理入库</span>
+          <span v-else-if="srcState" class="warn">还没设置转存目录，分享链接转存不了</span>
+          <button type="button" class="link" @click="router.push({ query: { tab: 'link' } })">
+            {{ folderPath ? '更改' : '去设置' }}
+          </button>
+        </template>
       </div>
-      <p v-if="lastSubmit" class="result" :class="lastSubmit.ok ? 'ok' : 'err'">{{ lastSubmit.text }}</p>
     </SectionCard>
 
     <SectionCard v-if="stage === 'pick'" title="选择影片" hint="先在 TMDB 定下是哪一部，再拿规范片名去各站搜">
@@ -231,10 +184,6 @@ const selOwned = computed(() => {
   flex: 1;
   min-width: 0;
 }
-.bar-code {
-  width: 110px;
-  flex: none;
-}
 .bar-sub {
   display: flex;
   flex-wrap: wrap;
@@ -263,16 +212,6 @@ const selOwned = computed(() => {
 }
 .link:hover {
   text-decoration: underline;
-}
-.result {
-  margin: 8px 0 0;
-  font-size: 13px;
-}
-.result.ok {
-  color: var(--success);
-}
-.result.err {
-  color: var(--danger);
 }
 
 .sel {
@@ -326,9 +265,6 @@ const selOwned = computed(() => {
   }
   .bar-input {
     flex-basis: 100%;
-  }
-  .bar-code {
-    flex: 1;
   }
   .sel-poster {
     width: 56px;

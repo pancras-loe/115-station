@@ -23,6 +23,10 @@ export const tmdbImageUrl = (path: string, size = 'w154') =>
 export const pansouConfig = () => http.get<{ base_url?: string }>('/pansou/config')
 export const savePansou = (base_url: string) => http.post<{ base_url?: string }>('/pansou/config', { base_url })
 
+// ============ TG 频道（与 TG 关键词订阅共用一份频道清单） ============
+export const tgConfig = () => http.get<{ channels?: string }>('/tgsearch/config')
+export const tgSaveConfig = (channels: string) => http.post<{ channels?: string }>('/tgsearch/config', { channels })
+
 // ============ 观影 ============
 export interface GyConfig {
   base_url?: string

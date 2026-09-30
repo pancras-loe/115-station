@@ -3,11 +3,13 @@ import { useRoute, useRouter } from 'vue-router'
 import HTabs from '@/components/hero/HTabs.vue'
 import SearchTab from './transfer/SearchTab.vue'
 import SourcesTab from './transfer/SourcesTab.vue'
+import LinkTab from './transfer/LinkTab.vue'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 /**
  * 影视转存：原来观影 / 盘搜 / 不太灵 / RE0 各占一个页签，找一部片要搜四遍。
- * 现在按影片搜一次、所有来源一起出结果；各站的账号与地址收进「来源设置」。
+ * 现在按影片搜一次、所有来源一起出结果；各站的账号与地址收进「来源设置」；
+ * 手上已经有链接（ed2k / 磁力 / 115 分享）的直接去「链接转存」，转存目录也在那里。
  */
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +26,7 @@ const tab = useTabQuery('search')
 const TABS = [
   { value: 'search', label: '找资源' },
   { value: 'sources', label: '来源设置' },
+  { value: 'link', label: '链接转存' },
 ]
 </script>
 
@@ -31,7 +34,8 @@ const TABS = [
   <div class="h-tabs-page">
     <HTabs v-model="tab" :items="TABS" />
     <!-- 搜索页用 v-show 保活：去来源设置登录一下再切回来，搜到一半的结果还在 -->
-    <SearchTab v-show="tab !== 'sources'" />
+    <SearchTab v-show="tab !== 'sources' && tab !== 'link'" />
     <SourcesTab v-if="tab === 'sources'" />
+    <LinkTab v-if="tab === 'link'" />
   </div>
 </template>

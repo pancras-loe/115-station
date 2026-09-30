@@ -1,8 +1,7 @@
 package api
 
-// TG 频道抓取引擎（订阅管理的底层，Web 搜索入口已删除）：
-// 抓取 Telegram 频道公开网页预版 https://t.me/s/<频道>?q=<关键词>，
-// 解析消息卡片，供订阅检查逐频道检索新资源。
+// TG 频道抓取引擎：抓取 Telegram 频道公开网页预览 https://t.me/s/<频道>?q=<关键词>，
+// 解析消息卡片。两个使用方：TG 关键词订阅（tgsub.go）与影视转存的「TG 频道」来源（transfertg.go）。
 
 import (
 	"context"
@@ -86,9 +85,12 @@ var (
 
 // TgSearchSearch GET /tgsearch/search?keyword=xxx
 
+// tgWebBase t.me 地址（单测换成假服务器）
+var tgWebBase = "https://t.me"
+
 // tgSearchChannel 抓取并解析单个频道
 func tgSearchChannel(channel, keyword string) ([]tgItem, error) {
-	api := "https://t.me/s/" + url.PathEscape(channel) + "?q=" + url.QueryEscape(keyword)
+	api := tgWebBase + "/s/" + url.PathEscape(channel) + "?q=" + url.QueryEscape(keyword)
 	body, err := tgHTTPGet(api, 25*time.Second)
 	if err != nil {
 		return nil, err

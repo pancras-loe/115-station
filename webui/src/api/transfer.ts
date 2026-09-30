@@ -2,7 +2,7 @@ import { http } from './client'
 
 // ============ 影视转存：按影片聚合各资源站（后端 transferhub.go） ============
 
-export type SourceKey = 'gy' | 'pansou' | 'mukaku' | 're0'
+export type SourceKey = 'gy' | 'pansou' | 'tg' | 'mukaku' | 're0'
 
 export interface TransferSource {
   key: SourceKey
@@ -42,6 +42,8 @@ export interface ResourceItem {
   pan?: string
   action: ResourceAction
   title: string
+  /** 更细的出处：TG 的频道名 */
+  via?: string
   url?: string
   code?: string
   /** 观影详情页路径 / RE0 slug：服务端提交时再换成真链接 */

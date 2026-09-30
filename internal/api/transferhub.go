@@ -68,13 +68,14 @@ type resTags struct {
 
 // ResourceItem 各来源统一后的一条资源
 type ResourceItem struct {
-	Source string `json:"source"` // gy / pansou / mukaku / re0
+	Source string `json:"source"` // gy / pansou / tg / mukaku / re0
 	Kind   string `json:"kind"`   // share115 / magnet / ed2k / pan（其他网盘）
 	Pan    string `json:"pan,omitempty"`
 	// Action 点这条会发生什么：transfer=115 分享转存 / offline=离线下载 /
 	// open=其他网盘，打开原链接手动处理 / unlock=RE0 先解锁（花积分）再转存
 	Action string `json:"action"`
 	Title  string `json:"title"`
+	Via    string `json:"via,omitempty"`  // 来源里更细的出处：TG 的频道名
 	URL    string `json:"url,omitempty"`  // 直接可用的链接；观影要先去详情页取磁力、RE0 要先解锁，这两种为空
 	Code   string `json:"code,omitempty"` // 提取码
 	Ref    string `json:"ref,omitempty"`  // 需要服务端再换一次的引用：观影详情页路径 / RE0 slug
@@ -115,6 +116,7 @@ type resSource struct {
 var resSources = []resSource{
 	{Key: "gy", Label: "观影", ready: gyReady, search: gyResSearch},
 	{Key: "pansou", Label: "盘搜", ready: func() string { return "" }, search: pansouResSearch},
+	{Key: "tg", Label: "TG 频道", ready: tgResReady, search: tgResSearch},
 	{Key: "mukaku", Label: "不太灵", ready: mukakuReady, search: mukakuResSearch},
 	{Key: "re0", Label: "RE0", ready: re0Ready, search: re0ResSearch},
 }
@@ -406,6 +408,24 @@ func resTagsOf(title string) resTags {
 	return t
 }
 
+// resMergeTags 以 base 为准，空着的字段用 extra 补
+func resMergeTags(base, extra resTags) resTags {
+	fill := func(dst *string, v string) {
+		if *dst == "" {
+			*dst = v
+		}
+	}
+	fill(&base.Pix, extra.Pix)
+	fill(&base.Type, extra.Type)
+	fill(&base.Effect, extra.Effect)
+	fill(&base.Video, extra.Video)
+	fill(&base.Audio, extra.Audio)
+	fill(&base.Team, extra.Team)
+	fill(&base.Season, extra.Season)
+	base.Zh = base.Zh || extra.Zh
+	return base
+}
+
 // resSeasonOf 标题里写的季：S01 / S01-S03 / 全集。只给剧集的季筛选用，认不出就空着
 func resSeasonOf(title string) string {
 	if m := reResSeason.FindStringSubmatch(title); m != nil {
@@ -588,9 +608,8 @@ func resNormalize(q resQuery, items []ResourceItem) []ResourceItem {
 		if removedCloudResource(it.Pan, it.URL) {
 			continue
 		}
-		zh := it.Tags.Zh
-		it.Tags = resTagsOf(it.Title)
-		it.Tags.Zh = it.Tags.Zh || zh
+		// 来源自己给的标签（RE0 的字幕语言、TG 的话题标签）只补标题里解析不出来的
+		it.Tags = resMergeTags(resTagsOf(it.Title), it.Tags)
 		if it.SizeBytes == 0 {
 			if it.Size == "" {
 				// 盘搜、不太灵不给大小，标题里常写着「[12.3G]」

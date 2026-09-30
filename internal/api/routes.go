@@ -341,6 +341,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/transfer/resources/:source", h.TransferResources)
 		protected.POST("/transfer/submit", h.TransferSubmit)
 		protected.GET("/transfer/owned", h.TransferOwned)
+		protected.GET("/tgsearch/config", h.TgSearchGetConfig) // 影视转存「TG 频道」来源的频道清单
+		protected.POST("/tgsearch/config", h.TgSearchSaveConfig)
 
 		// 影视转存 · 观影（账号密码登录 + PoW 反爬自动过验证）
 		protected.GET("/guanying/config", h.GyGetConfig)

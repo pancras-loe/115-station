@@ -347,6 +347,7 @@ const ROUTES: Record<string, Route> = {
     sources: [
       { key: 'gy', label: '观影', enabled: true, reason: '' },
       { key: 'pansou', label: '盘搜', enabled: true, reason: '' },
+      { key: 'tg', label: 'TG 频道', enabled: true, reason: '' },
       { key: 'mukaku', label: '不太灵', enabled: true, reason: '未设置 VIP Token（资源仅 VIP 可见）' },
       { key: 're0', label: 'RE0', enabled: true, reason: '' },
     ],
@@ -368,6 +369,13 @@ const ROUTES: Record<string, Route> = {
       { source: 'pansou', kind: 'share115', action: 'transfer', title: '流浪地球2 4K 合集', url: 'https://115.com/s/other', tags: { pix: '2160p' }, relevant: false, rank: 1 },
     ],
   },
+  '/transfer/resources/tg': {
+    items: [
+      { source: 'tg', kind: 'share115', action: 'transfer', title: '沙丘2 (2024) 2160p WEB-DL DDP5.1 Atmos', via: '@quanquan_115', url: 'https://115cdn.com/s/tg001', code: 'q9w8', size: '21.6GB', size_bytes: 23192823398, time: '2026-09-20 21:14', time_unix: 1758374040, tags: { pix: '2160p', type: 'WEB-DL', audio: 'DDP5.1' }, relevant: true, rank: 1 },
+    ],
+    note: '1 个频道没抓到：share_other',
+  },
+  '/tgsearch/config': { channels: 'quanquan_115\nshare_other' },
   '/transfer/resources/re0': {
     items: [
       { source: 're0', kind: 'share115', action: 'unlock', title: '沙丘2 2160p WEB-DL', ref: 'slug-1', size: '22.4GB', size_bytes: 24051816857, points: 5, owned: false, tags: { pix: '2160p', type: 'WEB-DL' }, relevant: true, rank: 1 },
