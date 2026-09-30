@@ -180,6 +180,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/config/tmdb", h.SaveTmdbConfig)
 		protected.GET("/config/setting", h.GetSetting)
 		protected.POST("/config/setting", h.SaveSetting)
+		protected.GET("/config/secret", h.RevealSecret)
 		protected.POST("/config/test-ai", h.TestAIConnection)
 		protected.POST("/config/test-tmdb", h.TestTMDBConnection)
 
@@ -1513,6 +1514,53 @@ func unmaskSensitiveJSON(newV, oldV string) string {
 		return newV
 	}
 	return string(b)
+}
+
+// RevealSecret 按需取一个被掩码的密钥明文（界面上点「眼睛」时才调）
+// GET /config/secret?key=emby&field=api_key（field 为 JSON 点路径，如 wecom.secret）
+//
+// GET /config/setting 的整份脱敏保持不变：表单加载、页面里的 XSS 都拿不到明文，
+// 只有用户点开的那一个字段走这里，且只认敏感字段名，每次都记一行日志。
+// 观影密码与 RE0 应用 Secret 不在 Setting 表里，按 key 单独取。
+func (h *Handler) RevealSecret(c *gin.Context) {
+	key, field := c.Query("key"), c.Query("field")
+	parts := strings.Split(field, ".")
+	if field == "" || !sensitiveFieldRe.MatchString(parts[len(parts)-1]) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不是密钥字段"})
+		return
+	}
+	var value string
+	switch {
+	case key == "guanying" && field == "password":
+		value = loadGyCfg().Password
+	case key == "re0" && field == "client_secret":
+		value = loadRe0Cfg().ClientSecret
+	case sensitiveSettingKeys[key]:
+		var root any
+		if raw := h.settingValueRaw(key); raw != "" && json.Unmarshal([]byte(raw), &root) != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "配置解析失败"})
+			return
+		}
+		value = secretAt(root, parts)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "该配置没有掩码字段"})
+		return
+	}
+	log.Printf("[配置] ○ 查看密钥：%s.%s", key, field)
+	c.JSON(http.StatusOK, gin.H{"value": value})
+}
+
+// secretAt 沿点路径取字符串值，路径不存在或不是字符串返回空
+func secretAt(n any, path []string) string {
+	for _, p := range path {
+		m, ok := n.(map[string]any)
+		if !ok {
+			return ""
+		}
+		n = m[p]
+	}
+	s, _ := n.(string)
+	return s
 }
 
 // SaveSetting 保存通用配置（key-value，value 为 JSON 字符串）

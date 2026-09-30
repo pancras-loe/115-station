@@ -133,6 +133,8 @@ async function loadNotify() {
     webhook: '',
   })
   let t = v.token
+  // 后端对 token 回的是掩码，接收地址要拼真值，否则复制出去的是 token=••••
+  if (t === configApi.SECRET_MASK) t = await configApi.revealSecret('emby-notify', 'token')
   // 兼容旧版：token 曾经只存在完整 webhook 地址里
   if (!t && v.webhook) t = v.webhook.match(/[?&]token=([^&]+)/)?.[1] ?? ''
   if (!t) {
@@ -165,6 +167,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
           <SecretInput
             v-model="model.api_key"
             name="emby-api-key"
+            :reveal="{ key: 'emby', field: 'api_key' }"
             placeholder="Emby 设置 → API 密钥 中生成"
           />
           <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>

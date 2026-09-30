@@ -109,7 +109,7 @@ const TABS = computed(() => [
           <HInput v-model="model.wecom.corp_id" placeholder="corpid" :input-attrs="plainProps('wecom-corp-id')" />
         </FieldRow>
         <FieldRow label="应用 Secret" tip="自建应用的凭证，泄露后请在企微后台重置。">
-          <SecretInput v-model="model.wecom.secret" name="wecom-app-secret" placeholder="secret" />
+          <SecretInput v-model="model.wecom.secret" name="wecom-app-secret" :reveal="{ key: 'message', field: 'wecom.secret' }" placeholder="secret" />
         </FieldRow>
         <FieldRow label="Agent ID" tip="自建应用的数字 ID。">
           <HInput v-model="model.wecom.agent_id" placeholder="agentid" :input-attrs="plainProps('wecom-agent-id')" />
@@ -121,12 +121,13 @@ const TABS = computed(() => [
           <HInput v-model="model.wecom.api_url" />
         </FieldRow>
         <FieldRow label="Token" tip="企微「接收消息服务器配置」的 Token——机器人互动必填，仅发通知可不填。">
-          <SecretInput v-model="model.wecom.token" name="wecom-callback-token" placeholder="机器人互动用，可留空" />
+          <SecretInput v-model="model.wecom.token" name="wecom-callback-token" :reveal="{ key: 'message', field: 'wecom.token' }" placeholder="机器人互动用，可留空" />
         </FieldRow>
         <FieldRow label="EncodingAESKey" tip="企微「接收消息服务器配置」的 43 位密钥——机器人互动必填。">
           <SecretInput
             v-model="model.wecom.encoding_aes_key"
             name="wecom-aes-key"
+            :reveal="{ key: 'message', field: 'wecom.encoding_aes_key' }"
             placeholder="43 位，机器人互动用"
           />
         </FieldRow>
@@ -158,7 +159,7 @@ const TABS = computed(() => [
           服务重启或重新启用后不补执行离线期间的指令，请重新发送。
         </HAlert>
         <FieldRow label="Bot Token" tip="Telegram BotFather 创建机器人后的 Token。">
-          <SecretInput v-model="model.tg.token" name="tg-bot-token" placeholder="123456:ABC..." />
+          <SecretInput v-model="model.tg.token" name="tg-bot-token" :reveal="{ key: 'message', field: 'tg.token' }" placeholder="123456:ABC..." />
         </FieldRow>
         <FieldRow label="Chat ID" tip="通知接收目标。填写个人私聊 ID 时，该会话同时可以操作机器人；群和频道只接收通知。启用后可私聊机器人发送 /id 查询。">
           <HInput v-model="model.tg.chat_id" placeholder="接收消息的 chat id" />
@@ -184,7 +185,7 @@ const TABS = computed(() => [
           <HInput v-model="model.feishu.webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" />
         </FieldRow>
         <FieldRow label="签名密钥" tip="添加机器人时若开启了「签名校验」才需要填，否则留空。">
-          <SecretInput v-model="model.feishu.secret" name="feishu-sign-secret" placeholder="未开启签名校验则留空" />
+          <SecretInput v-model="model.feishu.secret" name="feishu-sign-secret" :reveal="{ key: 'message', field: 'feishu.secret' }" placeholder="未开启签名校验则留空" />
         </FieldRow>
         <FieldRow label="状态">
           <HSegmented v-model="model.feishu.enabled" :options="[{ label: '启用', value: true }, { label: '禁用', value: false }]" />
@@ -213,6 +214,7 @@ const TABS = computed(() => [
           <SecretInput
             v-model="model.qq_onebot.token"
             name="onebot-access-token"
+            :reveal="{ key: 'message', field: 'qq_onebot.token' }"
             placeholder="与服务端 access_token 一致，可留空"
           />
         </FieldRow>
@@ -257,7 +259,7 @@ const TABS = computed(() => [
           <HInput v-model="model.qq_official.app_id" placeholder="机器人 AppID" :input-attrs="plainProps('qqoff-app-id')" />
         </FieldRow>
         <FieldRow label="AppSecret" tip="机器人管理页的密钥，用于换取 access_token。">
-          <SecretInput v-model="model.qq_official.secret" name="qqoff-app-secret" placeholder="机器人密钥" />
+          <SecretInput v-model="model.qq_official.secret" name="qqoff-app-secret" :reveal="{ key: 'message', field: 'qq_official.secret' }" placeholder="机器人密钥" />
         </FieldRow>
         <FieldRow label="群 ID" tip="接收通知的群 ID（group_openid）。把机器人拉进群后，从官方事件推送里可以查到。">
           <HInput v-model="model.qq_official.group_id" placeholder="group_openid" />

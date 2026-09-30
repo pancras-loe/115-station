@@ -18,6 +18,13 @@ export async function getSetting<T>(key: string, fallback: T): Promise<T> {
 export const saveSetting = (key: string, value: unknown) =>
   http.post('/config/setting', { key, value: JSON.stringify(value) })
 
+/** 后端对密钥字段回传的掩码；原样存回表示「不改」 */
+export const SECRET_MASK = '••••'
+
+/** 取一个被掩码的密钥明文（field 是 JSON 点路径，如 wecom.secret） */
+export const revealSecret = async (key: string, field: string) =>
+  (await http.get<{ value?: string }>('/config/secret', { params: { key, field } })).value ?? ''
+
 // ---- TMDB 用独立接口，不走 Setting 表 ----
 export interface TmdbConfig {
   api_url: string

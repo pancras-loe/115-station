@@ -182,7 +182,7 @@ onMounted(load)
         <div class="auth-row">
           <div class="h-field-row">
             <HInput v-model="form.username" placeholder="用户名 / 邮箱" :input-attrs="plainProps('gy-account')" />
-            <SecretInput v-model="form.password" name="gy-secret" placeholder="密码" />
+            <SecretInput v-model="form.password" name="gy-secret" :reveal="{ key: 'guanying', field: 'password' }" placeholder="密码" />
             <HButton :variant="loggedIn ? 'tertiary' : 'primary'" :loading="authing" @click="auth">
               {{ loggedIn ? '退出登录' : '登录' }}
             </HButton>

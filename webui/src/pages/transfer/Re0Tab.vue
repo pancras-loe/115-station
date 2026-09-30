@@ -157,7 +157,8 @@ onMounted(load)
           <HInput v-model="form.base_url" placeholder="站点地址" class="w180" :input-attrs="plainProps('re0-base-url')" />
           <HInput v-model="form.client_id" placeholder="client_id（app_xxx）" class="w200" :input-attrs="plainProps('re0-client-id')" />
           <div class="w200">
-            <SecretInput v-model="form.client_secret" name="re0-client-secret" placeholder="应用 Secret" />
+            <SecretInput v-model="form.client_secret" name="re0-client-secret"
+              :reveal="{ key: 're0', field: 'client_secret' }" placeholder="应用 Secret" />
           </div>
         </div>
       </FieldRow>
