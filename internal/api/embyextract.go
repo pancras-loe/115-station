@@ -554,7 +554,7 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 			}
 			sent = true
 			setEmbyExtractRunning(it.ID, it.sourceLabel(src))
-			one, msg := embyExtractOne(cfg, it, src)
+			one, msg, fileFault := embyExtractOne(cfg, it, src)
 			if one {
 				msg = ""
 			} else {
@@ -567,7 +567,10 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 				ok, errMsg = false, joinProbeErr(errMsg, msg)
 			}
 			seen[k] = msg
-			if one {
+			if one || fileFault {
+				// 文件本身的毛病（直链取到了、Emby 的 ffprobe 读不了）说明 115 与 Emby 都正常：
+				// 不计入熔断。2026-10-02《鱿鱼游戏》S02：音轨里有一条 xHE-AAC（AAC object type 42），
+				// Emby 自带的 ffprobe 5.1 不认，整个文件探测失败；连着三集一样，熔断白停 30 分钟
 				embyExtractFails = 0
 			} else if embyExtractFails++; embyExtractFails >= embyExtractBreakAfter {
 				// 熔断：这个条目剩下的版本不探了（算这次失败），先落账再暂停 ——
@@ -1095,8 +1098,13 @@ var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 // 单版本条目也要点名 —— Emby 实测把同目录多版本存成几个独立条目、各带一个 MediaSources，
 // 但对其中任何一个发 PlaybackInfo，返回的是整组版本、主版本排第一（2026-09-30《夏洛特烦恼》：
 // 883 缺信息，返回的第一个是早就探过的 882，0 秒报「成功」，883 其实没探）
-func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource) (ok bool, errMsg string) {
+//
+// fileFault = Emby 正常返回、探测期间本站也成功给出过直链，却没有轨道：多半是 Emby 的 ffprobe
+// 读不了这个文件（不支持的编码等），和 115 风控无关。计数是全局的，同时有人在播放也会加，
+// 但 115 真被风控时播放同样取不到链，不会把风控误判成文件问题
+func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource) (ok bool, errMsg string, fileFault bool) {
 	start := time.Now()
+	linksBefore := playbackLinksServed.Load()
 	q := url.Values{"api_key": {cfg.APIKey}}
 	if src.ID != "" {
 		q.Set("MediaSourceId", src.ID)
@@ -1104,23 +1112,23 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 	label := it.sourceLabel(src)
 	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+"/Items/"+url.PathEscape(it.ID)+"/PlaybackInfo?"+q.Encode(), nil)
 	if err != nil {
-		return false, err.Error()
+		return false, err.Error(), false
 	}
 	resp, err := embyExtractClient.Do(req)
 	if err != nil {
 		var ne net.Error
 		if errors.As(err, &ne) && ne.Timeout() {
 			log.Printf("[Emby探测] ○ %s：等了 %s 还没返回，Emby 可能仍在提取（不会马上重试）", label, embyExtractTimeout)
-			return false, "超时"
+			return false, "超时", false
 		}
 		log.Printf("[Emby探测] ✗ %s：请求失败 %v", label, err)
-		return false, err.Error()
+		return false, err.Error(), false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		io.Copy(io.Discard, resp.Body)
 		log.Printf("[Emby探测] ✗ %s：HTTP %d", label, resp.StatusCode)
-		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return false, fmt.Sprintf("HTTP %d", resp.StatusCode), false
 	}
 	var info struct {
 		MediaSources []embyMediaSource `json:"MediaSources"`
@@ -1129,12 +1137,17 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 	took := time.Since(start).Round(100 * time.Millisecond)
 	streams := playbackSourceStreams(info.MediaSources, src)
 	if !embyStreamsComplete(streams) {
+		if playbackLinksServed.Load() > linksBefore {
+			log.Printf("[Emby探测] ○ %s：直链已取到，但 Emby 没提取到音视频轨道（%s）—— 多半是 Emby 的 ffprobe 读不了这个文件（如不支持的音轨编码），看 Emby 日志里这条 STRM 的 ffprobe 报错；不计入连续失败",
+				label, took)
+			return false, "直链正常，Emby 的 ffprobe 读不了这个文件", true
+		}
 		log.Printf("[Emby探测] ○ %s：Emby 返回了，但没提取到音视频轨道（%s）—— 看 Emby 日志里这条 STRM 的 ffprobe 报错",
 			label, took)
-		return false, "没提取到音视频轨道"
+		return false, "没提取到音视频轨道", false
 	}
 	log.Printf("[Emby探测] ✓ %s：%s（%s）", label, embyStreamsBrief(streams), took)
-	return true, ""
+	return true, "", false
 }
 
 // playbackSourceStreams PlaybackInfo 返回里点名那个版本的轨道。

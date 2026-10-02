@@ -20,6 +20,9 @@ type fakeExtractEmby struct {
 	srv     *httptest.Server
 	mu      sync.Mutex
 	probeOK bool
+	// noStreams：PlaybackInfo 返回 200 却没有轨道（Emby 的 ffprobe 读不了文件）；
+	// linkServed 再模拟探测期间本站给出过直链
+	noStreams, linkServed bool
 	eps     []string        // 缺媒体信息的集 id
 	done    map[string]bool // 已探测成功
 	calls   map[string]int  // 每个 id 的 PlaybackInfo 次数
@@ -66,6 +69,13 @@ func newFakeExtractEmby(t *testing.T, probeOK bool, eps ...string) *fakeExtractE
 			fmt.Sscanf(r.URL.Path, "/Items/%s", &id)
 			id = id[:len(id)-len("/PlaybackInfo")]
 			f.calls[id]++
+			if f.linkServed {
+				playbackLinksServed.Add(1)
+			}
+			if f.noStreams {
+				json.NewEncoder(w).Encode(map[string]any{"MediaSources": []map[string]any{{"MediaStreams": nil}}})
+				return
+			}
 			if !f.probeOK {
 				http.Error(w, "boom", http.StatusInternalServerError)
 				return
@@ -230,6 +240,36 @@ func TestEmbyExtractBreaker(t *testing.T) {
 	}
 	if embyExtractFails != 0 {
 		t.Fatal("暂停后连续失败计数应清零")
+	}
+}
+
+// 直链取到了、Emby 的 ffprobe 读不了文件（2026-10-02《鱿鱼游戏》S02 的 xHE-AAC 音轨）：
+// 是文件的毛病，不计入熔断；没取过直链的「没轨道」仍然计入（可能是 115 取不到链）
+func TestEmbyExtractFileFaultNoBreak(t *testing.T) {
+	resetExtractState(t)
+	embyExtractBreakPause = 300 * time.Millisecond
+	f := newFakeExtractEmby(t, false, "a", "b", "c")
+	f.noStreams, f.linkServed = true, true
+	start := time.Now()
+	embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧"})
+	if f.totalCalls() != 3 {
+		t.Fatalf("三个条目各请求一次，实际 %v", f.calls)
+	}
+	if time.Since(start) >= embyExtractBreakPause {
+		t.Fatal("文件本身读不了不应触发熔断")
+	}
+	if m, ok := embyExtractLoad("a"); !ok || m.LastErr == "" {
+		t.Fatalf("仍要记失败账：%+v", m)
+	}
+
+	resetExtractState(t)
+	embyExtractBreakPause = 150 * time.Millisecond
+	g := newFakeExtractEmby(t, false, "a", "b", "c")
+	g.noStreams = true
+	start = time.Now()
+	embyExtractPath(g.cfg(), embyExtractEntry{path: "/media/某剧"})
+	if time.Since(start) < embyExtractBreakPause {
+		t.Fatal("没取到直链的失败应照常熔断")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"115-station/internal/config"
@@ -158,8 +159,13 @@ func servePickcodeDirect(c *gin.Context, db *gorm.DB, cfg *config.Config, pickco
 	// 带上来源 IP 与 UA：入库后紧跟着的 302 多半是神医助手 / Emby 用 ffprobe 探测 STRM，
 	// 不看 UA 分不清是真播放还是探测
 	vlog("[播放] ✓ 返回 CDN 302（取链 %s，%s，UA=%q）", time.Since(start).Round(time.Millisecond), c.ClientIP(), c.Request.UserAgent())
+	playbackLinksServed.Add(1)
 	playbackRedirect(c.Writer, c.Request, u)
 }
+
+// playbackLinksServed 成功换出直链并返回 302 的次数。Emby 提前探测据此区分
+// 「115 取不到链」（该熔断）和「链取到了、Emby 的 ffprobe 读不了这个文件」（不该熔断）
+var playbackLinksServed atomic.Int64
 
 func registerDirectPlaybackRoutes(r gin.IRouter, db *gorm.DB, cfg *config.Config) {
 	for _, route := range []string{"/d/:pickcode", "/d/:pickcode/*filename"} {
