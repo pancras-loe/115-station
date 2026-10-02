@@ -509,6 +509,12 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 		// 间隔放在记账之前：记账（LastErr=「请求中」）到发请求之间不能空着 3 秒 ——
 		// 那几秒里条目既不算「正在探」，失败清单就把它当成「请求中断（服务重启）」列出来，
 		// 探一集闪一条（2026-09-30 现场）。停服也不会留下一笔没发出去的尝试
+		// 熔断暂停在「下一个请求发出之前」等，不在触发熔断的那一刻原地等：后者让这条路径
+		// 迟迟不收尾，任务卡在「片目 2/3」半小时，点停止也叫不醒（2026-10-02 现场）。
+		// 排它的任务全被停了就不替它干等，交给下面的停止分支收尾
+		if !embyExtractPauseWait(func() bool { return !e.auto && embyExtractAllCanceled(jobs) }) {
+			return false
+		}
 		if sent {
 			if !embyExtractWait(embyExtractGap) {
 				return false
@@ -596,10 +602,7 @@ func embyExtractPath(cfg embyRefreshCfg, e embyExtractEntry) (alive bool) {
 				embyExtractFails, embyExtractBreakPause)
 			embyExtractFails = 0
 			setEmbyExtractPausedUntil(time.Now().Add(embyExtractBreakPause))
-			if !embyExtractWait(embyExtractBreakPause) {
-				return false
-			}
-			sent = false // 暂停已经隔开了
+			sent = false // 暂停会隔开下一个请求
 		}
 	}
 	if sent && !embyExtractWait(embyExtractGap) {
@@ -615,15 +618,31 @@ func joinProbeErr(a, b string) string {
 	return a + "；" + b
 }
 
-// embyExtractWait 两次探测之间的间隔（熔断暂停也走它）；返回 false 表示服务要退出了
+// embyExtractWait 两次探测之间的间隔；返回 false 表示服务要退出了
 func embyExtractWait(d time.Duration) bool {
 	select {
 	case <-stopCh:
 		return false
 	case <-time.After(d):
 	}
-	setEmbyExtractPausedUntil(time.Time{})
 	return true
+}
+
+// embyExtractPauseWait 熔断暂停中就等到暂停结束；canceled 为真时提前返回（任务停了，不必替它等）。
+// 暂停期间每秒看一次 canceled。返回 false 表示服务要退出了
+func embyExtractPauseWait(canceled func() bool) bool {
+	for {
+		t, ok := embyExtractPausedUntil()
+		if !ok || canceled() {
+			return true
+		}
+		d := min(time.Until(t), time.Second)
+		select {
+		case <-stopCh:
+			return false
+		case <-time.After(d):
+		}
+	}
 }
 
 // embyExtractFails 连续失败的条目数（只有 worker 一个 goroutine 读写）

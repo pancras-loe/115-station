@@ -112,9 +112,13 @@ func resetExtractState(t *testing.T) {
 	t.Helper()
 	newTestDB(t, "extract.db")
 	embyExtractFails = 0
+	setEmbyExtractPausedUntil(time.Time{})
 	gap, pause := embyExtractGap, embyExtractBreakPause
 	embyExtractGap, embyExtractBreakPause = time.Millisecond, time.Millisecond
-	t.Cleanup(func() { embyExtractGap, embyExtractBreakPause = gap, pause })
+	t.Cleanup(func() {
+		embyExtractGap, embyExtractBreakPause = gap, pause
+		setEmbyExtractPausedUntil(time.Time{})
+	})
 }
 
 func TestEmbyExtractTargetsOnlyMissing(t *testing.T) {
@@ -235,11 +239,45 @@ func TestEmbyExtractBreaker(t *testing.T) {
 	if f.totalCalls() != 3 {
 		t.Fatalf("三个条目各请求一次，实际 %v", f.calls)
 	}
-	if time.Since(start) < embyExtractBreakPause {
-		t.Fatal("连续 3 个失败应暂停")
+	// 熔断落在最后一个条目上：这条路径马上收尾，不原地等（否则任务卡住、停止也叫不醒）
+	if time.Since(start) >= embyExtractBreakPause {
+		t.Fatal("触发熔断的路径不应原地等暂停")
+	}
+	if _, ok := embyExtractPausedUntil(); !ok {
+		t.Fatal("连续 3 个失败应进入暂停")
 	}
 	if embyExtractFails != 0 {
 		t.Fatal("暂停后连续失败计数应清零")
+	}
+	// 下一个请求要等暂停结束才发
+	g := newFakeExtractEmby(t, true, "d")
+	embyExtractPath(g.cfg(), embyExtractEntry{path: "/media/某剧"})
+	if time.Since(start) < embyExtractBreakPause {
+		t.Fatal("暂停期间不应发下一个请求")
+	}
+}
+
+// 暂停期间排它的任务被停：不替它干等，马上收尾
+func TestEmbyExtractPauseCancel(t *testing.T) {
+	resetExtractState(t)
+	embyExtractBreakPause = time.Hour
+	setEmbyExtractPausedUntil(time.Now().Add(time.Hour))
+	t.Cleanup(func() { setEmbyExtractPausedUntil(time.Time{}) })
+	cancelEmbyExtractJob(77)
+	t.Cleanup(func() { forgetEmbyExtractCancel(77) })
+	f := newFakeExtractEmby(t, true, "a")
+	done := make(chan struct{})
+	go func() {
+		embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧", jobs: []uint{77}, manual: true})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("任务停了还在等熔断暂停")
+	}
+	if f.totalCalls() != 0 {
+		t.Fatalf("停掉的任务不应再发请求：%v", f.calls)
 	}
 }
 
@@ -247,15 +285,14 @@ func TestEmbyExtractBreaker(t *testing.T) {
 // 是文件的毛病，不计入熔断；没取过直链的「没轨道」仍然计入（可能是 115 取不到链）
 func TestEmbyExtractFileFaultNoBreak(t *testing.T) {
 	resetExtractState(t)
-	embyExtractBreakPause = 300 * time.Millisecond
+	embyExtractBreakPause = time.Minute
 	f := newFakeExtractEmby(t, false, "a", "b", "c")
 	f.noStreams, f.linkServed = true, true
-	start := time.Now()
 	embyExtractPath(f.cfg(), embyExtractEntry{path: "/media/某剧"})
 	if f.totalCalls() != 3 {
 		t.Fatalf("三个条目各请求一次，实际 %v", f.calls)
 	}
-	if time.Since(start) >= embyExtractBreakPause {
+	if _, paused := embyExtractPausedUntil(); paused {
 		t.Fatal("文件本身读不了不应触发熔断")
 	}
 	if m, ok := embyExtractLoad("a"); !ok || m.LastErr == "" {
@@ -266,9 +303,9 @@ func TestEmbyExtractFileFaultNoBreak(t *testing.T) {
 	embyExtractBreakPause = 150 * time.Millisecond
 	g := newFakeExtractEmby(t, false, "a", "b", "c")
 	g.noStreams = true
-	start = time.Now()
+	embyExtractBreakPause = time.Minute
 	embyExtractPath(g.cfg(), embyExtractEntry{path: "/media/某剧"})
-	if time.Since(start) < embyExtractBreakPause {
+	if _, paused := embyExtractPausedUntil(); !paused {
 		t.Fatal("没取到直链的失败应照常熔断")
 	}
 }
