@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { EyeOff, RotateCcw } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ProbeErrNote from '@/components/ui/ProbeErrNote.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
@@ -200,6 +201,7 @@ async function unignore() {
             </div>
             <template v-if="idle(f)">
               <p v-if="f.last_err" class="f-line" :title="f.last_err">原因：{{ f.last_err }}</p>
+              <ProbeErrNote :err="f.last_err" />
               <p class="f-line dim">{{ autoText(f) }}</p>
             </template>
           </div>

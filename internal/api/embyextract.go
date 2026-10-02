@@ -1107,6 +1107,15 @@ func embyPathBase(p string) string {
 	return filepath.Base(strings.ReplaceAll(p, "\\", "/"))
 }
 
+// 两种「Emby 返回了却没有轨道」的失败原因。前端按这两句原文配说明与处理建议
+// （webui/src/utils/mediaInfo.ts 的 probeErrAdvice），改文案要两边一起改
+const (
+	// 直链取到了：文件本身 Emby 读不了（不支持的编码），不是本站或 115 的问题
+	embyProbeErrUnreadable = "直链正常，Emby 的 ffprobe 读不了这个文件"
+	// 探测期间本站没给出过直链：Emby 没能经 STRM 拿到文件
+	embyProbeErrNoStreams = "没提取到音视频轨道"
+)
+
 // embyExtractClient PlaybackInfo 专用：embyRequest 的 20 秒不够远端 STRM 探测一次
 var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 
@@ -1159,11 +1168,11 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 		if playbackLinksServed.Load() > linksBefore {
 			log.Printf("[Emby探测] ○ %s：直链已取到，但 Emby 没提取到音视频轨道（%s）—— 多半是 Emby 的 ffprobe 读不了这个文件（如不支持的音轨编码），看 Emby 日志里这条 STRM 的 ffprobe 报错；不计入连续失败",
 				label, took)
-			return false, "直链正常，Emby 的 ffprobe 读不了这个文件", true
+			return false, embyProbeErrUnreadable, true
 		}
 		log.Printf("[Emby探测] ○ %s：Emby 返回了，但没提取到音视频轨道（%s）—— 看 Emby 日志里这条 STRM 的 ffprobe 报错",
 			label, took)
-		return false, "没提取到音视频轨道", false
+		return false, embyProbeErrNoStreams, false
 	}
 	log.Printf("[Emby探测] ✓ %s：%s（%s）", label, embyStreamsBrief(streams), took)
 	return true, "", false

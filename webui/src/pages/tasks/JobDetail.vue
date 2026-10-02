@@ -5,6 +5,7 @@ import HModal from '@/components/hero/HModal.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
+import ProbeErrNote from '@/components/ui/ProbeErrNote.vue'
 import { tasksApi } from '@/api'
 import type { TaskJobDetail, TaskProbeItem } from '@/api/tasks'
 import { toastError } from '@/composables/useFeedback'
@@ -227,6 +228,7 @@ async function retry() {
               <span v-if="it.attempts" class="dim">累计请求 {{ it.attempts }} 次</span>
             </div>
             <p v-if="it.err" class="pi-line">{{ it.kind === 'held' ? `刚请求过，上次结果：${it.err}` : it.err }}</p>
+            <ProbeErrNote :err="it.err" />
             <p v-if="probeNext(it)" class="pi-line dim">{{ probeNext(it) }}</p>
           </li>
         </ul>

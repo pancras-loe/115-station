@@ -191,3 +191,46 @@ export function probeHint(p: EmbyDetailItem['probe'], limits?: ProbeLimits): str
       return '光盘结构（ISO / BDMV），Emby 探测不了，不占用 115 请求。'
   }
 }
+
+export interface ProbeErrAdvice {
+  /** 一句话结论：是谁的问题 */
+  title: string
+  /** 为什么会这样 */
+  why: string
+  /** 用户能做什么 */
+  todo: string
+}
+
+/**
+ * 探测失败原因 → 给用户看的解释与处理建议。认的是后端写死的两句原文
+ * （internal/api/embyextract.go 的 embyProbeErrUnreadable / embyProbeErrNoStreams），
+ * 多版本时前面会带「版本名：」，所以按包含判断。认不出的返回 null，界面只显示原文。
+ *
+ * 不给提示的话，用户只看到「失败」，要去翻 Emby 日志才知道是文件里有 Emby 不支持的编码，
+ * 不少人会以为是本站坏了（2026-10-02《鱿鱼游戏》S02 的 xHE-AAC 音轨）。
+ */
+export function probeErrAdvice(err?: string): ProbeErrAdvice | null {
+  if (!err) return null
+  if (err.includes('Emby 的 ffprobe 读不了这个文件')) {
+    return {
+      title: '文件本身的问题，不是本站或 115 的问题',
+      why:
+        '本站已经正常给出 115 直链，Emby 也读到了文件，但它自带的 ffprobe 解析不了。' +
+        '常见原因是文件里有它不支持的编码，比如 xHE-AAC 音轨：Emby 内置的 ffprobe 是 5.1 版，要 7.1 以上才支持。重试多少次结果都一样。',
+      todo:
+        '先在 Emby 里试播一次：能播就点「忽略」，只是 Emby 里看不到轨道信息；播不了就换一个资源，' +
+        '或者用 mkvmerge 去掉出问题的那条轨道后重新上传（不用重新编码）。想知道是哪条轨道，' +
+        '在 Emby 日志里搜这个文件名，看 ffprobe 报错里带「not implemented」的那几行。',
+    }
+  }
+  if (err.includes('没提取到音视频轨道')) {
+    return {
+      title: 'Emby 没能通过 STRM 读到文件',
+      why: 'Emby 返回了，但没有任何轨道，而且探测期间本站没有给出过 115 直链：Emby 多半没访问到 STRM 里的地址，或者本站取直链失败了。',
+      todo:
+        '检查 STRM 里的地址（本站的地址和端口）在 Emby 所在机器上能不能访问；再看本站日志同一时间有没有「[播放] ✗ 取链失败」。' +
+        '本站更新前记下的失败分不清是这种情况还是文件本身读不了，重试一次就能分清。',
+    }
+  }
+  return null
+}

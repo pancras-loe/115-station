@@ -6,6 +6,7 @@ import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
+import ProbeErrNote from '@/components/ui/ProbeErrNote.vue'
 import { localApi } from '@/api'
 import type { EmbyDetailItem, ProbeState, TitleEmby } from '@/api/local'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -295,6 +296,7 @@ function itemLabel(it: EmbyDetailItem) {
             <span v-if="it.bitrate">{{ bitrateLabel(it.bitrate) }}</span>
           </p>
           <p class="probe-hint" :class="`tone-${PROBE_TONE[it.probe.state]}`">{{ probeHint(it.probe, limits) }}</p>
+          <ProbeErrNote v-if="!it.has_info" :err="it.probe.last_err" />
           <template v-if="it.has_info">
             <div class="tracks">
               <div class="track-group">
@@ -350,6 +352,7 @@ function itemLabel(it: EmbyDetailItem) {
               </button>
               <div v-if="expanded.has(it.id)" class="row-detail">
                 <p class="probe-hint" :class="`tone-${PROBE_TONE[it.probe.state]}`">{{ probeHint(it.probe, limits) }}</p>
+                <ProbeErrNote v-if="!it.has_info" :err="it.probe.last_err" />
                 <p v-if="it.runtime || it.size" class="big-meta">
                   <span v-if="it.runtime">{{ durationLabel(it.runtime) }}</span>
                   <span v-if="it.container">{{ it.container.toUpperCase() }}</span>
