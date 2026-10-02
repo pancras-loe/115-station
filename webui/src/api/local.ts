@@ -53,6 +53,8 @@ export interface LocalEmbyStat {
 export interface LocalEmbyStats {
   configured: boolean
   ready?: boolean
+  /** 后台正在拉新快照：隔一会儿再问，拉完原地刷新卡片 */
+  refreshing?: boolean
   at?: string
   error?: string
   /** 读到的 Emby 影视条目数 */
@@ -109,8 +111,8 @@ export const listTitles = (q: LocalTitleQuery) =>
   })
 
 export const embyStats = (refresh = false) =>
-  // 大库要翻二三十页，给足时间
-  http.get<LocalEmbyStats>('/local/titles/emby-stats', { params: { refresh: refresh ? 1 : undefined }, timeoutMs: 180_000 })
+  // 后端只登记、在后台拉，立即返回
+  http.get<LocalEmbyStats>('/local/titles/emby-stats', { params: { refresh: refresh ? 1 : undefined } })
 
 /** <img> 带不了登录态：后端按 key 签了名，这条路由公开 */
 export const posterUrl = (t: LocalTitle) => (t.poster ? `/api/local/poster?${t.poster}` : '')

@@ -173,24 +173,33 @@ watch(view, (v) => {
 })
 
 // ---- Emby 媒体信息：打开页面（与点「刷新」）时拉一次快照，平时不拉 ----
+// 后端立即返回：有旧快照先用旧的（列表本身就带着角标），后台在拉（refreshing）就隔两秒再问，拉完原地刷新
 
 const emby = ref<LocalEmbyStats | null>(null)
 const embyLoading = ref(false)
 const embyError = ref('')
+let embyTimer: ReturnType<typeof setTimeout> | undefined
+let embyAlive = true
 
-async function loadEmby(refresh = false) {
+/** waited：这一轮是等着后台拉完的，列表手上的角标是旧的，要原地刷新 */
+async function loadEmby(refresh = false, waited = refresh) {
+  clearTimeout(embyTimer)
   embyLoading.value = true
-  embyError.value = ''
   try {
     const d = await localApi.embyStats(refresh)
+    if (!embyAlive) return
     emby.value = d
     embyError.value = d.error ?? ''
-    if (d.ready) await refreshInPlace()
+    if (d.refreshing) {
+      embyTimer = setTimeout(() => void loadEmby(false, true), 2000)
+      return // embyLoading 留着，等拉完
+    }
+    // 快照本来就是新的：列表请求已经带上了角标，不必再读一遍
+    if (d.ready && waited) await refreshInPlace()
   } catch (e) {
     embyError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    embyLoading.value = false
   }
+  embyLoading.value = false
 }
 
 /**
@@ -413,6 +422,8 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  embyAlive = false
+  clearTimeout(embyTimer)
   offFinished()
   clearTimeout(kwTimer)
   window.removeEventListener('resize', measure)
