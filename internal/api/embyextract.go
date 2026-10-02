@@ -1107,7 +1107,8 @@ func embyPathBase(p string) string {
 	return filepath.Base(strings.ReplaceAll(p, "\\", "/"))
 }
 
-// 两种「Emby 返回了却没有轨道」的失败原因。前端按这两句原文配说明与处理建议
+// 两种「Emby 返回了却没有轨道」的失败原因。前端按这两句原文配说明与处理建议；
+// 前一种在 Emby 日志里找到具体原因时，后面接「：音轨 #4（…）：…」
 // （webui/src/utils/mediaInfo.ts 的 probeErrAdvice），改文案要两边一起改
 const (
 	// 直链取到了：文件本身 Emby 读不了（不支持的编码），不是本站或 115 的问题
@@ -1166,6 +1167,11 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 	streams := playbackSourceStreams(info.MediaSources, src)
 	if !embyStreamsComplete(streams) {
 		if playbackLinksServed.Load() > linksBefore {
+			// 去 Emby 日志里找具体是哪条轨道读不了，用户就不用自己翻（embyprobelog.go）
+			if cause := embyProbeLogCause(cfg, src); cause != "" {
+				log.Printf("[Emby探测] ○ %s：直链正常，但 Emby 的 ffprobe 读不了这个文件（%s）—— %s；不计入连续失败", label, took, cause)
+				return false, embyProbeErrUnreadable + "：" + cause, true
+			}
 			log.Printf("[Emby探测] ○ %s：直链已取到，但 Emby 没提取到音视频轨道（%s）—— 多半是 Emby 的 ffprobe 读不了这个文件（如不支持的音轨编码），看 Emby 日志里这条 STRM 的 ffprobe 报错；不计入连续失败",
 				label, took)
 			return false, embyProbeErrUnreadable, true

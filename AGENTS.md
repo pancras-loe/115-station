@@ -425,6 +425,9 @@ git tag v1.2.0 && git push origin v1.2.0
       **手动刮削收尾的 Emby 刷新不走入库回查**（`scrapeEmbyRefresh` 的 `ingest`，只有整理交过来的刷新才算入库）：
       回查确认后会按全局开关自动探，弹窗里关掉的「轨道探测」会被它顶回来（2026-09-30 现场）。
       新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
+      **「Emby 读不了这个文件」不计入熔断**：探测期间本站成功给过直链（`playbackLinksServed`）、Emby 却没给出轨道，是文件里有 Emby 内置 ffprobe 5.1 不支持的编码（2026-10-02 xHE-AAC 音轨），
+      这时读一次 Emby 日志（`embyprobelog.go`，官方接口 `GET /System/Logs/embyserver.txt`，要管理员 API Key）按直链里的 pickcode 找出 ffprobe 报错，把哪条轨道、什么原因写进失败原因；
+      前端 `probeErrAdvice` 按失败原因原文配说明，两边文案要一起改。熔断暂停在下一个请求前才等（`embyExtractPauseWait`），别改回原地等 —— 任务会卡住、停止也叫不醒。
       **定时补全建的探测任务是第三种**（`metafill.go`，`probeJobParams.Auto` → `queueEmbyExtractJob(id, true, …)`）：挂着任务 id（任务中心看得到、能停），
       放行却走自动规则（`embyExtractAutoJobs` 记着哪些任务是自动规则的，队列条目的 `manual` 只由手动任务决定）。
       **别改成手动规则**：定时每天都跑，按手动规则（只防抖）就是每天把探不成的条目再取一次 115 直链。

@@ -211,16 +211,30 @@ export interface ProbeErrAdvice {
  */
 export function probeErrAdvice(err?: string): ProbeErrAdvice | null {
   if (!err) return null
-  if (err.includes('Emby 的 ffprobe 读不了这个文件')) {
+  const unreadable = '直链正常，Emby 的 ffprobe 读不了这个文件'
+  const at = err.indexOf(unreadable)
+  if (at >= 0) {
+    // 后端在 Emby 日志里找到了具体原因时，接在后面：「：音轨 #4（chi「台配国语」AAC）：Emby 内置的 ffprobe 不支持 …」
+    // 多个版本的失败原因之间用「；」隔开，只取这一段
+    const rest = err.slice(at + unreadable.length)
+    const detail = rest.startsWith('：') ? rest.slice(1).split('；')[0].trim() : ''
+    const fix = '先在 Emby 里试播一次：能播就点「忽略」，只是 Emby 里看不到轨道信息；播不了就换一个资源，'
+    if (detail) {
+      return {
+        title: '文件本身的问题，不是本站或 115 的问题',
+        why: `Emby 日志里的报错：${detail}。本站已经正常给出 115 直链，是 Emby 读不了文件里的这条轨道，重试多少次结果都一样。`,
+        todo: fix + '或者用 mkvmerge 去掉这条轨道后重新上传（不用重新编码）。',
+      }
+    }
     return {
       title: '文件本身的问题，不是本站或 115 的问题',
       why:
         '本站已经正常给出 115 直链，Emby 也读到了文件，但它自带的 ffprobe 解析不了。' +
         '常见原因是文件里有它不支持的编码，比如 xHE-AAC 音轨：Emby 内置的 ffprobe 是 5.1 版，要 7.1 以上才支持。重试多少次结果都一样。',
       todo:
-        '先在 Emby 里试播一次：能播就点「忽略」，只是 Emby 里看不到轨道信息；播不了就换一个资源，' +
+        fix +
         '或者用 mkvmerge 去掉出问题的那条轨道后重新上传（不用重新编码）。想知道是哪条轨道，' +
-        '在 Emby 日志里搜这个文件名，看 ffprobe 报错里带「not implemented」的那几行。',
+        '在 Emby 日志里搜这个文件名，看 ffprobe 报错里带「not implemented」的那几行（本站读 Emby 日志需要管理员权限的 API Key）。',
     }
   }
   if (err.includes('没提取到音视频轨道')) {

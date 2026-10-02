@@ -1,0 +1,91 @@
+2026-10-02 12:46:05.832 Info MediaInfoService-0HNOUGQ7UN4R8:0000001B: http/1.1 POST http://127.0.0.1:8096/Items/34622/PlaybackInfo?MediaSourceId=mediasource_34622. Source Ip: 127.0.0.1, UserAgent: Go-http-client/1.1
+2026-10-02 12:46:05.835 Info MediaProbeManager: ProcessRun 'ffprobe' Execute: /bin/ffprobe -i "http://127.0.0.1:6086/d/biislctuies7t83of.mkv?/鱿鱼游戏.Squid Game.2021.S02E02.WEB-DL.2160p.H265.mkv" -threads 0 -v info -print_format json -show_streams -show_chapters -show_format -show_data
+2026-10-02 12:46:05.900 Info MediaProbeManager: ProcessRun 'ffprobe' Process exited with code 1 - Failed
+2026-10-02 12:46:05.901 Error App: Error in ffprobe
+	*** Error Report ***
+	Version: 4.10.1.0
+	Emby.Server.MediaEncoding.Unified.Ffmpeg.FfRunException: Emby.Server.MediaEncoding.Unified.Ffmpeg.FfRunException: ffprobe failed - streams and format are both null: -i "http://127.0.0.1:6086/d/biislctuies7t83of.mkv?/鱿鱼游戏.Squid Game.2021.S02E02.WEB-DL.2160p.H265.mkv" -threads 0 -v info -print_format json -show_streams -show_chapters -show_format -show_data
+	ffprobe version 5.1-emby_2023_06_25_p6 Copyright (c) 2007-2022 the FFmpeg developers and softworkz for Emby LLC
+	  built with gcc 13.4.0 (crosstool-NG 1.28.0)
+	[aac @ 0x2b5149c0] Audio object type 42 is not implemented. Update your FFmpeg version to the newest one from Git. If the problem still occurs, it means that your file has a feature which has not been implemented.
+	[matroska,webm @ 0x2b4e6500] Failed to open codec in avformat_find_stream_info
+	[matroska,webm @ 0x2b4e6500] Could not find codec parameters for stream 4 (Audio: aac, 48000 Hz, 0 channels, fltp): unspecified number of channels
+	Consider increasing the value for the 'analyzeduration' (0) and 'probesize' (5000000) options
+	[matroska,webm @ 0x2b4e6500] Could not find codec parameters for stream 17 (Subtitle: hdmv_pgs_subtitle (pgssub)): unspecified size
+	Input #0, matroska,webm, from 'http://127.0.0.1:6086/d/biislctuies7t83of.mkv?/鱿鱼游戏.Squid Game.2021.S02E02.WEB-DL.2160p.H265.mkv':
+	  Metadata:
+	    encoder         : libebml v1.4.5 + libmatroska v1.7.1
+	  Duration: 00:51:39.21, start: 0.000000, bitrate: 20492 kb/s
+	  Stream #0:0(chi): Video: hevc (Main 10), yuv420p10le(tv, bt2020nc/bt2020/smpte2084), 3840x2160 [SAR 1:1 DAR 16:9], Level 150, 23.98 fps, 23.98 tbr, 1k tbn (default)
+	    Metadata:
+	      title           : LGNB
+	      BPS             : 11989661
+	  Stream #0:1(kor): Audio: eac3, 48000 Hz, 5.1(side), fltp, 768 kb/s (original)
+	    Metadata:
+	      title           : 韩语-杜比全景声
+	  Stream #0:3(chi): Audio: eac3, 48000 Hz, 5.1(side), fltp, 640 kb/s (default)
+	    Metadata:
+	      title           : 台配国语
+	  Stream #0:4(chi): Audio: aac, 48000 Hz, 2 channels, fltp
+	    Metadata:
+	      title           : 台配国语
+	      BPS             : 192973
+	  Stream #0:15(tel): Audio: aac (HE-AAC), 48000 Hz, stereo, fltp (dub)
+	    Metadata:
+	      title           : 泰卢固语
+	  Stream #0:17(chi): Subtitle: hdmv_pgs_subtitle (default)
+	    Metadata:
+	      title           : 简韩双语
+	[aac @ 0x2b61e300] Audio object type 42 is not implemented. Update your FFmpeg version to the newest one from Git. If the problem still occurs, it means that your file has a feature which has not been implemented.
+	Could not open codec for input stream 4
+	{
+	   at Emby.Server.MediaEncoding.Probing.MediaProbeManager.GetMediaInfoInternal(MediaSourceInfo mediaSource, String inputPath, String primaryPath, MediaProtocol protocol, Boolean extractChapters, Boolean isAudio, CancellationToken cancellationToken)
+	Source: Emby.Server.MediaEncoding
+	TargetSite: Void MoveNext()
+2026-10-02 12:46:05.910 Info MediaInfoService-0HNOUGQ7UN4R8:0000001B: http/1.1 Response 200 to 127.0.0.1. Time: 1440ms. POST http://127.0.0.1:8096/Items/34622/PlaybackInfo?MediaSourceId=mediasource_34622.
+2026-10-02 12:46:10.832 Info MediaInfoService-0HNOUGQ7UN4R8:0000001B: http/1.1 POST http://127.0.0.1:8096/Items/34622/PlaybackInfo?MediaSourceId=mediasource_34622. Source Ip: 127.0.0.1, UserAgent: Go-http-client/1.1
+2026-10-02 12:46:10.835 Info MediaProbeManager: ProcessRun 'ffprobe' Execute: /bin/ffprobe -i "http://127.0.0.1:6086/d/e55lf8g5cxocqzw9v.mkv?/鱿鱼游戏.Squid Game.2021.S02E01.WEB-DL.2160p.H265.mkv" -threads 0 -v info -print_format json -show_streams -show_chapters -show_format -show_data
+2026-10-02 12:46:10.900 Info MediaProbeManager: ProcessRun 'ffprobe' Process exited with code 1 - Failed
+2026-10-02 12:46:10.901 Error App: Error in ffprobe
+	*** Error Report ***
+	Version: 4.10.1.0
+	Emby.Server.MediaEncoding.Unified.Ffmpeg.FfRunException: Emby.Server.MediaEncoding.Unified.Ffmpeg.FfRunException: ffprobe failed - streams and format are both null: -i "http://127.0.0.1:6086/d/e55lf8g5cxocqzw9v.mkv?/鱿鱼游戏.Squid Game.2021.S02E01.WEB-DL.2160p.H265.mkv" -threads 0 -v info -print_format json -show_streams -show_chapters -show_format -show_data
+	ffprobe version 5.1-emby_2023_06_25_p6 Copyright (c) 2007-2022 the FFmpeg developers and softworkz for Emby LLC
+	  built with gcc 13.4.0 (crosstool-NG 1.28.0)
+	[aac @ 0x2b5149c0] Audio object type 42 is not implemented. Update your FFmpeg version to the newest one from Git. If the problem still occurs, it means that your file has a feature which has not been implemented.
+	[matroska,webm @ 0x2b4e6500] Failed to open codec in avformat_find_stream_info
+	[matroska,webm @ 0x2b4e6500] Could not find codec parameters for stream 4 (Audio: aac, 48000 Hz, 0 channels, fltp): unspecified number of channels
+	Consider increasing the value for the 'analyzeduration' (0) and 'probesize' (5000000) options
+	[matroska,webm @ 0x2b4e6500] Could not find codec parameters for stream 17 (Subtitle: hdmv_pgs_subtitle (pgssub)): unspecified size
+	Input #0, matroska,webm, from 'http://127.0.0.1:6086/d/e55lf8g5cxocqzw9v.mkv?/鱿鱼游戏.Squid Game.2021.S02E01.WEB-DL.2160p.H265.mkv':
+	  Metadata:
+	    encoder         : libebml v1.4.5 + libmatroska v1.7.1
+	  Duration: 00:51:39.21, start: 0.000000, bitrate: 20492 kb/s
+	  Stream #0:0(chi): Video: hevc (Main 10), yuv420p10le(tv, bt2020nc/bt2020/smpte2084), 3840x2160 [SAR 1:1 DAR 16:9], Level 150, 23.98 fps, 23.98 tbr, 1k tbn (default)
+	    Metadata:
+	      title           : LGNB
+	      BPS             : 11989661
+	  Stream #0:1(kor): Audio: eac3, 48000 Hz, 5.1(side), fltp, 768 kb/s (original)
+	    Metadata:
+	      title           : 韩语-杜比全景声
+	  Stream #0:3(chi): Audio: eac3, 48000 Hz, 5.1(side), fltp, 640 kb/s (default)
+	    Metadata:
+	      title           : 台配国语
+	  Stream #0:4(chi): Audio: aac, 48000 Hz, 2 channels, fltp
+	    Metadata:
+	      title           : 台配国语
+	      BPS             : 192973
+	  Stream #0:15(tel): Audio: aac (HE-AAC), 48000 Hz, stereo, fltp (dub)
+	    Metadata:
+	      title           : 泰卢固语
+	  Stream #0:17(chi): Subtitle: hdmv_pgs_subtitle (default)
+	    Metadata:
+	      title           : 简韩双语
+	[aac @ 0x2b61e300] Audio object type 42 is not implemented. Update your FFmpeg version to the newest one from Git. If the problem still occurs, it means that your file has a feature which has not been implemented.
+	Could not open codec for input stream 4
+	{
+	   at Emby.Server.MediaEncoding.Probing.MediaProbeManager.GetMediaInfoInternal(MediaSourceInfo mediaSource, String inputPath, String primaryPath, MediaProtocol protocol, Boolean extractChapters, Boolean isAudio, CancellationToken cancellationToken)
+	Source: Emby.Server.MediaEncoding
+	TargetSite: Void MoveNext()
+2026-10-02 12:46:10.910 Info MediaInfoService-0HNOUGQ7UN4R8:0000001B: http/1.1 Response 200 to 127.0.0.1. Time: 1440ms. POST http://127.0.0.1:8096/Items/34622/PlaybackInfo?MediaSourceId=mediasource_34622.
+2026-10-02 12:46:11.829 Info SessionManager: Setting _lastPlaySessionId for session 48e2bf213471541d041f5abcdb5d1e4c to d151d0310a884261a422a032f9c12abe
