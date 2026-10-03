@@ -460,6 +460,9 @@ type applyStats struct {
 	AssetsDownloaded int
 	AssetsSkipped    int
 	AssetsFailed     int
+
+	// Written 真正新写/改写的 strm 的相对路径（台账口径，含库名前缀）。同步后自动刮削按它找片目
+	Written []string
 }
 
 // applySyncResults 对遍历结果执行落盘：视频生成 strm，附属文件下载（已存在跳过），
@@ -485,6 +488,7 @@ func applySyncResults(db *gorm.DB, ops *pan115Ops, videos, assets []remoteFile, 
 		}
 		if wrote {
 			st.StrmCreated++
+			st.Written = append(st.Written, strmRel)
 		} else {
 			st.StrmExisting++
 		}

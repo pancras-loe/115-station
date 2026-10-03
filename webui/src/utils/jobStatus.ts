@@ -38,6 +38,7 @@ export const JOB_SOURCE: Record<string, string> = {
   cron: '定时',
   auto: '自动',
   organize: '整理后',
+  incr: '增量同步后',
   scrape: '刮削后',
   redo: '重新整理后',
 }

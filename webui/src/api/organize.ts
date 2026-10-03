@@ -23,6 +23,8 @@ export interface ScrapeConfig {
   write_images: boolean
   force: boolean
   auto_after_organize: boolean
+  /** 增量同步新写出 STRM 后自动刮削那些片目（默认关；目录名没有 TMDB 编号时只认片名完全相等） */
+  auto_after_sync: boolean
   /** 刮削时 ffprobe 探测轨道写进 NFO（默认关，慢） */
   probe_streams: boolean
   /** 同一季多集共用的剧照判为占位图，不写集剧照（默认开） */

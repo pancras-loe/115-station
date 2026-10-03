@@ -407,6 +407,10 @@ git tag v1.2.0 && git push origin v1.2.0
     - **整理后要刮的，Emby 刷新交给刮削任务**（`flushScrape` 先于 `flushRefresh`，参数 `EmbyRefresh` / `EmbyVerify`）：刮完只刷一次，
       刮削出错 / 被停 / 什么都没写也照刷（`execScrapeJob` 开头的 defer）。只在刮削队列空闲时交接（`scrapeLaneIdle`），前面排着别的刮削就整理当场刷。
       2026-09-28 现场：整理刷一次、11 秒后刮完又刷一次，两分钟后 Emby 连目录条目都没建。
+    - **增量同步后自动刮削**（`scrape.auto_after_sync`，默认关，2026-10-03 起）：增量本轮**新写**的 STRM（`applyStats.Written` 与零遍历直推里 `wrote` 的，改名回声不算）
+      按 `titleOf` 归片目，`enqueueSyncScrape` 入同一个执行器，去重键 `sync`（与整理后的 `auto` 分开，`isAutoScrapeKey` 两个都认：不另建探测任务、空转不留行），Emby 刷新照整理那套交接。
+      一轮最多 `syncScrapeMaxTitles`（50）部，分类目录外的不刮。**全量不接**（首次全量就是整库刮削），存量交给媒体信息补全。
+      目录名没有 TMDB 编号时走 `recognizeStrict`：只认 `choose` 第一关（标题 / 原名相等），不走识别记忆与 AI —— 同步来的目录是用户自己命名的，认错一次 NFO 就钉进 Emby（维护者明确要求）。测试 `syncscrape_test.go`。
     - 刮削期间**不许调 `beginTask` / `endTask` / `setJobProgress`**（那是 `taskMu` 持有者的全局状态），进度走 `scrapeLane.set` / `setSub`。
     - 刮削不探测轨道、NFO 不写 streamdetails：Emby / Jellyfin 导入 NFO 不读它，播放时自己探测、还会把 NFO 整份重写。
       原来的 ffprobe「媒体补全」（缺画质信息时探测改名）与 NFO 轨道探测已于 2026-09-29 一并删除，镜像也不再带 ffmpeg，别加回来。

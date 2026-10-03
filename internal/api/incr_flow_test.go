@@ -41,6 +41,9 @@ type stubIncrDeps struct {
 	refreshed  []string
 	deleted    []string
 	saved      map[string]string
+	scraped    []string // 交给同步后刮削的新 STRM
+	// scrapeTakes 模拟刮削任务接下了 Emby 刷新
+	scrapeTakes bool
 }
 
 func newStubDeps() *stubIncrDeps {
@@ -100,11 +103,16 @@ func (s *stubIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFil
 	return s.walkErr
 }
 
-func (s *stubIncrDeps) invalidateDirCache()                    {}
-func (s *stubIncrDeps) setting(key string) string              { return s.settings[key] }
-func (s *stubIncrDeps) saveSetting(key, val string)            { s.saved[key] = val }
-func (s *stubIncrDeps) notifyRefresh(base string)              { s.refreshed = append(s.refreshed, base) }
-func (s *stubIncrDeps) notifyDeleted(paths ...string)          { s.deleted = append(s.deleted, paths...) }
+func (s *stubIncrDeps) invalidateDirCache()           {}
+func (s *stubIncrDeps) setting(key string) string     { return s.settings[key] }
+func (s *stubIncrDeps) saveSetting(key, val string)   { s.saved[key] = val }
+func (s *stubIncrDeps) notifyRefresh(base string)     { s.refreshed = append(s.refreshed, base) }
+func (s *stubIncrDeps) notifyDeleted(paths ...string) { s.deleted = append(s.deleted, paths...) }
+
+func (s *stubIncrDeps) autoScrape(rels []string, refresh string) bool {
+	s.scraped = append(s.scraped, rels...)
+	return s.scrapeTakes && refresh != ""
+}
 func (s *stubIncrDeps) downloadAsset(remoteFile, string) error { return nil }
 
 func (s *stubIncrDeps) strmConfig() (string, string, bool, bool) {

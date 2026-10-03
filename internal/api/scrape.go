@@ -48,6 +48,11 @@ type scrapeCfg struct {
 	// 此前挂在增量同步末尾且扫全台账——新增一部片也要全库过一遍
 	AutoAfterOrganize bool `json:"auto_after_organize"`
 
+	// AutoAfterSync 增量同步新写出 STRM 后自动刮削那些片目（enqueueSyncScrape）。默认关。
+	// 只管增量：全量首次跑就是整库，等于一次全库刮削（全库刮削已删，见 AGENTS §6.16），存量交给媒体信息补全。
+	// 同步来的目录多半是用户自己命名的，目录名里没有 TMDB 编号时只认片名完全相等（recognizeStrict）
+	AutoAfterSync bool `json:"auto_after_sync"`
+
 	// ProbeStreams 界面上的「轨道探测」：入库后让 Emby 提前探测媒体信息，第一次播放不用现场探测（embyextract.go）。
 	// 默认关：每个条目探测一次就是一次 115 直链请求。
 	// 2026-09-29 之前它控制的是本站自己 ffprobe 写 NFO streamdetails —— Emby 导入 NFO 不读那一段，已删，key 沿用

@@ -62,7 +62,13 @@ type localScrapeParams struct {
 	// 两次刷新之后两分钟 Emby 连目录条目都没建）。所以交给刮削，写完元数据只刷一次
 	EmbyRefresh []string `json:"emby_refresh,omitempty"`
 	EmbyVerify  []string `json:"emby_verify,omitempty"`
+	// Origin 自动刮削是谁交过来的：空 = 整理后，"sync" = 增量同步后（enqueueSyncScrape）。
+	// 同步后的目录名里没有 TMDB 编号时只认片名完全相等（strict），任务标题也按它写
+	Origin string `json:"origin,omitempty"`
 }
+
+// strict 目录名里没有 TMDB 编号时只接受片名完全相等的识别结果（recognizeStrict）
+func (p *localScrapeParams) strict() bool { return p != nil && p.Origin == scrapeOriginSync }
 
 // scrapeHint 整理时识别到的片目信息
 type scrapeHint struct {
@@ -191,12 +197,31 @@ func localScrapeJobTitle(ledger map[string]*ledgerTitleEntry, keys []string) str
 }
 
 // ledgerScrapeTitle 台账片目 → 刮削对象（本地落点 + 网盘对应目录）。
-// pick 非空 = 用户指定了 TMDB 条目；目录名里没有编号时按目录名识别一次
-func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid string, pick *TmdbMedia) (scrapeTitle, error) {
+// pick 非空 = 用户指定了 TMDB 条目；目录名里没有编号时按目录名识别一次。
+// strict = 同步后自动刮削：识别只认片名完全相等（recognizeStrict），认不准就不刮
+func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid string, pick *TmdbMedia, strict bool) (scrapeTitle, error) {
 	t := scrapeTitle{Kind: e.MediaType, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID}
 	switch {
 	case pick != nil:
 		t.Kind, t.TmdbID, t.Title, t.Year = pick.MediaType, pick.TmdbID, pick.Title, pick.Year
+	case t.TmdbID <= 0 && strict:
+		parsed := parseFileName(path.Base(e.Key))
+		parsed.IsTV = parsed.IsTV || e.MediaType == "tv"
+		kind := e.MediaType
+		if kind != "tv" && kind != "movie" {
+			kind = ""
+		}
+		media, err := tc.recognizeStrict(parsed, kind)
+		if err != nil {
+			return t, fmt.Errorf("按片名搜 TMDB 失败：%v", err)
+		}
+		if media == nil {
+			return t, errors.New("目录名里没有 TMDB 编号，按片名也找不到片名完全相等的条目：请到本地文件页指定 TMDB 条目刮削")
+		}
+		t.TmdbID, t.Title, t.Year = media.TmdbID, media.Title, media.Year
+		if media.MediaType != "" {
+			t.Kind = media.MediaType
+		}
 	case t.TmdbID <= 0:
 		// 目录名里没有 {tmdbid=…}：用户点名要刮的，按目录名识别一次
 		parsed := parseFileName(path.Base(e.Key))
@@ -523,7 +548,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	var wrote map[string]bool
 	// 刮到的片目交给 Emby 提前探测：用户这一次勾了「轨道探测」，按手动规则另建一个探测任务
 	// （embyprobejob.go，进度与结果在任务中心，失败能单独重试，不把刮削本身标成失败）。
-	// 整理后自动刮削（scrapeAutoDedupe）不排：那些片目刚入库，入库确认那条入口会排，
+	// 整理 / 同步后的自动刮削（isAutoScrapeKey）不排：那些片目刚入库，入库确认那条入口会排，
 	// 这里再排一次就是同一批条目进两次队列（防重复探测，见 embyextract.go 文件头）
 	var extract []string
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
@@ -605,7 +630,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		if tg.hint != nil {
 			e.MediaType, e.Title, e.Year, e.TmdbID = tg.hint.Kind, tg.hint.Title, tg.hint.Year, tg.hint.TmdbID
 		}
-		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick)
+		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick, lp.strict())
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s：%v", name, err))
 			log.Printf("[影视刮削] ✗ %s：%v", name, err)
@@ -620,7 +645,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		log.Printf("[影视刮削] ▶ 《%s》(%s) [tmdb=%d] %s，视频 %d 个 → %s",
 			t.Title, t.Year, t.TmdbID, map[string]string{"tv": "剧集", "movie": "电影"}[t.Kind], len(t.Videos), t.Dir.Local)
 		st := sess.scrapeTitleMeta(t)
-		if o.Probe && job.DedupeKey != scrapeAutoDedupe {
+		if o.Probe && !isAutoScrapeKey(job.DedupeKey) {
 			if cfg, ok := loadEmbyRefreshCfg(); ok {
 				extract = append(extract, embyPathOf(cfg, t.Dir.Local))
 			}
@@ -688,7 +713,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 			msg += fmt.Sprintf("；已建 Emby 提前探测任务 #%d（%d 个片目，已有媒体信息的跳过，进度在任务中心）", pj.ID, len(extract))
 			res.FollowJob = pj.ID
 		}
-	} else if o.Probe && job.DedupeKey != scrapeAutoDedupe && done > 0 {
+	} else if o.Probe && !isAutoScrapeKey(job.DedupeKey) && done > 0 {
 		if _, ok := loadEmbyRefreshCfg(); !ok {
 			msg += "；没有配置 Emby，跳过提前探测"
 		}
@@ -803,39 +828,127 @@ func enqueueAutoScrape(db *gorm.DB, jobs []scrapeJob, cfg scrapeCfg, refresh, ve
 		p.Keys = append(p.Keys, j.Key)
 		p.Hints[j.Key] = scrapeHint{Kind: j.Kind, Title: j.Title, Year: j.Year, TmdbID: j.TmdbID}
 	}
+	return enqueueAutoScrapeJob(db, p, refresh, verify)
+}
+
+// enqueueAutoScrapeJob 整理后 / 同步后两种自动刮削共用的入队：按 Origin 分去重键与来源，
+// 各自并成一个排队任务（mergeAutoScrape），任务中心看得出是谁触发的
+func enqueueAutoScrapeJob(db *gorm.DB, p *localScrapeParams, refresh, verify []string) (handedOff bool) {
 	p.Keys = normalizeTitleKeys(p.Keys)
 	if len(refresh) > 0 && scrapeLaneIdle(db) {
 		p.EmbyRefresh, p.EmbyVerify = refresh, verify
 	}
+	dedupe, source, who := scrapeAutoDedupe, "organize", "整理"
+	if p.Origin == scrapeOriginSync {
+		dedupe, source, who = scrapeSyncDedupe, "incr", "增量同步"
+	}
 	job, err := enqueueJob(db, jobSpec{
-		Kind: jobKindScrape, Title: autoScrapeTitle(p), DedupeKey: scrapeAutoDedupe,
-		Source: "organize", Priority: jobPriorityBackground,
+		Kind: jobKindScrape, Title: autoScrapeTitle(p), DedupeKey: dedupe,
+		Source: source, Priority: jobPriorityBackground,
 		Params: jobParams{Local: p}, Merge: mergeAutoScrape,
 	})
 	if err != nil {
-		log.Printf("[影视刮削] ✗ 整理后刮削入队失败: %v", err)
+		log.Printf("[影视刮削] ✗ %s后刮削入队失败: %v", who, err)
 		return false
 	}
 	tail := ""
 	if len(p.EmbyRefresh) > 0 {
 		tail = "，刮完再刷 Emby"
 	}
-	log.Printf("[影视刮削] ○ 整理完成，%d 个片目加入刮削队列（任务 #%d，与整理分开执行，不占任务锁%s）", len(p.Keys), job.ID, tail)
+	log.Printf("[影视刮削] ○ %s完成，%d 个片目加入刮削队列（任务 #%d，与%s分开执行，不占任务锁%s）", who, len(p.Keys), job.ID, who, tail)
 	wakeJobWorker()
 	return len(p.EmbyRefresh) > 0
 }
 
-// scrapeLaneIdle 刮削队列上没有正在跑的任务，也没有排在整理后刮削前面的
-// （手动刮削优先级更高，会插到它前面）
+// scrapeLaneIdle 刮削队列上没有正在跑的任务，也没有排在自动刮削前面的
+// （手动刮削优先级更高，会插到它前面；另一种自动刮削同是后台优先级、一般很小，不算）
 func scrapeLaneIdle(db *gorm.DB) bool {
 	if id, _ := scrapeLane.current(); id != 0 {
 		return false
 	}
 	var n int64
 	db.Model(&model.TaskJob{}).
-		Where("kind = ? AND status = ? AND dedupe_key <> ?", jobKindScrape, jobQueued, scrapeAutoDedupe).
+		Where("kind = ? AND status = ? AND dedupe_key NOT IN ?", jobKindScrape, jobQueued,
+			[]string{scrapeAutoDedupe, scrapeSyncDedupe}).
 		Count(&n)
 	return n == 0
+}
+
+// ---- 增量同步后自动刮削 ----
+//
+// 整理写出的 STRM 不经过增量（事件被抑制，整理自己刮），所以增量新写的 STRM 都是外部变更：
+// 手机上传、网页端拖进媒体库。scrape.auto_after_sync 开着时把它们所在的片目交给刮削队列，
+// 执行器与整理后刮削是同一个（execScrapeJob）。全量不接：首次全量就是整库，存量交给媒体信息补全。
+
+const (
+	// scrapeSyncDedupe 同步后刮削的去重键：还没开始刮的几轮增量并成一个任务
+	scrapeSyncDedupe = "sync"
+	// scrapeOriginSync localScrapeParams.Origin：增量同步交过来的
+	scrapeOriginSync = "sync"
+	// syncScrapeMaxTitles 一轮增量最多交给刮削的片目数。网页端把一个大目录整体拖进媒体库时
+	// 一轮能冒出上百部，自动刮这么多没人盯着；超出的交给媒体信息补全或本地文件页
+	syncScrapeMaxTitles = 50
+)
+
+// isAutoScrapeKey 整理后 / 同步后的自动刮削任务
+func isAutoScrapeKey(k string) bool { return k == scrapeAutoDedupe || k == scrapeSyncDedupe }
+
+// syncScrapeKeys 本轮新写的 STRM（台账相对路径）→ 片目 key（去重排序）。
+// 按当前分类规则归不进片目的（用户自己的目录结构、分类改过）计入 outside，不刮
+func syncScrapeKeys(layout libCategoryLayout, rels []string) (keys []string, outside int) {
+	seen := map[string]bool{}
+	for _, r := range rels {
+		key, _, _, _, ok := layout.titleOf(r)
+		if !ok {
+			outside++
+			continue
+		}
+		if !seen[key] {
+			seen[key] = true
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys, outside
+}
+
+// enqueueSyncScrape 增量同步收尾：本轮新写的 STRM 所在片目入刮削队列。
+// refresh 是增量本来要刷的 Emby 目录（本地绝对路径，可空）；返回 true 表示刷新交给了刮削任务，
+// 增量不必再刷（刮完只刷一次，Emby 第一次扫到时 NFO 已经在了）
+func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bool) {
+	if len(rels) == 0 {
+		return false
+	}
+	cfg := loadScrapeCfg()
+	if !cfg.AutoAfterSync || !(cfg.WriteNFO || cfg.WriteImages) {
+		return false
+	}
+	if cfg.LocalRoot == "" {
+		log.Printf("[影视刮削] ○ 未配置本地媒体库根目录，跳过同步后刮削")
+		return false
+	}
+	if _, err := loadTmdbClient(); err != nil {
+		log.Printf("[影视刮削] ○ TMDB 未配置，跳过同步后刮削: %v", err)
+		return false
+	}
+	keys, outside := syncScrapeKeys(loadLibCategoryLayout(), rels)
+	if outside > 0 {
+		log.Printf("[影视刮削] ○ 本轮增量有 %d 个新 STRM 不在当前分类目录下的片目里，不自动刮削", outside)
+	}
+	if len(keys) == 0 {
+		return false
+	}
+	if len(keys) > syncScrapeMaxTitles {
+		log.Printf("[影视刮削] ⚠ 本轮增量新增 %d 个片目，超过自动刮削上限 %d，只刮前 %d 个；"+
+			"其余请用「扩展功能 → 媒体信息补全」或本地文件页刮削", len(keys), syncScrapeMaxTitles, syncScrapeMaxTitles)
+		keys = keys[:syncScrapeMaxTitles]
+	}
+	var r []string
+	if refresh != "" {
+		r = []string{refresh}
+	}
+	p := &localScrapeParams{Keys: keys, Scrape: cfg.opts(), Origin: scrapeOriginSync}
+	return enqueueAutoScrapeJob(db, p, r, nil)
 }
 
 // scrapeEmbyRefresh 刮削收尾刷 Emby：这次写过元数据的目录，加上整理交过来的。
@@ -898,16 +1011,21 @@ func mergeAutoScrape(prev, next jobParams) (jobParams, string) {
 	return out, autoScrapeTitle(&lp)
 }
 
-// autoScrapeTitle 「整理后刮削《片名》等 N 部」
+// autoScrapeTitle 「整理后刮削《片名》等 N 部」/「同步后刮削《片名》等 N 部」
 func autoScrapeTitle(p *localScrapeParams) string {
-	if p == nil || len(p.Keys) == 0 {
-		return "整理后刮削"
+	prefix := "整理后刮削"
+	if p.strict() {
+		prefix = "同步后刮削"
 	}
-	name := path.Base(p.Keys[0])
+	if p == nil || len(p.Keys) == 0 {
+		return prefix
+	}
+	// 同步后的没有 Hints：片名从目录名里摘（去掉 {tmdbid=…} 与年份）
+	name, _, _ := parseTitleDir(path.Base(p.Keys[0]))
 	if h, ok := p.Hints[p.Keys[0]]; ok && h.Title != "" {
 		name = h.Title
 	}
-	s := "整理后刮削《" + truncateStr(name, 40) + "》"
+	s := prefix + "《" + truncateStr(name, 40) + "》"
 	if len(p.Keys) > 1 {
 		s += fmt.Sprintf("等 %d 部", len(p.Keys))
 	}

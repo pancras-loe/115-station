@@ -297,6 +297,10 @@ func yearScore(want, got string) int {
 	}
 }
 
+// chooseHowExact choose 第一关（标题 / 原名归一化后相等）的 how。
+// 同步后自动刮削只认这一关（recognizeStrict），改文案时两边一起改
+const chooseHowExact = "片名相等"
+
 // choose 从一页候选里挑出和查询片名对得上的那一条；都对不上返回 nil。
 //
 // 三道关，逐道放宽：
@@ -385,7 +389,7 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 				}
 			}
 		}
-		return finish(exact[0], "片名相等")
+		return finish(exact[0], chooseHowExact)
 	}
 
 	// 第二关：别名 / 译名相等（只看前 5 名，每条一次详情请求，有缓存）
@@ -468,6 +472,54 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 			m := c.media(p.kind, country)
 			m.matchHow = how
 			return m, nil
+		}
+	}
+	return nil, firstErr
+}
+
+// recognizeStrict 同步后自动刮削按目录名认片：只接受 choose 第一关（标题 / 原名相等）的结果。
+//
+// 和 recognize 的区别都是有意的：同步来的目录是用户自己命名的，没有人在旁边看着，
+// 认错一次 NFO 就把错的条目钉进 Emby。所以别名相等、包含关系这两关不认；
+// 识别记忆、AI 增强识别也不走（前者没有名字可比，后者每轮都要烧一次模型调用）。
+// 搜中了但不是第一关通过的，换下一个搜索词再试，都不行就返回 nil。
+// kind 为 movie / tv 时只搜那一边（片目所在的分类已经说明了类型），空串先电影后剧集
+func (tc *TmdbClient) recognizeStrict(parsed *ParsedName, kind string) (*TmdbMedia, error) {
+	if parsed == nil || parsed.Title == "" {
+		return nil, nil
+	}
+	queries := titleCandidates(parsed.Title)
+	if c := cleanSearchTitle(parsed.Title); c != "" && c != parsed.Title {
+		queries = append(queries, c)
+	}
+	var firstErr error
+	seen := map[string]bool{}
+	for _, q := range queries {
+		if seen[q] {
+			continue
+		}
+		seen[q] = true
+		var tries []func() (*TmdbMedia, error)
+		if kind != "tv" {
+			tries = append(tries, func() (*TmdbMedia, error) { return tc.SearchMovie(q, parsed.Year) })
+		}
+		if kind != "movie" {
+			tries = append(tries, func() (*TmdbMedia, error) { return tc.searchTVSeason(q, parsed.Year, parsed.Season) })
+		}
+		for _, try := range tries {
+			m, err := try()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if m != nil && m.matchHow == chooseHowExact {
+				return m, nil
+			}
+			if m != nil {
+				vlog("[影视刮削] 搜索 %q 采用的是「%s」（%s），同步后刮削只认片名相等，不用", q, m.matchHow, m.Title)
+			}
 		}
 	}
 	return nil, firstErr

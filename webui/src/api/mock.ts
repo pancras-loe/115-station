@@ -474,7 +474,7 @@ const ROUTES: Record<string, Route> = {
       },
     }
   },
-  '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true } },
+  '/scrape/config': { cfg: { write_nfo: true, write_images: true, force: false, auto_after_organize: true, auto_after_sync: false } },
   '/storage': {
     data: [{ id: 1, name: '115主号', type: '115', cookie_path: '/config/115-cookies.txt', device: 'web', interval: 3, openapi_enabled: false, app_id: '' }],
   },

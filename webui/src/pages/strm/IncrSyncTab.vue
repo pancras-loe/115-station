@@ -245,6 +245,14 @@ const helpVisible = ref(false)
         <Info :size="14" />
         前提：115 生活 App 里开启「最近」（生活事件），并且先完整执行过一次全量同步。
       </p>
+      <p class="pre">
+        <Info :size="14" />
+        <span>
+          增量新增的片目要自动刮削 NFO / 海报，到
+          <RouterLink class="jump" :to="{ name: 'organize', query: { tab: 'scrape' } }">自动整理 → 影视刮削</RouterLink>
+          打开「同步后自动刮削」。
+        </span>
+      </p>
 
       <FieldRow
         label="增量同步间隔"

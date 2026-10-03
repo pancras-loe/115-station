@@ -55,6 +55,9 @@ type incrDeps interface {
 	// notifyDeleted 本地 strm 被删/移走了：通知 Emby 清掉对应条目。
 	// 跟 notifyRefresh 分开是因为两者的目标路径处理不一样（删除要上移到存活父目录）
 	notifyDeleted(paths ...string)
+	// autoScrape 本轮新写的 STRM（台账相对路径）交给同步后自动刮削（开关在 scrape.auto_after_sync）。
+	// refresh 是本来要刷的 Emby 目录；返回 true 表示刷新交给了刮削任务，增量不再自己刷
+	autoScrape(strmRels []string, refresh string) (handedOff bool)
 }
 
 // errAssetExists 附属文件本地已存在，无需下载。
@@ -171,3 +174,7 @@ func (d *realIncrDeps) applyResults(videos, assets []remoteFile, localPath, doma
 func (d *realIncrDeps) notifyRefresh(base string) { d.h.notifyEmbyRefresh(base) }
 
 func (d *realIncrDeps) notifyDeleted(paths ...string) { notifyEmbyDeleted(paths...) }
+
+func (d *realIncrDeps) autoScrape(strmRels []string, refresh string) bool {
+	return enqueueSyncScrape(d.h.DB, strmRels, refresh)
+}

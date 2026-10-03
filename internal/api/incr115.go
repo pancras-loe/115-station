@@ -480,6 +480,11 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		}
 	}
 
+	// 本轮真正新写的 STRM（台账相对路径）：同步后自动刮削按它找片目。
+	// 只收 wrote 的 —— 本地已有、内容一致的不算，否则任何一次重复遍历都会把整个目录重刮一遍；
+	// 改名回声也不收：那是同一部片换了文件名，不是新片目
+	var newStrms []string
+
 	// 本轮命中抑制表的 fid：事件成功消费后才把这些标记清掉
 	var suppressedHits []string
 
@@ -756,6 +761,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					markEmbyRenamed(strmAbs)
 				} else if wrote {
 					markEmbyFreshAdded(strmAbs)
+					newStrms = append(newStrms, strmRel)
 				}
 				if wrote {
 					sum.StrmCreated++
@@ -931,6 +937,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			continue
 		}
 		st := d.applyResults(videos, assets, p.LocalPath, domain, format, keepExt, skipExist, t.base)
+		newStrms = append(newStrms, st.Written...)
 		if st.StrmCreated > 0 {
 			markEmbyFreshAdded(filepath.Join(p.LocalPath, filepath.FromSlash(path.Join(libName, t.base))))
 		}
@@ -1011,7 +1018,16 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	if shallowest != "" {
 		refreshBase = filepath.Join(p.LocalPath, filepath.FromSlash(shallowest))
 	}
-	if sum.StrmCreated+sum.AssetsDownloaded > 0 {
+	// 同步后自动刮削开着时，刷新尽量交给刮削任务：刮完只刷一次（与整理后刮削同一套交接）
+	handedOff := false
+	if len(newStrms) > 0 {
+		rb := ""
+		if sum.StrmCreated+sum.AssetsDownloaded > 0 {
+			rb = refreshBase
+		}
+		handedOff = d.autoScrape(dedupeStrings(newStrms), rb) && rb != ""
+	}
+	if sum.StrmCreated+sum.AssetsDownloaded > 0 && !handedOff {
 		d.notifyRefresh(refreshBase)
 	}
 	// 目录整体搬迁没有重新生成 STRM，也需要让 Emby 发现新位置。

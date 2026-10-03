@@ -26,6 +26,7 @@ const cfg = ref<ScrapeConfig>({
   write_images: true,
   force: false,
   auto_after_organize: false,
+  auto_after_sync: false,
   probe_streams: false,
   skip_shared_stills: true,
 })
@@ -47,6 +48,7 @@ async function load() {
       write_images: c.write_images !== false,
       force: !!c.force,
       auto_after_organize: !!c.auto_after_organize,
+      auto_after_sync: !!c.auto_after_sync,
       probe_streams: !!c.probe_streams,
       // 后端缺省开启
       skip_shared_stills: c.skip_shared_stills !== false,
@@ -96,6 +98,14 @@ onMounted(load)
           tip="整理完成后只刮本轮新入库的片目（不扫全库）。刮削在单独的「刮削队列」里执行，不占任务锁：几百集的剧刮半小时，整理与同步照常进行。"
         >
           <HSegmented v-model="cfg.auto_after_organize" :options="ON_OFF" />
+        </FieldRow>
+
+        <FieldRow
+          label="同步后自动刮削"
+          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用「扩展功能 → 媒体信息补全」。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「本地文件」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
+          hint="增量同步新增的片目；没有 TMDB 编号时只认片名完全相等"
+        >
+          <HSegmented v-model="cfg.auto_after_sync" :options="ON_OFF" />
         </FieldRow>
 
         <FieldRow
@@ -182,7 +192,7 @@ onMounted(load)
             </ol>
             <p>不改的话 Emby 会自己再联网刮一遍、再下一遍图，最终以 Emby 的结果为准，本站刮的白刮，还多耗流量。</p>
             <p>
-              <b>想切回 Emby 自己刮削</b>：先关掉左边的「整理后自动刮削」，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
+              <b>想切回 Emby 自己刮削</b>：先关掉左边的「整理后自动刮削」与「同步后自动刮削」，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
               本站已写好的 NFO 与海报不会浪费：Nfo 读取器保持勾选时 Emby 先读现成的，只联网补缺；
               媒体目录里的海报 Emby 本来就会读，不需要为此打开「保存媒体图片到媒体文件夹中」。
               那个开关管的是 Emby <b>新下载</b>的图片写到哪 —— 要让「监控上传」把 Emby 的刮削结果回传 115 才需要打开。
