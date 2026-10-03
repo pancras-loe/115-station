@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -316,7 +317,8 @@ func re0StateTake(state string) (string, bool) {
 }
 
 // Re0OAuthStart GET /re0/oauth/start?redirect_uri=...
-// 前端传 115-Station 公网地址 + /api/re0/oauth/callback（RE0 应用支持动态回调）
+// 前端传浏览器当前访问的地址 + /api/re0/oauth/callback：回跳只经过用户自己的浏览器，
+// 内网地址也行，不需要公网；前提是应用的「固定 Redirect URI 白名单」留空（动态回调）。
 func (h *Handler) Re0OAuthStart(c *gin.Context) {
 	cfg := loadRe0Cfg()
 	if cfg.ClientID == "" || cfg.ClientSecret == "" {
@@ -504,6 +506,53 @@ func (h *Handler) Re0Check(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// Re0EgressIP GET /re0/egress-ip —— 本站访问 RE0 时的出口 IP（填应用的「预期服务端出口 IP」用）
+//
+// 读站点自己的 Cloudflare `/cdn-cgi/trace`，而不是通用的「查我的 IP」服务：
+// 那是 RE0 边缘实际看到的地址（IPv4 还是 IPv6、走没走 HTTPS_PROXY 都一致）。
+// 走同一个 re0HTTP，否则查出来的和真正发请求的不是同一条出口。
+// 站点不在 Cloudflare 后面时退回 cloudflare.com 的 trace，结果可能与实际出口的 IP 版本不同。
+func (h *Handler) Re0EgressIP(c *gin.Context) {
+	cfg := loadRe0Cfg()
+	sources := []string{strings.TrimRight(cfg.BaseURL, "/") + "/cdn-cgi/trace", "https://www.cloudflare.com/cdn-cgi/trace"}
+	var lastErr error
+	for i, src := range sources {
+		ip, err := re0TraceIP(src)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		c.JSON(http.StatusOK, gin.H{"ip": ip, "ipv6": strings.Contains(ip, ":"), "exact": i == 0})
+		return
+	}
+	c.JSON(http.StatusBadGateway, gin.H{"error": "查询出口 IP 失败: " + lastErr.Error()})
+}
+
+func re0TraceIP(u string) (string, error) {
+	resp, err := re0HTTP.Get(u)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	return parseTraceIP(string(raw))
+}
+
+// parseTraceIP 从 trace 的 `key=value` 行里取 ip=，并确认是合法 IP（防止拿到挑战页之类的 HTML）
+func parseTraceIP(body string) (string, error) {
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ip="); ok {
+			if ip := net.ParseIP(v); ip != nil {
+				return ip.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("响应里没有 ip 字段")
 }
 
 // ==================== 搜索与解锁 ====================

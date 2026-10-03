@@ -117,3 +117,22 @@ func TestRe0StateStore(t *testing.T) {
 		t.Errorf("未知 state 应拒绝")
 	}
 }
+
+// 出口 IP：只认 trace 里合法的 ip= 行；拿到挑战页 HTML 之类必须报错，不能把垃圾当 IP 给用户填
+func TestParseTraceIP(t *testing.T) {
+	cases := []struct {
+		body, want string
+		ok         bool
+	}{
+		{"fl=1\nh=re0.me\nip=211.20.18.214\nts=1\n", "211.20.18.214", true},
+		{"h=re0.me\nip=2001:db8::1\n", "2001:db8::1", true},
+		{"ip=\n", "", false},
+		{"<!DOCTYPE html><title>Just a moment...</title>", "", false},
+	}
+	for _, c := range cases {
+		got, err := parseTraceIP(c.body)
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("parseTraceIP(%q) = %q, %v", c.body, got, err)
+		}
+	}
+}

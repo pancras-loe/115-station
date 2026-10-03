@@ -356,6 +356,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/re0/config", h.Re0SaveConfig)
 		protected.GET("/re0/check", h.Re0Check)
 		protected.GET("/re0/oauth/start", h.Re0OAuthStart)
+		protected.GET("/re0/egress-ip", h.Re0EgressIP)
 
 		// 分享链接转存（转存到接收文件夹后由整理+增量接管）
 		protected.POST("/share/receive", h.ShareReceive)

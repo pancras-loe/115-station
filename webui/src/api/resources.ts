@@ -57,4 +57,6 @@ export const re0Config = () =>
 export const re0SaveConfig = (body: { base_url: string; client_id: string; client_secret: string }) =>
   http.post('/re0/config', body)
 export const re0Check = () => http.get<{ authorized: boolean; message?: string }>('/re0/check')
-export const re0OAuthStart = () => http.get<{ authorize_url?: string }>('/re0/oauth/start')
+export const re0OAuthStart = (redirectUri: string) =>
+  http.get<{ authorize_url?: string }>('/re0/oauth/start', { params: { redirect_uri: redirectUri } })
+export const re0EgressIP = () => http.get<{ ip: string; ipv6: boolean; exact: boolean }>('/re0/egress-ip')
