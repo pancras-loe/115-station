@@ -131,11 +131,19 @@ func TestCheckWorkspace_GoneDirs(t *testing.T) {
 func TestCheckWorkspace_RootCid(t *testing.T) {
 	f := &fakeResolve{paths: map[string]string{"1": "/影视"}}
 	err := checkWorkspaceSlots(wsSlotsOf("1", "0", "", "", ""), map[string]bool{"share": true}, f.fn)
-	if err == nil {
-		t.Fatal("网盘根作为工作目录必然包含媒体库")
+	if err == nil || !strings.Contains(err.Error(), "网盘根") {
+		t.Fatalf("网盘根不能作为工作目录, err=%v", err)
 	}
-	if len(f.calls) != 1 { // 根不打接口
+	if len(f.calls) != 0 { // 直接拦下，不打接口
 		t.Fatalf("calls=%v", f.calls)
+	}
+	// 只配了这一个目录时互斥比较无从拦起，同样要拒绝
+	if err := checkWorkspaceSlots(wsSlotsOf("", "0", "", "", ""), map[string]bool{"share": true}, f.fn); err == nil {
+		t.Fatal("单独把转存目录选成网盘根也必须拒绝")
+	}
+	// 没改动的旧配置是根不拦（别因为它存不了别的目录）
+	if err := checkWorkspaceSlots(wsSlotsOf("1", "0", "2", "", ""), map[string]bool{"pending": true}, (&fakeResolve{paths: map[string]string{"1": "/影视", "2": "/待整理"}}).fn); err != nil && strings.Contains(err.Error(), "不能选网盘根") {
+		t.Fatalf("未改动的根不该被这条拦下: %v", err)
 	}
 }
 

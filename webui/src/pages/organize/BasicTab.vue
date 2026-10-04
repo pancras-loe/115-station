@@ -150,7 +150,13 @@ const dirty = computed(
 async function resolveAll(): Promise<boolean> {
   for (const { key, label } of DIRS) {
     const raw = cids.value[key].path.trim()
-    if (!raw) continue // 允许留空
+    // 允许留空。清空也要写回去：以前这里直接跳过，页面显示「有改动」、保存成功，
+    // 落库的却还是旧目录，清不掉
+    if (!raw) {
+      model.value[key] = ''
+      model.value[`${key}_path` as const] = ''
+      continue
+    }
     const cid = (await inputs.value[key]?.ensureCid()) ?? ''
     if (!cid) {
       message.error(`${label}路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid`)

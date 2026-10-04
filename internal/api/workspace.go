@@ -113,6 +113,13 @@ func checkWorkspaceSlots(slots []wsSlot, changed map[string]bool, resolve func(c
 	if !anyChanged {
 		return nil
 	}
+	// 网盘根不能当工作目录：只配了这一个目录时下面的互斥比较拦不住它，
+	// 而整理 / 清理拿根当起点就是对整个网盘动手（目录选择器也已禁选根）
+	for _, s := range set {
+		if changed[s.key] && s.cid == "0" {
+			return fmt.Errorf("%s 不能选网盘根目录，请选一个具体的文件夹", s.label)
+		}
+	}
 	involved := func(a, b wsSlot) bool { return changed[a.key] || changed[b.key] }
 
 	for i := range set {

@@ -13,8 +13,10 @@ export type PickerMode = '115' | 'local'
 const props = defineProps<{
   show: boolean
   mode: PickerMode
-  /** local 模式打开时先定位到这里（通常是输入框里的现值），读不出来再退回顶层 */
+  /** 打开时先定位到这里（通常是输入框的现值），读不出来再退回顶层。115 模式下是可读路径，可以为空 */
   initial?: string
+  /** 115 模式的现值 cid；有它才定位（路径可能只是旧配置留下的纯数字） */
+  initialCid?: string
 }>()
 const emit = defineEmits<{
   'update:show': [boolean]
@@ -33,10 +35,11 @@ const note = ref('')
 const jumpText = ref('')
 
 // 115 没有「父目录」的概念，只有 cid，所以进入子目录时压栈，返回时出栈。
-// trail 是逐级目录名，用来拼出可读路径（cid 本身不含路径信息）。
+// trail 是逐级目录名，用来拼出可读路径（cid 本身不含路径信息）；
+// null 表示路径不知道（按纯数字 cid 跳过来、又反查不出路径），这时只能回传 cid。
 const cid = ref('0')
-const trail = ref<string[]>([])
-const history = ref<{ cid: string; trail: string[] }[]>([])
+const trail = ref<string[] | null>([])
+const history = ref<{ cid: string; trail: string[] | null }[]>([])
 
 const path = ref('')
 
@@ -45,32 +48,51 @@ const currentLabel = ref('')
 // 连点几个目录时请求可能乱序回来，只认最后一次发出去的
 let seq = 0
 
-async function load115(nextCid: string, opts?: { enter?: string; restore?: string[]; refresh?: boolean }) {
+const trailPath = (t: string[]) => '/' + t.join('/')
+const segsOf = (p: string) => p.split('/').filter(Boolean)
+const isCid = (v: string) => /^\d+$/.test(v)
+
+function label115(c: string, t: string[] | null) {
+  if (t === null) return `cid ${c}`
+  return t.length ? trailPath(t) : '根目录'
+}
+
+/**
+ * 读 115 目录。cid / trail / history 只在**读成功之后**一起提交：
+ * 以前先改 trail 再发请求，读失败时 trail 已经是子目录、cid 还是父目录，
+ * 「选择此目录」回传的就是「子目录的路径 + 父目录的 cid」，存进配置后同步 / 整理的是另一个目录。
+ */
+async function load115(
+  nextCid: string,
+  nextTrail: string[] | null,
+  opts?: { history?: 'push' | 'pop' | 'reset'; refresh?: boolean; fallback?: string },
+) {
   const my = ++seq
   loading.value = true
   note.value = ''
   try {
-    if (opts?.enter) {
-      history.value.push({ cid: cid.value, trail: [...trail.value] })
-      trail.value.push(opts.enter)
-    } else if (opts?.restore) {
-      trail.value = opts.restore
-    } else {
-      trail.value = [] // 根目录 / 手动跳转
-      history.value = []
-    }
     const data = await storageApi.dirs115(nextCid, opts?.refresh)
     if (my !== seq) return
+    if (opts?.history === 'push') history.value.push({ cid: cid.value, trail: trail.value && [...trail.value] })
+    else if (opts?.history === 'pop') history.value.pop()
+    else if (opts?.history === 'reset') history.value = []
     cid.value = nextCid
-    currentLabel.value = trail.value.length ? '/' + trail.value.join('/') : '根目录'
+    trail.value = nextTrail
+    currentLabel.value = label115(nextCid, nextTrail)
     items.value = data.data ?? []
     if (!items.value.length && (data.count ?? 0) > 0) {
       note.value = `目录共有 ${data.count} 个条目，但没有识别到文件夹（通道 ${data.channel || '?'}，来源 ${data.origin || '?'}）`
     }
   } catch (e) {
     if (my !== seq) return
-    items.value = []
-    note.value = e instanceof Error ? e.message : '加载失败'
+    const msg = e instanceof Error ? e.message : '加载失败'
+    if (opts?.fallback) {
+      loading.value = false
+      await load115('0', [], { history: 'reset' })
+      if (my + 1 === seq) note.value = `${opts.fallback}（${msg}），已回到根目录`
+      return
+    }
+    note.value = `无法打开 ${label115(nextCid, nextTrail)}：${msg}`
   } finally {
     if (my === seq) loading.value = false
   }
@@ -105,7 +127,26 @@ async function loadLocal(p: string, opts?: { fallback?: boolean }) {
   }
 }
 
+/** 按 cid 反查可读路径；查不出返回 null（只能按 cid 显示） */
+async function trailOfCid(c: string): Promise<string[] | null> {
+  try {
+    return segsOf((await storageApi.path115(c)).path)
+  } catch {
+    return null
+  }
+}
+
+/** 115 打开时定位到现值：路径可读就直接用，只有 cid 就反查一次路径 */
+async function open115() {
+  const c = props.initialCid?.trim() ?? ''
+  if (!isCid(c) || c === '0') return load115('0', [])
+  const p = props.initial?.trim() ?? ''
+  const t = p.startsWith('/') ? segsOf(p) : await trailOfCid(c)
+  return load115(c, t, { fallback: '原来选的目录打不开' })
+}
+
 function reset() {
+  seq++ // 作废上一次打开时还没回来的请求
   items.value = []
   note.value = ''
   jumpText.value = ''
@@ -114,14 +155,15 @@ function reset() {
   history.value = []
   path.value = ''
   currentLabel.value = ''
-  if (props.mode === '115') load115('0')
-  else if (props.initial?.trim()) loadLocal(props.initial.trim(), { fallback: true })
-  else loadLocal('')
+  if (props.mode === '115') void open115()
+  else if (props.initial?.trim()) void loadLocal(props.initial.trim(), { fallback: true })
+  else void loadLocal('')
 }
 
 function enter(it: DirEntry) {
-  if (props.mode === '115') load115(it.cid ?? '0', { enter: it.name })
-  else loadLocal(it.path ?? '')
+  if (props.mode === '115') {
+    if (it.cid) load115(it.cid, trail.value && [...trail.value, it.name], { history: 'push' })
+  } else if (it.path) loadLocal(it.path)
 }
 
 function parentPath(p: string) {
@@ -130,19 +172,40 @@ function parentPath(p: string) {
   return idx <= 0 ? '' : trimmed.slice(0, idx + 1)
 }
 
-function goUp() {
-  if (props.mode === '115') {
-    const prev = history.value.pop()
-    if (!prev) return // 已在根目录
-    load115(prev.cid, { restore: prev.trail })
-  } else {
+/** 能不能往上走。115：有来路，或者知道路径且不在根 */
+const canGoUp = computed(() =>
+  props.mode === '115' ? history.value.length > 0 || (!!trail.value && trail.value.length > 0) : !!path.value,
+)
+
+async function goUp() {
+  if (props.mode !== '115') {
     loadLocal(parentPath(path.value))
+    return
+  }
+  const prev = history.value[history.value.length - 1]
+  if (prev) {
+    load115(prev.cid, prev.trail, { history: 'pop' })
+    return
+  }
+  // 跳转 / 定位过来的没有来路（以前这时「上级」点了没反应）：按路径解析上一级
+  const t = trail.value
+  if (!t || !t.length) return
+  const parent = t.slice(0, -1)
+  if (!parent.length) {
+    load115('0', [], { history: 'reset' })
+    return
+  }
+  try {
+    const data = await storageApi.resolve115(trailPath(parent))
+    if (data.cid) load115(data.cid, parent, { history: 'reset' })
+  } catch (e) {
+    note.value = e instanceof Error ? e.message : '上级目录无法解析'
   }
 }
 
 /** 重新拉取当前目录。115 侧绕过后端缓存，否则刚新建的文件夹要等缓存过期才出现 */
 function refresh() {
-  if (props.mode === '115') load115(cid.value, { restore: [...trail.value], refresh: true })
+  if (props.mode === '115') load115(cid.value, trail.value, { refresh: true })
   else loadLocal(path.value)
 }
 
@@ -150,33 +213,35 @@ function refresh() {
 async function jump() {
   const v = jumpText.value.trim()
   if (!v) return
-  if (props.mode === '115') {
-    if (/^\d+$/.test(v)) {
-      load115(v)
-      return
-    }
-    try {
-      const data = await storageApi.resolve115(v)
-      if (data.cid) {
-        const t = v.replace(/^\/+|\/+$/g, '').split('/').filter(Boolean)
-        load115(data.cid, { restore: t })
-      }
-    } catch (e) {
-      items.value = []
-      note.value = e instanceof Error ? e.message : '路径无法解析'
-    }
-  } else {
+  if (props.mode !== '115') {
     loadLocal(v)
+    return
+  }
+  if (isCid(v)) {
+    if (v === '0') return load115('0', [], { history: 'reset' })
+    // 反查一次路径：以前直接按根目录处理，标题写「根目录」、选中后输入框是空的
+    load115(v, await trailOfCid(v), { history: 'reset' })
+    return
+  }
+  try {
+    const data = await storageApi.resolve115(v)
+    if (data.cid) load115(data.cid, segsOf(v), { history: 'reset' })
+  } catch (e) {
+    // 解析失败只报原因，列表与当前目录保持不动
+    note.value = e instanceof Error ? e.message : '路径无法解析'
   }
 }
 
-/** 本地顶层（盘符 / 根目录列表）不是一个真实目录，不能选 */
-const canConfirm = computed(() => !loading.value && (props.mode === '115' || !!path.value))
+/** 顶层（本地的盘符 / 根目录列表、115 的网盘根）不能选：工作目录选成网盘根，整理与清理会从整个网盘开始动 */
+const canConfirm = computed(() => !loading.value && (props.mode === '115' ? cid.value !== '0' : !!path.value))
+
+/** 路径不知道时回传 cid 本身：Cid115Input 把纯数字当 cid，不会去解析 */
+const pathOf115 = (c: string, t: string[] | null) => (t === null ? c : trailPath(t))
 
 function confirm() {
   if (!canConfirm.value) return
   if (props.mode === '115') {
-    emit('pick', { cid: cid.value, path: trail.value.length ? '/' + trail.value.join('/') : '' })
+    emit('pick', { cid: cid.value, path: pathOf115(cid.value, trail.value) })
   } else {
     emit('pick', { cid: '', path: path.value })
   }
@@ -186,7 +251,8 @@ function confirm() {
 /** 行尾「选择」：不用先点进去，直接选这一行的子目录 */
 function pickItem(it: DirEntry) {
   if (props.mode === '115') {
-    emit('pick', { cid: it.cid ?? '0', path: '/' + [...trail.value, it.name].join('/') })
+    if (!it.cid) return
+    emit('pick', { cid: it.cid, path: pathOf115(it.cid, trail.value && [...trail.value, it.name]) })
   } else {
     if (!it.path) return
     emit('pick', { cid: '', path: it.path })
@@ -211,7 +277,7 @@ watch(() => props.show, (v) => v && reset())
       </div>
 
       <div class="crumb">
-        <HButton size="sm" variant="ghost" :disabled="loading" @click="goUp">
+        <HButton size="sm" variant="ghost" :disabled="loading || !canGoUp" @click="goUp">
           <template #icon><CornerLeftUp /></template>
           上级
         </HButton>
@@ -242,7 +308,7 @@ watch(() => props.show, (v) => v && reset())
     </div>
 
     <template #footer>
-      <span class="footer-hint">{{ canConfirm ? `当前目录：${currentLabel}` : '点文件夹进入，或点行尾「选择」' }}</span>
+      <span class="footer-hint">{{ canConfirm ? `当前目录：${currentLabel}` : loading ? '加载中…' : '点文件夹进入，或点行尾「选择」' }}</span>
       <div class="footer-btns">
         <HButton variant="tertiary" @click="emit('update:show', false)">取消</HButton>
         <HButton variant="primary" :disabled="!canConfirm" @click="confirm">选择当前目录</HButton>

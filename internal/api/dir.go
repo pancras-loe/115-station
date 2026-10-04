@@ -42,16 +42,11 @@ func (h *Handler) List115Dirs(c *gin.Context) {
 	// 命中缓存直接返回（5 分钟）。refresh=1 是选择器上的「刷新」按钮：
 	// 用户刚在 115 上新建的文件夹，没有它要等缓存过期才看得到。
 	// 只跳过读缓存，结果照常写回，后续普通打开拿到的就是新列表
-	cacheKey := cid
 	refresh := c.Query("refresh") == "1"
-	dirCacheMu.Lock()
-	if e, ok := dirCache[cacheKey]; ok && !refresh && time.Now().Before(e.expires) {
-		dirs, count, origin := e.dirs, e.count, e.origin
-		dirCacheMu.Unlock()
-		c.JSON(http.StatusOK, gin.H{"data": dirs, "cid": cid, "count": count, "origin": origin, "channel": "cache"})
+	if e, ok := dirCacheGet(cid); ok && !refresh {
+		c.JSON(http.StatusOK, gin.H{"data": e.dirs, "cid": cid, "count": e.count, "origin": e.origin, "channel": "cache"})
 		return
 	}
-	dirCacheMu.Unlock()
 
 	// 统一操作通道：OpenAPI 优先，Cookie 回退。
 	ops, err := h.newPan115Ops()
@@ -65,16 +60,42 @@ func (h *Handler) List115Dirs(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	dirCachePut(cid, dirs, count, origin)
 
-	// 写入缓存（超过 500 项时清空防止膨胀）
+	c.JSON(http.StatusOK, gin.H{"data": dirs, "cid": cid, "channel": ops.channelName(), "count": count, "origin": origin})
+}
+
+func dirCacheGet(cid string) (dirCacheEntry, bool) {
 	dirCacheMu.Lock()
+	defer dirCacheMu.Unlock()
+	e, ok := dirCache[cid]
+	if !ok || !time.Now().Before(e.expires) {
+		return dirCacheEntry{}, false
+	}
+	return e, true
+}
+
+// dirCachePut 写入缓存（超过 500 项时清空防止膨胀）
+func dirCachePut(cid string, dirs []gin.H, count int, origin string) {
+	dirCacheMu.Lock()
+	defer dirCacheMu.Unlock()
 	if len(dirCache) > 500 {
 		dirCache = map[string]dirCacheEntry{}
 	}
-	dirCache[cacheKey] = dirCacheEntry{dirs: dirs, count: count, origin: origin, expires: time.Now().Add(dirCacheTTL)}
-	dirCacheMu.Unlock()
+	dirCache[cid] = dirCacheEntry{dirs: dirs, count: count, origin: origin, expires: time.Now().Add(dirCacheTTL)}
+}
 
-	c.JSON(http.StatusOK, gin.H{"data": dirs, "cid": cid, "channel": ops.channelName(), "count": count, "origin": origin})
+// cachedListDirs 目录选择器用的读：先看缓存，没有再列并写回
+func cachedListDirs(ops *pan115Ops, cid string) ([]gin.H, error) {
+	if e, ok := dirCacheGet(cid); ok {
+		return e.dirs, nil
+	}
+	dirs, count, origin, err := ops.listDirs(cid)
+	if err != nil {
+		return nil, err
+	}
+	dirCachePut(cid, dirs, count, origin)
+	return dirs, nil
 }
 
 // fetch115Dirs 调用 115 webapi 获取目录下的文件夹列表（多镜像自动回退）
@@ -109,7 +130,8 @@ func fetch115Dirs(cookie, ua, cid string) ([]gin.H, int, string, error) {
 
 // Resolve115Path 把网盘绝对路径逐段解析为 cid（供前端手填路径时换算）
 // GET /storage/115/resolve?path=/影视测试/俱乐部
-// 依赖目录列表缓存，逐段匹配目录名；单层目录数超过一页（1150）时可能漏配
+// 逐段匹配目录名，与选择器共用目录列表缓存：此前每次都逐段现查，
+// 选择器里「上级」「跳转」一次就是路径深度那么多次 115 请求（每次还要等节流）
 func (h *Handler) Resolve115Path(c *gin.Context) {
 	p := strings.Trim(c.Query("path"), "/ \t")
 	if p == "" {
@@ -123,7 +145,7 @@ func (h *Handler) Resolve115Path(c *gin.Context) {
 	}
 	cid := "0"
 	for i, seg := range strings.Split(p, "/") {
-		dirs, _, _, err := ops.listDirs(cid)
+		dirs, err := cachedListDirs(ops, cid)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "读取目录失败: " + err.Error()})
 			return

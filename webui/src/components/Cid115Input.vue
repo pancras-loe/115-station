@@ -104,7 +104,13 @@ defineExpose({ ensureCid })
       </HButton>
     </div>
 
-    <DirPickerModal v-model:show="pickerShow" mode="115" @pick="onPick" />
+    <DirPickerModal
+      v-model:show="pickerShow"
+      mode="115"
+      :initial="modelValue.path"
+      :initial-cid="modelValue.cid"
+      @pick="onPick"
+    />
   </div>
 </template>
 
