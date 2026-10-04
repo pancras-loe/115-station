@@ -496,6 +496,7 @@ const ROUTES: Record<string, Route> = {
   },
   '/auth/status': { initialized: true },
   '/auth/login': { token: 'mock-token', username: 'demo' },
+  '/auth/otp': { enabled: false, token_expire: 11520 },
   '/version': { version: 'v1.2.0-3-g9596437', sha: '9596437' },
   '/system/update/check': () => ROUTES['/system/update'],
   '/system/update': {

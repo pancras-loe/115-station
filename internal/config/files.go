@@ -37,6 +37,9 @@ func (c *Config) SettingFile() string {
 type AuthConfig struct {
 	Username     string `yaml:"username"`
 	PasswordHash string `yaml:"password_hash"`
+	// OtpSecret 二步验证（TOTP）密钥，base32；空 = 未开启。
+	// 只在网页「系统配置 → 登录安全」里绑定 / 解绑，环境变量同步密码时原样保留
+	OtpSecret string `yaml:"otp_secret,omitempty"`
 }
 
 // IsAuthExists 检查是否已有管理员
@@ -48,6 +51,16 @@ func (c *Config) IsAuthExists() bool {
 // EnsureAdmin 保证存在可用管理员：环境变量优先（每次启动同步一次，改环境
 // 变量即改密码）；否则沿用 auth.yaml；都没有则生成随机密码落盘并打印日志
 func (c *Config) EnsureAdmin() error {
+	// 丢了验证器（换手机没迁移）时的唯一出路：容器加 AUTH_OTP_RESET=true 重启一次，
+	// 关掉二步验证后再去掉这个变量。不提供网页上的绕过入口
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_OTP_RESET"))); v == "true" || v == "1" {
+		if auth, err := c.LoadAuth(); err == nil && auth.OtpSecret != "" {
+			if err := c.SetAuthOtp(""); err != nil {
+				return err
+			}
+			log.Println("[账号] ✓ 已按 AUTH_OTP_RESET 关闭二步验证，请去掉该环境变量后再重启")
+		}
+	}
 	envUser := strings.TrimSpace(os.Getenv("AUTH_USER"))
 	envPass := os.Getenv("AUTH_PASSWORD")
 	if envUser != "" && envPass != "" {
@@ -112,6 +125,10 @@ func (c *Config) SaveAuth(username, password string) error {
 		Username:     username,
 		PasswordHash: string(hash),
 	}
+	// 改密码（环境变量同步）不能顺手把二步验证关掉
+	if old, err := c.LoadAuth(); err == nil {
+		auth.OtpSecret = old.OtpSecret
+	}
 	data, err := yaml.Marshal(&auth)
 	if err != nil {
 		return err
@@ -126,6 +143,20 @@ func (c *Config) UpdateAuthUsername(newUsername string) error {
 		return err
 	}
 	auth.Username = newUsername
+	data, err := yaml.Marshal(&auth)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.AuthFile(), data, 0600)
+}
+
+// SetAuthOtp 写入 / 清除二步验证密钥，保留账号与密码哈希
+func (c *Config) SetAuthOtp(secret string) error {
+	auth, err := c.LoadAuth()
+	if err != nil {
+		return err
+	}
+	auth.OtpSecret = secret
 	data, err := yaml.Marshal(&auth)
 	if err != nil {
 		return err

@@ -23,12 +23,15 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(user: string, pass: string) {
-    const res = await authApi.login(user, pass)
+  /** 返回 'otp'：密码对了、还要二步验证码，登录页切到验证码那一步 */
+  async function login(user: string, pass: string, otp?: string): Promise<'ok' | 'otp'> {
+    const res = await authApi.login(user, pass, otp)
+    if (res.otp_required) return 'otp'
     tokenStorage.set(res.token)
     localStorage.setItem('username', res.username)
     token.value = res.token
     username.value = res.username
+    return 'ok'
   }
 
   function logout() {

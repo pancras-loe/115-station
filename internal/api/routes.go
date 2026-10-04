@@ -22,7 +22,6 @@ import (
 	"gorm.io/gorm"
 )
 
-
 // loginGuardEntry 登录防爆破计数
 type loginGuardEntry struct {
 	fails     int
@@ -150,6 +149,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 账号
 		protected.POST("/auth/update-account", h.UpdateAccount)
+		// 登录二步验证（TOTP，见 authotp.go）
+		protected.GET("/auth/otp", h.OtpStatus)
+		protected.POST("/auth/otp/generate", h.OtpGenerate)
+		protected.POST("/auth/otp/enable", h.OtpEnable)
+		protected.POST("/auth/otp/disable", h.OtpDisable)
 
 		// 代理测试
 		protected.POST("/proxy/test", h.TestProxyLatency)
@@ -478,6 +482,9 @@ func (h *Handler) Login(c *gin.Context) {
 	var req struct {
 		Username string `json:"username" binding:"required"`
 		Password string `json:"password" binding:"required"`
+		// Otp 二步验证码。开着二步验证时第一次只带账号密码，
+		// 回 otp_required 后前端补上验证码连同账号密码再提交一次
+		Otp string `json:"otp"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
@@ -496,6 +503,19 @@ func (h *Handler) Login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
+	// 密码对了才看二步验证（同 MoviePilot）：没开的人看不出账号开没开
+	if auth, err := h.Config.LoadAuth(); err == nil && auth.OtpSecret != "" {
+		if strings.TrimSpace(req.Otp) == "" {
+			c.JSON(http.StatusOK, gin.H{"otp_required": true})
+			return
+		}
+		// 验证码错也算一次失败：6 位数字比密码好猜得多
+		if !otpCheck(auth.OtpSecret, req.Otp) {
+			loginGuardFail(ip)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "验证码不正确或已使用"})
+			return
+		}
+	}
 	loginGuardPass(ip)
 
 	token := h.generateToken(1, req.Username)
@@ -510,13 +530,22 @@ func (h *Handler) generateToken(userID uint, username string) string {
 	claims := jwt.MapClaims{
 		"user_id":  userID,
 		"username": username,
-		// 自托管工具常用场景：30 天有效期（此前 72 小时，三天没操作就会被
-		// 全站 401 轰炸着赶去重新登录，体验差且无安全收益——密码仍可随时改）
-		"exp": time.Now().Add(30 * 24 * time.Hour).Unix(),
+		// 有效期对齐 MoviePilot（ACCESS_TOKEN_EXPIRE_MINUTES，默认 8 天）。
+		// 此前是 30 天：令牌存在浏览器 localStorage，丢一次就是一个月的后台权限
+		"iat": time.Now().Unix(),
+		"exp": time.Now().Add(h.tokenExpire()).Unix(),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	t, _ := token.SignedString([]byte(h.Config.JWTSecret))
 	return t
+}
+
+// tokenExpire 登录令牌有效期；测试里手搭的 Config 没填时按默认 8 天
+func (h *Handler) tokenExpire() time.Duration {
+	if h.Config.TokenExpire > 0 {
+		return h.Config.TokenExpire
+	}
+	return 8 * 24 * time.Hour
 }
 
 func (h *Handler) AuthMiddleware() gin.HandlerFunc {

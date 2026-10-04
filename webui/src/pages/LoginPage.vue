@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
-import { Eye, EyeOff, KeyRound, UserRound } from '@lucide/vue'
+import { ArrowLeft, Eye, EyeOff, KeyRound, ShieldCheck, UserRound } from '@lucide/vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAuthStore } from '@/stores/auth'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -21,6 +21,10 @@ const username = ref('')
 const password = ref('')
 const submitting = ref(false)
 const showPwd = ref(false)
+// 二步验证：密码通过后后端回 otp_required，切到验证码这一步（账号密码留着，随验证码一起再交一次）
+const otpStep = ref(false)
+const otp = ref('')
+const otpInput = ref<InstanceType<typeof HInput>>()
 
 // 账号来源是容器环境变量 AUTH_USER / AUTH_PASSWORD（未配置时首启生成随机密码，
 // 见容器日志）。网页注册功能已移除，所以「未初始化」只能给配置指引，不能给注册入口。
@@ -84,17 +88,41 @@ async function submit() {
     message.warning('请输入账号和密码')
     return
   }
+  if (otpStep.value && !/^\d{6}$/.test(otp.value.trim())) {
+    message.warning('请输入 6 位验证码')
+    return
+  }
   submitting.value = true
   try {
-    await auth.login(username.value, password.value)
+    const r = await auth.login(username.value, password.value, otpStep.value ? otp.value.trim() : undefined)
+    if (r === 'otp') {
+      otpStep.value = true
+      otp.value = ''
+      await nextTick()
+      otpInput.value?.focus()
+      return
+    }
     message.success('登录成功')
     const redirect = route.query.redirect
     router.replace(typeof redirect === 'string' ? redirect : '/')
   } catch (e) {
     toastError(e, '登录失败')
+    if (otpStep.value) otp.value = ''
   } finally {
     submitting.value = false
   }
+}
+
+function backToPassword() {
+  otpStep.value = false
+  otp.value = ''
+}
+
+/** 输满 6 位直接提交，省一次点按钮 */
+function onOtpInput(v: string) {
+  const digits = v.replace(/\D/g, '').slice(0, 6)
+  otp.value = digits
+  if (digits.length === 6 && !submitting.value) submit()
 }
 </script>
 
@@ -136,7 +164,34 @@ async function submit() {
 
       <!-- 登录页是全站唯一「要」浏览器自动填充的地方：name / autocomplete 按标准写，
            密码框用真正的 type=password（其余页面的密钥框刻意避开它，见 SecretInput） -->
-      <form class="form" @submit.prevent="submit">
+      <form v-if="otpStep" class="form" @submit.prevent="submit">
+        <div class="otp-head">
+          <ShieldCheck :size="20" />
+          <div>
+            <div class="otp-title">二步验证</div>
+            <div class="otp-sub">打开身份验证器，输入 {{ username }} 的 6 位验证码</div>
+          </div>
+        </div>
+        <label class="field">
+          <span class="field-label">验证码</span>
+          <HInput
+            ref="otpInput"
+            :model-value="otp"
+            placeholder="6 位数字"
+            mono
+            :input-attrs="{ name: 'otp', autocomplete: 'one-time-code', inputmode: 'numeric', maxlength: '6' }"
+            @update:model-value="onOtpInput"
+          >
+            <template #prefix><ShieldCheck :size="16" /></template>
+          </HInput>
+        </label>
+        <HButton variant="primary" size="lg" full-width type="submit" :loading="submitting" class="submit">
+          验证并登录
+        </HButton>
+        <button type="button" class="back" @click="backToPassword"><ArrowLeft :size="14" /> 返回重新输入密码</button>
+      </form>
+
+      <form v-else class="form" @submit.prevent="submit">
         <label class="field">
           <span class="field-label">账号</span>
           <HInput
@@ -293,6 +348,37 @@ async function submit() {
 }
 .submit {
   margin-top: 8px;
+}
+.otp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--accent);
+}
+.otp-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.otp-sub {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.back:hover {
+  color: var(--accent);
 }
 /* ---- 背景剧照 ---- */
 .wall {

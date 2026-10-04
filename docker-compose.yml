@@ -18,3 +18,5 @@ services:
       - TZ=Asia/Shanghai
       - AUTH_USER=admin              # 管理后台账号（环境变量管理，网页注册已移除）
       - AUTH_PASSWORD=change-me      # 改成强密码后 up -d 重启生效
+      # - ACCESS_TOKEN_EXPIRE_MINUTES=11520  # 登录有效期（分钟），默认 8 天，同 MoviePilot
+      # - AUTH_OTP_RESET=true        # 丢了二步验证器时临时加上重启一次，登录后去掉

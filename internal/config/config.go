@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -15,17 +16,21 @@ type Config struct {
 	DataDir   string // 数据目录
 	ConfigDir string // 配置目录
 	JWTSecret string // JWT密钥
+	// TokenExpire 登录令牌有效期。对齐 MoviePilot：默认 8 天，
+	// 环境变量 ACCESS_TOKEN_EXPIRE_MINUTES（分钟，同名同义）可改
+	TokenExpire time.Duration
 }
 
 func Load() *Config {
 	port := getEnvInt("PORT", 6060)
 	proxyPort := getEnvInt("PROXY_PORT", 6086)
 	return &Config{
-		Port:      port,
-		ProxyPort: proxyPort,
-		DataDir:   getEnv("DATA_DIR", "/data"),
-		ConfigDir: getEnv("CONFIG_DIR", "/config"),
-		JWTSecret: loadOrCreateJWTSecret(getEnv("CONFIG_DIR", "/config")),
+		Port:        port,
+		ProxyPort:   proxyPort,
+		DataDir:     getEnv("DATA_DIR", "/data"),
+		ConfigDir:   getEnv("CONFIG_DIR", "/config"),
+		JWTSecret:   loadOrCreateJWTSecret(getEnv("CONFIG_DIR", "/config")),
+		TokenExpire: tokenExpire(),
 	}
 }
 
@@ -53,6 +58,16 @@ func loadOrCreateJWTSecret(configDir string) string {
 		log.Printf("○ JWT 密钥落盘失败（每次重启后已登录会话失效）: %v", err)
 	}
 	return secret
+}
+
+// tokenExpire 读 ACCESS_TOKEN_EXPIRE_MINUTES，非法或 ≤0 时用默认 8 天
+func tokenExpire() time.Duration {
+	const def = 60 * 24 * 8
+	m := getEnvInt("ACCESS_TOKEN_EXPIRE_MINUTES", def)
+	if m <= 0 {
+		m = def
+	}
+	return time.Duration(m) * time.Minute
 }
 
 func (c *Config) PortStr() string {
