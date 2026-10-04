@@ -296,7 +296,13 @@ func lastDigitsTemplate(name string) (tpl, digits string) {
 // names 用原始文件名（替换规则只用于解析，模板按用户眼里的名字比对就够了）
 func fillEpisodesFromSiblings(names map[string]string, parses map[string]*ParsedName) {
 	agree := map[string]int{} // 模板 → 数字就是集号的兄弟数
+	taken := map[[2]int]bool{} // 已被兄弟占用的 季,集：补出来撞上的不补，否则批量改名会撞名
 	for fid, p := range parses {
+		if p != nil && p.Episode > 0 {
+			for _, ep := range p.episodeList() {
+				taken[[2]int{p.Season, ep}] = true
+			}
+		}
 		if p == nil || p.Episode <= 0 || p.EpisodeEnd > 0 {
 			continue
 		}
@@ -324,6 +330,14 @@ func fillEpisodesFromSiblings(names map[string]string, parses map[string]*Parsed
 				break
 			}
 		}
+		season := p.Season
+		if season == 0 && ref != nil {
+			season = ref.Season
+		}
+		if taken[[2]int{season, n}] {
+			continue // 那一集已经有文件了（重复的两份），留给特别篇，别让两份算出同一个名字
+		}
+		taken[[2]int{season, n}] = true
 		p.Episode, p.IsTV = n, true
 		if p.Season == 0 && ref != nil {
 			p.Season, p.SeasonGuessed = ref.Season, ref.SeasonGuessed

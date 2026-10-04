@@ -33,3 +33,21 @@ func TestEpisodeParsesKeepsLoneResolution(t *testing.T) {
 		t.Fatalf("不同模板不该被补集号，实际 E%d", p.Episode)
 	}
 }
+
+// 那一集已经有文件（重复的两份）：不补，免得两份算出同一个名字、批量改名撞名
+func TestEpisodeParsesFillSkipsTakenEpisode(t *testing.T) {
+	vids := []remoteFile{
+		{Fid: "a", Name: "蜡笔小新第二季-1.mp4"},
+		{Fid: "b", Name: "蜡笔小新第二季-2.mp4"},
+		{Fid: "c", Name: "蜡笔小新第二季-3.mp4"},
+		{Fid: "d", Name: "蜡笔小新第二季 E720.mp4"},
+		{Fid: "e", Name: "蜡笔小新第二季-720.mp4"},
+	}
+	eps := episodeParses(vids, nil, nil)
+	if eps["d"].Episode != 720 {
+		t.Fatalf("前提：E720 应解析出集号，实际 %+v", *eps["d"])
+	}
+	if eps["e"].Episode != 0 {
+		t.Fatalf("E720 已被占用，-720 不该再补成同一集，实际 E%d", eps["e"].Episode)
+	}
+}
