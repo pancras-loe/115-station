@@ -456,7 +456,7 @@ git tag v1.2.0 && git push origin v1.2.0
       执行器只把路径带任务 id 排进同一个 worker 然后等结果（别另起第二个探测者），停止时 `cancelEmbyExtractJob` 摘掉排着的。
       每个条目的结果写 `TaskJob.Probe`（`embyprobereport.go`），任务状态：全失败 `failed`、部分失败 `partial`。
       防抖期内重试任务后端直接 409 说清几点能试（`probeRetryReadyAt`），前端倒计时。**没有定时重试**，文案别写成「会自动重试」。
-      入库确认排的自动探测没有任务可挂，靠任务中心的「Emby 探测」页签（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条 / 全部手动重试；条目在 Emby 里没了顺手删账）。**「忽略」只打 `EmbyExtractMark.IgnoredAt`、不删账**（删了自动次数清零，下次入库确认又要请求两次）：忽略的不再列出、不再自动探，手动请求时清掉标记（`embyExtractClaim`），再失败回到清单；`POST /tasks/probe/ignore` / `unignore`。
+      入库确认排的自动探测（2026-10-04 起）也建任务：一个片目一个、`Source=ingest`、按自动规则放行（`enqueueIngestProbes`，与定时补全同一套 `Auto`），一个都没请求就按 `Idle` 删行不进历史；**别改回直接塞 worker**，一部上千集的番剧要探一个多小时，没任务就看不到进度、停不下来。探测失败的条目另有任务中心的「Emby 探测」页签（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条 / 全部手动重试；条目在 Emby 里没了顺手删账）。**「忽略」只打 `EmbyExtractMark.IgnoredAt`、不删账**（删了自动次数清零，下次入库确认又要请求两次）：忽略的不再列出、不再自动探，手动请求时清掉标记（`embyExtractClaim`），再失败回到清单；`POST /tasks/probe/ignore` / `unignore`。
     - 任务状态 `partial`（部分失败）：执行器返回 `jobOutcome.Partial`。刮削有出错的产物或没刮成的片目（含中途片目被挪走）就是部分失败；停止优先于它。可重试，保留 30 天。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。

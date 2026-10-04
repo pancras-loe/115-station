@@ -1521,6 +1521,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 		onLog("⚠ 扫描根覆盖到媒体库/已存在/冗余目录，这些子树内的条目将被跳过（防误整理库内容）")
 	}
 
+	defer holdMediaNotif()() // 一轮整理的入库通知收尾后一起发，多季合集不再一季一条
 	done := 0
 	for i, entry := range topEntries {
 		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮
@@ -2140,6 +2141,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 整条记为失败、点「重新整理」补齐 —— 与批量改名半途失败的处理一致（已成功的按新名落盘）
 	var movedRels []string
 	var moveErr error
+	goneFids := map[string]bool{} // 收拾源目录时认「115 还没落定」的刚搬走文件，见 pruneOrMoveSettled
 	for _, rel := range place.dirs {
 		fids := groups[rel]
 		if len(fids) == 0 {
@@ -2149,6 +2151,9 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		if err := ops.moveFiles(relCid[rel], fids); err != nil {
 			moveErr = err
 			break
+		}
+		for _, fid := range fids {
+			goneFids[fid] = true
 		}
 		movedRels = append(movedRels, rel)
 	}
@@ -2163,6 +2168,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		onLog(fmt.Sprintf("▣ 移动 %d 个 NFO/封面 → %s（cid=%s）", len(metaFids), rootRel, rootCid))
 		if err := ops.moveFiles(rootCid, metaFids); err != nil {
 			onLog(fmt.Sprintf("○ %s/ - 封面/NFO 移动失败（留在源目录）: %v", dir.Name, err))
+		} else {
+			for _, fid := range metaFids {
+				goneFids[fid] = true
+			}
 		}
 	}
 
@@ -2177,6 +2186,9 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		} else if err := ops.moveFiles(junkCid, junkFids); err != nil {
 			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件移到冗余失败: %v", dir.Name, len(junkFids), err))
 		} else {
+			for _, fid := range junkFids {
+				goneFids[fid] = true
+			}
 			onLog(fmt.Sprintf("○ %s/ - %d 个无用文件已移到 冗余/%s", dir.Name, len(junkFids), junkRel))
 		}
 	}
@@ -2207,7 +2219,9 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 此前一律搬进冗余——冗余目录被空壳越堆越多，点进去什么都没有。
 	// 注意不能只看直接子项：待整理常见 片名/Season 01/*.mkv，文件搬走后
 	// 父目录里还挂着空的 Season 01，pruneOrMove 会递归判断整棵子树
-	pruneOrMove(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", onLog)
+	if _, deferred := pruneOrMoveSettled(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", goneFids, onLog); deferred {
+		ctx.pruner.mark(dir.Fid, dir.Name+"/")
+	}
 
 	// ---- 一条龙落盘：STRM + 附属文件直接由整理写出 ----
 	// 到这一步 targetDir / fid / pickcode / 最终文件名全都在手里，
@@ -3024,6 +3038,7 @@ func runOrganizeEngineWithConfig(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, 
 	}
 
 	onLog(fmt.Sprintf("▶ 转存目录发现 %d 个条目，开始整理...", len(topEntries)))
+	defer holdMediaNotif()() // 一轮整理的入库通知收尾后一起发，多季合集不再一季一条
 	done := 0
 	for i, entry := range topEntries {
 		// 用户在任务队列里点了停止：做完上一个条目就收工，剩下的留在原处等下一轮

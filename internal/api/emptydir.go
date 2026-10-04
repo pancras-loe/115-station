@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // ==================== 网盘空目录清理 ====================
@@ -255,14 +256,77 @@ func pruneEmptyDirTree(ops dirIO, cid string, protected map[string]bool, depth i
 // 还有残留内容就连同内容移到 fallbackCid（冗余），等人工过目。
 // 返回是否已删除
 func pruneOrMove(ops dirIO, cid string, protected map[string]bool, fallbackCid, label string, onLog func(string)) bool {
+	gone, _ := pruneOrMoveSettled(ops, cid, protected, fallbackCid, label, nil, onLog)
+	return gone
+}
+
+// moveSettleWaits 批量移动之后等 115 落定的退避。
+// 2026-10-04 现场：一次 move 480 / 870 个文件，紧接着列源目录，115 还原样列出刚搬走的文件
+// （156 个的那两季就没事），于是判成「有残留」整个搬进冗余 —— 冗余里留下两个空的「第一季（480集）」。
+// 做成变量是给测试置零用的
+var moveSettleWaits = []time.Duration{3 * time.Second, 5 * time.Second, 8 * time.Second, 12 * time.Second}
+
+// subtreeLeftovers 数 cid 子树里还列得出的文件：movedLeft 是本次刚搬走的（115 还没落定），
+// other 是真正的残留。读不出来返回 err，调用方按「不知道」处理
+func subtreeLeftovers(ops dirIO, cid string, moved map[string]bool, depth int) (movedLeft, other int, err error) {
+	if depth > emptyDirMaxDepth {
+		return 0, 1, nil // 太深就当有残留，宁可搬冗余也不误删
+	}
+	entries, _, err := ops.listEntries(cid, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, e := range entries {
+		if fmt.Sprint(e["f"]) != "0" {
+			if moved[fmt.Sprint(e["fid"])] {
+				movedLeft++
+			} else {
+				other++
+			}
+			continue
+		}
+		sub := fmt.Sprint(e["cid"])
+		if sub == "" || sub == "<nil>" {
+			continue
+		}
+		m, o, err := subtreeLeftovers(ops, sub, moved, depth+1)
+		if err != nil {
+			return 0, 0, err
+		}
+		movedLeft += m
+		other += o
+	}
+	return movedLeft, other, nil
+}
+
+// pruneOrMoveSettled 同 pruneOrMove，但知道本次刚从这个目录搬走了哪些文件（moved）。
+// 列目录还看得见它们时先等 115 落定；等满了还只剩它们，就既不删也不搬（deferred=true）：
+// 删 —— 万一移动其实没生效，等于把整季片子删进回收站；搬冗余 —— 落定后就是一个空壳。
+// 调用方把目录登记给本轮的 dirPruner，收尾时再查一遍
+func pruneOrMoveSettled(ops dirIO, cid string, protected map[string]bool, fallbackCid, label string,
+	moved map[string]bool, onLog func(string)) (gone, deferred bool) {
 	// 核不准就两件事都不做：这里的「回退」是把目录连同内容搬进冗余，
 	// 拿着一个指向别处的 cid 搬，比删还难收拾
 	if !prunableRoot(ops, cid, protected, label, onLog) {
-		return false
+		return false, false
 	}
-	_, gone := pruneEmptyDirTree(ops, cid, protected, 0, label, onLog)
+	if len(moved) > 0 {
+		for i := 0; ; i++ {
+			m, o, err := subtreeLeftovers(ops, cid, moved, 0)
+			if err != nil || m == 0 || o > 0 {
+				break // 已落定 / 真有残留 / 读不出：交给下面的常规判断
+			}
+			if i >= len(moveSettleWaits) {
+				onLog(fmt.Sprintf("○ %s - 115 还在处理批量移动（仍列出 %d 个已搬走的文件），源目录先留着，本轮收尾再清理", label, m))
+				return false, true
+			}
+			vlogTo(onLog, "○ %s - 115 仍列出 %d 个刚搬走的文件，等 %s 再看", label, m, moveSettleWaits[i])
+			time.Sleep(moveSettleWaits[i])
+		}
+	}
+	_, gone = pruneEmptyDirTree(ops, cid, protected, 0, label, onLog)
 	if gone {
-		return true // pruneEmptyDirTree 已经逐个打过日志
+		return true, false // pruneEmptyDirTree 已经逐个打过日志
 	}
 	if fallbackCid != "" {
 		if err := ops.moveFiles(fallbackCid, []string{cid}); err != nil {
@@ -271,7 +335,7 @@ func pruneOrMove(ops dirIO, cid string, protected map[string]bool, fallbackCid, 
 			onLog(fmt.Sprintf("○ %s - 源目录仍有残留内容，已连同内容移到冗余", label))
 		}
 	}
-	return false
+	return false, false
 }
 
 // orgProtectedCids 整理工作区的全部根目录：清理空目录时永不触碰

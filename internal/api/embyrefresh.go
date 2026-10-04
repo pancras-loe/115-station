@@ -389,7 +389,7 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 		}
 		targets := embyExtractTitleTargets(cfg, extract)
 		if auto := splitRedoProbes(targets); len(auto) > 0 && embyExtractEnabled() {
-			queueEmbyExtract(auto...)
+			enqueueIngestProbes(auto)
 		}
 	}()
 	for _, d := range embyVerifyDelays {

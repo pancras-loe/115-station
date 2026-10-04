@@ -41,6 +41,7 @@ export const JOB_SOURCE: Record<string, string> = {
   incr: '增量同步后',
   scrape: '刮削后',
   redo: '重新整理后',
+  ingest: '入库后',
 }
 
 /** 不在主队列上的任务，排队位置前面加上是哪条队列（刮削、探测、人物各自一条，不等任务锁）；主队列为空串 */

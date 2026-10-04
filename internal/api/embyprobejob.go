@@ -125,7 +125,7 @@ func execProbeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	probeLane.set("", progressKeep, progressKeep, "")
 
 	failed := r.Failed + r.Errors
-	msg := probeJobMessage(r)
+	msg := probeJobMessage(r, p.Auto)
 	switch {
 	case stopped:
 		return jobOutcome{Message: "已按要求停止；" + msg, Canceled: true}, nil
@@ -134,7 +134,9 @@ func execProbeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	case failed > 0 && r.OK == 0:
 		return jobOutcome{}, errors.New(msg)
 	}
-	return jobOutcome{Message: msg, Partial: failed > 0}, nil
+	// 入库后自动建的任务一个都没请求（都有媒体信息 / 自动次数用完）就不进历史：每次入库都留一行空任务是噪音
+	idle := job.Source == probeSourceIngest && r.OK+r.Failed+r.Errors+r.Canceled == 0
+	return jobOutcome{Message: msg, Partial: failed > 0, Idle: idle}, nil
 }
 
 // probeJobProgress 任务进度：请求了几个 / 这次要请求几个、正在探哪一集；还在排队就说前面还有几个片目
@@ -158,13 +160,17 @@ func probeJobProgress(r jobProbeReport, state, label string, ahead int) {
 }
 
 // probeJobMessage 结果一句话
-func probeJobMessage(r jobProbeReport) string {
+func probeJobMessage(r jobProbeReport, autoRule bool) string {
 	var parts []string
 	if r.OK+r.Failed > 0 {
 		parts = append(parts, fmt.Sprintf("请求探测 %d 个视频：成功 %d、失败 %d", r.OK+r.Failed, r.OK, r.Failed))
 	}
 	if r.Held > 0 {
-		parts = append(parts, fmt.Sprintf("%d 个刚请求过，防抖跳过", r.Held))
+		if autoRule {
+			parts = append(parts, fmt.Sprintf("%d 个自动探测次数已用完或 24 小时内请求过，跳过", r.Held))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d 个刚请求过，防抖跳过", r.Held))
+		}
 	}
 	if r.Canceled > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个因停止没探", r.Canceled))
@@ -338,4 +344,35 @@ func splitRedoProbes(embyPaths []string) (auto []string) {
 // titleLocalDir 片目在本地媒体库里的绝对路径
 func (s *orgSink) titleLocalDir(rootRel string) string {
 	return filepath.Join(s.localRoot, filepath.FromSlash(s.libRel(rootRel)))
+}
+
+// probeSourceIngest 入库确认后自动建的探测任务（TaskJob.Source）
+const probeSourceIngest = "ingest"
+
+// enqueueIngestProbes 入库确认后的自动探测：一个片目一个任务、按自动规则放行（同一条目最多 2 次、间隔 24 小时）。
+// 此前直接把路径塞进 worker、不挂任务 —— 一部 1665 集的番剧要探一个多小时，任务中心里看不到进度、
+// 也没地方停（2026-10-04 现场）。放行规则不变，只是多了一个看得见、停得下的壳。
+// 建不了任务（没库 / 入队失败）退回原来的无任务入口，探测本身不能因此丢掉
+func enqueueIngestProbes(targets []string) {
+	for _, p := range targets {
+		if model.DB == nil {
+			queueEmbyExtract(p)
+			continue
+		}
+		name := embyPathBase(strings.TrimPrefix(p, embyExtractItemPrefix))
+		job, err := enqueueProbeJob(model.DB, probeJobSpec{
+			Title:     fmt.Sprintf("Emby 提前探测《%s》（入库后）", truncateStr(name, 60)),
+			Source:    probeSourceIngest,
+			DedupeKey: "probe-ingest:" + p,
+			Paths:     []string{p},
+			Auto:      true,
+			Priority:  jobPriorityBackground,
+		})
+		if err != nil {
+			log.Printf("[Emby探测] ✗ 入库后的探测任务入队失败，改走后台队列（任务中心看不到进度）: %v", err)
+			queueEmbyExtract(p)
+			continue
+		}
+		log.Printf("[Emby探测] ○ 入库后自动探测《%s》（任务 #%d，自动规则，任务中心可看进度、可停止）", name, job.ID)
+	}
 }

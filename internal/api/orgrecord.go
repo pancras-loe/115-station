@@ -541,6 +541,16 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 			parses[f.Fid] = redoParseVideo(f, rules, entryHint)
 		}
 	}
+	{
+		// 只补从没改过名的：改过名的是模板生成的规范名，季集已经写全
+		names := map[string]string{}
+		for _, f := range files {
+			if f.Kind == "video" && f.Orig == "" {
+				names[f.Fid] = f.Name
+			}
+		}
+		fillEpisodesFromSiblings(names, parses)
+	}
 	if remap != nil && media.MediaType == "tv" {
 		remap(parses)
 	}

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -21,6 +23,11 @@ func episodeParses(videos []remoteFile, rules []ReplaceRule, main *ParsedName) m
 	for _, vf := range videos {
 		out[vf.Fid] = parseVideoInDir(vf, rules, main)
 	}
+	names := make(map[string]string, len(videos))
+	for _, vf := range videos {
+		names[vf.Fid] = vf.Name
+	}
+	fillEpisodesFromSiblings(names, out)
 	return out
 }
 
@@ -262,4 +269,64 @@ func (pl *orgPlacement) placeMeta(media *TmdbMedia, rootRel string, videos, meta
 		}
 	}
 	pl.collectDirs()
+}
+
+// reLastDigits 名字里最后一段数字（集号模板的「#」）
+var reLastDigits = regexp.MustCompile(`\d+`)
+
+// siblingTemplateMin 至少这么多个兄弟视频套着同一个模板、且那段数字就是集号，才拿它补没集号的
+const siblingTemplateMin = 3
+
+// lastDigitsTemplate 去掉扩展名后把最后一段数字换成 #：「蜡笔小新第二季-712.mp4」→「蜡笔小新第二季-#」
+func lastDigitsTemplate(name string) (tpl, digits string) {
+	name = baseName(name) // 扩展名里的数字（.mp4）不算
+	locs := reLastDigits.FindAllStringIndex(name, -1)
+	if len(locs) == 0 {
+		return "", ""
+	}
+	l := locs[len(locs)-1]
+	return name[:l[0]] + "#" + name[l[1]:], name[l[0]:l[1]]
+}
+
+// fillEpisodesFromSiblings 同一条目里按兄弟视频的命名模板补集号。
+// plausibleEpisode 单看一个名字时把 480 / 576 / 720 / 1080 当分辨率排除，这本身没错
+// （「某剧 - 1080.mkv」多半是画质）；但 873 集的「蜡笔小新第二季-NNN.mp4」里，
+// -480 / -576 / -720 三集因此没了集号，被当特别篇丢进 Season 0、保持原名（2026-10-04 现场）。
+// 一批兄弟都是「同一模板 + 那段数字 = 集号」时，这段数字在它身上同样是集号。
+// names 用原始文件名（替换规则只用于解析，模板按用户眼里的名字比对就够了）
+func fillEpisodesFromSiblings(names map[string]string, parses map[string]*ParsedName) {
+	agree := map[string]int{} // 模板 → 数字就是集号的兄弟数
+	for fid, p := range parses {
+		if p == nil || p.Episode <= 0 || p.EpisodeEnd > 0 {
+			continue
+		}
+		tpl, d := lastDigitsTemplate(names[fid])
+		if n, err := strconv.Atoi(d); tpl != "" && err == nil && n == p.Episode {
+			agree[tpl]++
+		}
+	}
+	for fid, p := range parses {
+		if p == nil || p.Episode > 0 {
+			continue
+		}
+		tpl, d := lastDigitsTemplate(names[fid])
+		if tpl == "" || agree[tpl] < siblingTemplateMin {
+			continue
+		}
+		n, err := strconv.Atoi(d)
+		if err != nil || n <= 0 {
+			continue
+		}
+		var ref *ParsedName // 季号与片名取同模板的兄弟：它自己的解析在这一处是残的
+		for f2, p2 := range parses {
+			if t2, _ := lastDigitsTemplate(names[f2]); t2 == tpl && p2 != nil && p2.Episode > 0 {
+				ref = p2
+				break
+			}
+		}
+		p.Episode, p.IsTV = n, true
+		if p.Season == 0 && ref != nil {
+			p.Season, p.SeasonGuessed = ref.Season, ref.SeasonGuessed
+		}
+	}
 }

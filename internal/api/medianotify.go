@@ -168,6 +168,7 @@ var mediaNotif struct {
 	timer   *time.Timer
 	firstAt time.Time
 	sent    map[string]time.Time // 已经发出的媒体键；只拦截随后迟到的 Emby 回声
+	holds   int                  // 正在跑的整理轮数，见 holdMediaNotif
 }
 
 const mediaNotifSentWindow = 10 * time.Minute
@@ -215,11 +216,41 @@ func QueueMediaNotif(e mediaNotifEntry) {
 	if mediaNotif.firstAt.IsZero() {
 		mediaNotif.firstAt = time.Now()
 	}
+	if mediaNotif.holds > 0 && time.Since(mediaNotif.firstAt) < mediaNotifHoldMax {
+		mediaNotif.timer = nil // 整理还在跑：等它收尾再排冲刷，见 holdMediaNotif
+		return
+	}
 	wait := 15 * time.Second
-	if time.Since(mediaNotif.firstAt) > 105*time.Second {
+	if mediaNotif.holds == 0 && time.Since(mediaNotif.firstAt) > 105*time.Second {
 		wait = 0
 	}
 	mediaNotif.timer = time.AfterFunc(wait, FlushMediaNotif)
+}
+
+// mediaNotifHoldMax 整理一轮再长，攒着的通知也最多压这么久
+const mediaNotifHoldMax = 10 * time.Minute
+
+// holdMediaNotif 整理一轮开始时调用，返回的函数在这一轮结束时调用。
+// 期间入队的通知只攒着不冲刷：多季合集每一季是一个条目、处理一季要几十秒，
+// 15 秒防抖兜不住，同一部剧就是一季一条（2026-10-04 现场：蜡笔小新 4 季 4 条）。
+// 收尾后照常 15 秒防抖，给 Emby 的入库回声留出合并的时间
+func holdMediaNotif() func() {
+	mediaNotif.mu.Lock()
+	mediaNotif.holds++
+	mediaNotif.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			mediaNotif.mu.Lock()
+			defer mediaNotif.mu.Unlock()
+			if mediaNotif.holds > 0 {
+				mediaNotif.holds--
+			}
+			if mediaNotif.holds == 0 && len(mediaNotif.items) > 0 && mediaNotif.timer == nil {
+				mediaNotif.timer = time.AfterFunc(15*time.Second, FlushMediaNotif)
+			}
+		})
+	}
 }
 
 // FlushMediaNotif 冲刷并发送（单条富格式 / 多条合并）

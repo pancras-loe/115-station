@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -305,6 +306,10 @@ func (r *titleRun) fetchImages(phase string, reqs []imgReq, labels []string) []i
 				q := reqs[i]
 				start := time.Now()
 				data, url, err := r.s.fetch(q.path, q.size)
+				if imgFetchTimedOut(err) && !r.s.rep.stopped() {
+					// 图床偶尔整批卡住几秒（2026-10-04 现场：一千多张剧照里 4 张超时，任务就成了「部分失败」），超时的再试一次
+					data, url, err = r.s.fetch(q.path, q.size)
+				}
 				img := &fetchedImage{data: data, url: url, err: err}
 				if err == nil {
 					// 只缓存成功的：失败多半是图床临时不通，下一个片目遇到同一张图该再试
@@ -826,4 +831,10 @@ func humanBytes(n int) string {
 	default:
 		return fmt.Sprintf("%dB", n)
 	}
+}
+
+// imgFetchTimedOut 拉图超时（连接 / 等响应头）。只有超时值得当场重试：404 之类再拉也一样
+func imgFetchTimedOut(err error) bool {
+	var ne net.Error
+	return err != nil && errors.As(err, &ne) && ne.Timeout()
 }

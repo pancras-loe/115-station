@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeDirIO 假的 115 目录树，驱动**真的** pruneEmptyDirTree —— 守卫判断错一次
@@ -397,5 +398,69 @@ func TestLogListCaps(t *testing.T) {
 	logList("  - %s", items[:3])
 	if len(lines) != 3 {
 		t.Fatalf("未超上限应全列，实际 %d 行", len(lines))
+	}
+}
+
+// staleDirIO 模拟 115 批量移动未落定：前 staleCalls 次列 src 时还列出刚搬走的文件
+type staleDirIO struct {
+	*fakeDirIO
+	staleCalls int
+	stale      []map[string]interface{}
+}
+
+func (f *staleDirIO) listEntries(cid string, off int) ([]map[string]interface{}, int, error) {
+	if cid == "src" && f.staleCalls > 0 {
+		f.staleCalls--
+		return f.stale, len(f.stale), nil
+	}
+	return f.fakeDirIO.listEntries(cid, off)
+}
+
+func zeroSettleWaits(t *testing.T) {
+	old := moveSettleWaits
+	moveSettleWaits = []time.Duration{0, 0}
+	t.Cleanup(func() { moveSettleWaits = old })
+}
+
+// 2026-10-04 现场：搬走 480 集后 115 还列着它们，源目录被整个搬进冗余，冗余里留下空壳。
+// 落定之后就该删掉，而不是搬冗余
+func TestPruneOrMoveSettledWaitsForMove(t *testing.T) {
+	zeroSettleWaits(t)
+	f := &staleDirIO{
+		fakeDirIO:  newFakeDirs(map[string][]map[string]interface{}{"src": {}}),
+		staleCalls: 2,
+		stale:      []map[string]interface{}{fileEnt("E01.mp4"), fileEnt("E02.mp4")},
+	}
+	gone, deferred := pruneOrMoveSettled(f, "src", nil, "redundant", "第一季/",
+		map[string]bool{"E01.mp4": true, "E02.mp4": true}, quiet)
+	if !gone || deferred {
+		t.Fatalf("落定后应删除，实际 gone=%v deferred=%v moved=%v", gone, deferred, f.moved)
+	}
+	if len(f.moved) != 0 {
+		t.Fatalf("不该搬进冗余：%v", f.moved)
+	}
+}
+
+// 一直没落定：既不删（移动可能没生效）也不搬冗余，交给本轮收尾
+func TestPruneOrMoveSettledDefersWhenStillStale(t *testing.T) {
+	zeroSettleWaits(t)
+	f := &staleDirIO{
+		fakeDirIO:  newFakeDirs(map[string][]map[string]interface{}{"src": {}}),
+		staleCalls: 100,
+		stale:      []map[string]interface{}{fileEnt("E01.mp4")},
+	}
+	gone, deferred := pruneOrMoveSettled(f, "src", nil, "redundant", "第一季/", map[string]bool{"E01.mp4": true}, quiet)
+	if gone || !deferred || len(f.moved) != 0 || len(f.deleted) != 0 {
+		t.Fatalf("应延后处理，实际 gone=%v deferred=%v moved=%v deleted=%v", gone, deferred, f.moved, f.deleted)
+	}
+}
+
+// 真有残留（不是刚搬走的）照旧搬冗余，不白等
+func TestPruneOrMoveSettledRealLeftover(t *testing.T) {
+	zeroSettleWaits(t)
+	f := newFakeDirs(map[string][]map[string]interface{}{"src": {fileEnt("E01.mp4"), fileEnt("花絮.mkv")}})
+	gone, deferred := pruneOrMoveSettled(f, "src", nil, "redundant", "第一季/", map[string]bool{"E01.mp4": true}, quiet)
+	if gone || deferred || len(f.moved) != 1 {
+		t.Fatalf("有真残留应搬冗余，实际 gone=%v deferred=%v moved=%v", gone, deferred, f.moved)
 	}
 }
