@@ -448,8 +448,8 @@ function onOtpInput(v: string) {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at center, rgb(0 0 0 / 0.15), rgb(0 0 0 / 0.55) 75%),
-    linear-gradient(to top, rgb(0 0 0 / 0.7), transparent 40%);
+    linear-gradient(rgb(0 0 0 / 0.25), rgb(0 0 0 / 0.25)),
+    linear-gradient(to top, rgb(0 0 0 / 0.65), transparent 35%);
   opacity: 0;
   transition: opacity 1.6s ease;
 }
@@ -459,11 +459,25 @@ function onOtpInput(v: string) {
 .has-wall .auth-bg {
   display: none;
 }
+/* 卡片压得越实，剧照越像被一块板子挡住：底色只留六成，靠背景模糊保住字的可读性 */
 .has-wall .auth-card {
-  background: color-mix(in oklab, var(--surface) 82%, transparent);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
-  box-shadow: 0 24px 60px -12px rgb(0 0 0 / 0.55);
+  background: color-mix(in oklab, var(--surface) 62%, transparent);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 24px 60px -12px rgb(0 0 0 / 0.45);
+}
+/* 宽屏：卡片靠右。TMDB 剧照的主体多在画面中间，卡片居中正好把人挡住（2026-10-04 现场）；
+   暗角也只压右边卡片那一侧，左边和中间留给剧照 */
+@media (min-width: 1024px) {
+  .auth.has-wall {
+    place-items: center end;
+    padding-right: clamp(32px, 8vw, 140px);
+  }
+  .has-wall .wall-shade {
+    background:
+      linear-gradient(to left, rgb(0 0 0 / 0.55), rgb(0 0 0 / 0.2) 40%, transparent 65%),
+      linear-gradient(to top, rgb(0 0 0 / 0.65), transparent 35%);
+  }
 }
 .wall-caption {
   position: absolute;
