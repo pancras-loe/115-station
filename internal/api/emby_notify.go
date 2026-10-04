@@ -116,6 +116,10 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	if category == "added" {
 		// 入库事件走聚合富通知（封面/评分取自 Emby；15 秒防抖合并）
 		go h.queueEmbyAddedNotif(payload)
+		// 回查放弃过的入库（Emby 扫得太慢）在这里补上提前探测
+		if ip := getNested([]string{"Item"}, []string{"Path"}); ip != "" {
+			go embyLateIngestHit(ip)
+		}
 		log.Printf("[Emby Webhook] Emby 入库事件: %s", itemName)
 		c.JSON(http.StatusOK, gin.H{"message": "ok（已进入入库通知队列）"})
 		return
@@ -148,7 +152,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		switch {
 		case !notifiable:
 			log.Printf("[Emby Webhook] ○ 目录条目的删除（%s，%s），不推通知", itemType, itemName)
-		case embySelfDeleted(itemPath):
+		case embySelfDeleted(itemPath) || (embyIsDirItemType(itemType) && embySelfDeletedRelated(itemPath)):
 			log.Printf("[Emby Webhook] 本站自产的删除事件（%s），跳过通知", itemName)
 		default:
 			title = embyDeleteTitle(label)
@@ -410,4 +414,13 @@ func (h *Handler) TestEmbyConnection(c *gin.Context) {
 		"version":       info.Version,
 		"library_count": libraryCount,
 	})
+}
+
+// embyIsDirItemType 剧集 / 季这类按目录存在的条目（删除回声按路径包含关系认，见 embySelfDeletedRelated）
+func embyIsDirItemType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "series", "season":
+		return true
+	}
+	return false
 }

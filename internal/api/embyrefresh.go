@@ -321,7 +321,88 @@ func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool,
 // Emby 的文件监控在处理前有一段「等路径不再变动」的静默期，刮削紧跟着往
 // 同一个目录写 NFO/海报还会把它一次次推后，所以第一次回查放在 30 秒之后。
 // 测试里置空即关闭
-var embyVerifyDelays = []time.Duration{30 * time.Second, 60 * time.Second, 120 * time.Second}
+//
+// 原来只查到 2 分钟。2026-10-04 现场：一部 1665 集的番剧重新整理后刷整个媒体库，Emby 4 分钟后才入库，
+// 回查早已放弃，入库确认之后的提前探测于是一个都没排上。现在查到 10 分钟（与「实测能拖到 9 分钟」对齐），
+// 再晚的由 Emby 自己的入库事件补上（embyLateIngestHit）
+var embyVerifyDelays = []time.Duration{30 * time.Second, 60 * time.Second, 2 * time.Minute,
+	4 * time.Minute, 7 * time.Minute, 10 * time.Minute}
+
+// embyLateIngest 回查放弃了的路径（Emby 路径 → 截止时间）。Emby 之后推来入库事件、
+// 条目路径与它相关的，照入库确认的流程交给提前探测 —— 慢一点入库的片不该因此永远不探
+var embyLateIngest = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+// embyLateIngestTTL 迟到入库最多等多久
+const embyLateIngestTTL = 6 * time.Hour
+
+func markEmbyLateIngest(paths []string) {
+	embyLateIngest.Lock()
+	defer embyLateIngest.Unlock()
+	now := time.Now()
+	for k, t := range embyLateIngest.m {
+		if now.After(t) {
+			delete(embyLateIngest.m, k)
+		}
+	}
+	for _, p := range paths {
+		if k := embyDelKey(p); k != "" {
+			embyLateIngest.m[k] = now.Add(embyLateIngestTTL)
+		}
+	}
+}
+
+// takeEmbyLateIngest 摘出与这个条目路径相关（同一条或互为上下级）的迟到路径
+func takeEmbyLateIngest(itemPath string) []string {
+	k := embyDelKey(itemPath)
+	if k == "" {
+		return nil
+	}
+	embyLateIngest.Lock()
+	defer embyLateIngest.Unlock()
+	var out []string
+	now := time.Now()
+	for p, t := range embyLateIngest.m {
+		if now.After(t) {
+			delete(embyLateIngest.m, p)
+			continue
+		}
+		if embyPathRelated(p, k) {
+			out = append(out, p)
+			delete(embyLateIngest.m, p)
+		}
+	}
+	return out
+}
+
+// embyLateIngestHit Emby 入库事件（webhook）到了：回查放弃过的相关路径照入库确认处理
+func embyLateIngestHit(itemPath string) {
+	paths := takeEmbyLateIngest(itemPath)
+	if len(paths) == 0 {
+		return
+	}
+	cfg, ok := loadEmbyRefreshCfg()
+	if !ok || !cfg.enabled() {
+		return
+	}
+	log.Printf("[Emby] ✓ 入库确认（迟到，来自 Emby 入库事件）：%d 个路径 —— %s", len(paths), itemPath)
+	embyIngestConfirmed(cfg, paths)
+}
+
+// embyIngestConfirmed 入库确认了的路径交给提前探测（影视刮削「轨道探测」开着时），见 embyextract.go。
+// 先归到片目目录（整部探，片目之上的目录不探，见 embyExtractTitleTargets）；
+// 属于刚重新整理过的片目的，按手动规则另建探测任务（embyprobejob.go 的 splitRedoProbes）
+func embyIngestConfirmed(cfg embyRefreshCfg, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	targets := embyExtractTitleTargets(cfg, paths)
+	if auto := splitRedoProbes(targets); len(auto) > 0 && embyExtractEnabled() {
+		enqueueIngestProbes(auto)
+	}
+}
 
 // embyVerifyPending 正在回查的路径。同一条路径同时只跑一轮回查
 var (
@@ -378,20 +459,10 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 	start := time.Now()
 	pending := append([]string(nil), paths...)
 	lastType := map[string]string{}
-	// 入库确认了的路径交给提前探测（影视刮削「轨道探测」开着时），见 embyextract.go。
-	// 放在 defer 里：三轮回查中途 return 的那几种出口都要把已确认的交出去
+	// 入库确认了的路径交给提前探测（embyIngestConfirmed）。
+	// 放在 defer 里：回查中途 return 的那几种出口都要把已确认的交出去
 	var extract []string
-	// 先归到片目目录（整部探，片目之上的目录不探，见 embyExtractTitleTargets）；
-	// 属于刚重新整理过的片目的，按手动规则另建探测任务（embyprobejob.go 的 splitRedoProbes）
-	defer func() {
-		if len(extract) == 0 {
-			return
-		}
-		targets := embyExtractTitleTargets(cfg, extract)
-		if auto := splitRedoProbes(targets); len(auto) > 0 && embyExtractEnabled() {
-			enqueueIngestProbes(auto)
-		}
-	}()
+	defer func() { embyIngestConfirmed(cfg, extract) }()
 	for _, d := range embyVerifyDelays {
 		select {
 		case <-stopCh:
@@ -424,6 +495,8 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 			return
 		}
 	}
+	// 放弃了的留个底：Emby 晚些推来入库事件时补上提前探测
+	markEmbyLateIngest(pending)
 	for _, p := range pending {
 		if t := lastType[p]; t != "" {
 			log.Printf("[Emby] ✗ 入库未完成：%s 在 Emby 里只有目录条目（Type=%s），影片没被识别 —— "+
@@ -431,7 +504,7 @@ func embyVerifyIngest(cfg embyRefreshCfg, paths []string) {
 			continue
 		}
 		log.Printf("[Emby] ✗ 入库未完成：刷新提交 %s 后 Emby 仍查不到 %s 的任何条目 —— "+
-			"检查「EMBY 管理」的本地路径映射，以及 Emby 那边的媒体库目录是否包含它",
+			"检查「EMBY 管理」的本地路径映射，以及 Emby 那边的媒体库目录是否包含它（之后 Emby 推来入库事件会再补一次确认）",
 			time.Since(start).Truncate(time.Second), p)
 	}
 }
@@ -557,6 +630,26 @@ func embySelfDeleted(embyPath string) bool {
 	return ok && time.Since(t) <= embySelfDeleteTTL
 }
 
+// embySelfDeletedRelated 目录型条目（剧集 / 季）的删除事件是不是本站动作的回声：
+// 本站删的是一集集 STRM（或整个旧标题目录），Emby 收拾完报上来的却是 Series / Season 条目，
+// 路径是剧集目录，精确比对永远对不上 —— 2026-10-04 重新整理蜡笔小新，旧剧集被清掉，
+// 照样推了一条「🗑️ Emby 删除 · 剧集」。所以对目录型条目按路径包含关系认（同一时间窗内）。
+// 只给 Series / Season 用：文件型条目仍然精确比对，免得把用户刚删的同目录另一集吞掉
+func embySelfDeletedRelated(embyPath string) bool {
+	k := embyDelKey(embyPath)
+	if k == "" {
+		return false
+	}
+	embySelfDelMu.Lock()
+	defer embySelfDelMu.Unlock()
+	for p, t := range embySelfDel {
+		if time.Since(t) <= embySelfDeleteTTL && embyPathRelated(p, k) {
+			return true
+		}
+	}
+	return false
+}
+
 // embyDelKey 路径风格（windows 反斜杠）与末尾斜杠都不参与比对
 func embyDelKey(p string) string {
 	return strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/")
@@ -667,6 +760,21 @@ func embyPathOf(cfg embyRefreshCfg, local string) string {
 func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, localPaths []string) []string {
 	root := filepath.Clean(localMediaRoot())
 	rest := make([]string, 0, len(localPaths))
+	// 「目录里还有别的文件」逐条打一行的话，一部上千集的剧重新整理就是上千行，汇总成一段
+	var busy []string
+	defer func() {
+		if len(busy) == 0 {
+			return
+		}
+		log.Printf("[Emby] ○ %d 个条目所在目录还有其他文件，不删条目（Emby 会连目录一起删），改为刷新:", len(busy))
+		for i, ep := range busy {
+			if i >= logListMax {
+				log.Printf("[Emby]     …另有 %d 条", len(busy)-logListMax)
+				break
+			}
+			log.Printf("[Emby]     - %s", ep)
+		}
+	}()
 	for _, local := range dedupeStrings(localPaths) {
 		if local == "" {
 			continue
@@ -704,7 +812,7 @@ func embyDeleteItems(cfg embyRefreshCfg, loadLibs func() []embyMediaFolder, loca
 		// 网盘上给某一集改名都是同一个形态。所以所在目录还有别的东西时一律不删条目，
 		// 交给刷新 —— 慢几分钟好过删掉用户的文件。目录条目（被删的是整个目录）不受影响
 		if embyHitsHaveFile(hits) && dirHasEntries(filepath.Dir(local)) {
-			log.Printf("[Emby] ○ %s 所在目录还有其他文件，不删条目（Emby 会连目录一起删），改为刷新", ep)
+			busy = append(busy, ep)
 			rest = append(rest, local)
 			continue
 		}

@@ -303,7 +303,20 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	for _, f := range files {
 		oldFids = append(oldFids, f.Fid)
 	}
-	droppedPaths, keptLocal := dropLocalByFidsExcept(sink.localRoot, oldFids, keep)
+	droppedPaths, keptLocal := dropLocalByFidsQuiet(sink.localRoot, oldFids, keep)
+	embyGone := absUnder(sink.localRoot, droppedPaths)
+	// 换了标题目录：旧标题目录里刮削写的 tvshow.nfo / 海报 / season.nfo 不在台账里，
+	// 上面删不到，得单独收掉（守卫见 purgeStaleTitleDir）。整个收干净了就按目录通知 Emby 一次：
+	// 删掉的是剧集条目本身，不必逐集去查
+	if rec.TargetDir != "" && strings.Trim(rec.TargetDir, "/") != strings.Trim(rootRel, "/") {
+		if dir, n := purgeStaleTitleDir(sink.localRoot, sink.libRel(rec.TargetDir)); dir != "" {
+			log.Printf("[整理] ○ 已收掉本地旧标题目录 %s（刮削产物 %d 个）", sink.libRel(rec.TargetDir), n)
+			embyGone = []string{dir}
+		}
+	}
+	if len(embyGone) > 0 {
+		go notifyEmbyDeleted(embyGone...)
+	}
 	if rec.TmdbID > 0 && rec.TmdbID != tmdbID {
 		// 认错了片才清掉旧的媒体库条目；同一个 tmdb 重整理时 recordMedia 会更新它
 		h.DB.Where("tmdb_id = ? AND media_type = ?", rec.TmdbID, rec.MediaType).Delete(&model.MediaLibrary{})

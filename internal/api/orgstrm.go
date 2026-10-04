@@ -278,6 +278,22 @@ func dropLocalByFids(localRoot string, fids []string) []string {
 // 「重新整理到同一个 TMDB 条目」这种原地刷新场景下，文件落点根本没变，
 // 删了再原样写回纯属多余，附属文件还要重新下载一遍
 func dropLocalByFidsExcept(localRoot string, fids []string, keepPaths map[string]string) (removed []string, kept int) {
+	removed, kept = dropLocalByFidsQuiet(localRoot, fids, keepPaths)
+	// 旧产出删掉了就得告诉 Emby：本地文件没了条目不会自己消失，
+	// 留着的话用户点进去就是播放 404（洗版让位、重新整理都会走到这里）
+	if len(removed) > 0 {
+		go notifyEmbyDeleted(absUnder(localRoot, removed)...)
+	}
+	return removed, kept
+}
+
+// dropLocalByFidsQuiet 同 dropLocalByFidsExcept，但不通知 Emby —— 重新整理要先把整个旧标题目录
+// 收拾干净，再按目录通知一次（逐集通知一部 1665 集的番剧就是 1665 次 Emby 查询、1665 行日志）。
+//
+// 删 STRM 时顺带删它的刮削产物（集 NFO、集剧照）：那些是刮削写的，不在台账里，
+// 此前只删 STRM，旧季目录里留着一排 NFO / 剧照，目录永远删不掉，
+// Emby 那边也因为「所在目录还有其他文件」不敢删条目（2026-10-04 现场，蜡笔小新重新整理）
+func dropLocalByFidsQuiet(localRoot string, fids []string, keepPaths map[string]string) (removed []string, kept int) {
 	for _, fid := range fids {
 		if fid == "" {
 			continue
@@ -294,6 +310,9 @@ func dropLocalByFidsExcept(localRoot string, fids []string, keepPaths map[string
 			full := filepath.Join(localRoot, filepath.FromSlash(sf.RelPath))
 			if err := os.Remove(full); err == nil || os.IsNotExist(err) {
 				removed = append(removed, sf.RelPath)
+				if strings.HasSuffix(strings.ToLower(sf.RelPath), ".strm") {
+					removeStrmCompanions(localRoot, sf.RelPath)
+				}
 				removeEmptyParents(filepath.Dir(full), localRoot)
 			} else {
 				log.Printf("[整理] ✗ 清理旧文件失败 %s: %v", sf.RelPath, err)
@@ -301,12 +320,115 @@ func dropLocalByFidsExcept(localRoot string, fids []string, keepPaths map[string
 		}
 		model.DB.Delete(&model.SyncedFile{}, sf.ID)
 	}
-	// 旧产出删掉了就得告诉 Emby：本地文件没了条目不会自己消失，
-	// 留着的话用户点进去就是播放 404（洗版让位、重新整理都会走到这里）
-	if len(removed) > 0 {
-		go notifyEmbyDeleted(absUnder(localRoot, removed)...)
-	}
 	return removed, kept
+}
+
+// strmCompanionSuffixes 一个视频的刮削产物相对视频基名的后缀（scrape.go 写的那几种 + Emby 多版本存图）。
+// 只认精确后缀，不按前缀匹配：「片名」的前缀能匹配上「片名.2020.nfo」，那是另一个视频的
+var strmCompanionSuffixes = []string{
+	".nfo", "-thumb.jpg", "-thumb.png", "-thumb.webp",
+	"-poster.jpg", "-poster.png", "-fanart.jpg", "-landscape.jpg", "-clearlogo.png",
+}
+
+// removeStrmCompanions 删一个已删 STRM 的刮削产物。台账里有的（网盘镜像）不碰：那是另一个 fid 的文件
+func removeStrmCompanions(localRoot, strmRel string) {
+	base := strings.TrimSuffix(strmRel, path.Ext(strmRel))
+	for _, suf := range strmCompanionSuffixes {
+		rel := base + suf
+		full := filepath.Join(localRoot, filepath.FromSlash(rel))
+		if _, err := os.Stat(full); err != nil {
+			continue
+		}
+		var n int64
+		if model.DB != nil {
+			model.DB.Model(&model.SyncedFile{}).Where("rel_path = ?", rel).Count(&n)
+		}
+		if n > 0 {
+			continue
+		}
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			log.Printf("[整理] ✗ 清理旧刮削产物失败 %s: %v", rel, err)
+		}
+	}
+}
+
+// staleMetaExts 旧标题目录里允许直接删的文件：全是刮削 / Emby 生成的元数据与图片
+var staleMetaExts = map[string]bool{
+	".nfo": true, ".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+	".gif": true, ".bmp": true, ".tbn": true, ".bif": true,
+}
+
+// purgeStaleTitleDir 重新整理换了标题目录之后，收掉本地的旧标题目录（libRel 是库内相对路径，
+// 含媒体库名）。STRM 已由 dropLocalByFidsQuiet 删掉，剩下的是刮削写的 tvshow.nfo / poster /
+// season.nfo / 季海报这些不在台账里的东西 —— 留着的话旧目录永远是个只有元数据的空壳，
+// Emby 里旧剧集条目也会一直挂着。
+//
+// 守卫（任一不满足就整个不动，返回 ""）：
+//   - 必须严格在本地根之下，且库内至少两级（分类/标题），分类目录本身绝不碰；
+//   - 子树里不能还有 .strm（同一部剧分批入库、别的记录的集数还在这儿）；
+//   - 台账里不能还有这棵子树下的行（网盘镜像过来的文件归同步管）；
+//   - 只删 staleMetaExts 里的扩展名，别的文件一个都不删，有剩就保留目录。
+//
+// 整个目录都收干净了返回它的绝对路径（调用方拿它按目录通知 Emby），否则返回 ""
+func purgeStaleTitleDir(localRoot, libRel string) (string, int) {
+	libRel = strings.Trim(path.Clean("/"+libRel), "/")
+	if libRel == "" || len(strings.Split(libRel, "/")) < 2 {
+		return "", 0
+	}
+	root := filepath.Clean(localRoot)
+	full := filepath.Join(root, filepath.FromSlash(libRel))
+	if !strings.HasPrefix(full, root+string(filepath.Separator)) {
+		return "", 0
+	}
+	if st, err := os.Stat(full); err != nil || !st.IsDir() {
+		return "", 0
+	}
+	var files, dirs []string
+	hasStrm := false
+	if err := filepath.WalkDir(full, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs = append(dirs, p)
+			return nil
+		}
+		if strings.EqualFold(filepath.Ext(p), ".strm") {
+			hasStrm = true
+			return filepath.SkipAll
+		}
+		files = append(files, p)
+		return nil
+	}); err != nil || hasStrm {
+		return "", 0
+	}
+	if model.DB != nil {
+		esc := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(libRel)
+		var n int64
+		model.DB.Model(&model.SyncedFile{}).Where(`rel_path LIKE ? ESCAPE '\'`, esc+"/%").Count(&n)
+		if n > 0 {
+			return "", 0
+		}
+	}
+	removed := 0
+	for _, f := range files {
+		if !staleMetaExts[strings.ToLower(filepath.Ext(f))] {
+			continue
+		}
+		if err := os.Remove(f); err == nil {
+			removed++
+		}
+	}
+	// 自下而上收空目录（WalkDir 是先序，倒过来就是子目录在前）
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if entries, err := os.ReadDir(dirs[i]); err == nil && len(entries) == 0 {
+			os.Remove(dirs[i])
+		}
+	}
+	if _, err := os.Stat(full); err == nil {
+		return "", removed
+	}
+	return full, removed
 }
 
 // removeEmptyParents 自下而上删空目录，到 root 为止（不删 root 自身）。
