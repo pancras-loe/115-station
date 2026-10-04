@@ -152,7 +152,7 @@ func TestPlanEpisodePicks(t *testing.T) {
 		},
 	}
 	st := &washStrategy{Mode: "replace", PriorityLevel: []washRule{{ResourcePix: "2160p"}, {ResourcePix: "1080p"}}}
-	ep, err := planEpisodePicks(media, category, ti, files, picks, nil, st, lg)
+	ep, err := planEpisodePicks(media, category, ti, files, picks, nil, st, lg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +174,11 @@ func TestPlanEpisodePicks(t *testing.T) {
 	// 片目目录与模板算出来的不一致：拒绝（不许借指定季集换标题目录）
 	bad := ti
 	bad.titleRel = "动漫番剧/别的名字"
-	if _, err := planEpisodePicks(media, category, bad, files, picks, nil, st, lg); err == nil {
+	if _, err := planEpisodePicks(media, category, bad, files, picks, nil, st, lg, nil); err == nil {
 		t.Error("片目与模板不一致时应拒绝")
 	}
 	// 没填集号
-	if _, err := planEpisodePicks(media, category, ti, files, map[string]episodePick{"v720": {2, 720}}, nil, st, lg); err == nil {
+	if _, err := planEpisodePicks(media, category, ti, files, map[string]episodePick{"v720": {2, 720}}, nil, st, lg, nil); err == nil {
 		t.Error("有视频没给季集时应拒绝")
 	}
 }
@@ -207,7 +207,7 @@ func TestPlanEpisodePicksNameConflict(t *testing.T) {
 		},
 		bySha1: func(string) []model.SyncedFile { return nil },
 	}
-	ep, err := planEpisodePicks(media, "动漫番剧", ti, files, picks, nil, nil, lg)
+	ep, err := planEpisodePicks(media, "动漫番剧", ti, files, picks, nil, nil, lg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

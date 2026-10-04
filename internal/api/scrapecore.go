@@ -760,6 +760,9 @@ func (r *titleRun) episodeStills() {
 	var want []*scrapeEp
 	var reqs []imgReq
 	var names []string
+	// TMDB 上没剧照的集汇总成一行：一部上千集的番剧几百集没剧照，「只补缺失」每刮一次都会再碰到它们，
+	// 逐集打一行就是几百行刷屏（2026-10-04 现场，蜡笔小新改一集季集，刮削日志刷了几百行）
+	var noStill []string
 	for _, e := range todo {
 		name := e.v.Name + "-thumb.jpg"
 		if e.placeholder {
@@ -768,12 +771,20 @@ func (r *titleRun) episodeStills() {
 		}
 		still := stillOf(e)
 		if still == "" {
-			r.logv("○ %s：TMDB 上这一集没有剧照", name)
+			noStill = append(noStill, fmt.Sprintf("S%02dE%02d", e.season, e.ep))
 			continue
 		}
 		want = append(want, e)
 		reqs = append(reqs, imgReq{path: still, size: "w780"})
 		names = append(names, name)
+	}
+	if n := len(noStill); n > 0 {
+		const show = 5
+		eg := strings.Join(noStill[:min(n, show)], "、")
+		if n > show {
+			eg += " …"
+		}
+		r.logv("○ %d 集 TMDB 上没有剧照，不写集剧照（%s）", n, eg)
 	}
 	res := r.fetchImages("集剧照", reqs, names)
 	if r.s.rep.stopped() || r.st.Gone {

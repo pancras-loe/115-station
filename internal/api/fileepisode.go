@@ -172,10 +172,12 @@ type episodeLedger struct {
 }
 
 // planEpisodePicks 纯判定：算新名与落点，再逐集按洗版策略判定。不发 115 请求、不动本地。
+// onLog 收洗版判定的日志：只有执行时给。预览不给 —— 对话框每改一次季集就预览一次，
+// 打出来就是同一批集的判定刷好几遍，像是洗版判了好几次（2026-10-04 现场）
 // files 是勾选的视频及其同名附属（Dir 填「片目名/子目录」，与整理记录同口径）；
 // picks 必须给每个视频一项
 func planEpisodePicks(media *TmdbMedia, category string, t libFileTitle, files []orgRecordFile,
-	picks map[string]episodePick, rules []ReplaceRule, st *washStrategy, lg episodeLedger) (*episodePlan, error) {
+	picks map[string]episodePick, rules []ReplaceRule, st *washStrategy, lg episodeLedger, onLog func(string)) (*episodePlan, error) {
 	for _, f := range files {
 		if f.Kind != "video" {
 			continue
@@ -245,8 +247,10 @@ func planEpisodePicks(media *TmdbMedia, category string, t libFileTitle, files [
 				plan = washNoStrategy(g.Name, same, capture)
 			}
 			plan.targetDir = rel
-			for _, l := range lines {
-				log.Printf("[整理] %s", l)
+			if onLog != nil {
+				for _, l := range lines {
+					onLog(l)
+				}
 			}
 			switch plan.decision {
 			case washReplaced:
@@ -399,7 +403,7 @@ func (h *Handler) PreviewFileEpisodes(c *gin.Context) {
 	out := gin.H{"title": ctx.media.Title, "year": ctx.media.Year, "title_rel": ctx.title.titleRel,
 		"strategy": ctx.st != nil}
 	items := make([]episodePlanItem, 0, len(files))
-	ep, err := planEpisodePicks(ctx.media, ctx.category, ctx.title, files, picks, rules, ctx.st, libEpisodeLedger(ctx.title.libName))
+	ep, err := planEpisodePicks(ctx.media, ctx.category, ctx.title, files, picks, rules, ctx.st, libEpisodeLedger(ctx.title.libName), nil)
 	if err != nil {
 		// 季集填错了也要把预填值还给前端，让用户能改
 		out["error"] = err.Error()
@@ -514,7 +518,8 @@ func execLibEpisodeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	for _, f := range files {
 		recFiles = append(recFiles, f.orgRecordFile)
 	}
-	ep, err := planEpisodePicks(ctx.media, ctx.category, t, recFiles, fp.Episodes, loadReplaceRules(), ctx.st, libEpisodeLedger(t.libName))
+	ep, err := planEpisodePicks(ctx.media, ctx.category, t, recFiles, fp.Episodes, loadReplaceRules(), ctx.st, libEpisodeLedger(t.libName),
+		func(l string) { log.Printf("[整理] %s", l) })
 	if err != nil {
 		return jobOutcome{}, err
 	}
