@@ -23,6 +23,7 @@ export const JOB_KIND: Record<string, string> = {
   person: '演职人员补全',
   metafill: '媒体信息补全',
   libredo: '重新整理片目',
+  libepisode: '指定季集',
   filemove: '移动',
   ignore: '忽略',
   deepdel: '深度删除',

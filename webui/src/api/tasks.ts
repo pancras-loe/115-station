@@ -110,6 +110,7 @@ export interface TaskJob {
     | 'scrape'
     | 'probe'
     | 'libredo'
+    | 'libepisode'
     | 'filemove'
     | 'full'
     | 'incr'

@@ -190,7 +190,7 @@ function clearDirFilter() {
 }
 // 重新整理 / 确认入库都进任务队列异步执行：任务跑完再刷新列表，结果才落在记录上
 const offFinished = queue.onFinished((j) => {
-  if (['redo', 'confirm', 'ignore', 'deepdel', 'organize', 'orgpick', 'libredo', 'filemove', 'transfer'].includes(j.kind)) void reload()
+  if (['redo', 'confirm', 'ignore', 'deepdel', 'organize', 'orgpick', 'libredo', 'libepisode', 'filemove', 'transfer'].includes(j.kind)) void reload()
 })
 onUnmounted(offFinished)
 

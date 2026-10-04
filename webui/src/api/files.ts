@@ -24,6 +24,8 @@ export interface FileItem {
   organize?: boolean
   move?: boolean
   title?: boolean
+  /** 剧集片目里的视频：能「指定季集」；此时 title_key / title_rel 是所在片目的 */
+  episode?: boolean
   /** 片目在本地文件页的 key（?title=） */
   title_key?: string
   /** 片目的库内相对路径（整理记录 ?target_dir=） */
@@ -73,6 +75,46 @@ export interface FileJobBody {
 }
 
 export const organize = (body: FileJobBody) => http.post<QueuedReply>('/files/organize', body)
+
+/** 片目里一个视频的季集 */
+export interface EpisodePick {
+  season: number
+  episode: number
+}
+
+/**
+ * 指定季集预览的一行。wash：new 新增集 / replace 洗掉库内旧版 / exists 库内更优、移「已存在」/
+ * samefile 库内已有同一份 / coexist 与库内版本共存 / unchanged 没变 / conflict 目标已有同名文件
+ */
+export interface EpisodePreviewItem extends EpisodePick {
+  id: string
+  name: string
+  /** 季集是按文件名推测的（认不出时拿末段数字当集号） */
+  guessed?: boolean
+  new_name?: string
+  target_rel?: string
+  wash?: 'new' | 'replace' | 'exists' | 'samefile' | 'coexist' | 'unchanged' | 'conflict'
+  wash_text?: string
+}
+
+export interface EpisodePreview {
+  title: string
+  year: string
+  title_rel: string
+  /** 这个分类配了洗版策略 */
+  strategy: boolean
+  items: EpisodePreviewItem[]
+  /** 季集或模板有问题（items 仍带着预填值，可改） */
+  error?: string
+}
+
+type EpisodeBody = FileJobBody & { episodes?: Record<string, EpisodePick> }
+
+/** 预填季集 + 新名 + 洗版判定；episodes 里没有的按文件名预填。不发 115 请求 */
+export const previewEpisodes = (body: EpisodeBody) => http.post<EpisodePreview>('/files/library/episodes/preview', body)
+
+export const submitEpisodes = (body: EpisodeBody & { episodes: Record<string, EpisodePick> }) =>
+  http.post<QueuedReply>('/files/library/episodes', body)
 
 /** 移动目标：只能是这三个工作区 */
 export type MoveTarget = 'redundant' | 'existing' | 'pending'

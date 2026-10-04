@@ -308,6 +308,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/local/titles/probe", h.LocalTitleProbe)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)
+		protected.POST("/files/library/episodes/preview", h.PreviewFileEpisodes)
+		protected.POST("/files/library/episodes", h.SubmitFileEpisodes)
 		protected.POST("/organize/workspace/init", h.InitWorkspaceDirs)
 
 		// 整理记录：历史留痕 + 指定 TMDB 条目重新整理

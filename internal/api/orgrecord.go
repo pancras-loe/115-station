@@ -187,6 +187,23 @@ func dropClaimedFiles(files []orgRecordFile, newer []string) ([]orgRecordFile, [
 // redoOrganize 原地重整理：按记录里的 fid 把文件改名 + 搬到指定 TMDB 条目对应的目录，
 // 清掉旧的本地产物，重新落 STRM 并刮削。就地更新 rec
 func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType string) error {
+	return h.redoOrganizeWith(rec, tmdbID, mediaType, nil)
+}
+
+// redoOpts 重新整理的附加要求（网盘文件页「指定季集」用，fileepisode.go）
+type redoOpts struct {
+	// episodes fid → 用户指定的季集，盖过解析结果，也不参与全剧连续编号换算（给的就是最终值）
+	episodes map[string]episodePick
+	// pruneDirs 收尾时要试着清掉的空目录（cid → 日志里的名字），守卫照 pruneEmptyDirTree
+	pruneDirs map[string]string
+	// message 成功后写进记录的说明（空则用默认的「已按手动指定的 TMDB 条目重新整理」）
+	message string
+}
+
+func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaType string, opt *redoOpts) error {
+	if opt == nil {
+		opt = &redoOpts{}
+	}
 	prevID, prevType := rec.TmdbID, rec.MediaType // 判断这次是不是改了指定（改了才记进识别记忆）
 	files := unmarshalRecordFiles(rec.Files)
 	if len(files) == 0 {
@@ -250,7 +267,8 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
 	plan, err := planRedoLayoutWith(media, category, files, rec.Source, loadReplaceRules(), func(eps map[string]*ParsedName) {
-		remapAbsEpisodesTmdb(tc, media, eps, func(m string) { log.Printf("[整理] %s", m) })
+		remapAbsEpisodesTmdb(tc, media, withoutPicked(eps, opt.episodes), func(m string) { log.Printf("[整理] %s", m) })
+		applyEpisodePicks(eps, opt.episodes)
 	})
 	if err != nil {
 		return err
@@ -261,7 +279,8 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	// 这种是冲着「刮削失败了重来一次 / 换了 STRM 域名要重写」来的，
 	// 网盘那边一个字节都不用动 —— 把文件移动到它已经在的目录，
 	// 115 的行为没有保证，而且白等一轮写限流、附属文件还要重下一遍
-	inPlace := isInPlaceRedo(rec, rootRel, renames)
+	// 指定季集的文件可能名字不用改、只是放错了季目录：不走原地刷新，搬不搬交给 settledGroups
+	inPlace := len(opt.episodes) == 0 && isInPlaceRedo(rec, rootRel, renames)
 	if inPlace {
 		log.Printf("[整理] ▣ 目标与现状一致（%s），按原地刷新处理：不动网盘，只重建 STRM 与元数据", rootRel)
 	} else {
@@ -383,6 +402,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 		// 当初的源目录，多半在冗余里躺着
 		pruner.mark(rec.SourceFid, strings.TrimSuffix(rec.Source, "/"))
 	}
+	for cid, label := range opt.pruneDirs {
+		pruner.mark(cid, label)
+	}
 	setJobProgress("清理空目录", 4, redoSteps, "")
 	pruner.flush()
 
@@ -402,6 +424,9 @@ func (h *Handler) redoOrganize(rec *model.OrganizeRecord, tmdbID int, mediaType 
 	rec.Status = "success"
 	rec.Stage = ""
 	rec.Message = fmt.Sprintf("已按手动指定的 TMDB 条目重新整理 → %s", rootRel)
+	if opt.message != "" {
+		rec.Message = opt.message
+	}
 	rec.TmdbID = media.TmdbID
 	rec.Title = media.Title
 	rec.Year = media.Year

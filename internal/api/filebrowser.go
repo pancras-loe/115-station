@@ -56,6 +56,8 @@ type fileRowActions struct {
 	Move     bool `json:"move,omitempty"`
 	// Title 媒体库里的片目目录：整理 = 重新整理，移动 = 移出媒体库
 	Title bool `json:"title,omitempty"`
+	// Episode 剧集片目里的视频：能「指定季集」（fileepisode.go），此时 TitleKey / TitleRel 是所在片目的
+	Episode bool `json:"episode,omitempty"`
 	// TitleKey 本地文件页的片目 key（库名/库内路径，与 cleanupMovedTitle 同口径）
 	TitleKey string `json:"title_key,omitempty"`
 	// TitleRel 库内相对路径（整理记录的 target_dir 按它筛）
@@ -243,6 +245,12 @@ func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCatego
 		if libName, rel, ok := libTitleOf(chain, roles, layout, it); ok {
 			return fileRowActions{Organize: true, Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
 		}
+		if t, ok := libTitleAround(chain, roles, layout); ok {
+			if why := episodeRowAction(t, layout, it.Name, it.IsDir); why != "" {
+				return fileRowActions{Block: why}
+			}
+			return fileRowActions{Episode: true, TitleKey: strings.Trim(t.libName+"/"+t.titleRel, "/"), TitleRel: t.titleRel}
+		}
 		if it.IsDir {
 			return fileRowActions{Block: "媒体库里只有分类目录下的片目目录能整理和移动"}
 		}
@@ -275,7 +283,7 @@ type fileBusy struct {
 // 行上挂「排队整理 / 移动中」，免得用户以为没提交上又点一次（后端虽有去重，但换个勾选组合就去不掉）
 func activeFileJobItems(h *Handler) map[string]fileBusy {
 	var jobs []model.TaskJob
-	h.DB.Where("status IN ? AND kind IN ?", []string{"queued", "running"}, []string{"orgpick", "libredo", "filemove"}).Find(&jobs)
+	h.DB.Where("status IN ? AND kind IN ?", []string{"queued", "running"}, []string{"orgpick", "libredo", "libepisode", "filemove"}).Find(&jobs)
 	out := map[string]fileBusy{}
 	for i := range jobs {
 		p := decodeJobParams(&jobs[i])
@@ -429,6 +437,8 @@ type fileJobParams struct {
 	Items []fileJobItem `json:"items"`
 	// Target 移动的目标工作区（redundant / existing / pending，filelibrary.go）
 	Target string `json:"target,omitempty"`
+	// Episodes 片目里的视频 fid → 指定的季集（fileepisode.go）
+	Episodes map[string]episodePick `json:"episodes,omitempty"`
 }
 
 // fileJobRequest 两个入队接口的请求体

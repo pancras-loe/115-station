@@ -11,6 +11,7 @@ import {
   FolderInput,
   FolderOutput,
   History,
+  ListOrdered,
   House,
   Info,
   LibraryBig,
@@ -28,6 +29,7 @@ import HSkeleton from '@/components/hero/HSkeleton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import OrganizeDialog from '@/components/files/OrganizeDialog.vue'
 import MoveDialog from '@/components/files/MoveDialog.vue'
+import EpisodeDialog from '@/components/files/EpisodeDialog.vue'
 import { filesApi } from '@/api'
 import type { Crumb, FileItem, FileJobBody, WorkspaceRole } from '@/api/files'
 import { useQueueStore } from '@/stores/queue'
@@ -39,6 +41,7 @@ import { useQueueStore } from '@/stores/queue'
  * 前端不再自己抄视频后缀与片目判定 —— 以前两边对不上，按钮点下去就是 400。
  * 做不了任何事的行不能勾选（悬停说明原因），全选只选能处理的。
  * 媒体库里只有片目目录能动：整理 = 重新整理（一次一部），移动 = 移出媒体库；另有跳到本地详情 / 整理记录。
+ * 剧集片目里的视频另能「指定季集」（识别错了个别集时用，可多选同一目录里的几集）。
  * 刮削在本地文件页（LocalFilesPage）。
  *
  * 115 只有 cid 没有父目录概念，面包屑就是一路点进来的栈；列目录与提交都带上它，
@@ -170,11 +173,12 @@ function containedRoles(it: FileItem): WorkspaceRole[] {
 // ---- 每一行的操作（全看后端给的 organize / move / title） ----
 
 function actionable(it: FileItem) {
-  return !!(it.organize || it.move)
+  return !!(it.organize || it.move || it.episode)
 }
 
 /** 行内悬停时露出的那一个快捷按钮：能整理就是整理，否则没有（移动在「⋯」里） */
 function quickOf(it: FileItem) {
+  if (it.episode) return { key: 'episode', label: '指定季集', icon: ListOrdered }
   if (!it.organize) return null
   return it.title ? { key: 'organize', label: '重新整理', icon: Wand2 } : { key: 'organize', label: '整理', icon: Wand2 }
 }
@@ -186,6 +190,13 @@ function menuOf(it: FileItem): MenuOption[] {
       { key: 'local', label: '本地详情', icon: LibraryBig },
       { key: 'records', label: '整理记录', icon: History },
       { key: 'move', label: '移出媒体库…', icon: FolderOutput, danger: true },
+    ]
+  }
+  if (it.episode) {
+    return [
+      { key: 'episode', label: '指定季集', icon: ListOrdered },
+      { key: 'local', label: '片目本地详情', icon: LibraryBig },
+      { key: 'records', label: '片目整理记录', icon: History },
     ]
   }
   const out: MenuOption[] = []
@@ -248,6 +259,17 @@ function bodyOf(list: FileItem[]): FileJobBody {
 
 const toOrganize = computed(() => selectedItems.value.filter((it) => it.organize))
 const toMove = computed(() => selectedItems.value.filter((it) => it.move))
+const toEpisode = computed(() => selectedItems.value.filter((it) => it.episode))
+/** 与后端 fileEpisodeMax 一致 */
+const EPISODE_MAX = 50
+const batchEpisode = computed(() => {
+  const n = toEpisode.value.length
+  if (!n) return null
+  return {
+    label: n === selectedItems.value.length ? '指定季集' : `指定季集 ${n} 项`,
+    block: n > EPISODE_MAX ? `一次最多指定 ${EPISODE_MAX} 集` : '',
+  }
+})
 
 /** 批量整理按钮：媒体库里的重新整理一次只能一部，勾了多部就不给这个按钮 */
 const batchOrganize = computed(() => {
@@ -273,7 +295,7 @@ const batchMove = computed(() => {
 const batchNote = computed(() => {
   const total = selectedItems.value.length
   const notes: string[] = []
-  const block = batchOrganize.value?.block || batchMove.value?.block
+  const block = batchOrganize.value?.block || batchMove.value?.block || batchEpisode.value?.block
   if (block) notes.push(block)
   if (inLibrary.value && toOrganize.value.length > 1) notes.push('重新整理一次只能一部')
   if (!inLibrary.value && batchOrganize.value && toOrganize.value.length < total) {
@@ -291,11 +313,16 @@ const dialogBody = ref<FileJobBody | null>(null)
 const organizeInLibrary = ref(false)
 const showOrganize = ref(false)
 const showMove = ref(false)
+const showEpisode = ref(false)
 
 function openOrganize(list: FileItem[]) {
   dialogBody.value = bodyOf(list)
   organizeInLibrary.value = list.some((it) => it.title)
   showOrganize.value = true
+}
+function openEpisode(list: FileItem[]) {
+  dialogBody.value = bodyOf(list)
+  showEpisode.value = true
 }
 function openMove(list: FileItem[]) {
   dialogBody.value = bodyOf(list)
@@ -316,6 +343,7 @@ function onRowAction(it: FileItem, key: string, e?: MouseEvent) {
   markOpener(e)
   if (key === 'organize') openOrganize([it])
   else if (key === 'move') openMove([it])
+  else if (key === 'episode') openEpisode([it])
   else if (key === 'local' && it.title_key) void router.push({ name: 'local', query: { title: it.title_key } })
   else if (key === 'records' && it.title_rel) {
     void router.push({ name: 'tasks', query: { tab: 'records', target_dir: it.title_rel } })
@@ -342,7 +370,7 @@ function humanSize(n?: number) {
 
 // 本页发起的任务：新进队列时重列一次（走缓存，只为给行挂上「排队整理」），
 // 跑完时网盘内容变了，跳过缓存重列，并清掉已经处理掉的勾选
-const PAGE_KINDS = new Set(['orgpick', 'libredo', 'filemove'])
+const PAGE_KINDS = new Set(['orgpick', 'libredo', 'libepisode', 'filemove'])
 const activePageJobs = computed(() =>
   queue.active.filter((j) => PAGE_KINDS.has(j.kind)).map((j) => j.id),
 )
@@ -407,7 +435,8 @@ onMounted(() => load())
         <Info :size="14" />
         <span>
           媒体库里只有分类目录下的<b>片目目录</b>能操作：重新整理（按当前模板与分类规则重新规整）、移出媒体库，
-          或跳到它的本地详情与整理记录。刮削到「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」。
+          或跳到它的本地详情与整理记录；剧集片目里个别集认错了季集，勾上那几个视频「指定季集」。
+          刮削到「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」。
         </span>
       </p>
       <HAlert v-if="error" status="danger" class="tip">{{ error }}</HAlert>
@@ -518,6 +547,15 @@ onMounted(() => load())
               <component :is="inLibrary ? FolderOutput : FolderInput" :size="14" />{{ batchMove.label }}
             </HButton>
             <HButton
+              v-if="batchEpisode"
+              variant="primary"
+              size="sm"
+              :disabled="!!batchEpisode.block"
+              @click="(e: MouseEvent) => (markOpener(e), openEpisode(toEpisode))"
+            >
+              <ListOrdered :size="14" />{{ batchEpisode.label }}
+            </HButton>
+            <HButton
               v-if="batchOrganize"
               variant="primary"
               size="sm"
@@ -537,6 +575,7 @@ onMounted(() => load())
 
     <!-- return-focus 透传给弹窗根上的 HModal -->
     <OrganizeDialog v-model:show="showOrganize" :body="dialogBody" :library="organizeInLibrary" :return-focus="!pointerOpened" />
+    <EpisodeDialog v-model:show="showEpisode" :body="dialogBody" :return-focus="!pointerOpened" />
     <MoveDialog v-model:show="showMove" :body="dialogBody" :zone="zone" :configured="configured" :return-focus="!pointerOpened" />
   </div>
 </template>

@@ -27,7 +27,7 @@ const drawerOpen = ref(false)
 const queue = useQueueStore()
 onMounted(refreshRecordStats)
 const offFinished = queue.onFinished((j) => {
-  if (['organize', 'orgpick', 'libredo', 'filemove', 'transfer', 'redo', 'confirm', 'ignore', 'deepdel'].includes(j.kind)) void refreshRecordStats()
+  if (['organize', 'orgpick', 'libredo', 'libepisode', 'filemove', 'transfer', 'redo', 'confirm', 'ignore', 'deepdel'].includes(j.kind)) void refreshRecordStats()
 })
 onUnmounted(offFinished)
 const version = ref('')
