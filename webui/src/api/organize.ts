@@ -25,7 +25,7 @@ export interface ScrapeConfig {
   auto_after_organize: boolean
   /** 增量同步新写出 STRM 后自动刮削那些片目（默认关；目录名没有 TMDB 编号时只认片名完全相等） */
   auto_after_sync: boolean
-  /** 刮削时 ffprobe 探测轨道写进 NFO（默认关，慢） */
+  /** 入库后让 Emby 提前探测媒体信息（默认关；每个条目一次 115 直链请求，见 embyextract.go） */
   probe_streams: boolean
   /** 同一季多集共用的剧照判为占位图，不写集剧照（默认开） */
   skip_shared_stills: boolean

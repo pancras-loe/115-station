@@ -14,7 +14,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 
 /**
- * 刮削本地媒体库里所选的片目。选项默认取「自动整理 → 影视刮削」里保存的配置，
+ * 刮削本地媒体库里所选的片目。选项默认取「影视刮削」页里保存的配置，
  * 在这里改的只对这一次生效，不回写配置。
  *
  * 「上传到网盘」默认关：不勾时只写本地，回不回传网盘照常由「监控上传」决定；

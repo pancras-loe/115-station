@@ -1,80 +1,23 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ChevronRight, HardDrive, Info, TriangleAlert, Upload } from '@lucide/vue'
-import HButton from '@/components/hero/HButton.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import { organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
-import type { ScrapeConfig } from '@/api/organize'
-import { toastError, useFeedback } from '@/composables/useFeedback'
+import SaveBar from './SaveBar.vue'
+import { useScrapeConfig } from './scrapeConfig'
 
 /**
- * 影视刮削配置。2026-09-30 改版：原来一张卡里夹着三块长提示框（Emby 设置步骤 / 刮削做什么 / 手动刮削在哪），
- * 配置项被挤到第二屏。现在左边是开关，右边是去向与说明，Emby 设置步骤默认折起。
+ * 影视刮削配置。2026-10-04 从「自动整理」里拎出来成了独立页面的第一个页签；
+ * 「轨道探测」管的是 Emby 提前探测、不是刮削，挪去了「媒体信息」页签。
+ * 自动整理那边留一个只读概览（organize/ScrapeSummary.vue），要改跳到这里。
  */
-const { message } = useFeedback()
 const media = useFullSetting()
 const monitor = useSetting('monitor', { enabled: false })
-
-const cfg = ref<ScrapeConfig>({
-  local_root: '',
-  write_nfo: true,
-  write_images: true,
-  force: false,
-  auto_after_organize: false,
-  auto_after_sync: false,
-  probe_streams: false,
-  skip_shared_stills: true,
-})
-/** 读回来的那份，用来判断改过没有；先按默认值起步，否则读回来之前保存条会闪一下「有未保存的改动」 */
-const savedJson = ref(JSON.stringify(cfg.value))
-const saving = ref(false)
-
-async function load() {
-  try {
-    const res = await organizeApi.getScrapeConfig()
-    // 后端是 { cfg, status }：此前这里取 res.data ?? res 摊平读，字段全是 undefined，
-    // 于是「整理后自动刮削」无论后端存的是什么都显示「关闭」，
-    // 点一次保存还会把实际配置按这份假显示写回去
-    const c = res.cfg ?? {}
-    cfg.value = {
-      local_root: c.local_root ?? '',
-      // 这两项后端缺省视为开启，所以判 !== false 而不是 !!
-      write_nfo: c.write_nfo !== false,
-      write_images: c.write_images !== false,
-      force: !!c.force,
-      auto_after_organize: !!c.auto_after_organize,
-      auto_after_sync: !!c.auto_after_sync,
-      probe_streams: !!c.probe_streams,
-      // 后端缺省开启
-      skip_shared_stills: c.skip_shared_stills !== false,
-    }
-  } catch {
-    // 首次使用尚无配置
-  } finally {
-    savedJson.value = JSON.stringify(cfg.value)
-  }
-}
-
-const dirty = () => JSON.stringify(cfg.value) !== savedJson.value
-
-async function save() {
-  saving.value = true
-  try {
-    cfg.value.local_root = media.model.value.local_path
-    await organizeApi.saveScrapeConfig(cfg.value)
-    savedJson.value = JSON.stringify(cfg.value)
-    message.success('保存成功')
-  } catch (e) {
-    toastError(e, '保存失败')
-  } finally {
-    saving.value = false
-  }
-}
+const { cfg, saving, dirty, load, save } = useScrapeConfig()
 
 const ON_OFF = [
   { label: '开启', value: true },
@@ -102,7 +45,7 @@ onMounted(load)
 
         <FieldRow
           label="同步后自动刮削"
-          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用「扩展功能 → 媒体信息补全」。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「本地文件」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
+          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用本页「媒体信息」页签里的媒体信息补全。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「本地文件」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
           hint="增量同步新增的片目；没有 TMDB 编号时只认片名完全相等"
         >
           <HSegmented v-model="cfg.auto_after_sync" :options="ON_OFF" />
@@ -129,14 +72,6 @@ onMounted(load)
           hint="同一季 3 集以上共用的剧照不写"
         >
           <HSegmented v-model="cfg.skip_shared_stills" :options="[{ label: '不写', value: true }, { label: '照写', value: false }]" />
-        </FieldRow>
-
-        <FieldRow
-          label="轨道探测"
-          tip="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行；在「本地文件」手动刮削时也可以给所选片目补上（所选视频超过 100 个要确认两次）。Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「系统配置 → Emby」配好服务器地址与 API 密钥。"
-          hint="入库后让 Emby 提前探测音视频轨道；每个条目一次 115 直链请求"
-        >
-          <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
         </FieldRow>
       </SectionCard>
 
@@ -168,7 +103,7 @@ onMounted(load)
         <p class="note">
           <Info :size="14" />
           <span>
-            手动刮削在「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」页勾选片目后点「刮削」，只处理已入库的片目。
+            手动刮削在「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」页勾选片目后点「刮削」，只处理已入库的片目；弹窗里的选项默认取左边这几项，可以只为那一次改。
             未识别、整理失败的文件还在网盘里、本地没有 STRM，要先到「<RouterLink :to="{ name: 'tasks', query: { tab: 'records', status: 'problem' } }">整理记录</RouterLink>」重新整理，入库时会自动刮削。
           </span>
         </p>
@@ -203,12 +138,12 @@ onMounted(load)
       </SectionCard>
     </div>
 
-    <div class="save-bar" :class="{ 'is-dirty': dirty() }">
-      <span class="save-note">
-        {{ dirty() ? '有未保存的改动' : '进度见顶栏任务队列；逐个文件的去向见实时日志（搜「[影视刮削]」）' }}
-      </span>
-      <HButton variant="primary" size="sm" :loading="saving" @click="save">保存配置</HButton>
-    </div>
+    <SaveBar
+      :dirty="dirty"
+      :saving="saving"
+      note="进度见顶栏任务队列；逐个文件的去向见实时日志（搜「[影视刮削]」）"
+      @save="save(media.model.value.local_path)"
+    />
   </div>
 </template>
 
@@ -351,33 +286,6 @@ onMounted(load)
 .emby-body ol {
   margin: 4px 0;
   padding-left: 20px;
-}
-
-/* ---- 保存条 ---- */
-.save-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 8px 8px 16px;
-  border-radius: var(--r-lg);
-  box-shadow: inset 0 0 0 1px var(--border);
-  transition:
-    background-color 150ms ease,
-    box-shadow 150ms ease;
-}
-.save-bar.is-dirty {
-  background: color-mix(in oklab, var(--accent) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent);
-}
-.save-note {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  color: var(--muted);
-}
-.is-dirty .save-note {
-  color: var(--accent);
-  font-weight: 500;
 }
 
 @media (max-width: 1280px) {

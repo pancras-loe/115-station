@@ -262,7 +262,7 @@ type EmbyPersonMark struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// MetaFillMark 媒体信息补全（扩展功能，api/metafill.go）对片目补刮的记账（按台账片目 key）。
+// MetaFillMark 媒体信息补全（影视刮削页，api/metafill.go）对片目补刮的记账（按台账片目 key）。
 // 补刮过、缺的还是那几样（TMDB 上就是没有背景图、目录名认不出条目 …）的片目，不记账的话每次定时都要白刮一遍。
 // Lack 记当时缺什么（「背景图,3 集 NFO」）：缺的东西变了（新加了几集）就不算同一回事，照常补
 type MetaFillMark struct {

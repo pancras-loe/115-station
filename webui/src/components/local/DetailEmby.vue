@@ -258,7 +258,7 @@ function itemLabel(it: EmbyDetailItem) {
         </div>
         <p class="auto-line">
           入库后自动探测：<b :class="data.auto_probe ? 'on' : 'off'">{{ data.auto_probe ? '已开启' : '未开启' }}</b>
-          <span class="dim">（自动整理 → 影视刮削 →「轨道探测」）</span>
+          <span class="dim">（影视刮削 → 媒体信息 →「轨道探测」）</span>
         </p>
         <button type="button" class="rules-toggle" :aria-expanded="showRules" @click="showRules = !showRules">
           <CircleHelp :size="14" />为什么有的视频没被探测？

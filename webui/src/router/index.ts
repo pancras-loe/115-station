@@ -68,6 +68,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '本地文件', desc: '本地媒体库的影片与剧集 / 手动刮削', icon: 'local' },
       },
       {
+        path: 'scrape',
+        name: 'scrape',
+        component: () => import('@/pages/ScrapePage.vue'),
+        meta: { title: '影视刮削', desc: 'NFO 与海报 / 媒体信息探测 / 演职人员补全', icon: 'scrape' },
+      },
+      {
         path: 'upload-download',
         name: 'upload-download',
         component: () => import('@/pages/UploadDownloadPage.vue'),
@@ -97,7 +103,7 @@ const routes: RouteRecordRaw[] = [
         path: 'plugins',
         name: 'plugins',
         component: () => import('@/pages/PluginsPage.vue'),
-        meta: { title: '扩展功能', desc: '签到 / TG 搜索 / 封面生成等插件', icon: 'plugin' },
+        meta: { title: '扩展功能', desc: '签到 / 媒体库封面等插件', icon: 'plugin' },
       },
       {
         path: 'logs',

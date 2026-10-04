@@ -1,19 +1,21 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
-import HModal from '@/components/hero/HModal.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
+import FormActions from '@/components/ui/FormActions.vue'
+import SectionCard from '@/components/ui/SectionCard.vue'
+import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CronField from '@/components/ui/CronField.vue'
 import { pluginsApi } from '@/api'
 import type { MetaFillConfig, MetaFillInfo } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
+import { useQueueStore } from '@/stores/queue'
 
-const show = defineModel<boolean>('show', { required: true })
 const { message } = useFeedback()
 const router = useRouter()
 
@@ -41,9 +43,7 @@ async function load() {
   }
 }
 
-watch(show, (v) => {
-  if (v) void load()
-})
+onMounted(load)
 
 const invalid = computed(() => (!form.value.scrape && !form.value.probe ? '补刮与探测至少开一项' : ''))
 
@@ -67,7 +67,7 @@ async function save() {
       max_probe: form.value.max_probe || DEFAULTS.max_probe,
     })
     message.success('已保存')
-    show.value = false
+    await load()
   } catch (e) {
     toastError(e, '保存失败')
   } finally {
@@ -88,16 +88,37 @@ async function reset() {
   }
 }
 
+// 跑一次可能几十分钟：入任务队列后立即返回，结果显示在卡片里
+const queue = useQueueStore()
+const running = ref(false)
+const runResult = ref<BannerState | null>(null)
+
+async function run() {
+  running.value = true
+  try {
+    const d = await pluginsApi.runMetaFill()
+    runResult.value = { status: 'ok', title: d.message || '已加入任务队列', detail: '扫描完会另建刮削 / 探测任务，进度见任务中心' }
+    await queue.submitted(d.job_id)
+    await load()
+  } catch (e) {
+    runResult.value = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    running.value = false
+  }
+}
+
 function openLastJob() {
   const id = info.value?.last_job?.id
   if (!id) return
-  show.value = false
   void router.push({ name: 'tasks', query: { job: String(id) } })
 }
 </script>
 
 <template>
-  <HModal v-model:show="show" title="媒体信息补全" width="560px">
+  <SectionCard title="媒体信息补全">
+    <template #extra>
+      <HButton variant="secondary" size="sm" :loading="running" @click="run">立即运行</HButton>
+    </template>
     <p class="lead">
       定时检查本地媒体库：缺 NFO、海报、背景图的片目（本地文件页里「未刮全」的）交给刮削补上；
       Emby 里还没有媒体信息（轨道）的视频让 Emby 提前探测。扫描本身不发 115 请求，
@@ -113,7 +134,7 @@ function openLastJob() {
 
     <FieldRow
       label="补刮 NFO / 图片"
-      tip="写哪些产物沿用「自动整理 → 刮削」的配置，但一律只补缺失（不覆盖已有文件）、只写本地（传不传网盘由监控上传决定）。补刮过、缺的还是那几样的片目（TMDB 上没有、目录名认不出条目）一段时间内不再刮。"
+      tip="写哪些产物沿用「刮削」页签的配置，但一律只补缺失（不覆盖已有文件）、只写本地（传不传网盘由监控上传决定）。补刮过、缺的还是那几样的片目（TMDB 上没有、目录名认不出条目）一段时间内不再刮。"
     >
       <HSwitch v-model="form.scrape" aria-label="补刮 NFO / 图片" />
     </FieldRow>
@@ -151,18 +172,16 @@ function openLastJob() {
       </div>
     </div>
 
-    <template #footer>
-      <div class="foot">
-        <HPopconfirm v-if="info?.marks" side="top" @confirm="reset">
-          <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
-          <template #content>清空后，下次把暂缓的片目重新补刮一遍（探测的记账不受影响）。</template>
-        </HPopconfirm>
-        <span class="spacer" />
-        <HButton variant="tertiary" @click="show = false">取消</HButton>
-        <HButton variant="primary" :loading="saving" :disabled="!!invalid" @click="save">保存</HButton>
-      </div>
-    </template>
-  </HModal>
+    <TestBanner :state="runResult" />
+
+    <FormActions>
+      <HButton variant="primary" :loading="saving" :disabled="!!invalid" @click="save">保存</HButton>
+      <HPopconfirm v-if="info?.marks" side="top" @confirm="reset">
+        <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
+        <template #content>清空后，下次把暂缓的片目重新补刮一遍（探测的记账不受影响）。</template>
+      </HPopconfirm>
+    </FormActions>
+  </SectionCard>
 </template>
 
 <style scoped>
@@ -173,7 +192,7 @@ function openLastJob() {
   color: var(--muted);
 }
 .stats {
-  margin-top: 14px;
+  margin: 14px 0;
   padding: 12px 14px;
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
@@ -190,14 +209,5 @@ function openLastJob() {
 .link {
   color: var(--accent);
   cursor: pointer;
-}
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-.spacer {
-  flex: 1;
 }
 </style>

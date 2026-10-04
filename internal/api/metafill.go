@@ -17,7 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ==================== 媒体信息补全（扩展功能，kind=metafill）====================
+// ==================== 媒体信息补全（影视刮削页，kind=metafill）====================
 //
 // 定时把本地媒体库里「没刮全」「Emby 里还缺媒体信息」的片目找出来，交给现成的两条队列去补：
 //   - 缺 NFO / 海报 / 背景图（本地文件页卡片的「未刮全」，同一套 grade 口径）→ 建一个刮削任务，
@@ -222,7 +222,7 @@ func (h *Handler) metaFillScrape(job *model.TaskJob, cfg metaFillCfg, titles []l
 	}
 	sc := loadScrapeCfg()
 	if !sc.WriteNFO && !sc.WriteImages {
-		res.Problems = append(res.Problems, "「自动整理 → 刮削」里 NFO 与图片都关着，没法补刮")
+		res.Problems = append(res.Problems, "「影视刮削 → 刮削」里 NFO 与图片都关着，没法补刮")
 		return head + "，刮削配置里 NFO 与图片都关着，跳过"
 	}
 	if _, err := loadTmdbClient(); err != nil {

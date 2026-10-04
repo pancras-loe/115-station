@@ -1,23 +1,22 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, type Component } from 'vue'
+import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, FileSearch, Images, Play, Settings2, UsersRound } from '@lucide/vue'
+import { ArrowRight, CalendarCheck, Clapperboard, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
-import PersonFillModal from '@/components/plugins/PersonFillModal.vue'
-import MetaFillModal from '@/components/plugins/MetaFillModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
-import { useQueueStore } from '@/stores/queue'
 
 const { message } = useFeedback()
+const router = useRouter()
 
 /** 每张插件卡的「立即运行」结果，展示在卡片内 */
 const results = ref<Record<string, BannerState | null>>({})
@@ -82,43 +81,21 @@ async function cgRun() {
   }
 }
 
-// ============ 演职人员补全 ============
-// 跑一次可能几十分钟，入任务队列（人物队列）后立即返回，进度在顶栏任务面板 / 任务中心
-const pfShow = ref(false)
-const queue = useQueueStore()
-
-async function pfRun() {
-  busy.value.personfill = true
-  try {
-    const d = await pluginsApi.runPersonFill()
-    results.value.personfill = { status: 'ok', title: d.message || '已加入任务队列', detail: '进度见顶栏任务面板或任务中心' }
-    await queue.submitted(d.job_id)
-  } catch (e) {
-    results.value.personfill = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
-  } finally {
-    busy.value.personfill = false
-  }
-}
-
-// ============ 媒体信息补全 ============
-// 扫描后建刮削 / 探测任务，入任务队列（刮削队列）后立即返回
-const mfShow = ref(false)
-
-async function mfRun() {
-  busy.value.metafill = true
-  try {
-    const d = await pluginsApi.runMetaFill()
-    results.value.metafill = { status: 'ok', title: d.message || '已加入任务队列', detail: '扫描完会另建刮削 / 探测任务，进度见任务中心' }
-    await queue.submitted(d.job_id)
-  } catch (e) {
-    results.value.metafill = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
-  } finally {
-    busy.value.metafill = false
-  }
-}
-
 // ============ 插件清单 ============
-const plugins = [
+interface Plugin {
+  key: string
+  name: string
+  icon: Component
+  desc: string
+  available: boolean
+  runLabel?: string
+  onConfig?: () => void
+  onRun?: () => void
+  /** 已搬到别的页面：卡片只留一个跳转按钮 */
+  movedTo?: string
+}
+
+const plugins: Plugin[] = [
   {
     key: 'checkin',
     name: '115 每日签到',
@@ -139,40 +116,30 @@ const plugins = [
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
   },
+  // 演职人员补全、媒体信息补全 2026-10-04 搬到「影视刮削」页。留一张卡指过去，
+  // 老用户在这里找不到时知道去哪；过一两个版本可以删掉
   {
-    key: 'personfill',
-    name: '演职人员补全',
-    icon: UsersRound,
-    desc: '给 Emby 里缺头像、名字不是中文的演员 / 导演 / 编剧补上 TMDB 头像、中文名与中文简介。头像经本站代理下载后通过 Emby API 写入，支持定时。',
+    key: 'moved-scrape',
+    name: '演职人员 / 媒体信息补全',
+    icon: Clapperboard,
+    desc: '已移到「影视刮削」页的「媒体信息」「演职人员」页签，配置与定时计划都保留原样。',
     available: true,
-    runLabel: '立即运行',
-    onConfig: () => (pfShow.value = true),
-    onRun: pfRun,
-  },
-  {
-    key: 'metafill',
-    name: '媒体信息补全',
-    icon: FileSearch,
-    desc: '定时找出本地媒体库里缺 NFO、海报、背景图的片目补刮，Emby 里还没有媒体信息的视频让它提前探测。探测按自动规则、有单次上限，避免反复取 115 直链。',
-    available: true,
-    runLabel: '立即运行',
-    onConfig: () => (mfShow.value = true),
-    onRun: mfRun,
+    movedTo: 'scrape',
   },
 ]
 
-const availableCount = plugins.filter((p) => p.available).length
+const availableCount = plugins.filter((p) => !p.movedTo).length
 </script>
 
 <template>
-  <SectionCard title="插件扩展" :hint="`共 ${plugins.length} 个插件 · ${availableCount} 个可用`">
+  <SectionCard title="插件扩展" :hint="`共 ${availableCount} 个插件`">
     <div class="grid">
       <div v-for="p in plugins" :key="p.key" class="plugin" :class="{ off: !p.available }">
         <div class="head">
           <div class="ico"><component :is="p.icon" :size="17" :stroke-width="1.8" /></div>
           <div class="name">{{ p.name }}</div>
-          <HChip :color="heroTone(p.available ? 'success' : 'default')">
-            {{ p.available ? '可用' : '规划中' }}
+          <HChip :color="heroTone(p.movedTo ? 'info' : p.available ? 'success' : 'default')">
+            {{ p.movedTo ? '已迁移' : p.available ? '可用' : '规划中' }}
           </HChip>
         </div>
 
@@ -180,12 +147,18 @@ const availableCount = plugins.filter((p) => p.available).length
 
         <TestBanner :state="results[p.key]" />
 
-        <div class="foot">
-          <HButton variant="tertiary" size="sm" :disabled="!p.available" @click="p.onConfig()">
+        <div v-if="p.movedTo" class="foot">
+          <HButton variant="secondary" size="sm" @click="router.push({ name: p.movedTo })">
+            <template #icon><ArrowRight :size="14" /></template>
+            去影视刮削
+          </HButton>
+        </div>
+        <div v-else class="foot">
+          <HButton variant="tertiary" size="sm" :disabled="!p.available" @click="p.onConfig?.()">
             <template #icon><Settings2 :size="14" /></template>
             配置规则
           </HButton>
-          <HButton variant="secondary" size="sm" :disabled="!p.available" :loading="busy[p.key]" @click="p.onRun()">
+          <HButton variant="secondary" size="sm" :disabled="!p.available" :loading="busy[p.key]" @click="p.onRun?.()">
             <template #icon><Play :size="14" /></template>
             {{ p.runLabel }}
           </HButton>
@@ -216,8 +189,6 @@ const availableCount = plugins.filter((p) => p.available).length
     </HModal>
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
-    <PersonFillModal v-model:show="pfShow" />
-    <MetaFillModal v-model:show="mfShow" />
   </SectionCard>
 </template>
 

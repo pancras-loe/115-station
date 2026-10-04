@@ -249,7 +249,7 @@ const helpVisible = ref(false)
         <Info :size="14" />
         <span>
           增量新增的片目要自动刮削 NFO / 海报，到
-          <RouterLink class="jump" :to="{ name: 'organize', query: { tab: 'scrape' } }">自动整理 → 影视刮削</RouterLink>
+          <RouterLink class="jump" :to="{ name: 'scrape' }">影视刮削</RouterLink>
           打开「同步后自动刮削」。
         </span>
       </p>

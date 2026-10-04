@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import BasicTab from './organize/BasicTab.vue'
-import ScrapeTab from './organize/ScrapeTab.vue'
+import ScrapeSummary from './organize/ScrapeSummary.vue'
 import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
@@ -33,7 +33,8 @@ const tabs = computed(() => [
     <!-- 页签内容按需挂载：没选中的页签不渲染、不发请求（与原 NTabPane 的 display-directive="if" 一致） -->
     <div class="panel">
       <BasicTab v-if="tab === 'basic'" />
-      <ScrapeTab v-else-if="tab === 'scrape'" />
+      <!-- 刮削配置已搬到「影视刮削」页，这里只读，改要跳过去 -->
+      <ScrapeSummary v-else-if="tab === 'scrape'" />
       <RecognizeTab v-else-if="tab === 'recognize'" />
       <AiTab v-else-if="tab === 'ai'" />
       <RenameTab v-else-if="tab === 'rename'" />

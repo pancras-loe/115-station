@@ -24,7 +24,7 @@ import (
 // 原来挂在网盘文件页上（按 115 目录勾选、台账里没有的直接写网盘），2026-09 起挪到本地文件页：
 // 刮削只认本地已经有的片目，不再有「只写网盘」这条路。
 //
-// 选项默认取「自动整理 → 刮削」里保存的配置，前端可以只为这一次改。
+// 选项默认取「影视刮削」页里保存的配置，前端可以只为这一次改。
 // 「上传到网盘」只管这一次：勾了就当场把这次写出的文件传进网盘对应目录（upload115FileConsented，
 // 不看监控上传总开关）；没勾就只写本地，传不传交给监控上传 —— 它开着会照常把新文件传上去。
 
@@ -940,7 +940,7 @@ func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bo
 	}
 	if len(keys) > syncScrapeMaxTitles {
 		log.Printf("[影视刮削] ⚠ 本轮增量新增 %d 个片目，超过自动刮削上限 %d，只刮前 %d 个；"+
-			"其余请用「扩展功能 → 媒体信息补全」或本地文件页刮削", len(keys), syncScrapeMaxTitles, syncScrapeMaxTitles)
+			"其余请用「影视刮削 → 媒体信息」的媒体信息补全或本地文件页刮削", len(keys), syncScrapeMaxTitles, syncScrapeMaxTitles)
 		keys = keys[:syncScrapeMaxTitles]
 	}
 	var r []string

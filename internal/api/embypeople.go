@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ==================== 演职人员补全（扩展功能，kind=person）====================
+// ==================== 演职人员补全（影视刮削页，kind=person）====================
 //
 // Emby 的人物头像存在它自己的元数据目录里（<programdata>/metadata/people/首字母/姓名/poster.jpg，
 // 4.9 起只在这里；更老的版本还有散落在 metadata/library/xx/<guid>/ 的），不在媒体目录旁边，

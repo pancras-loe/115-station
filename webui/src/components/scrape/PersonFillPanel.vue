@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HCheckbox from '@/components/hero/HCheckbox.vue'
-import HModal from '@/components/hero/HModal.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
+import FormActions from '@/components/ui/FormActions.vue'
+import SectionCard from '@/components/ui/SectionCard.vue'
+import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CronField from '@/components/ui/CronField.vue'
 import { pluginsApi } from '@/api'
 import type { PersonFillConfig, PersonFillInfo, PersonType } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
+import { useQueueStore } from '@/stores/queue'
 
-const show = defineModel<boolean>('show', { required: true })
 const { message } = useFeedback()
 const router = useRouter()
 
@@ -50,9 +52,7 @@ async function load() {
   }
 }
 
-watch(show, (v) => {
-  if (v) void load()
-})
+onMounted(load)
 
 function toggleType(t: PersonType, on: boolean) {
   const s = new Set(form.value.types)
@@ -91,7 +91,7 @@ async function save() {
       max_per_run: form.value.max_per_run || DEFAULTS.max_per_run,
     })
     message.success('已保存')
-    show.value = false
+    await load()
   } catch (e) {
     toastError(e, '保存失败')
   } finally {
@@ -112,16 +112,37 @@ async function reset() {
   }
 }
 
+// 跑一次可能几十分钟：入任务队列后立即返回，结果显示在卡片里
+const queue = useQueueStore()
+const running = ref(false)
+const runResult = ref<BannerState | null>(null)
+
+async function run() {
+  running.value = true
+  try {
+    const d = await pluginsApi.runPersonFill()
+    runResult.value = { status: 'ok', title: d.message || '已加入任务队列', detail: '进度见顶栏任务面板或任务中心' }
+    await queue.submitted(d.job_id)
+    await load()
+  } catch (e) {
+    runResult.value = { status: 'err', title: '提交失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    running.value = false
+  }
+}
+
 function openLastJob() {
   const id = info.value?.last_job?.id
   if (!id) return
-  show.value = false
   void router.push({ name: 'tasks', query: { job: String(id) } })
 }
 </script>
 
 <template>
-  <HModal v-model:show="show" title="演职人员补全" width="560px">
+  <SectionCard title="演职人员补全">
+    <template #extra>
+      <HButton variant="secondary" size="sm" :loading="running" @click="run">立即运行</HButton>
+    </template>
     <p class="lead">
       给 Emby 里缺头像、名字不是中文的演职人员补上 TMDB 的头像、中文名与中文简介。
       通过 Emby API 写入（人物头像存在 Emby 自己的元数据目录里，不在媒体文件夹旁边），
@@ -191,18 +212,16 @@ function openLastJob() {
       </div>
     </div>
 
-    <template #footer>
-      <div class="foot">
-        <HPopconfirm v-if="markTotal || info?.cursor" side="top" @confirm="reset">
-          <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
-          <template #content>清空后，下次任务从第一部片目开始，把暂缓的人物全部重新查一遍 TMDB。</template>
-        </HPopconfirm>
-        <span class="spacer" />
-        <HButton variant="tertiary" @click="show = false">取消</HButton>
-        <HButton variant="primary" :loading="saving" :disabled="!!invalid" @click="save">保存</HButton>
-      </div>
-    </template>
-  </HModal>
+    <TestBanner :state="runResult" />
+
+    <FormActions>
+      <HButton variant="primary" :loading="saving" :disabled="!!invalid" @click="save">保存</HButton>
+      <HPopconfirm v-if="markTotal || info?.cursor" side="top" @confirm="reset">
+        <HButton variant="tertiary" :loading="resetting">清空记账</HButton>
+        <template #content>清空后，下次任务从第一部片目开始，把暂缓的人物全部重新查一遍 TMDB。</template>
+      </HPopconfirm>
+    </FormActions>
+  </SectionCard>
 </template>
 
 <style scoped>
@@ -218,7 +237,7 @@ function openLastJob() {
   gap: 16px;
 }
 .stats {
-  margin-top: 14px;
+  margin: 14px 0;
   padding: 12px 14px;
   border-radius: var(--r-lg);
   background: var(--surface-secondary);
@@ -235,14 +254,5 @@ function openLastJob() {
 .link {
   color: var(--accent);
   cursor: pointer;
-}
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-}
-.spacer {
-  flex: 1;
 }
 </style>
