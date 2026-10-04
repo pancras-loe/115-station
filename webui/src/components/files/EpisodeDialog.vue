@@ -286,11 +286,12 @@ async function submit() {
   font-size: 12px;
   color: var(--muted);
 }
+/* −/+ 两个按钮就占掉近百像素：太窄时中间的数字被裁掉（480 只露出 48），季号整个看不见 */
 .num {
-  width: 104px;
+  width: 136px;
 }
 .num-ep {
-  width: 120px;
+  width: 164px;
 }
 .result {
   display: flex;
