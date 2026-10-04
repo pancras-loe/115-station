@@ -23,9 +23,9 @@ type fakeExtractEmby struct {
 	// noStreams：PlaybackInfo 返回 200 却没有轨道（Emby 的 ffprobe 读不了文件）；
 	// linkServed 再模拟探测期间本站给出过直链
 	noStreams, linkServed bool
-	eps     []string        // 缺媒体信息的集 id
-	done    map[string]bool // 已探测成功
-	calls   map[string]int  // 每个 id 的 PlaybackInfo 次数
+	eps                   []string        // 缺媒体信息的集 id
+	done                  map[string]bool // 已探测成功
+	calls                 map[string]int  // 每个 id 的 PlaybackInfo 次数
 }
 
 func newFakeExtractEmby(t *testing.T, probeOK bool, eps ...string) *fakeExtractEmby {
@@ -353,28 +353,59 @@ func TestExtractTitleTargets(t *testing.T) {
 		{MediaType: "tv", Name: "剧集/国产剧"},
 	})
 	id := func(s string) string { return s }
+	// 这一轮新写出的 STRM 登记：某剧新进了 E01、E02、E03（样本只确认到 E01、E02），老剧什么都没新写
+	fresh := map[string][]string{
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)": {
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E01.strm",
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm",
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E03.strm",
+		},
+	}
+	take := func(dir string) []string {
+		dir = filepath.ToSlash(dir)
+		out := fresh[dir]
+		delete(fresh, dir)
+		return out
+	}
 	got := extractTitleTargets([]string{
 		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E01.strm",
-		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm", // 同一部：只排一次
-		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 02",                // 季目录：归到片目
-		"/strm/媒体库/电影/某片 (2020)/某片.strm",
-		"/strm/媒体库/电影/散文件.strm", // 不属于任何片目：只探它自己
-		"/strm",                 // 同步根
-		"/strm/媒体库",             // 媒体库
-		"/strm/媒体库/剧集/国产剧",      // 分类
-		"/strm/媒体库/剧集",          // 分类的上级
-	}, "/strm", layout, id, filepath.ToSlash) // 真实的 embyPathOf 收本地原生路径；测试在 Windows 上也要跑
-	want := []string{
-		"/strm/媒体库/剧集/国产剧/某剧 (2023)",
-		"/strm/媒体库/电影/某片 (2020)",
-		"/strm/媒体库/电影/散文件.strm",
+		"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm", // 同一部：并进同一个任务
+		"/strm/媒体库/剧集/国产剧/老剧 (2010)/Season 02",                // 季目录、没登记新集：不探（此前整部探）
+		"/strm/媒体库/电影/某片 (2020)/某片.strm",                      // 没登记：只探确认到的这一个
+		"/strm/媒体库/电影/散文件.strm",                               // 不属于任何片目：只探它自己
+		"/strm",                                               // 同步根
+		"/strm/媒体库",                                           // 媒体库
+		"/strm/媒体库/剧集/国产剧",                                    // 分类
+		"/strm/媒体库/剧集",                                        // 分类的上级
+	}, "/strm", layout, id, filepath.ToSlash, take) // 真实的 embyPathOf 收本地原生路径；测试在 Windows 上也要跑
+	want := []ingestProbeGroup{
+		{name: "某剧 (2023)", key: "/strm/媒体库/剧集/国产剧/某剧 (2023)", paths: []string{
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E01.strm",
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E02.strm",
+			"/strm/媒体库/剧集/国产剧/某剧 (2023)/Season 01/某剧 S01E03.strm",
+		}},
+		{name: "某片 (2020)", key: "/strm/媒体库/电影/某片 (2020)", paths: []string{"/strm/媒体库/电影/某片 (2020)/某片.strm"}},
+		{name: "散文件.strm", key: "/strm/媒体库/电影/散文件.strm", paths: []string{"/strm/媒体库/电影/散文件.strm"}},
 	}
-	if len(got) != len(want) {
+	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("得到 %v，预期 %v", got, want)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("第 %d 个：%s，预期 %s（全部 %v）", i, got[i], want[i], got)
-		}
+}
+
+// 登记：取走即删，只取这个目录下的
+func TestFreshStrms(t *testing.T) {
+	freshStrms.Lock()
+	freshStrms.m = map[string]time.Time{}
+	freshStrms.Unlock()
+	a := filepath.FromSlash("/m/剧集/某剧/Season 01/E01.strm")
+	b := filepath.FromSlash("/m/剧集/某剧2/Season 01/E01.strm")
+	markFreshStrm(a)
+	markFreshStrm(b)
+	got := takeFreshStrms(filepath.FromSlash("/m/剧集/某剧"))
+	if len(got) != 1 || got[0] != a {
+		t.Fatalf("只该取到某剧的（某剧2 是前缀相同的另一部）：%v", got)
+	}
+	if got := takeFreshStrms(filepath.FromSlash("/m/剧集/某剧")); len(got) != 0 {
+		t.Fatalf("取走即删：%v", got)
 	}
 }

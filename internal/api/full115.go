@@ -869,5 +869,6 @@ func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f
 	if err := os.WriteFile(strmPath, []byte(streamURL), 0o666); err != nil {
 		return "", false, err
 	}
+	markFreshStrm(strmPath) // 入库确认后只探新写出的（embyfresh.go）
 	return strmRel, true, nil
 }

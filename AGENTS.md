@@ -423,9 +423,11 @@ git tag v1.2.0 && git push origin v1.2.0
       **发请求前**先记一次（手动的也记），成功删账；连续 3 个失败熔断暂停 30 分钟（手动的也等）。规则按入口分两种（`embyExtractAllowed` 的 `manual`）：
       **自动**（入库确认）同一条目最多 2 次、间隔 ≥24 小时，用完**永远**不再自动探（2026-09-29 起不再 30 天清账重来，维护者认为多此一举）；
       **手动**不看次数与 24 小时，只防抖 `embyExtractDebounce`（5 分钟）。
-      自动入口排的一律是**片目目录**（`embyExtractTitleTargets`，按 `libCategoryLayout.titleOf` 归）：入库确认的样本只有 3 个 `.strm`，
-      直接排就只探 3 集；没点名时回查的是刷新目标（全量的同步根、迁移时的整个媒体库），直接排就是递归探整片库 ——
-      所以片目之上的目录**不自动探**，不属于任何片目的单个 `.strm` 只探它自己。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
+      自动入口**只探新入库的集**（2026-10-05 起，`embyExtractTitleTargets`）：入库确认的样本只有 3 个 `.strm`，回答不了「这一轮新进了哪几集」，
+      所以 `writeStrm` 每真写出一个 STRM 就登记进内存（`embyfresh.go` 的 `markFreshStrm`，6 小时），入库确认按 `libCategoryLayout.titleOf` 归到片目后
+      取走这个片目下登记的那些去探（`takeFreshStrms`），一个片目一个任务，同键排着的路径取并集。**别改回整部探**：往一部 1665 集、大部分没探过的番剧里
+      加一集就排进去一千多集（2026-10-04 现场）。登记没有（重启丢了）时只探确认到的那个 `.strm`，目录不探；片目之上的目录**不自动探**；
+      不属于任何片目的单个 `.strm` 只探它自己。重新整理 / 指定季集登记的手动探测要在归片目**之前**摘（`splitRedoProbes`），指定季集按文件登记、只探改过的几集。整理后自动刮削（`scrapeAutoDedupe`）不排队（入库确认已覆盖）。
       **手动刮削收尾的 Emby 刷新不走入库回查**（`scrapeEmbyRefresh` 的 `ingest`，只有整理交过来的刷新才算入库）：
       回查确认后会按全局开关自动探，弹窗里关掉的「轨道探测」会被它顶回来（2026-09-30 现场）。
       新增入口别绕过 `embyExtractClaim`。测试 `embyextract_test.go`。
@@ -456,7 +458,7 @@ git tag v1.2.0 && git push origin v1.2.0
       执行器只把路径带任务 id 排进同一个 worker 然后等结果（别另起第二个探测者），停止时 `cancelEmbyExtractJob` 摘掉排着的。
       每个条目的结果写 `TaskJob.Probe`（`embyprobereport.go`），任务状态：全失败 `failed`、部分失败 `partial`。
       防抖期内重试任务后端直接 409 说清几点能试（`probeRetryReadyAt`），前端倒计时。**没有定时重试**，文案别写成「会自动重试」。
-      入库回查查到 10 分钟，再晚的由 Emby 入库 webhook 补确认（`embyLateIngestHit`）。入库确认排的自动探测（2026-10-04 起）也建任务：一个片目一个、`Source=ingest`、按自动规则放行（`enqueueIngestProbes`，与定时补全同一套 `Auto`），一个都没请求就按 `Idle` 删行不进历史；**别改回直接塞 worker**，一部上千集的番剧要探一个多小时，没任务就看不到进度、停不下来。探测失败的条目另有任务中心的「Emby 探测」页签（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条 / 全部手动重试；条目在 Emby 里没了顺手删账）。**「忽略」只打 `EmbyExtractMark.IgnoredAt`、不删账**（删了自动次数清零，下次入库确认又要请求两次）：忽略的不再列出、不再自动探，手动请求时清掉标记（`embyExtractClaim`），再失败回到清单；`POST /tasks/probe/ignore` / `unignore`。
+      入库回查查到 10 分钟，再晚的由 Emby 入库 webhook 补确认（`embyLateIngestHit`）。入库确认排的自动探测（2026-10-04 起）也建任务：一个片目一个（只含新入库的集）、`Source=ingest`、按自动规则放行（`enqueueIngestProbes`，与定时补全同一套 `Auto`），一个都没请求就按 `Idle` 删行不进历史；**别改回直接塞 worker**，一部上千集的番剧要探一个多小时，没任务就看不到进度、停不下来。探测失败的条目另有任务中心的「Emby 探测」页签（`GET /tasks/probe`，列记账里所有没成功的条目，可逐条 / 全部手动重试；条目在 Emby 里没了顺手删账）。**「忽略」只打 `EmbyExtractMark.IgnoredAt`、不删账**（删了自动次数清零，下次入库确认又要请求两次）：忽略的不再列出、不再自动探，手动请求时清掉标记（`embyExtractClaim`），再失败回到清单；`POST /tasks/probe/ignore` / `unignore`。
     - 任务状态 `partial`（部分失败）：执行器返回 `jobOutcome.Partial`。刮削有出错的产物或没刮成的片目（含中途片目被挪走）就是部分失败；停止优先于它。可重试，保留 30 天。
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。

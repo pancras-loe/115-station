@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 
 	"115-station/internal/model"
@@ -24,7 +25,7 @@ func TestIngestProbeJobAutoRule(t *testing.T) {
 	seedEmbyCfg(t, f.srv.URL)
 	startTestExtractWorker(t, f.cfg())
 
-	enqueueIngestProbes([]string{"/media/某剧"})
+	enqueueIngestProbes([]ingestProbeGroup{{name: "某剧", key: "/media/某剧", paths: []string{"/media/某剧"}}})
 	job := lastIngestProbeJob(t)
 	if p := decodeJobParams(&job).Probe; p == nil || !p.Auto || job.Priority != jobPriorityBackground {
 		t.Fatalf("应是后台优先级、自动规则的探测任务：%+v", job)
@@ -39,7 +40,7 @@ func TestIngestProbeJobAutoRule(t *testing.T) {
 	}
 
 	// 马上又入库一次：自动规则 24 小时内不再请求；什么都没请求就不留行
-	enqueueIngestProbes([]string{"/media/某剧"})
+	enqueueIngestProbes([]ingestProbeGroup{{name: "某剧", key: "/media/某剧", paths: []string{"/media/某剧"}}})
 	job2 := lastIngestProbeJob(t)
 	h.runJob(&job2, probeLane)
 	if f.totalCalls() != 1 {
@@ -59,7 +60,7 @@ func TestIngestProbeJobCancel(t *testing.T) {
 	f := newFakeExtractEmby(t, true, "ep1")
 	seedEmbyCfg(t, f.srv.URL)
 
-	enqueueIngestProbes([]string{"/media/某剧"})
+	enqueueIngestProbes([]ingestProbeGroup{{name: "某剧", key: "/media/某剧", paths: []string{"/media/某剧"}}})
 	job := lastIngestProbeJob(t)
 	// 没跑 execProbeJob，它收尾时清的内存状态这里自己清：下个用例换新库，任务 id 又从 1 开始
 	t.Cleanup(func() {
@@ -76,5 +77,23 @@ func TestIngestProbeJobCancel(t *testing.T) {
 	}
 	if f.totalCalls() != 0 {
 		t.Fatalf("不该请求：%v", f.calls)
+	}
+}
+
+// 同一部剧排着没开始时又进来一批新集：路径取并集，不能把上一批覆盖掉
+func TestIngestProbeJobMergesPaths(t *testing.T) {
+	resetExtractState(t)
+	enqueueIngestProbes([]ingestProbeGroup{{name: "某剧", key: "/media/某剧", paths: []string{"/media/某剧/S01E01.strm"}}})
+	enqueueIngestProbes([]ingestProbeGroup{{name: "某剧", key: "/media/某剧", paths: []string{"/media/某剧/S01E02.strm", "/media/某剧/S01E01.strm"}}})
+	var jobs []model.TaskJob
+	model.DB.Where("kind = ? AND source = ?", jobKindProbe, probeSourceIngest).Find(&jobs)
+	if len(jobs) != 1 {
+		t.Fatalf("应合并成一个任务：%d 个", len(jobs))
+	}
+	if p := decodeJobParams(&jobs[0]).Probe.Paths; len(p) != 2 {
+		t.Fatalf("路径应取并集：%v", p)
+	}
+	if !strings.Contains(jobs[0].Title, "新入库 2 个") {
+		t.Fatalf("标题应按合并后的数量重写：%s", jobs[0].Title)
 	}
 }

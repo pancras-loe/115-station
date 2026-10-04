@@ -48,6 +48,9 @@ type probeJobSpec struct {
 	Paths, Items                  []string
 	Auto                          bool
 	Priority                      int // 零值 = jobPriorityManual
+	// TitleFor 非空 = 同键排着没开始的，路径取并集而不是覆盖（入库后探测：同一部剧连着进来两批新集，
+	// 两批都要探），标题按合并后的路径数重写
+	TitleFor func(paths int) string
 }
 
 // enqueueProbeJob 建一个手动探测任务。同一个片目排着没开始的，合并成一个（DedupeKey 同键覆盖）
@@ -58,10 +61,37 @@ func enqueueProbeJob(db *gorm.DB, s probeJobSpec) (model.TaskJob, error) {
 	if s.Source == "" {
 		s.Source = "web"
 	}
-	return enqueueJob(db, jobSpec{
+	spec := jobSpec{
 		Kind: jobKindProbe, Title: s.Title, DedupeKey: s.DedupeKey, Source: s.Source, Priority: s.Priority,
 		Params: jobParams{Probe: &probeJobParams{Key: s.Key, Paths: s.Paths, Items: s.Items, Auto: s.Auto}},
-	})
+	}
+	if s.TitleFor != nil {
+		spec.Merge = func(prev, next jobParams) (jobParams, string) {
+			out := mergeProbePaths(prev, next)
+			return out, s.TitleFor(len(out.Probe.Paths))
+		}
+	}
+	return enqueueJob(db, spec)
+}
+
+// mergeProbePaths 同键排着的探测任务：路径并集
+func mergeProbePaths(prev, next jobParams) jobParams {
+	if prev.Probe == nil || next.Probe == nil {
+		return next
+	}
+	seen := map[string]bool{}
+	var paths []string
+	for _, p := range append(append([]string(nil), prev.Probe.Paths...), next.Probe.Paths...) {
+		if !seen[p] {
+			seen[p] = true
+			paths = append(paths, p)
+		}
+	}
+	out := next
+	pp := *next.Probe
+	pp.Paths = paths
+	out.Probe = &pp
+	return out
 }
 
 // activeProbeJobFor 这个片目有没有排着 / 正在跑的探测任务（片目详情显示「进度在任务中心」用）
@@ -408,30 +438,43 @@ func (s *orgSink) titleLocalDir(rootRel string) string {
 // probeSourceIngest 入库确认后自动建的探测任务（TaskJob.Source）
 const probeSourceIngest = "ingest"
 
-// enqueueIngestProbes 入库确认后的自动探测：一个片目一个任务、按自动规则放行（同一条目最多 2 次、间隔 24 小时）。
+// enqueueIngestProbes 入库确认后的自动探测：一个片目一个任务（只含这一轮新写出的集，见 embyExtractTitleTargets）、
+// 按自动规则放行（同一条目最多 2 次、间隔 24 小时）。
 // 此前直接把路径塞进 worker、不挂任务 —— 一部 1665 集的番剧要探一个多小时，任务中心里看不到进度、
 // 也没地方停（2026-10-04 现场）。放行规则不变，只是多了一个看得见、停得下的壳。
 // 建不了任务（没库 / 入队失败）退回原来的无任务入口，探测本身不能因此丢掉
-func enqueueIngestProbes(targets []string) {
-	for _, p := range targets {
+func enqueueIngestProbes(groups []ingestProbeGroup) {
+	for _, g := range groups {
 		if model.DB == nil {
-			queueEmbyExtract(p)
+			for _, p := range g.paths {
+				queueEmbyExtract(p)
+			}
 			continue
 		}
-		name := embyPathBase(strings.TrimPrefix(p, embyExtractItemPrefix))
+		name := g.name
+		titleFor := func(n int) string {
+			if n > 1 {
+				return fmt.Sprintf("Emby 提前探测《%s》新入库 %d 个（入库后）", truncateStr(name, 60), n)
+			}
+			return fmt.Sprintf("Emby 提前探测《%s》（入库后）", truncateStr(name, 60))
+		}
 		job, err := enqueueProbeJob(model.DB, probeJobSpec{
-			Title:     fmt.Sprintf("Emby 提前探测《%s》（入库后）", truncateStr(name, 60)),
+			Title:     titleFor(len(g.paths)),
+			TitleFor:  titleFor,
 			Source:    probeSourceIngest,
-			DedupeKey: "probe-ingest:" + p,
-			Paths:     []string{p},
+			DedupeKey: truncateStr("probe-ingest:"+g.key, 240),
+			Paths:     g.paths,
 			Auto:      true,
 			Priority:  jobPriorityBackground,
 		})
 		if err != nil {
 			log.Printf("[Emby探测] ✗ 入库后的探测任务入队失败，改走后台队列（任务中心看不到进度）: %v", err)
-			queueEmbyExtract(p)
+			for _, p := range g.paths {
+				queueEmbyExtract(p)
+			}
 			continue
 		}
-		log.Printf("[Emby探测] ○ 入库后自动探测《%s》（任务 #%d，自动规则，任务中心可看进度、可停止）", name, job.ID)
+		log.Printf("[Emby探测] ○ 入库后自动探测《%s》%d 个新入库的文件（任务 #%d，自动规则，任务中心可看进度、可停止）",
+			g.name, len(g.paths), job.ID)
 	}
 }

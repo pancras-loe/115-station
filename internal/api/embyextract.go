@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +38,7 @@ import (
 //
 // 开关复用影视刮削的「轨道探测」（scrape.probe_streams / 刮削任务的 Probe）。入口分两类，规则不同：
 //   - 自动：入库确认之后（embyVerifyIngest 查到条目的那一刻），全局开关，整理 / 增量 / 全量进来的都算
-//     排的是所在片目目录（整部探），片目之上的目录不探，见 embyExtractTitleTargets
+//     排的是所在片目这一轮新写出的集（embyfresh.go），不整部探；片目之上的目录不探，见 embyExtractTitleTargets
 //   - 手动：用户这一次明确要探 —— 片目详情点「提前探测」、本地文件页刮削勾了「轨道探测」、
 //     重新整理（带刮削且开着探测）。手动的一律建一个「Emby 提前探测」任务（kind=probe，
 //     单独一条探测队列，embyprobejob.go），任务中心看得到进度、能停、失败了能重试
@@ -971,37 +972,64 @@ func embyExtractTargets(cfg embyRefreshCfg, embyPath string) (todo []embyExtract
 	return todo, true, nil
 }
 
-// embyExtractTitleTargets 入库确认到的路径 → 自动探测的目标：一律归到所在的片目目录，整部探。
+// ingestProbeGroup 入库确认后的一个自动探测任务：一个片目这一轮新写出的集
+type ingestProbeGroup struct {
+	name  string   // 任务标题里的名字（片目目录名 / 单个文件名）
+	key   string   // 去重键（片目或文件的 Emby 路径）
+	paths []string // 要探的 Emby 路径（.strm）
+}
+
+// embyExtractTitleTargets 入库确认到的路径 → 自动探测的目标：所在片目这一轮**新写出的集**。
 //
 // 入库确认拿来回查的路径有两种，直接排进探测队列两种都不对：
-//   - 整理点名的落盘样本（每轮最多 embyVerifySample 个 .strm）：一部 20 集的剧只会探到 3 集，
-//     其余的第一次播放还得 Emby 现场探；
+//   - 整理点名的落盘样本（每轮最多 embyVerifySample 个 .strm）：一部 20 集的剧只会探到 3 集；
 //   - 没点名时的刷新目标（全量同步的同步根、迁移时的整个媒体库）：直接排进去就是递归探整片库，
 //     一次全量就是成千上万次 115 直链请求。
 //
-// 所以按当前分类规则（libCategoryLayout.titleOf，与本地文件页的片目同口径）归到片目目录；
-// 在片目之上的目录（分类 / 媒体库 / 同步根）一律不自动探；不属于任何片目的单个 .strm（手机上传直接丢进分类目录）只探它自己
-func embyExtractTitleTargets(cfg embyRefreshCfg, embyPaths []string) []string {
+// 此前的做法是归到片目目录整部探 —— 往一部上千集、大部分没探过的番剧里加一集，就排进去一千多集
+// （2026-10-04 现场）。现在按当前分类规则（libCategoryLayout.titleOf）归到片目后，只取这个片目下
+// writeStrm 新写出的 STRM（embyfresh.go）；没有登记的（重启丢了 / 超了上限）退回只探确认到的那个 .strm。
+// 在片目之上的目录（分类 / 媒体库 / 同步根）一律不自动探；不属于任何片目的单个 .strm 只探它自己
+func embyExtractTitleTargets(cfg embyRefreshCfg, embyPaths []string) []ingestProbeGroup {
 	return extractTitleTargets(embyPaths, localMediaRoot(), loadLibCategoryLayout(),
 		func(p string) string { return embyPathToLocal(cfg.PathMapping, p) },
-		func(local string) string { return embyPathOf(cfg, local) })
+		func(local string) string { return embyPathOf(cfg, local) },
+		takeFreshStrms)
 }
 
-// extractTitleTargets 纯函数部分（测试用假映射）
+// extractTitleTargets 纯函数部分（测试用假映射与假登记）
 func extractTitleTargets(embyPaths []string, localRoot string, layout libCategoryLayout,
-	toLocal, toEmby func(string) string) (out []string) {
+	toLocal, toEmby func(string) string, takeFresh func(localDir string) []string) (out []ingestProbeGroup) {
 	root := ""
 	if localRoot != "" {
 		root = strings.TrimRight(filepath.ToSlash(filepath.Clean(localRoot)), "/")
 	}
-	seen := map[string]bool{}
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
+	seen := map[string]bool{} // 已经出过任务的片目 / 文件
+	group := map[string]int{} // 片目 → out 里的下标（同一片目确认到的样本补进同一个任务）
+	add := func(name, key string, paths ...string) {
+		if i, ok := group[key]; ok {
+			for _, p := range paths {
+				if !seen[p] {
+					seen[p] = true
+					out[i].paths = append(out[i].paths, p)
+				}
+			}
+			return
 		}
+		var ps []string
+		for _, p := range paths {
+			if !seen[p] {
+				seen[p] = true
+				ps = append(ps, p)
+			}
+		}
+		if len(ps) == 0 {
+			return
+		}
+		group[key] = len(out)
+		out = append(out, ingestProbeGroup{name: name, key: key, paths: ps})
 	}
-	var skipped []string
+	var skipped, unknown []string
 	for _, p := range embyPaths {
 		local := strings.TrimRight(filepath.ToSlash(toLocal(p)), "/")
 		isFile := strings.EqualFold(path.Ext(local), ".strm")
@@ -1011,12 +1039,27 @@ func extractTitleTargets(embyPaths []string, localRoot string, layout libCategor
 				probe += "/_" // titleOf 要求标题目录之下还有一段
 			}
 			if key, _, _, _, ok := layout.titleOf(probe); ok {
-				add(toEmby(filepath.FromSlash(root + "/" + key)))
+				titleEmby := toEmby(filepath.FromSlash(root + "/" + key))
+				var paths []string
+				for _, f := range takeFresh(filepath.FromSlash(root + "/" + key)) {
+					paths = append(paths, toEmby(f))
+				}
+				sort.Strings(paths)
+				if isFile {
+					paths = append(paths, p) // 样本自己一定是新入库的（登记丢了也探它）
+				}
+				if len(paths) == 0 {
+					if _, ok := group[titleEmby]; !ok {
+						unknown = append(unknown, p)
+					}
+					continue
+				}
+				add(path.Base(key), titleEmby, paths...)
 				continue
 			}
 		}
 		if isFile {
-			add(p)
+			add(embyPathBase(p), p, p)
 			continue
 		}
 		skipped = append(skipped, p)
@@ -1024,6 +1067,10 @@ func extractTitleTargets(embyPaths []string, localRoot string, layout libCategor
 	if len(skipped) > 0 {
 		log.Printf("[Emby探测] ○ %d 个入库确认的目录在片目之上（分类 / 媒体库 / 同步根），不自动探测整片库：%s",
 			len(skipped), truncateStr(strings.Join(skipped, "、"), 200))
+	}
+	if len(unknown) > 0 {
+		log.Printf("[Emby探测] ○ %d 个入库确认的目录没有登记新写出的集（重启后登记会丢），不自动探测：%s",
+			len(unknown), truncateStr(strings.Join(unknown, "、"), 200))
 	}
 	return out
 }
