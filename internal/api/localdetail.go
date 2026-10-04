@@ -88,15 +88,17 @@ type localTitleDetail struct {
 	posterV int64
 }
 
-// localDirIndex 一个目录里的文件（小写名 → 信息），同一次详情里每个目录只读一遍
+// localDirIndex 一个目录里的文件（小写名 → 信息），同一次详情里每个目录只读一遍。
+// 目录读不出来时记 nil（读 nil map 照样安全），调用方据此区分「空目录」与「目录不在」
 type localDirIndex map[string]map[string]os.FileInfo
 
 func (x localDirIndex) files(dir string) map[string]os.FileInfo {
 	if m, ok := x[dir]; ok {
 		return m
 	}
-	m := map[string]os.FileInfo{}
+	var m map[string]os.FileInfo
 	if ents, err := os.ReadDir(dir); err == nil {
+		m = make(map[string]os.FileInfo, len(ents))
 		for _, d := range ents {
 			if d.IsDir() {
 				continue
@@ -137,10 +139,10 @@ func (x localDirIndex) findImage(dir, label, kind string, names ...string) local
 
 // inspectLocalTitleDetail 读片目目录，列出每个刮削产物在不在。rows 是台账里这个片目的视频行
 func inspectLocalTitleDetail(root string, e *ledgerTitleEntry, rows []model.SyncedFile) localTitleDetail {
-	it := inspectLocalTitle(root, e)
+	idx := localDirIndex{}
+	it := inspectLocalTitleIn(root, e, idx) // 标题目录与下面共用一份目录索引，只读一遍
 	titleAbs := filepath.Join(root, filepath.FromSlash(e.Key))
 	d := localTitleDetail{localTitle: it.localTitle, Dir: titleAbs, Files: []localFile{}, Entries: []localEntry{}, posterV: it.posterV}
-	idx := localDirIndex{}
 	tv := e.MediaType == "tv"
 
 	// ---- 片目级 ----

@@ -580,13 +580,35 @@ func scrapeEpisodeNo(name string) (season, episode int) {
 	return
 }
 
+// 季集号缓存（文件名 → 季 / 集 / 结束集）。parseFileName 一次几十微秒（一串正则），
+// 本地文件页每重建一次快照，每一集要解析两遍（详情行 + scrapeSeasonDirs），上万集的库在 NAS 上就是秒级。
+// parseFileName 是纯函数，结果只跟名字有关，可以放心缓存；满了整张清掉重来
+var (
+	episodeSpanMu    sync.Mutex
+	episodeSpanCache = map[string][3]int{}
+)
+
+const episodeSpanMax = 200000
+
 // scrapeEpisodeSpan 同 scrapeEpisodeNo，另给出双集文件（S04E01-E02）的结束集号，单集为 0
 func scrapeEpisodeSpan(name string) (season, episode, end int) {
+	episodeSpanMu.Lock()
+	v, ok := episodeSpanCache[name]
+	episodeSpanMu.Unlock()
+	if ok {
+		return v[0], v[1], v[2]
+	}
 	fp := parseFileName(name)
 	season = fp.Season
 	if season == 0 {
 		season = 1
 	}
+	episodeSpanMu.Lock()
+	if len(episodeSpanCache) >= episodeSpanMax {
+		episodeSpanCache = map[string][3]int{}
+	}
+	episodeSpanCache[name] = [3]int{season, fp.Episode, fp.EpisodeEnd}
+	episodeSpanMu.Unlock()
 	return season, fp.Episode, fp.EpisodeEnd
 }
 

@@ -61,12 +61,17 @@ type localTitle struct {
 	Poster string `json:"poster,omitempty"`
 }
 
-// 卡片列表缓存：一次列表要把每个片目的标题目录读一遍，上千部时每翻一页都重读太浪费。
-// 刮削任务结束时 forgetLocalTitles 清掉，别的写入（整理落盘、Emby 刮削）最多晚 30 秒可见
+// 卡片列表缓存：一次列表要把每个片目的目录（标题 / 季）全读一遍，上千部时每翻一页都重读太浪费。
+// 刮削任务结束时 forgetLocalTitles 清掉（下一次请求当场重建，刚刮完的状态要立刻看得到）；
+// 别的写入（整理落盘、Emby 刮削）靠过期：过期后先把旧快照给出去、后台重建，最多晚一次请求可见。
+// 此前过期就在请求里同步重建，大库在 NAS 上一次要一两秒，每隔 30 秒打开页面都要干等
 var (
 	localTitlesMu    sync.Mutex
 	localTitlesCache []localTitle
 	localTitlesAt    time.Time
+	// localTitlesGen 每次 forget 加一：后台重建开始前记下，写回时对不上说明中途被清过，结果作废
+	localTitlesGen      int
+	localTitlesBuilding bool
 )
 
 const localTitlesTTL = 30 * time.Second
@@ -74,15 +79,37 @@ const localTitlesTTL = 30 * time.Second
 func forgetLocalTitles() {
 	localTitlesMu.Lock()
 	localTitlesCache = nil
+	localTitlesGen++
 	localTitlesMu.Unlock()
 }
 
 func (h *Handler) localTitlesSnapshot(refresh bool) []localTitle {
 	localTitlesMu.Lock()
 	defer localTitlesMu.Unlock()
-	if !refresh && localTitlesCache != nil && time.Since(localTitlesAt) < localTitlesTTL {
+	if !refresh && localTitlesCache != nil {
+		if time.Since(localTitlesAt) >= localTitlesTTL && !localTitlesBuilding {
+			localTitlesBuilding = true
+			gen := localTitlesGen
+			go func() {
+				out := h.buildLocalTitles(false)
+				localTitlesMu.Lock()
+				defer localTitlesMu.Unlock()
+				localTitlesBuilding = false
+				if gen == localTitlesGen {
+					localTitlesCache, localTitlesAt = out, time.Now()
+				}
+			}()
+		}
 		return localTitlesCache
 	}
+	out := h.buildLocalTitles(refresh)
+	localTitlesGen++ // 正在跑的后台重建比这份旧，别让它写回来盖掉
+	localTitlesCache, localTitlesAt = out, time.Now()
+	return out
+}
+
+// buildLocalTitles 重建卡片快照：读台账、读每个片目的目录。refresh = 台账也不用缓存
+func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 	root := localMediaRoot()
 	ledger := scanLedgerTitlesCached()
 	if refresh {
@@ -101,7 +128,6 @@ func (h *Handler) localTitlesSnapshot(refresh bool) []localTitle {
 		}
 		out = append(out, t)
 	}
-	localTitlesCache, localTitlesAt = out, time.Now()
 	return out
 }
 
@@ -139,6 +165,11 @@ func perVideoImage(names []string, kind string) string {
 
 // inspectLocalTitle 读一次标题目录，看片目级 NFO 与海报在不在。Status 由 inspectLocalTitleDetail 的 grade 定
 func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
+	return inspectLocalTitleIn(root, e, localDirIndex{})
+}
+
+// inspectLocalTitleIn 同 inspectLocalTitle，标题目录从 idx 读（详情接着要用同一个目录，不再读第二遍）
+func inspectLocalTitleIn(root string, e *ledgerTitleEntry, idx localDirIndex) inspectedTitle {
 	t := inspectedTitle{localTitle: localTitle{
 		Key: e.Key, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID, MediaType: e.MediaType,
 		Category: e.Category, Videos: e.Videos, LastAt: e.LastAt,
@@ -146,16 +177,9 @@ func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 	if t.Title == "" {
 		t.Title = filepath.Base(e.Key)
 	}
-	var names map[string]os.DirEntry
+	var names map[string]os.FileInfo
 	if root != "" {
-		if ents, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(e.Key))); err == nil {
-			names = make(map[string]os.DirEntry, len(ents))
-			for _, d := range ents {
-				if !d.IsDir() {
-					names[strings.ToLower(d.Name())] = d
-				}
-			}
-		}
+		names = idx.files(filepath.Join(root, filepath.FromSlash(e.Key)))
 	}
 	if names == nil {
 		t.Missing = true
@@ -182,12 +206,10 @@ func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 		}
 	}
 	for _, n := range candidates {
-		if d, ok := names[n]; ok {
-			if info, err := d.Info(); err == nil && info.Size() > 0 {
-				t.HasPoster = true
-				t.posterV = info.ModTime().Unix()
-				break
-			}
+		if info, ok := names[n]; ok && info.Size() > 0 {
+			t.HasPoster = true
+			t.posterV = info.ModTime().Unix()
+			break
 		}
 	}
 	return t
