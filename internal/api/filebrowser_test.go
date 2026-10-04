@@ -2,6 +2,7 @@ package api
 
 import (
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -200,5 +201,17 @@ func TestBrowseChainHint(t *testing.T) {
 	}
 	if c := browseChainHint(`oops`, "2"); c != nil {
 		t.Fatalf("坏 JSON 要作废: %v", c)
+	}
+}
+
+func TestNaturalLess(t *testing.T) {
+	names := []string{"X.S03E100.mp4", "X.S03E9.mp4", "X.S03E99.mp4", "X.S03E10.mp4", "x.S03E11.mp4", "X.S03E156.mp4", "Season 10", "Season 2"}
+	sort.SliceStable(names, func(i, j int) bool { return naturalLess(names[i], names[j]) })
+	want := []string{"Season 2", "Season 10", "X.S03E9.mp4", "X.S03E10.mp4", "x.S03E11.mp4", "X.S03E99.mp4", "X.S03E100.mp4", "X.S03E156.mp4"}
+	if strings.Join(names, "|") != strings.Join(want, "|") {
+		t.Fatalf("排序不对:\n%v\n期望\n%v", names, want)
+	}
+	if naturalLess("E01", "E01") || !naturalLess("E1", "E01") {
+		t.Fatal("相同数值的前导零次序不对")
 	}
 }

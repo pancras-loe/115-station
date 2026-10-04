@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"115-station/internal/model"
 
@@ -344,9 +346,46 @@ func listFileEntries(ops fileEntryLister, cid string, limit int) ([]fileEntry, b
 		if items[i].IsDir != items[j].IsDir {
 			return items[i].IsDir
 		}
-		return items[i].Name < items[j].Name
+		return naturalLess(items[i].Name, items[j].Name)
 	})
 	return items, truncated, nil
+}
+
+// naturalLess 自然排序：数字段按数值比。按字符串比的话 S03E100～E156 排在 E10 与 E11 之间，
+// 一季一百多集时滚到底只看到 E99，像是只列了 99 个（2026-10-04 现场，蜡笔小新 Season 3）
+func naturalLess(a, b string) bool {
+	for a != "" && b != "" {
+		da, db := leadingDigits(a), leadingDigits(b)
+		if da != "" && db != "" {
+			na, nb := strings.TrimLeft(da, "0"), strings.TrimLeft(db, "0")
+			if len(na) != len(nb) {
+				return len(na) < len(nb)
+			}
+			if na != nb {
+				return na < nb
+			}
+			if len(da) != len(db) { // 数值相同：前导零少的在前（E1 在 E01 前），保证次序稳定
+				return len(da) < len(db)
+			}
+			a, b = a[len(da):], b[len(db):]
+			continue
+		}
+		ra, sa := utf8.DecodeRuneInString(a)
+		rb, sb := utf8.DecodeRuneInString(b)
+		if la, lb := unicode.ToLower(ra), unicode.ToLower(rb); la != lb {
+			return la < lb
+		}
+		a, b = a[sa:], b[sb:]
+	}
+	return len(a) < len(b)
+}
+
+func leadingDigits(s string) string {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[:i]
 }
 
 // toFileEntry webapi 形态的条目 → fileEntry。目录自身 id 在 cid 字段（webapi）
