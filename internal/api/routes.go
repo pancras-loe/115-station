@@ -83,6 +83,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	Apply115Interval(db)
 	// 界面图片缓存的定期清理（imgcache.go）
 	startImgCacheJanitor(cfg.DataDir)
+	startLoginWallRefresher(cfg.DataDir)
 
 	// 存量 STRM 改名迁移（一次性）。必须同步跑、排在下面任何后台任务启动之前：
 	// 迁移中台账与本地文件短暂不一致，增量 / 整理 / 深删插进来会读到半截状态（strmmigrate.go）
@@ -128,8 +129,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	{
 		auth.GET("/status", h.AuthStatus) // 检查是否已初始化（前端提示文案用）
 		auth.POST("/login", h.Login)      // 登录
-		// 登录页背景剧照（TMDB 本周热门，公开数据；见 loginwall.go）
+		// 登录页背景剧照（TMDB 本周热门，公开数据；后台预取转码，只读本地，见 loginwall.go）
 		auth.GET("/wallpapers", h.LoginWallpapers)
+		auth.GET("/wallpaper", h.LoginWallpaperImage)
 	}
 
 	// Emby Webhook 接收端（无需登录鉴权：Emby 服务器推送事件，token 可选）

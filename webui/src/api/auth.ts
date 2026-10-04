@@ -39,12 +39,13 @@ export const updateAccount = (payload: { username?: string; password?: string; o
   http.post('/auth/update-account', payload)
 
 export interface LoginWallpaper {
-  /** TMDB backdrop_path，经公开的 /tmdb/img 代理取图 */
+  /** TMDB backdrop_path；大图走 /auth/wallpaper?path=&w=（本站转码好的，只认列表里的路径） */
   path: string
   title: string
   year?: string
+  /** 32px 小图的 data URI，大图到之前模糊着铺底 */
+  thumb: string
 }
 
-/** 登录页背景剧照（TMDB 本周热门）。拿不到时返回空列表，登录页退回纯色背景 */
-export const wallpapers = () =>
-  http.get<{ items: LoginWallpaper[] }>('/auth/wallpapers', { timeoutMs: 20_000 })
+/** 登录页背景剧照（TMDB 本周热门，后端预取到本地的）。后端不现场访问 TMDB，一张都没有时返回空列表 */
+export const wallpapers = () => http.get<{ items: LoginWallpaper[] }>('/auth/wallpapers', { timeoutMs: 10_000 })

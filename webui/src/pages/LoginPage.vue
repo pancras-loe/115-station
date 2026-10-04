@@ -10,7 +10,6 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import BrandMark from '@/components/BrandMark.vue'
 import { authApi } from '@/api'
 import type { LoginWallpaper } from '@/api/auth'
-import { tmdbImageUrl } from '@/api/resources'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -31,33 +30,59 @@ const otpInput = ref<InstanceType<typeof HInput>>()
 const notInitialized = computed(() => auth.initialized === false)
 
 // ---- 背景剧照轮播（参考 MoviePilot 登录页）----
-// 两层叠着交替淡入淡出：下一张先在内存里加载好再切，避免切过去是一块正在往下刷的半张图。
-// 拿不到剧照（没配 TMDB / 连不上）就保持原来的光晕背景
+// 剧照由后端预取并转码好放在本站（TMDB 不通也有图，见 loginwall.go），这里只管怎么显示：
+// - 第一张：先铺内嵌的 32px 小图（列表里自带，不发请求）模糊着顶上，大图到了再淡入 ——
+//   服务器上行带宽小的时候也不会是一片空白；
+// - 之后的轮换：下一张大图在内存里加载好才切，切过去不会是一块正在往下刷的半张图；拉不到就跳过这一轮。
+// 两层叠着交替淡入淡出。一张都没有（没配过 TMDB）就保持原来的光晕背景
 const WALL_INTERVAL = 12_000
+interface WallLayer {
+  thumb: string
+  full: string
+}
 const walls = ref<LoginWallpaper[]>([])
-const layers = ref<[string, string]>(['', ''])
+const layers = ref<[WallLayer, WallLayer]>([
+  { thumb: '', full: '' },
+  { thumb: '', full: '' },
+])
 const front = ref(0)
 const wallIdx = ref(-1)
 const current = computed(() => (wallIdx.value >= 0 ? walls.value[wallIdx.value] : null))
 let timer: number | undefined
 let alive = true
 
-const wallUrl = (w: LoginWallpaper) => tmdbImageUrl(w.path, 'w1280')
+// 要哪一档：剧照按 cover 铺满，16:9 的图在竖屏上要按高度撑，实际显示宽度比屏幕宽得多。
+// 不乘设备像素比：背景压着暗角，960 / 1280 两档够用，省带宽优先
+function wallUrl(w: LoginWallpaper) {
+  const need = Math.max(window.innerWidth, (window.innerHeight * 16) / 9)
+  return `/api/auth/wallpaper?path=${encodeURIComponent(w.path)}&w=${Math.round(need)}`
+}
 
-function showWall(i: number) {
+function loadImage(url: string) {
+  return new Promise<boolean>((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve(true)
+    img.onerror = () => resolve(false)
+    img.src = url
+  })
+}
+
+async function showFirst(i: number) {
   const w = walls.value[i]
-  if (!w) return
+  layers.value[front.value] = { thumb: w.thumb, full: '' }
+  wallIdx.value = i
   const url = wallUrl(w)
-  const img = new Image()
-  img.onload = () => {
-    if (!alive) return
-    const next = wallIdx.value < 0 ? front.value : 1 - front.value
-    layers.value[next] = url
-    front.value = next
-    wallIdx.value = i
-  }
-  // 拉不到就停在当前这张（或光晕背景），下一轮接着试下一张
-  img.src = url
+  if ((await loadImage(url)) && alive && wallIdx.value === i) layers.value[front.value].full = url
+}
+
+async function showNext(i: number) {
+  const w = walls.value[i]
+  const url = wallUrl(w)
+  if (!(await loadImage(url)) || !alive) return
+  const next = 1 - front.value
+  layers.value[next] = { thumb: w.thumb, full: url }
+  front.value = next
+  wallIdx.value = i
 }
 
 onMounted(async () => {
@@ -66,11 +91,11 @@ onMounted(async () => {
     if (!alive || !items?.length) return
     walls.value = items
     let i = Math.floor(Math.random() * items.length)
-    showWall(i)
+    void showFirst(i)
     if (items.length > 1) {
       timer = window.setInterval(() => {
         i = (i + 1) % items.length
-        showWall(i)
+        void showNext(i)
       }, WALL_INTERVAL)
     }
   } catch {
@@ -130,13 +155,14 @@ function onOtpInput(v: string) {
   <div class="auth" :class="{ 'has-wall': current }">
     <div class="auth-bg" aria-hidden="true" />
     <div v-if="walls.length" class="wall" :class="{ ready: current }" aria-hidden="true">
-      <div
-        v-for="(url, i) in layers"
-        :key="i"
-        class="wall-layer"
-        :class="{ on: current && front === i }"
-        :style="url ? { backgroundImage: `url(${url})` } : undefined"
-      />
+      <div v-for="(layer, i) in layers" :key="i" class="wall-layer" :class="{ on: current && front === i }">
+        <div class="wall-img wall-thumb" :style="layer.thumb ? { backgroundImage: `url(${layer.thumb})` } : undefined" />
+        <div
+          class="wall-img wall-full"
+          :class="{ loaded: layer.full }"
+          :style="layer.full ? { backgroundImage: `url(${layer.full})` } : undefined"
+        />
+      </div>
       <div class="wall-shade" />
     </div>
     <div class="auth-toggle" :class="{ 'on-dark': current }"><ThemeToggle /></div>
@@ -390,7 +416,6 @@ function onOtpInput(v: string) {
 .wall-layer {
   position: absolute;
   inset: 0;
-  background: center / cover no-repeat;
   opacity: 0;
   transform: scale(1.06);
   transition:
@@ -400,6 +425,23 @@ function onOtpInput(v: string) {
 .wall-layer.on {
   opacity: 1;
   transform: scale(1);
+}
+.wall-img {
+  position: absolute;
+  inset: 0;
+  background: center / cover no-repeat;
+}
+/* 32px 小图放大必然是马赛克，糊开当底色；略放大一圈，免得模糊的边缘透出底下的页面 */
+.wall-thumb {
+  filter: blur(24px);
+  transform: scale(1.1);
+}
+.wall-full {
+  opacity: 0;
+  transition: opacity 0.8s ease;
+}
+.wall-full.loaded {
+  opacity: 1;
 }
 /* 剧照上压一层暗角：中间的卡片和左下角的片名都要看得清，亮色主题也一样暗 */
 .wall-shade {
