@@ -413,7 +413,12 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 登记要在刷新之前，否则入库确认可能先到、按自动规则排掉了
 	if sink.scrapeOn && embyExtractEnabled() {
 		_, landed := sink.refreshTarget()
-		registerRedoProbe(sink.titleLocalDir(rootRel), media.Title, len(landed) > 0)
+		if len(opt.episodes) > 0 {
+			// 指定季集只探这几集：登记整个片目的话，上千集的番剧会把没探过的集全排进去
+			registerRedoProbeFiles(redoStrmPaths(sink.localRoot, newFiles), media.Title, len(landed) > 0)
+		} else {
+			registerRedoProbe(sink.titleLocalDir(rootRel), media.Title, len(landed) > 0)
+		}
 	}
 	sink.flushScrape()
 	sink.flushRefresh()
@@ -455,6 +460,21 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 		rememberRecognition(rec.RecogKey, rec.Source, media)
 	}
 	return nil
+}
+
+// redoStrmPaths 这次落盘的视频 STRM 的本地绝对路径（按台账取实际写成的名字：同基名冲突时可能是旧写法）
+func redoStrmPaths(localRoot string, files []orgRecordFile) []string {
+	var out []string
+	for _, f := range files {
+		if f.Kind != "video" || f.Fid == "" {
+			continue
+		}
+		var sf model.SyncedFile
+		if model.DB.Where("file_id = ?", f.Fid).First(&sf).Error == nil && sf.RelPath != "" {
+			out = append(out, filepath.Join(localRoot, filepath.FromSlash(sf.RelPath)))
+		}
+	}
+	return out
 }
 
 // redoSteps 重新整理报给队列面板的总步数（拉条目 / 改名搬移 / 清旧产物 / 落盘 / 清空目录 / 刮削刷新）

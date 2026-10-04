@@ -392,15 +392,17 @@ func embyLateIngestHit(itemPath string) {
 }
 
 // embyIngestConfirmed 入库确认了的路径交给提前探测（影视刮削「轨道探测」开着时），见 embyextract.go。
-// 先归到片目目录（整部探，片目之上的目录不探，见 embyExtractTitleTargets）；
-// 属于刚重新整理过的片目的，按手动规则另建探测任务（embyprobejob.go 的 splitRedoProbes）
+// 属于刚重新整理过的片目 / 刚指定季集的文件的，先按手动规则另建探测任务（embyprobejob.go 的 splitRedoProbes）；
+// 其余归到片目目录（整部探，片目之上的目录不探，见 embyExtractTitleTargets）。
+// 必须先摘再归：归完都是片目目录，指定季集登记的那几个文件就对不上了，只能整部探
 func embyIngestConfirmed(cfg embyRefreshCfg, paths []string) {
 	if len(paths) == 0 {
 		return
 	}
-	targets := embyExtractTitleTargets(cfg, paths)
-	if auto := splitRedoProbes(targets); len(auto) > 0 && embyExtractEnabled() {
-		enqueueIngestProbes(auto)
+	if auto := splitRedoProbes(paths); len(auto) > 0 && embyExtractEnabled() {
+		if targets := embyExtractTitleTargets(cfg, auto); len(targets) > 0 {
+			enqueueIngestProbes(targets)
+		}
 	}
 }
 

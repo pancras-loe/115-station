@@ -5,6 +5,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,5 +281,35 @@ func TestProbeFailListSkipsFirstInFlight(t *testing.T) {
 	}
 	if _, ok := got["fresh"]; !ok {
 		t.Fatal("不在探了的「请求中」要列出来（中断）")
+	}
+}
+
+// 指定季集登记的是那几个 .strm：入库确认到它们时只为它们建任务，不整部探；
+// 同一批文件的入库确认再来（迟到的 Emby 入库事件）也不落进自动入口
+func TestSplitRedoProbesFiles(t *testing.T) {
+	resetExtractState(t)
+	seedEmbyCfg(t, "http://emby")
+	files := []string{"/media/剧集/某剧/Season 02/某剧.S02E720.strm", "/media/剧集/某剧/Season 02/某剧.S02E480.strm"}
+	registerRedoProbeFiles(files, "某剧", true)
+	auto := splitRedoProbes([]string{files[0], "/media/剧集/某剧/Season 03/某剧.S03E01.strm"})
+	if len(auto) != 1 || auto[0] != "/media/剧集/某剧/Season 03/某剧.S03E01.strm" {
+		t.Fatalf("同片目的其他集不该被摘走：%v", auto)
+	}
+	var jobs []model.TaskJob
+	model.DB.Where("kind = ?", jobKindProbe).Find(&jobs)
+	if len(jobs) != 1 {
+		t.Fatalf("应建一个探测任务：%+v", jobs)
+	}
+	if p := decodeJobParams(&jobs[0]).Probe.Paths; len(p) != 2 || strings.Contains(strings.Join(p, ","), "Season 03") {
+		t.Fatalf("只探登记的两集：%v", p)
+	}
+	// 迟到的入库确认：照样摘掉（不整部探），也不再建第二个任务
+	if auto := splitRedoProbes([]string{files[1]}); len(auto) != 0 {
+		t.Fatalf("迟到的确认不该落进自动入口：%v", auto)
+	}
+	var n int64
+	model.DB.Model(&model.TaskJob{}).Where("kind = ?", jobKindProbe).Count(&n)
+	if n != 1 {
+		t.Fatalf("不该重复建任务：%d", n)
 	}
 }

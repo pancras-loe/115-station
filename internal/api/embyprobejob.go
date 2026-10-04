@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -264,11 +265,17 @@ func embyExtractQueuedItem(id string) string {
 type manualProbeIntent struct {
 	title string
 	until time.Time
+	// files 非空 = 只探这几个 .strm（网盘文件页「指定季集」）：入库确认碰到它们时只为它们建任务，
+	// 不整部探。这种登记命中后不删、留到过期（fired 防重复建任务）：同一批文件的入库确认还会再来
+	// （迟到的 Emby 入库事件），删了就落进自动入口，被归到片目整部探（2026-10-04 现场：改 3 集，
+	// 「重新整理后」与「入库后」两个任务各排了蜡笔小新整部 1568 集）
+	files []string
+	fired bool
 }
 
 var manualProbeIntents = struct {
 	sync.Mutex
-	m map[string]manualProbeIntent // Emby 片目目录 → 登记
+	m map[string]manualProbeIntent // Emby 片目目录（或「files:」+ 文件清单）→ 登记
 }{m: map[string]manualProbeIntent{}}
 
 // manualProbeIntentTTL 登记多久有效：入库确认要排在刮削之后，刮削队列里排着别的任务时可能要等一阵
@@ -291,15 +298,41 @@ func registerRedoProbe(localTitleDir, title string, landed bool) {
 	manualProbeIntents.Unlock()
 }
 
+// registerRedoProbeFiles 指定季集完登记这几个 .strm（本地路径）：入库确认到它们时只探它们。
+// landed=false（没写出新 STRM，不会有入库确认）直接建任务
+func registerRedoProbeFiles(localFiles []string, title string, landed bool) {
+	cfg, ok := loadEmbyRefreshCfg()
+	if !ok || len(localFiles) == 0 {
+		return
+	}
+	files := make([]string, 0, len(localFiles))
+	for _, f := range localFiles {
+		files = append(files, embyPathOf(cfg, f))
+	}
+	sort.Strings(files)
+	if !landed {
+		enqueueRedoProbePaths("probe-redo:files:"+strings.Join(files, "|"), title, files)
+		return
+	}
+	manualProbeIntents.Lock()
+	manualProbeIntents.m["files:"+strings.Join(files, "|")] = manualProbeIntent{
+		title: title, until: time.Now().Add(manualProbeIntentTTL), files: files}
+	manualProbeIntents.Unlock()
+}
+
 func enqueueRedoProbe(embyDir, title string) {
+	enqueueRedoProbePaths("probe-redo:"+embyDir, title, []string{embyDir})
+}
+
+func enqueueRedoProbePaths(dedupe, title string, paths []string) {
 	if model.DB == nil {
 		return
 	}
 	job, err := enqueueProbeJob(model.DB, probeJobSpec{
 		Title:     fmt.Sprintf("Emby 提前探测《%s》（重新整理后）", truncateStr(title, 60)),
 		Source:    "redo",
-		DedupeKey: "probe-redo:" + embyDir,
-		Paths:     []string{embyDir},
+		DedupeKey: truncateStr(dedupe, 240),
+		Paths:     paths,
 	})
 	if err != nil {
 		log.Printf("[Emby探测] ✗ 重新整理后的探测任务入队失败: %v", err)
@@ -319,11 +352,29 @@ func splitRedoProbes(embyPaths []string) (auto []string) {
 			delete(manualProbeIntents.m, dir)
 		}
 	}
+	var fileHits []manualProbeIntent
+	firedNow := map[string]bool{}
 	for _, p := range embyPaths {
 		matched := false
-		for dir, in := range manualProbeIntents.m {
-			if embyPathRelated(norm(dir), norm(p)) {
-				hit[dir], matched = in, true
+		for key, in := range manualProbeIntents.m {
+			if len(in.files) > 0 {
+				for _, f := range in.files {
+					if embyPathRelated(norm(f), norm(p)) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					if !in.fired && !firedNow[key] {
+						firedNow[key] = true
+						fileHits = append(fileHits, in)
+					}
+					break
+				}
+				continue
+			}
+			if embyPathRelated(norm(key), norm(p)) {
+				hit[key], matched = in, true
 				break
 			}
 		}
@@ -334,9 +385,17 @@ func splitRedoProbes(embyPaths []string) (auto []string) {
 	for dir := range hit {
 		delete(manualProbeIntents.m, dir)
 	}
+	for key := range firedNow {
+		in := manualProbeIntents.m[key]
+		in.fired = true
+		manualProbeIntents.m[key] = in
+	}
 	manualProbeIntents.Unlock()
 	for dir, in := range hit {
 		enqueueRedoProbe(dir, in.title)
+	}
+	for _, in := range fileHits {
+		enqueueRedoProbePaths("probe-redo:files:"+strings.Join(in.files, "|"), in.title, in.files)
 	}
 	return auto
 }
