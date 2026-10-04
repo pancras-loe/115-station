@@ -239,3 +239,12 @@ func TestPosterThumbShrinks(t *testing.T) {
 		t.Fatalf("缩略图尺寸 %v", b)
 	}
 }
+
+func TestLocalPosterWidth(t *testing.T) {
+	for q, want := range map[string]int{"": 400, "abc": 400, "0": 400, "-5": 400, "80": 120, "120": 120, "121": 180,
+		"216": 240, "300": 320, "400": 400, "2000": 400} {
+		if got := localPosterWidth(q); got != want {
+			t.Errorf("localPosterWidth(%q) = %d, want %d", q, got, want)
+		}
+	}
+}

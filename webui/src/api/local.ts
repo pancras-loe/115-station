@@ -114,8 +114,12 @@ export const embyStats = (refresh = false) =>
   // 后端只登记、在后台拉，立即返回
   http.get<LocalEmbyStats>('/local/titles/emby-stats', { params: { refresh: refresh ? 1 : undefined } })
 
-/** <img> 带不了登录态：后端按 key 签了名，这条路由公开 */
-export const posterUrl = (t: LocalTitle) => (t.poster ? `/api/local/poster?${t.poster}` : '')
+/**
+ * <img> 带不了登录态：后端按 key 签了名，这条路由公开。
+ * w = 需要的像素宽度（显示宽度 × 设备像素比），后端往上取档；不给就是最大档 400
+ */
+export const posterUrl = (t: { poster?: string }, w?: number) =>
+  t.poster ? `/api/local/poster?${t.poster}${w ? `&w=${Math.ceil(w)}` : ''}` : ''
 
 /** 本次刮削选项：只对这一次生效，不改已保存的刮削配置 */
 export interface ScrapeOptions {

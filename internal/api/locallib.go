@@ -396,6 +396,25 @@ const (
 	localFanartThumbW = 960
 )
 
+// localPosterWidths 海报缩略图可选的宽度档：前端按卡片实际显示宽度 × 设备像素比要（w=），
+// 往上取到最近一档。此前一律 400px：小卡片、列表视图（40px 宽）也拿 400px 的图，
+// 服务器上行带宽小的时候一屏几十张图要等一两秒。只开放几档，免得任意宽度把缓存撑爆
+var localPosterWidths = []int{120, 180, 240, 320, localPosterThumbW}
+
+// localPosterWidth 请求的宽度 → 档位；没带或不认识的给最大档（老前端 / 收藏的链接）
+func localPosterWidth(q string) int {
+	w, err := strconv.Atoi(q)
+	if err != nil || w <= 0 {
+		return localPosterThumbW
+	}
+	for _, b := range localPosterWidths {
+		if w <= b {
+			return b
+		}
+	}
+	return localPosterThumbW
+}
+
 // localFanartNames 标题目录里认作背景图的文件名（小写比较）
 var localFanartNames = []string{"fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png", "landscape.jpg"}
 
@@ -408,7 +427,7 @@ var (
 
 const posterThumbMax = 600
 
-// LocalPoster GET /local/poster?key=&v=&sig=[&img=fanart]（公开路由）
+// LocalPoster GET /local/poster?key=&v=&sig=[&w=][&img=fanart]（公开路由）
 func (h *Handler) LocalPoster(c *gin.Context) {
 	key := strings.Trim(c.Query("key"), "/")
 	sig := c.Query("sig")
@@ -426,7 +445,7 @@ func (h *Handler) LocalPoster(c *gin.Context) {
 		c.Status(http.StatusForbidden)
 		return
 	}
-	names, kind, width := localPosterNames, "poster", localPosterThumbW
+	names, kind, width := localPosterNames, "poster", localPosterWidth(c.Query("w"))
 	if c.Query("img") == "fanart" {
 		names, kind, width = localFanartNames, "fanart", localFanartThumbW
 	}

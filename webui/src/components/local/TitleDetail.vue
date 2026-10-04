@@ -103,7 +103,8 @@ onBeforeUnmount(offFinished)
 
 const d = computed(() => detail.value)
 const tv = computed(() => d.value?.media_type === 'tv')
-const posterSrc = computed(() => (d.value?.poster ? localApi.posterUrl(d.value) : ''))
+// 头部海报 108px 宽（手机 84px），按两倍要图就够，不必拿卡片墙最大档
+const posterSrc = computed(() => (d.value?.poster ? localApi.posterUrl(d.value, 108 * Math.max(2, window.devicePixelRatio || 1)) : ''))
 const fanartSrc = computed(() => (d.value ? localApi.fanartUrl(d.value) : ''))
 const posterBroken = ref(false)
 watch(posterSrc, () => (posterBroken.value = false))

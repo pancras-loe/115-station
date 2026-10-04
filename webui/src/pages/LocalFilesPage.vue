@@ -406,6 +406,33 @@ function measure() {
   const pad = el.parentElement ? parseFloat(getComputedStyle(el.parentElement).paddingBottom) : NaN
   if (Number.isFinite(pad)) pageBottom.value = Math.round(pad)
 }
+// ---- 海报按实际显示宽度要图 ----
+//
+// 后端按 w 往上取档（120 / 180 / 240 / 320 / 400）。此前一律 400px：列表视图的海报只有 40px 宽，
+// 小卡片 100px 出头，服务器上行带宽小时一屏几十张图要等一两秒，多传的全是看不见的像素。
+// 量第一张卡片的海报宽度 × 设备像素比；只往大调不往小调，窗口来回拖时不会把同一张图按两档各拉一遍
+const posterW = ref(0)
+let gridRo: ResizeObserver | undefined
+function measurePoster() {
+  const el = gridEl?.querySelector<HTMLElement>('.poster')
+  if (!el || !el.clientWidth) return
+  const w = Math.ceil(el.clientWidth * (window.devicePixelRatio || 1))
+  if (w > posterW.value) posterW.value = w
+}
+let gridEl: HTMLElement | null = null
+function setGridEl(el: unknown) {
+  const next = (el as HTMLElement | null) ?? null
+  if (next === gridEl) return
+  gridRo?.disconnect()
+  gridEl = next
+  if (!gridEl || !('ResizeObserver' in window)) return
+  gridRo = new ResizeObserver(measurePoster)
+  gridRo.observe(gridEl)
+}
+// 切显示方案时卡片宽度跟着变，ResizeObserver 看的是整个网格，宽度没变就不会触发
+watch(view, () => nextTick(measurePoster))
+const posterSrc = (t: LocalTitle) => (posterW.value ? localApi.posterUrl(t, posterW.value) : '')
+
 let ro: ResizeObserver | undefined
 onMounted(async () => {
   void load()
@@ -428,6 +455,7 @@ onBeforeUnmount(() => {
   clearTimeout(kwTimer)
   window.removeEventListener('resize', measure)
   ro?.disconnect()
+  gridRo?.disconnect()
 })
 </script>
 
@@ -494,7 +522,7 @@ onBeforeUnmount(() => {
             v-else-if="!items.length"
             :text="keyword || type || status ? '没有符合条件的片目' : '台账里还没有片目：先跑一次全量同步或自动整理'"
           />
-          <div v-else class="grid" :class="[`v-${view}`, { dim: loading, selecting }]">
+          <div v-else :ref="setGridEl" class="grid" :class="[`v-${view}`, { dim: loading, selecting }]">
             <article
               v-for="t in items"
               :key="t.key"
@@ -513,7 +541,7 @@ onBeforeUnmount(() => {
                     <Tv v-if="t.media_type === 'tv'" :size="28" />
                     <Clapperboard v-else :size="28" />
                   </div>
-                  <img v-if="t.poster" :src="localApi.posterUrl(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
+                  <img v-if="t.poster && posterW" :src="posterSrc(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
                   <span v-if="t.status !== 'ok'" class="badge" :class="`tone-${STATUS_TONE[t.status]}`" :title="statusTitle(t)">
                     <span class="badge-dot" />{{ statusLabel(t) }}
                   </span>
