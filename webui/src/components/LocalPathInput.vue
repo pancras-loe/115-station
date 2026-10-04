@@ -29,6 +29,7 @@ const pickerShow = ref(false)
     <DirPickerModal
       v-model:show="pickerShow"
       :mode="mode || 'local'"
+      :initial="modelValue"
       @pick="emit('update:modelValue', $event.path)"
     />
   </div>
