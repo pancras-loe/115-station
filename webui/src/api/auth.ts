@@ -18,3 +18,14 @@ export const login = (username: string, password: string) =>
 
 export const updateAccount = (payload: { username?: string; password?: string; old_password?: string }) =>
   http.post('/auth/update-account', payload)
+
+export interface LoginWallpaper {
+  /** TMDB backdrop_path，经公开的 /tmdb/img 代理取图 */
+  path: string
+  title: string
+  year?: string
+}
+
+/** 登录页背景剧照（TMDB 本周热门）。拿不到时返回空列表，登录页退回纯色背景 */
+export const wallpapers = () =>
+  http.get<{ items: LoginWallpaper[] }>('/auth/wallpapers', { timeoutMs: 20_000 })

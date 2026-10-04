@@ -129,6 +129,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	{
 		auth.GET("/status", h.AuthStatus) // 检查是否已初始化（前端提示文案用）
 		auth.POST("/login", h.Login)      // 登录
+		// 登录页背景剧照（TMDB 本周热门，公开数据；见 loginwall.go）
+		auth.GET("/wallpapers", h.LoginWallpapers)
 	}
 
 	// Emby Webhook 接收端（无需登录鉴权：Emby 服务器推送事件，token 可选）
