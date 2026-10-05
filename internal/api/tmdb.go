@@ -44,6 +44,7 @@ type TmdbMedia struct {
 	BackdropPath string           `json:"backdrop_path"`
 	OrigLanguage string           `json:"original_language"`
 	OrigCountry []string          `json:"origin_country"`
+	ProdCountry []string          `json:"production_countries"` // 制片国家代码，只供二级分类用；搜索接口没有，来自详情
 	VoteAverage float64           `json:"vote_average"`
 	// TV 专属
 	SeasonNum   int                `json:"season_number,omitempty"`
@@ -235,6 +236,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 		BackdropPath  string   `json:"backdrop_path"`
 		OriginalLanguage string `json:"original_language"`
 		OriginCountry []string `json:"origin_country"`
+		ProductionCountries []tmdbISOCountry `json:"production_countries"`
 		VoteAverage   float64  `json:"vote_average"`
 	}
 	if err := json.Unmarshal(body, &d); err != nil {
@@ -275,6 +277,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 		Year: year, MediaType: mediaType, GenreIDs: genreIDs,
 		Overview: d.Overview, PosterPath: d.PosterPath, BackdropPath: d.BackdropPath,
 		OrigLanguage: d.OriginalLanguage, OrigCountry: d.OriginCountry,
+		ProdCountry: isoCountries(d.ProductionCountries),
 		VoteAverage: d.VoteAverage,
 	}, nil
 }

@@ -43,7 +43,9 @@ const media = ref<'movie' | 'tv'>('movie')
 const catName = ref('')
 const genres = ref<string[]>([])
 const countries = ref<string[]>([])
+const prodCountries = ref<string[]>([])
 const langs = ref<string[]>([])
+const years = ref('')
 const regex = ref('')
 
 const genreOptions = computed<MultiOption<string>[]>(() =>
@@ -79,6 +81,7 @@ const CATEGORY_PRESETS: CategoryPreset[] = [
   { label: '欧美剧', media: 'tv', name: '电视剧/欧美剧', countries: ['US', 'GB', 'FR', 'DE', 'ES', 'IT', 'NL', 'PT', 'RU'] },
   { label: '日韩剧', media: 'tv', name: '电视剧/日韩剧', countries: ['JP', 'KR', 'KP', 'TH', 'IN', 'SG'] },
   { label: '纪录剧集', media: 'tv', name: '电视剧/纪录片', genres: ['99'] },
+  { label: '儿童', media: 'tv', name: '电视剧/儿童', genres: ['10762'] },
   { label: '全放剧集/（兜底）', media: 'tv', name: '剧集' },
   { label: '动漫番剧（平铺）', media: 'tv', name: '动漫番剧', genres: ['16'] },
   { label: '综艺（平铺）', media: 'tv', name: '综艺', genres: ['10764', '10767'] },
@@ -90,7 +93,9 @@ function applyCategoryPreset(p: CategoryPreset) {
   catName.value = p.name
   genres.value = p.genres ?? []
   countries.value = p.countries ?? []
+  prodCountries.value = []
   langs.value = p.langs ?? []
+  years.value = ''
   regex.value = ''
 }
 
@@ -99,6 +104,8 @@ const catConds = computed<DraftCond[]>(() =>
     { key: 'genre_ids', value: genres.value.join(',') },
     { key: 'original_language', value: langs.value.join(',') },
     { key: 'origin_country', value: countries.value.join(',') },
+    { key: 'production_countries', value: prodCountries.value.join(',') },
+    { key: 'release_year', value: years.value.replace(/\s+/g, '') },
     { key: 'custom_regex', value: regex.value },
   ].filter(c => c.value.trim()),
 )
@@ -218,7 +225,9 @@ function resetForm() {
   catName.value = ''
   genres.value = []
   countries.value = []
+  prodCountries.value = []
   langs.value = []
+  years.value = ''
   regex.value = ''
   washName.value = ''
   washMode.value = 'replace'
@@ -263,8 +272,16 @@ watch(show, v => {
           <HMultiSelect v-model="countries" :options="countryOptions" placeholder="不限，可输入搜索" />
         </FieldRow>
 
+        <FieldRow label="制片国家" tip="production_countries；老电影常缺 origin_country，按国家分电影时用它更稳" wide>
+          <HMultiSelect v-model="prodCountries" :options="countryOptions" placeholder="不限，可输入搜索" />
+        </FieldRow>
+
         <FieldRow label="语言" tip="original_language，多选之间是「或」" wide>
           <HMultiSelect v-model="langs" :options="langOptions" placeholder="不限，可输入搜索" />
+        </FieldRow>
+
+        <FieldRow label="发行年份" tip="release_year，剧集取首播年份；可写范围 2000-2009，多个用逗号分隔" wide>
+          <HInput v-model="years" placeholder="选填，如 1980-1999" />
         </FieldRow>
 
         <FieldRow label="片名正则" tip="命中片名或原名即归此类，不要求其他条件同时成立" wide>

@@ -100,12 +100,33 @@ func (tc *TmdbClient) searchCands(kind string, params map[string]string) ([]tmdb
 	return cands, nil
 }
 
-func (c tmdbCand) media(kind string, origCountry []string) *TmdbMedia {
+// media 拼出选中的条目。d 是 choose 校验时已经拉过的详情（可能为 nil），
+// 产地与制片国家都从它取，不为二级分类另发请求
+func (c tmdbCand) media(kind string, d *tmdbDetail) *TmdbMedia {
+	var origCountry, prodCountry []string
+	if d != nil {
+		origCountry, prodCountry = d.OriginCountry, d.ProductionCountries
+	}
 	return &TmdbMedia{
 		TmdbID: c.ID, Title: c.Title, OriginalTitle: c.Original, Year: c.year(), MediaType: kind,
 		GenreIDs: c.GenreIDs, Overview: c.Overview, PosterPath: c.Poster, BackdropPath: c.Backdrop,
-		OrigLanguage: c.OrigLang, OrigCountry: origCountry, VoteAverage: c.Vote,
+		OrigLanguage: c.OrigLang, OrigCountry: origCountry, ProdCountry: prodCountry, VoteAverage: c.Vote,
 	}
+}
+
+// tmdbISOCountry 详情里 production_countries 的元素（只要国家代码）
+type tmdbISOCountry struct {
+	ISO string `json:"iso_3166_1"`
+}
+
+func isoCountries(cs []tmdbISOCountry) []string {
+	out := make([]string, 0, len(cs))
+	for _, c := range cs {
+		if c.ISO != "" {
+			out = append(out, c.ISO)
+		}
+	}
+	return out
 }
 
 // ---------- 详情（别名 / 译名 / 各季首播）----------
@@ -113,11 +134,12 @@ func (c tmdbCand) media(kind string, origCountry []string) *TmdbMedia {
 // tmdbDetail 校验候选要用到的详情字段。一次请求带上 alternative_titles 与 translations，
 // 选中之后取 origin_country 也复用这一份，不额外加请求
 type tmdbDetail struct {
-	OriginCountry []string
-	Names         []string       // 别名 + 各语言译名
-	Seasons       map[int]string // 季号 → 该季首播日期（仅剧集）
-	SeasonEps     map[int]int    // 季号 → 该季集数（仅剧集；全剧连续编号换算用，见 absepisode.go）
-	SeasonNames   map[int]string // 季号 → 季名（仅剧集；重命名的 {season_name}）
+	OriginCountry       []string
+	ProductionCountries []string       // 制片国家代码（二级分类的 production_countries 用）
+	Names               []string       // 别名 + 各语言译名
+	Seasons             map[int]string // 季号 → 该季首播日期（仅剧集）
+	SeasonEps           map[int]int    // 季号 → 该季集数（仅剧集；全剧连续编号换算用，见 absepisode.go）
+	SeasonNames         map[int]string // 季号 → 季名（仅剧集；重命名的 {season_name}）
 }
 
 var (
@@ -148,8 +170,9 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 		return nil, err
 	}
 	var raw struct {
-		OriginCountry     []string `json:"origin_country"`
-		AlternativeTitles struct {
+		OriginCountry       []string         `json:"origin_country"`
+		ProductionCountries []tmdbISOCountry `json:"production_countries"`
+		AlternativeTitles   struct {
 			Titles []struct {
 				Title string `json:"title"`
 			} `json:"titles"` // 电影
@@ -175,7 +198,7 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
-	d := &tmdbDetail{OriginCountry: raw.OriginCountry, Seasons: map[int]string{}, SeasonEps: map[int]int{}, SeasonNames: map[int]string{}}
+	d := &tmdbDetail{OriginCountry: raw.OriginCountry, ProductionCountries: isoCountries(raw.ProductionCountries), Seasons: map[int]string{}, SeasonEps: map[int]int{}, SeasonNames: map[int]string{}}
 	for _, t := range raw.AlternativeTitles.Titles {
 		d.Names = append(d.Names, t.Title)
 	}
@@ -465,11 +488,7 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 			continue
 		}
 		if c != nil {
-			var country []string
-			if d != nil {
-				country = d.OriginCountry
-			}
-			m := c.media(p.kind, country)
+			m := c.media(p.kind, d)
 			m.matchHow = how
 			return m, nil
 		}

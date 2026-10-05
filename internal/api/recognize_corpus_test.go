@@ -173,7 +173,7 @@ func TestRecognizeMatchCorpus(t *testing.T) {
 	t.Logf("匹配语料：%d/%d 条正确", pass, len(c.Cases))
 }
 
-// 选中之后的产地要从同一份详情里取（分类规则按 origin_country 分），不能丢
+// 选中之后的产地 / 制片国家要从同一份详情里取（分类规则按它们分），不能丢
 func TestRecognizeKeepsOriginCountry(t *testing.T) {
 	newTestDB(t, "recognize-country.db")
 	raw, _ := os.ReadFile("testdata/recognize_match.json")
@@ -190,6 +190,9 @@ func TestRecognizeKeepsOriginCountry(t *testing.T) {
 	}
 	if strings.Join(media.OrigCountry, ",") != "KR" {
 		t.Fatalf("产地丢了: %v", media.OrigCountry)
+	}
+	if strings.Join(media.ProdCountry, ",") != "KR" {
+		t.Fatalf("制片国家丢了: %v", media.ProdCountry)
 	}
 }
 

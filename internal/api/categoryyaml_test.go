@@ -89,3 +89,96 @@ tv:
 	}
 	_ = model.DB
 }
+
+// 认不出的条件不能让规则变成兜底：MoviePilot 的 release_year / production_countries 要认，
+// 拼错的键、写成映射的值记进 Unsupported；列表写法按逗号拼；不加引号的 !CN 被 YAML 读成标签，要拼回来
+func TestParseCategoryYAMLUnsupported(t *testing.T) {
+	src := `movie:
+  电影/老片:
+    release_year: '1950-1989'
+  电影/英国:
+    production_countries: 'GB'
+  电影/拼错:
+    genre_id: '16'
+  电影/映射:
+    genre_ids:
+      a: 1
+  电影/列表:
+    genre_ids: [16, 99]
+  电影/非华语:
+    origin_country: !CN
+  电影/其他:
+`
+	rows, err := parseCategoryYAML(src)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(rows) != 7 {
+		t.Fatalf("want 7 rows, got %d", len(rows))
+	}
+	if rows[0].ReleaseYear != "1950-1989" || rows[0].IsDefault {
+		t.Errorf("release_year: %+v", rows[0])
+	}
+	if rows[1].ProductionCountries != "GB" || rows[1].IsDefault {
+		t.Errorf("production_countries: %+v", rows[1])
+	}
+	if rows[2].Unsupported != "genre_id" || rows[2].IsDefault {
+		t.Errorf("拼错的键: %+v", rows[2])
+	}
+	if rows[3].Unsupported != "genre_ids" || rows[3].IsDefault {
+		t.Errorf("映射值: %+v", rows[3])
+	}
+	if rows[4].GenreIds != "16,99" || rows[4].Unsupported != "" {
+		t.Errorf("列表值: %+v", rows[4])
+	}
+	if rows[5].OriginCountry != "!CN" || rows[5].IsDefault {
+		t.Errorf("不加引号的排除: %+v", rows[5])
+	}
+	if !rows[6].IsDefault {
+		t.Errorf("兜底: %+v", rows[6])
+	}
+}
+
+// 匹配语义对齐 MoviePilot：且 / 或、! 排除、范围、不区分大小写、字段为空不匹配
+func TestMatchCategory(t *testing.T) {
+	yakka := &TmdbMedia{Title: "Yakka Dee!", MediaType: "tv", GenreIDs: []int{10762, 16},
+		OrigLanguage: "en", OrigCountry: []string{"GB"}, Year: "2017"}
+	cases := []struct {
+		name string
+		rule model.CategoryRule
+		want bool
+	}{
+		{"儿童", model.CategoryRule{GenreIds: "10762"}, true},
+		{"家庭不含儿童", model.CategoryRule{GenreIds: "10751"}, false},
+		{"类型且国家", model.CategoryRule{GenreIds: "16", OriginCountry: "CN,TW,HK"}, false},
+		{"小写国家", model.CategoryRule{OriginCountry: "us,gb"}, true},
+		{"大写语言", model.CategoryRule{OriginalLanguage: "EN"}, true},
+		{"排除命中", model.CategoryRule{GenreIds: "!10762"}, false},
+		{"排除未命中", model.CategoryRule{OriginCountry: "!CN"}, true},
+		{"正选加排除", model.CategoryRule{GenreIds: "16,!10762"}, false},
+		{"数字范围", model.CategoryRule{GenreIds: "10760-10765"}, true},
+		{"年份范围", model.CategoryRule{ReleaseYear: "2010-2019"}, true},
+		{"年份范围外", model.CategoryRule{ReleaseYear: "1990-1999"}, false},
+		{"排除年份范围", model.CategoryRule{ReleaseYear: "!2015-2020"}, false},
+		{"制片国家为空", model.CategoryRule{ProductionCountries: "GB"}, false},
+		{"认不出的条件", model.CategoryRule{GenreIds: "10762", Unsupported: "genre_id"}, false},
+		{"只有 ext", model.CategoryRule{Ext: "iso"}, false},
+		{"正则未命中只看其他条件", model.CategoryRule{CustomRegex: "^Peppa", GenreIds: "16"}, true},
+		{"只有正则未命中", model.CategoryRule{CustomRegex: "^Peppa"}, false},
+		{"正则命中", model.CategoryRule{CustomRegex: "(?i)yakka", GenreIds: "99"}, true},
+		{"兜底", model.CategoryRule{}, true},
+	}
+	for _, c := range cases {
+		if got := matchCategory(&c.rule, yakka); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+	movie := &TmdbMedia{MediaType: "movie", ProdCountry: []string{"GB", "US"}}
+	if !matchCategory(&model.CategoryRule{ProductionCountries: "gb"}, movie) {
+		t.Error("制片国家应命中")
+	}
+	// 没有国家时，只写了排除也不匹配（MoviePilot 同款）
+	if matchCategory(&model.CategoryRule{OriginCountry: "!CN"}, movie) {
+		t.Error("产地为空时排除条件不应命中")
+	}
+}

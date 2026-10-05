@@ -162,10 +162,19 @@ export function parseCategory(src: string): CategoryModel {
       continue
     }
     if (!rule) continue
+    // 块状列表（genre_ids: 换行 - 16 - 99）并进上一个条件，后端同样按逗号拼起来
+    const last = rule.conds[rule.conds.length - 1]
+    if (e.dash && !e.key && last) {
+      last.value = last.value.trim() ? `${last.value},${e.value}` : e.value
+      rule.endLine = e.line
+      if (e.value.trim()) rule.fallback = false
+      continue
+    }
     if (section.condIndent < 0) section.condIndent = e.indent
     rule.conds.push({ key: e.key, value: e.value, line: e.line })
     rule.endLine = e.line
-    if (e.value.trim()) rule.fallback = false
+    // 认不出的条件后端也不当兜底（这条规则不匹配任何条目），这里同口径
+    if (e.value.trim() || !(CATEGORY_FIELD_KEYS as readonly string[]).includes(e.key)) rule.fallback = false
   }
 
   for (const s of sections) {
@@ -232,7 +241,7 @@ export function lintCategory(src: string): RuleIssue[] {
           issues.push({
             line: c.line,
             level: 'warn',
-            text: `「${c.key}」不是分类条件字段，保存后会被丢弃（可用：${CATEGORY_FIELD_KEYS.join(' / ')}）`,
+            text: `「${c.key}」不是分类条件字段，这条规则将不匹配任何条目（可用：${CATEGORY_FIELD_KEYS.join(' / ')}）`,
           })
           continue
         }
@@ -241,32 +250,41 @@ export function lintCategory(src: string): RuleIssue[] {
           continue
         }
         if (c.key === 'ext') {
-          issues.push({ line: c.line, level: 'info', text: 'ext 当前不参与匹配，只会让这条不再充当兜底' })
+          const others = r.conds.some(o => o.key !== 'ext' && o.value.trim())
+          issues.push({
+            line: c.line,
+            level: others ? 'info' : 'warn',
+            text: others ? 'ext 当前不参与匹配，按其他条件判断' : 'ext 当前不参与匹配：只写了 ext 的规则不会匹配任何条目',
+          })
         }
         if (c.key === 'genre_ids') {
-          for (const v of splitList(c.value)) {
-            if (!/^\d+$/.test(v)) {
-              issues.push({ line: c.line, level: 'warn', text: `genre_ids 要填数字 ID，「${v}」不是` })
-            } else if (!genreName(s.media, v)) {
-              issues.push({ line: c.line, level: 'info', text: `类型 ID ${v} 不在${label}常见类型表里，确认下 TMDB 的取值` })
+          for (const { v } of splitTerms(c.value)) {
+            const ids = v.split('-').map(x => x.trim())
+            if (!ids.every(x => /^\d+$/.test(x))) {
+              issues.push({ line: c.line, level: 'warn', text: `genre_ids 要填数字 ID 或范围，「${v}」不是` })
+            } else if (ids.length === 1 && !genreName(s.media, v)) {
+              issues.push({ line: c.line, level: 'info', text: `类型 ID ${v} 不在${label}类型表里，确认下 TMDB 的取值` })
             }
           }
         }
-        if (c.key === 'origin_country') {
-          for (const v of splitList(c.value)) {
-            if (v !== v.toUpperCase()) {
-              issues.push({ line: c.line, level: 'warn', text: `国家代码要大写，「${v}」应写成 ${v.toUpperCase()}` })
-            } else if (!countryName(v)) {
+        if (c.key === 'origin_country' || c.key === 'production_countries') {
+          for (const { v } of splitTerms(c.value)) {
+            if (!v.includes('-') && !countryName(v.toUpperCase())) {
               issues.push({ line: c.line, level: 'info', text: `国家代码「${v}」不在参考表里` })
             }
           }
         }
         if (c.key === 'original_language') {
-          for (const v of splitList(c.value)) {
-            if (v !== v.toLowerCase()) {
-              issues.push({ line: c.line, level: 'warn', text: `语言代码要小写，「${v}」应写成 ${v.toLowerCase()}` })
-            } else if (!languageName(v)) {
+          for (const { v } of splitTerms(c.value)) {
+            if (!v.includes('-') && !languageName(v.toLowerCase())) {
               issues.push({ line: c.line, level: 'info', text: `语言代码「${v}」不在参考表里` })
+            }
+          }
+        }
+        if (c.key === 'release_year') {
+          for (const { v } of splitTerms(c.value)) {
+            if (!/^\d{4}(\s*-\s*\d{4})?$/.test(v)) {
+              issues.push({ line: c.line, level: 'warn', text: `release_year 要写四位年份或范围（2000-2009），「${v}」不是` })
             }
           }
         }
@@ -445,24 +463,35 @@ export interface OutlineGroup {
 
 function splitList(v: string): string[] {
   return v
+    .replace(/^\s*\[|\]\s*$/g, '') // 行内列表 [16, 99]，后端同样按逗号拼
     .split(',')
-    .map(s => s.trim())
+    .map(s => s.trim().replace(/^(['"])(.*)\1$/, '$2'))
     .filter(Boolean)
+}
+
+/** 拆成单个取值并剥掉排除前缀 !（范围 a-b 原样保留） */
+function splitTerms(v: string): { v: string; neg: boolean }[] {
+  return splitList(v)
+    .map(t => (t.startsWith('!') ? { v: t.slice(1).trim(), neg: true } : { v: t, neg: false }))
+    .filter(t => t.v)
 }
 
 /** 把 ID / 代码翻成「人话(原值)」，认不出就只留原值 */
 function decode(key: string, value: string, media: string): string {
   const names: Record<string, (v: string) => string> = {
     genre_ids: v => genreName(media, v),
-    origin_country: v => countryName(v),
-    original_language: v => languageName(v),
+    origin_country: v => countryName(v.toUpperCase()),
+    production_countries: v => countryName(v.toUpperCase()),
+    original_language: v => languageName(v.toLowerCase()),
+    release_year: () => '',
   }
   const fn = names[key]
   if (!fn) return value
-  return splitList(value)
-    .map(v => {
-      const name = fn(v)
-      return name ? `${name}(${v})` : v
+  return splitTerms(value)
+    .map(({ v, neg }) => {
+      const name = v.includes('-') ? '' : fn(v)
+      const text = name ? `${name}(${v})` : v
+      return neg ? `非 ${text}` : text
     })
     .join('、')
 }
@@ -471,6 +500,8 @@ const CATEGORY_COND_LABEL: Record<string, string> = {
   genre_ids: '类型',
   original_language: '语言',
   origin_country: '国家',
+  production_countries: '制片国家',
+  release_year: '年份',
   custom_regex: '片名正则',
   ext: '后缀',
 }
@@ -487,14 +518,23 @@ export function outlineCategory(src: string): OutlineGroup[] {
         const muted = seenFallback
         if (r.fallback) seenFallback = true
         const name = categoryDirName(r.name)
+        // 与后端 matchCategory 同口径：有认不出的条件，或者只写了 ext
+        const set = r.conds.filter(c => c.value.trim())
+        const dead =
+          r.conds.some(c => !(CATEGORY_FIELD_KEYS as readonly string[]).includes(c.key)) ||
+          (set.length > 0 && set.every(c => c.key === 'ext'))
         return {
           line: r.line,
           label: name ? `${name}/` : `${top}/`,
-          tags: [...(r.fallback ? ['兜底'] : []), ...(name ? [] : ['无分类目录'])],
+          tags: [
+            ...(r.fallback ? ['兜底'] : []),
+            ...(name ? [] : ['无分类目录']),
+            ...(dead ? ['不会匹配'] : []),
+          ],
           chips: r.conds
             .filter(c => c.value.trim())
             .map(c => `${CATEGORY_COND_LABEL[c.key] ?? c.key}：${decode(c.key, c.value, s.media)}`),
-          muted,
+          muted: muted || dead,
         }
       }),
     }

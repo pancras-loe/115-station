@@ -1253,6 +1253,37 @@ func SyncCategoryRulesFromYAML(db *gorm.DB) error {
 	return replaceCategoryRules(db, rows)
 }
 
+// categoryYAMLValue 取一个分类条件的值：标量原样，列表（genre_ids: [16, 99]）按逗号拼起来。
+// 映射等其他形态认不出，返回 false —— 此前一律读成空串，那条规则就悄悄变成了兜底
+func categoryYAMLValue(n *yaml.Node) (string, bool) {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		// 不加引号的排除写法 origin_country: !CN 在 YAML 里是「标签 !CN + 空值」，
+		// 原样读值就是空串、条件凭空消失。把标签拼回去，按用户的本意当排除
+		if n.Style&yaml.TaggedStyle != 0 && !strings.HasPrefix(n.Tag, "!!") {
+			return strings.TrimSpace(n.Tag + " " + n.Value), true
+		}
+		return n.Value, true
+	case yaml.SequenceNode:
+		parts := make([]string, 0, len(n.Content))
+		for _, c := range n.Content {
+			if c.Kind != yaml.ScalarNode {
+				return "", false
+			}
+			parts = append(parts, c.Value)
+		}
+		return strings.Join(parts, ","), true
+	}
+	return "", false
+}
+
+func joinNonEmpty(list, item string) string {
+	if list == "" {
+		return item
+	}
+	return list + "," + item
+}
+
 // parseCategoryYAML 解析二级分类 YAML 为有序规则行（movie/tv；无条件条目作为兜底）
 func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 	var root yaml.Node
@@ -1288,7 +1319,12 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 			fields := val.Content[j+1]
 			if fields != nil && fields.Kind == yaml.MappingNode {
 				for k := 0; k+1 < len(fields.Content); k += 2 {
-					fk, fv := fields.Content[k].Value, fields.Content[k+1].Value
+					fk := fields.Content[k].Value
+					fv, ok := categoryYAMLValue(fields.Content[k+1])
+					if !ok {
+						r.Unsupported = joinNonEmpty(r.Unsupported, fk)
+						continue
+					}
 					switch fk {
 					case "genre_ids":
 						r.GenreIds = fv
@@ -1298,14 +1334,21 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 						r.OriginCountry = fv
 					case "custom_regex":
 						r.CustomRegex = fv
+					case "production_countries":
+						r.ProductionCountries = fv
+					case "release_year":
+						r.ReleaseYear = fv
 					case "ext":
 						r.Ext = fv
+					default:
+						r.Unsupported = joinNonEmpty(r.Unsupported, fk)
 					}
 				}
 			}
 			prio++
 			r.Priority = prio
-			if r.GenreIds == "" && r.OriginalLanguage == "" && r.OriginCountry == "" && r.CustomRegex == "" && r.Ext == "" {
+			if r.GenreIds == "" && r.OriginalLanguage == "" && r.OriginCountry == "" && r.ProductionCountries == "" &&
+				r.ReleaseYear == "" && r.CustomRegex == "" && r.Ext == "" && r.Unsupported == "" {
 				r.IsDefault = true
 			}
 			rows = append(rows, r)

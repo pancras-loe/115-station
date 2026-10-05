@@ -1,6 +1,6 @@
 /**
  * 二级分类规则的参考表。
- * genre_ids / origin_country / original_language 的取值来自 TMDB，
+ * genre_ids / origin_country / production_countries / original_language 的取值来自 TMDB，
  * 这里只是速查，改动前先对照 TMDB 官方文档。
  */
 
@@ -182,16 +182,23 @@ export const LANGUAGES: [string, string][] = [
 
 export const CATEGORY_FIELDS: [string, string][] = [
   ['分类名', '即媒体库根下的目录名，写什么就落到哪；可用 / 建多级；不写任何条件的那条是兜底'],
-  ['genre_ids', 'TMDB 类型 ID（16 = 动漫，99 = 纪录片），逗号分隔'],
+  ['genre_ids', 'TMDB 类型 ID（16 = 动漫，99 = 纪录片，10762 = 儿童），逗号分隔'],
   ['original_language', '语言代码（zh = 中文，ja = 日语，ko = 韩语），逗号分隔'],
-  ['origin_country', '国家代码（CN、HK、JP、KR、US），逗号分隔'],
+  ['origin_country', '出品国家代码（CN、HK、JP、KR、US），逗号分隔'],
+  ['production_countries', '制片国家代码，写法同上；老电影常缺 origin_country，按国家分电影时用它更稳'],
+  ['release_year', '发行年份（剧集取首播年份），如 2020 或范围 2000-2009'],
   ['custom_regex', '正则匹配片名 / 原名，命中即归此类（不要求其他条件同时成立）'],
-  ['ext', '文件后缀；当前版本不参与匹配，只会让该条不再充当兜底'],
+  ['ext', '文件后缀；当前版本不参与匹配：只写了 ext 的规则不会匹配任何条目'],
 ]
 
 export const CATEGORY_RULES: [string, string][] = [
   ['顺序匹配', '从上到下，先匹配到的先停止'],
   ['多条件', '同一分类下多个条件为「且」关系，同一条件内逗号为「或」'],
+  ['排除', '值前加 ! 表示排除，如 origin_country: "!CN"；可与正选混写：genre_ids: "16,!10762"'],
+  ['范围', '数字可写范围：release_year: "2000-2009"、genre_ids: "10764-10767"'],
+  ['大小写', '代码不区分大小写，us 与 US 相同'],
+  ['字段为空', '写了某个条件、条目上这项却没有数据（如 TMDB 没填国家）时不匹配，只写排除也一样'],
+  ['写错字段', '认不出的条件名（如拼成 genre_id）会让这条规则不匹配任何条目，而不是变成兜底'],
   ['兜底分类', '不写条件的那条匹配一切，它之后的规则永远轮不到'],
   ['没有兜底时', '全都不匹配就归入「电影/未分类」「剧集/未分类」'],
   ['不自动加层', '分类名不会被补前缀：要 电影/动画电影 就写全，要平铺就直接写 动漫番剧'],
@@ -204,6 +211,8 @@ export const CATEGORY_FIELD_KEYS = [
   'genre_ids',
   'original_language',
   'origin_country',
+  'production_countries',
+  'release_year',
   'custom_regex',
   'ext',
 ] as const

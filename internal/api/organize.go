@@ -8,7 +8,9 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -597,88 +599,106 @@ func libSubPath(parts ...string) string {
 	return strings.Join(out, "/")
 }
 
-// matchCategory 判断媒体是否匹配某个分类规则
+// matchCategory 判断媒体是否匹配某个分类规则。
+//
+// 条件的写法与语义对齐 MoviePilot 的 category.yaml（app/modules/themoviedb/category.py
+// 的 get_category），用户的配置多半是从那边抄来的：
+//   - 多个条件「且」，同一条件内逗号「或」；不区分大小写；
+//   - `!值` 排除；`a-b` 范围（两端都是数字按数值区间，否则只认两个端点）；
+//   - 条件写了、条目上这个字段却是空的 → 不匹配（只写了排除也一样，MP 同款）。
+//
+// custom_regex 是本站自己的：命中即归此类，不要求其他条件同时成立。
+// ext 当前不参与匹配：只写了 ext 的规则不匹配任何条目（此前它会匹配一切）。
 func matchCategory(cat *model.CategoryRule, media *TmdbMedia) bool {
-	// 检查 genre_ids
-	if cat.GenreIds != "" {
-		genreList := strings.Split(cat.GenreIds, ",")
-		matched := false
-		for _, g := range genreList {
-			g = strings.TrimSpace(g)
-			if g == "" {
-				continue
-			}
-			gid := 0
-			fmt.Sscanf(g, "%d", &gid)
-			for _, mg := range media.GenreIDs {
-				if mg == gid {
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if cat.Unsupported != "" {
+		return false // 写了认不出的条件，宁可不匹配也不当兜底
 	}
-
-	// 检查 original_language
-	if cat.OriginalLanguage != "" {
-		langList := strings.Split(cat.OriginalLanguage, ",")
-		matched := false
-		for _, l := range langList {
-			l = strings.TrimSpace(l)
-			if l != "" && media.OrigLanguage == l {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-
-	// 检查自定义正则（命中即匹配，不需要其他条件）
 	if cat.CustomRegex != "" {
 		if re, err := regexp.Compile(cat.CustomRegex); err == nil {
 			if re.MatchString(media.Title) || re.MatchString(media.OriginalTitle) {
 				return true
 			}
 		}
-		// 只有正则条件且未命中
-		if cat.GenreIds == "" && cat.OriginalLanguage == "" && cat.OriginCountry == "" && cat.Ext == "" {
+	}
+	conds := []struct {
+		expr  string
+		value []string
+	}{
+		{cat.GenreIds, intStrings(media.GenreIDs)},
+		{cat.OriginalLanguage, nonEmpty(media.OrigLanguage)},
+		{cat.OriginCountry, media.OrigCountry},
+		{cat.ProductionCountries, media.ProdCountry},
+		{cat.ReleaseYear, nonEmpty(media.Year)},
+	}
+	checked := false
+	for _, c := range conds {
+		if strings.TrimSpace(c.expr) == "" {
+			continue
+		}
+		checked = true
+		if !matchCategoryValues(c.expr, c.value) {
 			return false
 		}
 	}
+	// 只写了正则（没命中）或只写了 ext：没有任何条件成立
+	return checked || (cat.CustomRegex == "" && cat.Ext == "")
+}
 
-	// 检查 origin_country
-	if cat.OriginCountry != "" {
-		countryList := strings.Split(cat.OriginCountry, ",")
-		matched := false
-		for _, c := range countryList {
-			c = strings.TrimSpace(c)
-			if c == "" {
-				continue
-			}
-			for _, mc := range media.OrigCountry {
-				if mc == c {
-					matched = true
-					break
-				}
-			}
-			if matched {
-				break
-			}
+// matchCategoryValues 一个条件的取值表达式是否命中条目上的值（见 matchCategory 的语义说明）
+func matchCategoryValues(expr string, have []string) bool {
+	if len(have) == 0 {
+		return false
+	}
+	var hit, want, deny bool
+	for _, term := range strings.Split(expr, ",") {
+		term = strings.ToUpper(strings.TrimSpace(term))
+		neg := strings.HasPrefix(term, "!")
+		if neg {
+			term = strings.TrimSpace(term[1:])
 		}
-		if !matched {
-			return false
+		if term == "" {
+			continue
+		}
+		in := slices.ContainsFunc(have, func(v string) bool { return categoryTermHas(term, strings.ToUpper(v)) })
+		if neg {
+			deny = deny || in
+		} else {
+			want = true
+			hit = hit || in
 		}
 	}
+	return !deny && (!want || hit)
+}
 
-	return true
+// categoryTermHas 单个取值（可能是范围）是否包含 v
+func categoryTermHas(term, v string) bool {
+	lo, hi, ok := strings.Cut(term, "-")
+	if !ok {
+		return term == v
+	}
+	lo, hi = strings.TrimSpace(lo), strings.TrimSpace(hi)
+	a, e1 := strconv.Atoi(lo)
+	b, e2 := strconv.Atoi(hi)
+	n, e3 := strconv.Atoi(v)
+	if e1 == nil && e2 == nil {
+		return e3 == nil && min(a, b) <= n && n <= max(a, b)
+	}
+	return v == lo || v == hi // 非数字范围 MP 只认两个端点
+}
+
+func intStrings(ns []int) []string {
+	out := make([]string, len(ns))
+	for i, n := range ns {
+		out[i] = strconv.Itoa(n)
+	}
+	return out
+}
+
+func nonEmpty(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return []string{s}
 }
 
 // sanitizeName 清洗名称中会破坏路径/被 115 拒绝的字符

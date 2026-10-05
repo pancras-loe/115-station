@@ -106,6 +106,12 @@ type CategoryRule struct {
 	OriginCountry    string `json:"origin_country" gorm:"size:100"`    // 原产地，如 "CN,TW,HK"
 	Ext              string `json:"ext" gorm:"size:100"`               // 文件后缀，如 "iso"
 	CustomRegex      string `json:"custom_regex" gorm:"size:500"`      // 自定义正则（匹配标题或原名）
+	// 以下两项对齐 MoviePilot 的 category.yaml
+	ProductionCountries string `json:"production_countries" gorm:"size:100"` // 制片国家（TMDB production_countries 的 iso_3166_1）
+	ReleaseYear         string `json:"release_year" gorm:"size:100"`         // 发行年份，支持 2000-2010 范围
+	// YAML 里认不出的条件键（或值写成了映射等认不出的形态），逗号分隔。非空时这条规则永不匹配：
+	// 此前它们被静默丢掉，一条只写了这些条件的规则会变成兜底，把后面的规则全吞掉
+	Unsupported string `json:"unsupported" gorm:"size:200"`
 
 	IsDefault bool `json:"is_default" gorm:"default:false"` // 是否兜底（未匹配任何分类时归入）
 	Priority  int  `json:"priority" gorm:"default:0"`       // 优先级，从小到大，先匹配到先停止
