@@ -364,6 +364,13 @@ func (h *Handler) TestEmbyConnection(c *gin.Context) {
 		return
 	}
 
+	// 页面加载时 GET /config/setting 把 api_key 脱敏成掩码，用户没改就点测试，
+	// 发来的是掩码本身 —— 换成已保存的密钥，与保存时 unmaskSensitiveJSON 同口径
+	if strings.TrimSpace(req.APIKey) == settingMask {
+		saved, _ := loadEmbyRefreshCfg()
+		req.APIKey = saved.APIKey
+	}
+
 	base := strings.TrimRight(req.ServerURL, "/")
 	q := ""
 	if req.APIKey != "" {
