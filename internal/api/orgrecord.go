@@ -470,6 +470,47 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	return nil
 }
 
+// dedupRecordFids 记录快照里同一个 fid 只留第一次出现的那条：重复的一条会在下面的重名检查里撞上自己
+func dedupRecordFids(files []orgRecordFile) []orgRecordFile {
+	seen := make(map[string]bool, len(files))
+	out := files[:0:0]
+	for _, f := range files {
+		if f.Fid != "" && seen[f.Fid] {
+			continue
+		}
+		seen[f.Fid] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// redoNameClash 两个视频算出同一个落点时的报错。分两种说：
+//   - 两个都明写了同一个季集号：是同一集的两份文件（网盘允许同目录同名，上一次整理就是这样并排放进去的），
+//     改识别规则没用，得挪走一份；
+//   - 否则才是季集号没认出来，照旧提示加替换规则。
+//
+// 2026-10-06 现场：越狱 S04E22 两份同名文件，提示却叫用户去加替换规则
+func redoNameClash(a, b orgRecordFile, pa, pb *ParsedName, origOf map[string]string, newName string) error {
+	desc := func(f orgRecordFile) string {
+		s := f.Name
+		if o := origOf[f.Fid]; o != "" && o != f.Name {
+			s += "（原名 " + o + "）"
+		}
+		if f.Size > 0 {
+			s += "，" + formatBytes(f.Size)
+		}
+		return s
+	}
+	if pa != nil && pb != nil && pa.Episode > 0 && pa.Season == pb.Season && pa.Episode == pb.Episode &&
+		pa.EpisodeEnd == pb.EpisodeEnd && !pa.SeasonGuessed && !pb.SeasonGuessed {
+		return fmt.Errorf("这条记录里有两个文件都是 S%02d%s：「%s」和「%s」，是同一集的两份，"+
+			"会落到同一个名字「%s」。请在 115 里删掉或挪走不要的那份，再重新整理",
+			pa.Season, pa.episodeTag(), desc(a), desc(b), newName)
+	}
+	return fmt.Errorf("「%s」和「%s」会被改成同一个文件名「%s」，多半是文件名里认不出季号或集号。"+
+		"请到「识别规则」加一条替换规则把集号写清楚（如把「第01话」替换成「E01」），再重新整理", desc(a), desc(b), newName)
+}
+
 // redoStrmPaths 这次落盘的视频 STRM 的本地绝对路径（按台账取实际写成的名字：同基名冲突时可能是旧写法）
 func redoStrmPaths(localRoot string, files []orgRecordFile) []string {
 	var out []string
@@ -597,6 +638,7 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, sr
 func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule,
 	remap func(map[string]*ParsedName)) (*redoLayout, error) {
 	out := &redoLayout{renames: map[string]string{}, groups: map[string][]orgRecordFile{}}
+	files = dedupRecordFids(files)
 	newBaseOf := map[string]string{} // 视频旧基名 → 新基名（字幕跟随用）
 	videos := 0
 	origOf := recordOrigNames(files, srcName)
@@ -626,7 +668,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 	specials := media.MediaType == "tv" && hasEpisodes(parses)
 	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
 	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
-	taken := map[string]string{}
+	taken := map[string]orgRecordFile{}
 	var vids []metaVideo // NFO / 图片认主人用：视频改名**前**的基名（与它们现在的名字同一时刻）
 
 	for _, f := range files {
@@ -666,10 +708,14 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 		if media.MediaType == "tv" {
 			key := mediaRel + "/" + newName
 			if prev, dup := taken[key]; dup {
-				return nil, fmt.Errorf("「%s」和「%s」会被改成同一个文件名「%s」，多半是文件名里认不出季号或集号。"+
-					"请到「识别规则」加一条替换规则把集号写清楚（如把「第01话」替换成「E01」），再重新整理", prev, f.Name, newName)
+				// 两份早就叫这个名字、并排放在一起（上一次整理就这么放的，网盘允许同目录同名）：
+				// 这次不需要改它们的名，拦下来只会让整部剧都没法重新整理（2026-10-06 现场：越狱 S04E22）
+				if prev.Name != newName || f.Name != newName {
+					return nil, redoNameClash(prev, f, parses[prev.Fid], parsed, origOf, newName)
+				}
+				log.Printf("[整理] ○ 「%s」有两份同名文件，名字已是规范名，保持原样", newName)
 			}
-			taken[key] = f.Name
+			taken[key] = f
 		}
 		out.groups[mediaRel] = append(out.groups[mediaRel], nf)
 		vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: mediaRel})
