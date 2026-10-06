@@ -167,9 +167,12 @@ func (h *Handler) CleanOrphans(c *gin.Context) {
 		case err == nil:
 			removed++
 			removedPaths = append(removedPaths, full)
+			// 集 NFO / 剧照一起删：留着的话目录收不掉，Emby 也因「目录里还有别的文件」不删条目
+			dropStrmCompanions(root, r.RelPath)
 			removeEmptyDirsUp(filepath.Dir(full), root)
 		case os.IsNotExist(err):
 			missing++ // 本地早就没了，台账清掉即可
+			dropStrmCompanions(root, r.RelPath)
 		default:
 			failed++
 			log.Printf("[同步] 失效 STRM 清理失败 %s: %v", r.RelPath, err)

@@ -397,6 +397,10 @@ type washPlan struct {
 	newName   string
 	targetDir string
 	sameAt    string // washSameFile 时库内那一份的台账路径
+	// landing 新版视频将要落成的库内相对路径（含分类前缀与最终文件名）。让位时据此判断旧版 STRM 的
+	// 集 NFO / 剧照还用不用得上：同名的话新版落盘后照样配对，删了要等刮削补回来；不同名就是孤儿。
+	// 为空 = 不知道新版叫什么，旧版的配套文件一律删
+	landing []string
 }
 
 // tryWashReplace 洗版判定与替换执行（单文件入口：散文件整理与重新整理用）。
@@ -412,7 +416,7 @@ type washPlan struct {
 // 而「重新整理」往里写的又是目录、再 path.Dir 一次就退到了二级分类层
 //
 // 整目录（一次几十上百集）走 processDir 里的批量路径，不要用这个入口。
-func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, newSha1, targetDir string, onLog func(string)) string {
+func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, newSha1, targetDir, landing string, onLog func(string)) string {
 	sc := newWashScanner(ops, cfg)
 	sameFiles := sc.sameFile(newSha1)
 	st := matchWashStrategy(media.MediaType, classifyMedia(media))
@@ -420,6 +424,7 @@ func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, media *TmdbMedia, newName, n
 		return washNoStrategy(newName, sameFiles, onLog).decision
 	}
 	plan := decideWash(media, newName, newSha1, targetDir, st, sc.libFiles(targetDir), sameFiles, onLog)
+	plan.landing = []string{landing}
 	if plan.decision != washReplaced {
 		return plan.decision
 	}
@@ -711,9 +716,18 @@ func applyWashPlans(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, st *washS
 	byDest := map[string][]model.SyncedFile{} // 旧版去向目录 → 让位行
 	var victims []model.SyncedFile
 	var destOrder []string
+	landingStems := map[string]bool{} // 新版 STRM 可能的基名（新旧两种写法都认）
 	for _, p := range plans {
 		if p == nil || p.decision != washReplaced {
 			continue
+		}
+		for _, rel := range p.landing {
+			if rel == "" {
+				continue
+			}
+			for _, c := range strmRelCandidates(rel) {
+				landingStems[strings.TrimSuffix(c, ".strm")] = true
+			}
 		}
 		dest := washOldDestRel(p.targetDir)
 		for _, sf := range p.victims {
@@ -784,6 +798,12 @@ func applyWashPlans(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, st *washS
 		cleaned++
 		ids = append(ids, sf.ID)
 		cleanedPaths = append(cleanedPaths, full)
+		// 旧版的集 NFO / 剧照：新版落到同一个名字上就留着（落盘后照样配对，不用等刮削补），
+		// 不同名就是孤儿 —— 留着的话目录收不掉，Emby 也因「目录里还有别的文件」不删旧条目
+		if strings.HasSuffix(strings.ToLower(sf.RelPath), ".strm") &&
+			!landingTaken(landingStems, strings.TrimSuffix(sf.RelPath, path.Ext(sf.RelPath))) {
+			removeStrmCompanions(localRoot, sf.RelPath)
+		}
 		removeEmptyParents(filepath.Dir(full), localRoot)
 	}
 	if len(ids) > 0 {
@@ -818,6 +838,17 @@ func applyWashPlans(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, st *washS
 		noteWashReplace(media, p.oldName, p.newName, dest)
 	}
 	return nil
+}
+
+// landingTaken 旧版 STRM 的基名（台账路径，带库名前缀）是不是新版要落的名字。
+// landing 是库内路径、不带库名前缀（洗版判定拿到的 targetDir 就是这样），所以按路径段后缀比
+func landingTaken(stems map[string]bool, base string) bool {
+	for s := range stems {
+		if base == s || strings.HasSuffix(base, "/"+s) {
+			return true
+		}
+	}
+	return false
 }
 
 func fidsOfLedger(rows []model.SyncedFile) []string {

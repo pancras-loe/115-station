@@ -2134,23 +2134,28 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 让位计划只给真要入库的：停下的、移冗余的不能先把旧版挤走。
 	// 几份都保留时它们顶的是同一个旧版，让位的台账行去重，否则同一批文件会被搬两次
 	var plans []*washPlan
-	claimed := map[string]bool{}
+	claimed := map[string]*washPlan{}
 	for _, vf := range accepted {
 		p := planOf[vf.Fid]
 		if p == nil {
 			continue
 		}
+		// 新版最终落点（含 #A #B）：旧版 STRM 同名时它的集 NFO / 剧照留给新版用
+		landing := vplace.relOf[vf.Fid] + "/" + plannedVideoName(media, vf, eps[vf.Fid], dup.variants[vf.Fid])
 		var victims []model.SyncedFile
 		for _, v := range p.victims {
-			if !claimed[v.FileID] {
-				claimed[v.FileID] = true
-				victims = append(victims, v)
+			if owner := claimed[v.FileID]; owner != nil {
+				owner.landing = append(owner.landing, landing) // 顶的是同一个旧版，落点算到先认领的那份上
+				continue
 			}
+			claimed[v.FileID] = p
+			victims = append(victims, v)
 		}
 		if len(victims) == 0 {
 			continue
 		}
 		p.victims = victims
+		p.landing = append(p.landing, landing)
 		plans = append(plans, p)
 	}
 	// 旧版让位：整批一次网盘请求
@@ -2699,7 +2704,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -2976,7 +2981,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, onLog); decision {
+	switch decision := tryWashReplace(ops, cfg, media, f.Name, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)

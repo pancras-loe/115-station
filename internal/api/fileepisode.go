@@ -256,6 +256,7 @@ func planEpisodePicks(media *TmdbMedia, category string, t libFileTitle, files [
 			case washReplaced:
 				it.Wash, it.WashText = "replace", "洗版：库内旧版 "+shortLogName(plan.oldName)+" 让位"
 				p := plan
+				p.landing = []string{rel + "/" + g.Name}
 				it.plan = &p
 			case washNotBetter:
 				it.Wash, it.WashText = "exists", "库内已有更优版本，移到「已存在」"

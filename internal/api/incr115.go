@@ -1401,6 +1401,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				rel, _ := filepath.Rel(localRoot, hitFile)
 				h.DB.Where("rel_path = ?", filepath.ToSlash(rel)).Delete(&model.SyncedFile{})
 				log.Printf("[同步] ✓ 本地文件已清理: %s", rel)
+				dropStrmCompanions(localRoot, filepath.ToSlash(rel))
 				return hitFile
 			}
 		}

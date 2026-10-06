@@ -391,7 +391,10 @@ func dropLibraryCopies(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, libDro
 			want[fid] = true
 		}
 		var victims []model.SyncedFile
-		var stems []string
+		var stems, landing []string
+		for _, fid := range byDir[dir] {
+			landing = append(landing, libTarget[fid]) // 新的那份就落在这个名字上：库里那份的集 NFO / 剧照留给它
+		}
 		for _, sf := range rows {
 			if want[sf.FileID] {
 				victims = append(victims, sf)
@@ -400,7 +403,7 @@ func dropLibraryCopies(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, libDro
 		}
 		victims = append(victims, followingSubtitles(rows, stems)...)
 		if len(victims) > 0 {
-			plans = append(plans, &washPlan{decision: washReplaced, victims: victims, targetDir: dir})
+			plans = append(plans, &washPlan{decision: washReplaced, victims: victims, targetDir: dir, landing: landing})
 		}
 	}
 	if len(plans) == 0 {
