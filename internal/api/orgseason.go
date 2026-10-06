@@ -94,6 +94,7 @@ type orgPlacement struct {
 //
 //   - 电影：全部进 movieRel（与原来一致）；
 //   - 剧集里带集号的：按自己的季号走模板，得到各自的季目录；
+//   - 第 0 季带集号的（明写 S00Exx、或 matchSpecialsTmdb 按集名认出来的）进特别篇目录；
 //   - 剧集里没有集号的（剧场版 / 特别篇 / 花絮），只要同条目里有别的带集号的，就放进
 //     特别篇目录（模板有季变量就渲染第 0 季，没有就是标题目录下的 Specials）——
 //     此前它们原名混进正片季目录，Emby 认不出，还占着正片的位置；
@@ -114,7 +115,9 @@ func placeEntryFiles(media *TmdbMedia, category, rootRel, fallbackRel string, vi
 	}
 	for _, v := range videos {
 		rel := fallbackRel
-		if p := eps[v.Fid]; anyEp && p != nil {
+		if p := eps[v.Fid]; media.MediaType == "tv" && isSpecialEpisode(p) {
+			rel = specialsRel(media, base, rootRel, p, v.Name) // 认出集号的特别篇（S00E09）：改名，落点同特别篇
+		} else if anyEp && p != nil {
 			if p.Season > 0 && p.Episode > 0 {
 				rel = libSubPath(base, pathDir(buildNewNameWithTemplate(media, p, v.Name)))
 			} else {

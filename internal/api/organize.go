@@ -303,7 +303,8 @@ func applySeasonHint(p, hint *ParsedName) {
 	if hint == nil || hint.Season <= 0 || hint.SeasonGuessed {
 		return
 	}
-	if p.Season == 0 || p.SeasonGuessed {
+	// 明写的 S00Exx 是特别篇，所在目录（Season 05）的季号不能盖过它
+	if (p.Season == 0 && p.Episode == 0) || p.SeasonGuessed {
 		p.Season, p.SeasonGuessed = hint.Season, false
 	}
 }
@@ -330,7 +331,7 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 		if mediaCopy.MediaType == "movie" {
 			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
 			file = ctx.ApplyTemplate(renameTpl.MovieFile)
-		} else if p.Season > 0 && p.Episode > 0 {
+		} else if p.Season >= 0 && p.Episode > 0 { // 第 0 季带集号 = 认出了特别篇的集号，照集模板改名
 			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
 			file = ctx.ApplyTemplate(renameTpl.TVFile)
 		} else {
@@ -1948,6 +1949,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	eps := episodeParses(videoFiles, replaceRules, parsed)
 	if media.MediaType == "tv" {
 		remapAbsEpisodesTmdb(tc, media, eps, onLog)
+		matchSpecialsTmdb(tc, media, eps, videoNames(videoFiles), onLog)
 	}
 	// 标题目录与兜底落点。模板对季号 0 不插季目录，newPath 只有「标题/文件」两段，
 	// 此前照样把 parts[1]（文件名）当季目录名建了出来，所以剧集要三段以上才取季目录

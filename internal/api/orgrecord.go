@@ -267,7 +267,15 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
 	plan, err := planRedoLayoutWith(media, category, files, rec.Source, loadReplaceRules(), func(eps map[string]*ParsedName) {
-		remapAbsEpisodesTmdb(tc, media, withoutPicked(eps, opt.episodes), func(m string) { log.Printf("[整理] %s", m) })
+		logf := func(m string) { log.Printf("[整理] %s", m) }
+		remapAbsEpisodesTmdb(tc, media, withoutPicked(eps, opt.episodes), logf)
+		names := map[string]string{}
+		for _, f := range files {
+			if f.Kind == "video" {
+				names[f.Fid] = f.Name
+			}
+		}
+		matchSpecialsTmdb(tc, media, withoutPicked(eps, opt.episodes), names, logf)
 		applyEpisodePicks(eps, opt.episodes)
 	})
 	if err != nil {
@@ -652,6 +660,9 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 		nf := f
 		nf.Name = newName
 		mediaRel := libSubPath(base, pathDir(newPath))
+		if media.MediaType == "tv" && isSpecialEpisode(parsed) {
+			mediaRel = specialsRel(media, base, out.rootRel, parsed, f.Name) // 模板对第 0 季不插季目录
+		}
 		if media.MediaType == "tv" {
 			key := mediaRel + "/" + newName
 			if prev, dup := taken[key]; dup {

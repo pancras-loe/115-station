@@ -255,7 +255,7 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 // seasonEpisode 返回 SxxExx 格式；一个文件装两集时是 SxxExx-Exx（Emby 的多集文件写法），
 // 只写开始集的话第二集在 Emby 里就成了缺集
 func (ctx *RenameContext) seasonEpisode() string {
-	if ctx.Parsed.Season > 0 && ctx.Parsed.Episode > 0 {
+	if ctx.Parsed.Season >= 0 && ctx.Parsed.Episode > 0 { // S00E09：特别篇
 		return fmt.Sprintf("S%02d%s", ctx.Parsed.Season, ctx.Parsed.episodeTag())
 	}
 	if ctx.Parsed.Season > 0 {

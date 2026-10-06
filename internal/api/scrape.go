@@ -600,8 +600,8 @@ func scrapeEpisodeSpan(name string) (season, episode, end int) {
 	}
 	fp := parseFileName(name)
 	season = fp.Season
-	if season == 0 {
-		season = 1
+	if season == 0 && fp.Episode == 0 {
+		season = 1 // 带集号的第 0 季只能是文件名明写的 S00Exx（特别篇），不能改成第 1 季
 	}
 	episodeSpanMu.Lock()
 	if len(episodeSpanCache) >= episodeSpanMax {
@@ -760,7 +760,15 @@ var (
 // tmdbSeasonEpisodes 某季的集信息映射（集号 → 信息）。cached = 命中缓存；
 // TMDB 失败返回空表与错误（集标题 / 剧照缺失时集级 NFO 仍会生成季集号），失败不缓存
 func (tc *TmdbClient) tmdbSeasonEpisodes(tvID, season int) (eps map[int]tmdbEpisodeInfo, cached bool, err error) {
+	return tc.tmdbSeasonEpisodesLang(tvID, season, "zh-CN")
+}
+
+// tmdbSeasonEpisodesLang 同 tmdbSeasonEpisodes，指定语言（特别篇按英文集名对号要用 en-US）
+func (tc *TmdbClient) tmdbSeasonEpisodesLang(tvID, season int, lang string) (eps map[int]tmdbEpisodeInfo, cached bool, err error) {
 	cacheKey := fmt.Sprintf("%d:%d", tvID, season)
+	if lang != "zh-CN" {
+		cacheKey += ":" + lang
+	}
 	scrapeSeasonMu.Lock()
 	if e, ok := scrapeSeasonCache[cacheKey]; ok && time.Since(e.at) < scrapeSeasonTTL {
 		scrapeSeasonMu.Unlock()
@@ -768,7 +776,7 @@ func (tc *TmdbClient) tmdbSeasonEpisodes(tvID, season int) (eps map[int]tmdbEpis
 	}
 	scrapeSeasonMu.Unlock()
 	m := map[int]tmdbEpisodeInfo{}
-	body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), map[string]string{"language": "zh-CN"})
+	body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), map[string]string{"language": lang})
 	if err != nil {
 		return m, false, err
 	}

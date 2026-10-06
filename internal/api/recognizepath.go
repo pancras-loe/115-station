@@ -131,7 +131,7 @@ func parseVideoInDir(vf remoteFile, rules []ReplaceRule, main *ParsedName) *Pars
 	}
 	p := parseFileName(name)
 	applySeasonHint(p, seasonHintFromPath(vf.Path, rules))
-	if p.Season == 0 && main != nil {
+	if p.Season == 0 && p.Episode == 0 && main != nil { // 明写的 S00Exx 不跟主视频的季
 		p.Season = main.Season
 	}
 	applySeasonHint(p, main)
