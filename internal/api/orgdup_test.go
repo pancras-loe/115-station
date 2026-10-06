@@ -1,8 +1,11 @@
 package api
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"115-station/internal/model"
 )
 
 // 2026-10-06 现场：越狱第 4 季第 22 集粤语 / 英语两份，命名模板不带语言，改出同一个名字
@@ -187,5 +190,119 @@ func TestRedoKeepsVariants(t *testing.T) {
 				t.Fatalf("字幕跟着 #B：%s", f.Name)
 			}
 		}
+	}
+}
+
+// ---- 和库里已有的撞名（散文件的同一集几份是一个一个整理的，后一个就撞上库里那份）----
+
+const libSeason = "库/剧集/越狱 (2005)/Season 4"
+
+func libRows() []model.SyncedFile {
+	return []model.SyncedFile{
+		{FileID: "lib22", Kind: "video", Sha1: "LIB", Size: 9000, RelPath: libSeason + "/越狱.S04E22.1080p.strm"},
+		{FileID: "lib22sub", Kind: "asset", RelPath: libSeason + "/越狱.S04E22.1080p.chs.ass"},
+		{FileID: "lib21", Kind: "video", Sha1: "L21", RelPath: libSeason + "/越狱.S04E21.1080p.strm"},
+	}
+}
+
+func TestLibraryClashes(t *testing.T) {
+	rowsOf := func(dir string) []model.SyncedFile {
+		if dir != "剧集/越狱 (2005)/Season 4" {
+			t.Fatalf("按落点目录查台账：%s", dir)
+		}
+		return libRows()
+	}
+	targets := map[string]string{"new": "剧集/越狱 (2005)/Season 4/越狱.S04E22.1080p.mkv"}
+	lib, libTarget := libraryClashes(targets, rowsOf, nil)
+	if len(lib) != 1 || lib[0].Fid != "lib22" || lib[0].Name != "越狱.S04E22.1080p.mkv" || libTarget["lib22"] != targets["new"] {
+		t.Fatalf("库内同名：%+v %v", lib, libTarget)
+	}
+	// 这次洗版让位的旧版不算
+	if lib, _ := libraryClashes(targets, rowsOf, map[string]bool{"lib22": true}); len(lib) != 0 {
+		t.Fatalf("让位的不算：%+v", lib)
+	}
+	// 旧写法的 STRM（视频名 + .strm）也认
+	legacy := func(string) []model.SyncedFile {
+		return []model.SyncedFile{{FileID: "old", Kind: "video", RelPath: libSeason + "/越狱.S04E22.1080p.mkv.strm"}}
+	}
+	if lib, _ := libraryClashes(targets, legacy, nil); len(lib) != 1 || lib[0].Name != "越狱.S04E22.1080p.mkv" {
+		t.Fatalf("旧写法：%+v", lib)
+	}
+}
+
+func TestSettleCollisionsWithLibrary(t *testing.T) {
+	target := "剧集/越狱 (2005)/Season 4/越狱.S04E22.1080p.mkv"
+	lib := remoteFile{Fid: "lib22", Name: "越狱.S04E22.1080p.mkv", Size: 9000, Sha1: "LIB"}
+	nw := remoteFile{Fid: "new", Name: "越狱.Prison.Break.S04E22.粤语.mkv", Size: 700, Sha1: "NEW"}
+	targetOf := func(v remoteFile) (string, string) {
+		if v.Fid == "lib22" {
+			return target, ""
+		}
+		return target, "S04E22"
+	}
+	out := settleCollisions([]remoteFile{nw}, targetOf, nil, nil, lib)
+	if len(out.held) != 1 || len(out.keep) != 0 {
+		t.Fatalf("和库里撞名要问：%+v", out)
+	}
+	g := out.held[0]
+	if g.Episode != "S04E22" || !g.Files[0].InLibrary || g.Files[0].Label != "库内已有" || g.Files[1].Label != "新进来的" {
+		t.Fatalf("组：%+v", g)
+	}
+	if !strings.Contains(dupHoldMessage(out.held), "库里已有") {
+		t.Fatalf("提示：%s", dupHoldMessage(out.held))
+	}
+	// 只留新的：库里那份让位，新的用原名（不加字母）
+	c, _ := buildDupChoice(out.held, []dupAction{{Action: "keep", Fid: "new"}})
+	out = settleCollisions([]remoteFile{nw}, targetOf, nil, c, lib)
+	if len(out.libDrop) != 1 || len(out.keep) != 1 || out.variants["new"] != "" {
+		t.Fatalf("只留新的：%+v", out)
+	}
+	// 都留：库里那份不动（占着 A），新的 #B
+	c, _ = buildDupChoice([]dupGroup{g}, []dupAction{{Action: "keep_all"}})
+	out = settleCollisions([]remoteFile{nw}, targetOf, nil, c, lib)
+	if len(out.keep) != 1 || out.variants["new"] != "B" || len(out.libDrop) != 0 || out.variants["lib22"] != "" {
+		t.Fatalf("都留：%+v", out)
+	}
+	// 只留库里的：新的移冗余
+	c, _ = buildDupChoice([]dupGroup{g}, []dupAction{{Action: "keep", Fid: "lib22"}})
+	out = settleCollisions([]remoteFile{nw}, targetOf, nil, c, lib)
+	if len(out.keep) != 0 || len(out.drop) != 1 || len(out.libDrop) != 0 {
+		t.Fatalf("只留库里的：%+v", out)
+	}
+	// sha1 相同：不问，新的算多余副本
+	same := nw
+	same.Sha1 = "LIB"
+	out = settleCollisions([]remoteFile{same}, targetOf, nil, nil, lib)
+	if len(out.held) != 0 || len(out.drop) != 1 || out.copies != 1 || len(out.keep) != 0 {
+		t.Fatalf("同一份：%+v", out)
+	}
+}
+
+// 库里那份让位：视频连同跟着它的字幕一起搬（一次 move），台账行清掉
+func TestDropLibraryCopies(t *testing.T) {
+	washTestDB(t)
+	rows := libRows()
+	for i := range rows {
+		model.DB.Create(&rows[i])
+	}
+	ops := &washRecOps{}
+	dir := "剧集/越狱 (2005)/Season 4"
+	err := dropLibraryCopies(ops, &OrgConfig{Redundant: "r"}, &TmdbMedia{Title: "越狱", MediaType: "tv"},
+		[]remoteFile{{Fid: "lib22"}}, map[string]string{"lib22": dir + "/越狱.S04E22.1080p.mkv"},
+		func(string) []model.SyncedFile { return rows }, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops.moveCalls) != 1 || !reflect.DeepEqual(ops.moveCalls[0], []string{"lib22", "lib22sub"}) {
+		t.Fatalf("一次搬走视频和字幕：%v", ops.moveCalls)
+	}
+	var n int64
+	model.DB.Model(&model.SyncedFile{}).Where("file_id IN ?", []string{"lib22", "lib22sub"}).Count(&n)
+	if n != 0 {
+		t.Fatal("让位的台账行要清掉")
+	}
+	model.DB.Model(&model.SyncedFile{}).Where("file_id = ?", "lib21").Count(&n)
+	if n != 1 {
+		t.Fatal("别的集不能动")
 	}
 }

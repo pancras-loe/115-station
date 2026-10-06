@@ -486,7 +486,12 @@ git tag v1.2.0 && git push origin v1.2.0
       （维护者定的，`strict` 只给库内体检用），要改名才撞上的返回 `redoDupError`：任务失败，`holdRedoDup` 把各组记到记录上、
       这次要整理成的条目记进暂存指定；用户在记录上选完，`submitDupChoice` 对非待确认的记录入「重新整理」队列，
       执行时 `po.choice` 生效：不要的（含字幕 / 集 NFO）移冗余、本地产物第 3 步按 fid 收掉，都留的按 `#A` `#B` 改名。
-    - 散文件（`processSingleFile`）还没接。测试 `orgdup_test.go` / `orgdupbot_test.go` / `redo_dupname_test.go`。
+    - **和库里已有的撞名**（新文件改名后与库内某份同名、不是同一份文件、洗版也没把它换掉）同样停下来问（维护者定的）：
+      `libraryClashes` 按台账的 STRM 名比（网盘文件名台账没存；新旧两种 STRM 写法都认，这次洗版让位的不算），
+      查到的库内那份以 `InLibrary` 成员进组。选「只留新的」→ `dropLibraryCopies` 走 `applyWashPlans` 让位（去向固定冗余），
+      「都留」→ 库内那份不动、占着 A，新的从 `#B` 起；「只留库里的」→ 新的移冗余。散文件（`processSingleFile`）也走这一套：
+      同一集几份散文件是一个一个整理的，后一个就撞上库里刚进的那份。同前缀兄弟（`organizeIdentifiedFile`）还没接。
+    - 测试 `orgdup_test.go` / `orgdupbot_test.go` / `redo_dupname_test.go`。
 
 ---
 

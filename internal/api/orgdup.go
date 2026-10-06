@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -57,6 +58,9 @@ type dupFile struct {
 	Label string `json:"label,omitempty"`
 	// Rank 命中洗版策略优先级的第几条（0 最优），没命中或没配策略为 -1
 	Rank int `json:"rank"`
+	// InLibrary 这一份是库里已有的（新进来的文件改名后和它同名）。Name 是按台账推出的名字。
+	// 选「只留新的」时它移冗余；都留时它不动、新的从 #B 起
+	InLibrary bool `json:"in_library,omitempty"`
 }
 
 // dupGroup 一组撞名的文件
@@ -73,13 +77,14 @@ type dupGroup struct {
 type dupOutcome struct {
 	keep     []remoteFile      // 照常入库（含已经选过、要加后缀字母的）
 	drop     []remoteFile      // 移冗余：sha1 相同的多余副本 + 用户不要的
+	libDrop  []remoteFile      // 库里已有、用户不要了的（移冗余，台账与本地产物一并清）
 	held     []dupGroup        // 停下来等用户选的组
 	heldFids map[string]bool   // 停下的视频
 	variants map[string]string // fid → 后缀字母
 	copies   int               // sha1 相同自动去掉的份数（日志用）
 }
 
-func (o dupOutcome) changed() bool { return len(o.drop) > 0 || len(o.held) > 0 }
+func (o dupOutcome) changed() bool { return len(o.drop) > 0 || len(o.held) > 0 || len(o.libDrop) > 0 }
 
 // dupChoiceDrop / dupChoiceKeep DupChoice 里的两种取值，其余是后缀字母 A..Z
 const (
@@ -89,10 +94,24 @@ const (
 
 // settleCollisions 纯计算：videos 按 targetOf 分组，处理撞名。
 // targetOf 返回 落点 与 集号标签；rankOf 给文件名按洗版策略排名（-1 = 没命中）；
-// choice 是用户的选择（没选过为 nil），只有覆盖了一组里的每一份才算选过 —— 后来又多出一份时照样再问
+// choice 是用户的选择（没选过为 nil），只有覆盖了一组里的每一份才算选过 —— 后来又多出一份时照样再问。
+// lib 是库里已有、和这批新文件同名的那几份（libraryClashes 查出来的），排在最前：sha1 相同时留库里的；
+// 它们只用来凑组，本身不进 keep —— 本来就在库里
 func settleCollisions(videos []remoteFile, targetOf func(remoteFile) (string, string),
-	rankOf func(string) int, choice map[string]string) dupOutcome {
+	rankOf func(string) int, choice map[string]string, lib ...remoteFile) dupOutcome {
 	out := dupOutcome{heldFids: map[string]bool{}, variants: map[string]string{}}
+	libFids := map[string]bool{}
+	for _, l := range lib {
+		libFids[l.Fid] = true
+	}
+	videos = append(append([]remoteFile(nil), lib...), videos...)
+	keep := func(vs ...remoteFile) {
+		for _, v := range vs {
+			if !libFids[v.Fid] {
+				out.keep = append(out.keep, v)
+			}
+		}
+	}
 	byTarget := map[string][]remoteFile{}
 	episodeOf := map[string]string{}
 	var order []string
@@ -100,14 +119,16 @@ func settleCollisions(videos []remoteFile, targetOf func(remoteFile) (string, st
 		t, ep := targetOf(v)
 		if _, ok := byTarget[t]; !ok {
 			order = append(order, t)
-			episodeOf[t] = ep
+		}
+		if episodeOf[t] == "" {
+			episodeOf[t] = ep // 库里那几份排在前面、给不出集号，取同组新文件的
 		}
 		byTarget[t] = append(byTarget[t], v)
 	}
 	for _, t := range order {
 		group := byTarget[t]
 		if len(group) == 1 {
-			out.keep = append(out.keep, group[0])
+			keep(group[0])
 			continue
 		}
 		// 同一份文件（sha1 相同）：不问，留第一份
@@ -122,11 +143,17 @@ func settleCollisions(videos []remoteFile, targetOf func(remoteFile) (string, st
 			seen[strings.ToUpper(v.Sha1)] = true
 			distinct = append(distinct, v)
 		}
-		if len(distinct) == 1 {
-			out.keep = append(out.keep, distinct[0])
+		news := 0
+		for _, v := range distinct {
+			if !libFids[v.Fid] {
+				news++
+			}
+		}
+		if len(distinct) == 1 || news == 0 {
+			keep(distinct...) // 只剩一份，或全是库里的（不是这次撞上的）
 			continue
 		}
-		g := buildDupGroup(t, episodeOf[t], distinct, rankOf)
+		g := buildDupGroup(t, episodeOf[t], distinct, rankOf, libFids)
 		if !choiceCovers(choice, distinct) {
 			out.held = append(out.held, g)
 			for _, v := range distinct {
@@ -136,16 +163,21 @@ func settleCollisions(videos []remoteFile, targetOf func(remoteFile) (string, st
 		}
 		var kept []remoteFile
 		for _, v := range distinct {
-			if choice[v.Fid] == dupChoiceDrop {
-				out.drop = append(out.drop, v)
-			} else {
+			switch {
+			case choice[v.Fid] != dupChoiceDrop:
 				kept = append(kept, v)
+			case libFids[v.Fid]:
+				out.libDrop = append(out.libDrop, v)
+			default:
+				out.drop = append(out.drop, v)
 			}
 		}
-		out.keep = append(out.keep, kept...)
+		keep(kept...)
 		if len(kept) > 1 {
 			for fid, l := range assignVariants(g, kept, choice) {
-				out.variants[fid] = l
+				if !libFids[fid] { // 库里那份不改名：它占着 A，新的从 B 起
+					out.variants[fid] = l
+				}
 			}
 		}
 	}
@@ -206,6 +238,9 @@ func variantOrder(g dupGroup, fids []string) []string {
 	out := append([]string(nil), fids...)
 	sort.SliceStable(out, func(i, j int) bool {
 		a, b := info[out[i]], info[out[j]]
+		if a.InLibrary != b.InLibrary {
+			return a.InLibrary // 库里那份不改名，算它占着 A
+		}
 		if (a.Fid == g.Recommend) != (b.Fid == g.Recommend) {
 			return a.Fid == g.Recommend
 		}
@@ -218,20 +253,37 @@ func variantOrder(g dupGroup, fids []string) []string {
 }
 
 // buildDupGroup 组装一组撞名文件给用户看：区别词、洗版排名、推荐
-func buildDupGroup(target, episode string, files []remoteFile, rankOf func(string) int) dupGroup {
+func buildDupGroup(target, episode string, files []remoteFile, rankOf func(string) int, libFids map[string]bool) dupGroup {
 	g := dupGroup{Target: target, Episode: episode}
-	names := make([]string, len(files))
-	for i, f := range files {
-		names[i] = f.Name
+	// 区别词只在新文件之间比：库里那份的名字是模板改过的，拿来比只会把新文件的整串画质都算成「不同」
+	var newNames []string
+	for _, f := range files {
+		if !libFids[f.Fid] {
+			newNames = append(newNames, f.Name)
+		}
 	}
-	labels := dupLabels(names)
+	newLabels := dupLabels(newNames)
+	labels := make([]string, len(files))
+	for i, j := 0, 0; i < len(files); i++ {
+		if libFids[files[i].Fid] {
+			labels[i] = "库内已有"
+			continue
+		}
+		if len(newNames) > 1 {
+			labels[i] = newLabels[j]
+		} else {
+			labels[i] = "新进来的"
+		}
+		j++
+	}
 	best, bestN := -1, 0
 	for i, f := range files {
 		r := -1
 		if rankOf != nil {
 			r = rankOf(f.Name)
 		}
-		g.Files = append(g.Files, dupFile{Fid: f.Fid, Name: f.Name, Size: f.Size, Label: labels[i], Rank: r})
+		g.Files = append(g.Files, dupFile{Fid: f.Fid, Name: f.Name, Size: f.Size, Label: labels[i], Rank: r,
+			InLibrary: libFids[f.Fid]})
 		switch {
 		case r < 0:
 		case best < 0 || r < best:
@@ -284,6 +336,80 @@ func dupLabels(names []string) []string {
 	return out
 }
 
+// libraryClashes 库里已有、和这批新文件改名后同名的视频（targets：fid → 库内目录 / 新名）。
+// 网盘上的文件名台账没存，按 STRM 名比：新写法是视频名去掉扩展名，旧写法是视频名加 .strm（strmname.go）。
+// skip 是不算的台账行：这次洗版让位的旧版（马上就搬走了）、这批文件自己
+func libraryClashes(targets map[string]string, rowsOf func(dir string) []model.SyncedFile, skip map[string]bool) (lib []remoteFile, libTarget map[string]string) {
+	libTarget = map[string]string{}
+	keys := make([]string, 0, len(targets))
+	for fid := range targets {
+		keys = append(keys, fid)
+	}
+	sort.Strings(keys) // 结果顺序稳定
+	for _, fid := range keys {
+		t := targets[fid]
+		dir, name := pathDir(t), pathBase(t)
+		for _, sf := range rowsOf(dir) {
+			if skip[sf.FileID] || libTarget[sf.FileID] != "" || !ledgerIsVideo(sf) {
+				continue
+			}
+			if b := path.Base(sf.RelPath); b != strmNameOf(name) && b != legacyStrmNameOf(name) {
+				continue
+			}
+			shown := ledgerName(sf)
+			if classifyFile(shown) != FileTypeVideo {
+				shown += pathExt(name) // 新写法的 STRM 名不带扩展名，按新文件的补上
+			}
+			lib = append(lib, remoteFile{Fid: sf.FileID, Name: shown, Size: sf.Size, Sha1: sf.Sha1, PickCode: sf.PickCode})
+			libTarget[sf.FileID] = t
+		}
+	}
+	return lib, libTarget
+}
+
+// dropLibraryCopies 用户不要了的库内那几份：移冗余，台账与本地产物一并清、通知 Emby。
+// 走洗版让位同一个执行（applyWashPlans），跟着它命名的字幕一起让位；去向固定冗余（维护者定的），不看洗版策略
+func dropLibraryCopies(ops washFileOps, cfg *OrgConfig, media *TmdbMedia, libDrop []remoteFile, libTarget map[string]string,
+	rowsOf func(dir string) []model.SyncedFile, onLog func(string)) error {
+	if len(libDrop) == 0 {
+		return nil
+	}
+	byDir := map[string][]string{} // 库内目录 → 要让位的 fid
+	var dirs []string
+	for _, f := range libDrop {
+		dir := pathDir(libTarget[f.Fid])
+		if _, ok := byDir[dir]; !ok {
+			dirs = append(dirs, dir)
+		}
+		byDir[dir] = append(byDir[dir], f.Fid)
+	}
+	var plans []*washPlan
+	for _, dir := range dirs {
+		rows := rowsOf(dir)
+		want := map[string]bool{}
+		for _, fid := range byDir[dir] {
+			want[fid] = true
+		}
+		var victims []model.SyncedFile
+		var stems []string
+		for _, sf := range rows {
+			if want[sf.FileID] {
+				victims = append(victims, sf)
+				stems = append(stems, baseName(ledgerName(sf)))
+			}
+		}
+		victims = append(victims, followingSubtitles(rows, stems)...)
+		if len(victims) > 0 {
+			plans = append(plans, &washPlan{decision: washReplaced, victims: victims, targetDir: dir})
+		}
+	}
+	if len(plans) == 0 {
+		return nil
+	}
+	onLog(fmt.Sprintf("○ 同集多份：库里 %d 份用户不要了，移到冗余", len(libDrop)))
+	return applyWashPlans(ops, cfg, media, &washStrategy{OldVersionTarget: "redundant"}, plans, onLog, notifyEmbyDeleted)
+}
+
 // dupCompanions files 里跟着 videos 命名的附属文件（字幕、集 NFO、剧照）：视频停下 / 移走时它们一起
 func dupCompanions(videos []remoteFile, files []remoteFile) []remoteFile {
 	if len(videos) == 0 {
@@ -334,6 +460,12 @@ func dupHoldMessage(groups []dupGroup) string {
 		what = pathBase(g.Target)
 	}
 	msg := fmt.Sprintf("%s 有 %d 份不同的文件，改名后会重名", what, len(g.Files))
+	for _, f := range g.Files {
+		if f.InLibrary {
+			msg = fmt.Sprintf("%s 新进来的文件改名后和库里已有的那份重名", what)
+			break
+		}
+	}
 	if len(labels) == len(g.Files) {
 		msg += "（" + strings.Join(labels, " / ") + "）"
 	}

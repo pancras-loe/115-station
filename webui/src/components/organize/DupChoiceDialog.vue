@@ -54,9 +54,10 @@ function fileLabel(g: DupGroup, i: number) {
   return g.files[i].label || `第 ${i + 1} 份`
 }
 
-/** 都留时的字母顺序（与后端 variantOrder 一致）：推荐的那份最前，其余体积从大到小 */
+/** 都留时的字母顺序（与后端 variantOrder 一致）：库里那份最前（它不改名，占着 A），再是推荐的，其余体积从大到小 */
 function variantLetters(g: DupGroup): Record<string, string> {
   const order = [...g.files].sort((a, b) => {
+    if (!!a.in_library !== !!b.in_library) return a.in_library ? -1 : 1
     const ra = a.fid === g.recommend ? 0 : 1
     const rb = b.fid === g.recommend ? 0 : 1
     if (ra !== rb) return ra - rb
@@ -72,6 +73,13 @@ function withVariant(name: string, v: string) {
 }
 function targetName(g: DupGroup) {
   return g.target.split('/').pop() || g.target
+}
+function keptName(g: DupGroup, fid: string) {
+  const f = g.files.find((x) => x.fid === fid)
+  return f?.in_library ? `${targetName(g)}（不动）` : withVariant(targetName(g), variantLetters(g)[fid])
+}
+function hasLibrary(g: DupGroup) {
+  return g.files.some((f) => f.in_library)
 }
 
 /**
@@ -121,6 +129,9 @@ function submit() {
           <b>{{ g.episode || '同一部' }}</b>
           <span class="dim" :title="g.target">改名后都叫 {{ targetName(g) }}</span>
         </header>
+        <p v-if="hasLibrary(g)" class="lib-note">
+          新进来的文件和库里已有的那份同名。留新的：库里那份移到「冗余」，它的 STRM 一并清掉；都留：库里那份不动，新的加 #B。
+        </p>
 
         <div class="opts" role="radiogroup" :aria-label="`${g.episode || targetName(g)} 的选择`">
           <button
@@ -136,6 +147,7 @@ function submit() {
             <span class="opt-head">
               <b>只留「{{ fileLabel(g, fi) }}」</b>
               <span v-if="f.size" class="dim">{{ bytes(f.size) }}</span>
+              <HChip v-if="f.in_library" color="accent">库内已有</HChip>
               <HChip v-if="g.recommend === f.fid" color="success" :title="g.reason">推荐</HChip>
             </span>
             <span class="opt-name" :title="f.name">{{ f.name }}</span>
@@ -151,7 +163,7 @@ function submit() {
           >
             <span class="opt-head"><b>都保留</b></span>
             <span v-for="(f, fi) in g.files" :key="f.fid" class="opt-name">
-              {{ fileLabel(g, fi) }} → {{ withVariant(targetName(g), variantLetters(g)[f.fid]) }}
+              {{ fileLabel(g, fi) }} → {{ keptName(g, f.fid) }}
             </span>
           </button>
 
@@ -216,6 +228,11 @@ function submit() {
   align-items: baseline;
   gap: 8px;
   min-width: 0;
+}
+.lib-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 .group-head .dim {
   overflow: hidden;

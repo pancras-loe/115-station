@@ -2042,13 +2042,29 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 同一次整理里几份不同的文件改出同一个名字（同一集的粤语 / 英语两份）：不替用户挑，
 	// 停下来让用户选；sha1 相同的多余副本直接移冗余（orgdup.go）。必须在任何改名 / 搬移之前：
 	// 115 遇到同名会把后到的悄悄改成「xxx(1).mkv」，记录、台账、STRM 就和网盘对不上了
+	// 库里已有、改名后同名的（不是同一份文件，洗版也没把它换掉）同样算进来问：
+	// 这次让位的旧版不算（马上就搬走了）
+	targets := map[string]string{}
+	for _, vf := range accepted {
+		targets[vf.Fid] = vplace.relOf[vf.Fid] + "/" + plannedVideoName(media, vf, eps[vf.Fid], "")
+	}
+	leaving := map[string]bool{}
+	for _, p := range planOf {
+		for _, v := range p.victims {
+			leaving[v.FileID] = true
+		}
+	}
+	libClash, libTarget := libraryClashes(targets, sc.libFiles, leaving)
 	dup := settleCollisions(accepted, func(vf remoteFile) (string, string) {
+		if t, ok := libTarget[vf.Fid]; ok {
+			return t, ""
+		}
 		ep := ""
 		if p := eps[vf.Fid]; p != nil && p.Episode > 0 && media.MediaType == "tv" {
 			ep = fmt.Sprintf("S%02d%s", p.Season, p.episodeTag())
 		}
-		return vplace.relOf[vf.Fid] + "/" + plannedVideoName(media, vf, eps[vf.Fid], ""), ep
-	}, func(name string) int { return washRankIn(st, name) }, ctx.dupChoice)
+		return targets[vf.Fid], ep
+	}, func(name string) int { return washRankIn(st, name) }, ctx.dupChoice, libClash...)
 	holdLeft := len(dup.held) > 0 // 源目录里还有等着选的文件：收尾不收拾源目录
 	if dup.changed() {
 		accepted = dup.keep
@@ -2071,6 +2087,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 				what = fmt.Sprintf("%d 个不要的版本与 %d 个重复副本", len(dup.drop)-dup.copies, dup.copies)
 			}
 			onLog(fmt.Sprintf("○ %s/ - 撞名处理：%s已移到 冗余/%s", dir.Name, what, junkRel))
+		}
+		// 用户选了「只留新的」：库里那份先让位（移冗余、清台账与本地产物），新的才能用这个名字
+		if err := dropLibraryCopies(ops, cfg, media, dup.libDrop, libTarget, sc.libFiles, onLog); err != nil {
+			failMedia("failed", "move", "库内同名的那份移到冗余失败: "+err.Error(), media, category, targetDir)
+			return append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: err.Error()})
 		}
 		if holdLeft {
 			var heldVideos []remoteFile
@@ -2982,6 +3003,80 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		return result, nil
 	}
 
+	// 改名后和库里已有的那份同名（不是同一个文件、洗版也没把它换掉）：停下来问（orgdup.go）。
+	// 散文件的同一集几份（粤语 / 英语）是一个一个整理的，后一个就落在这里 —— 不拦的话 115 会把它悄悄改成 xxx(1).mkv
+	variant := ""
+	{
+		prefix, prefixGot := "", false
+		rowsOf := func(dir string) []model.SyncedFile {
+			if !prefixGot {
+				prefix, prefixGot = ledgerPrefixOf(ops, cfg), true
+			}
+			return libraryFilesOf(dir, prefix)
+		}
+		target := targetDir + "/" + pathBase(newPath)
+		if libClash, libTarget := libraryClashes(map[string]string{f.Fid: target}, rowsOf, nil); len(libClash) > 0 {
+			ep := ""
+			if parsed.Episode > 0 && media.MediaType == "tv" {
+				ep = fmt.Sprintf("S%02d%s", parsed.Season, parsed.episodeTag())
+			}
+			st := matchWashStrategy(media.MediaType, category)
+			dup := settleCollisions([]remoteFile{f}, func(rf remoteFile) (string, string) {
+				if t, ok := libTarget[rf.Fid]; ok {
+					return t, ""
+				}
+				return target, ep
+			}, func(n string) int { return washRankIn(st, n) }, ctx.dupChoice, libClash...)
+			if len(dup.held) > 0 {
+				groupsJSON, _ := json.Marshal(dup.held)
+				msg := dupHoldMessage(dup.held)
+				onLog(fmt.Sprintf("⏸ %s - %s（整理记录 → 待确认）", f.Name, msg))
+				heldRec := &model.OrganizeRecord{
+					Source: f.Name, SourceFid: f.Fid, SourceKind: "file", SourceCid: cfg.Pending,
+					Status: orgStatusAwaiting, Stage: "confirm", Message: msg,
+					TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+					MediaType: media.MediaType, PosterPath: media.PosterPath,
+					Category: category, TargetDir: rootRel,
+					Files: marshalRecordFiles(self), VideoCount: 1, TotalSize: f.Size,
+					HoldDup: true, DupGroups: string(groupsJSON),
+				}
+				ctx.sink.note(heldRec)
+				go notifyDupHold(heldRec)
+				result.Status, result.Message = orgStatusAwaiting, msg
+				return result, nil
+			}
+			// 「只留新的」「都不要」：库里那份先让位
+			if err := dropLibraryCopies(ops, cfg, media, dup.libDrop, libTarget, rowsOf, onLog); err != nil {
+				result.Status, result.Message = "failed", "库内同名的那份移到冗余失败: "+err.Error()
+				return fail("failed", "move", result.Message)
+			}
+			if len(dup.keep) == 0 {
+				// 「只留库里的」「都不要」（或其实是同一份文件）：新的移冗余，字幕跟着走
+				holdingCid, err := moveToHoldingDir(ops, cfg.Redundant, holdingDir, []string{f.Fid})
+				if err != nil {
+					result.Status, result.Message = "failed", "移到冗余失败: "+err.Error()
+					return fail("failed", "move", result.Message)
+				}
+				appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
+				msg := "同集多份：没留这一份，已移到 冗余/" + holdingDir
+				result.Status, result.Message = "exists", msg
+				onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
+				ctx.sink.note(&model.OrganizeRecord{
+					Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
+					Status: "exists", Message: msg,
+					TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+					MediaType: media.MediaType, PosterPath: media.PosterPath,
+					Category: category, TargetDir: targetDir,
+					Files: marshalRecordFiles(self),
+				})
+				return result, nil
+			}
+			if variant = dup.variants[f.Fid]; variant != "" {
+				newPath = pathDir(newPath) + "/" + withVariant(pathBase(newPath), variant) // 都留：库里那份不动，这份加 #B
+			}
+		}
+	}
+
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
 		result.Status = "failed"
@@ -3020,7 +3115,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		filepath.Join(ctx.sink.localRoot, filepath.FromSlash(ctx.sink.libRel(targetDir)))))
 
 	recFiles := []orgRecordFile{{Fid: f.Fid, Name: finalName, Orig: recordOrig(f.Name, finalName),
-		Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1}}
+		Kind: "video", PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1, Variant: variant}}
 	for _, a := range attachments {
 		recFiles = append(recFiles, orgRecordFile{Fid: a.Fid, Name: a.Name, Kind: recordFileKind(a.Name), PickCode: a.PickCode, Sha1: a.Sha1})
 	}

@@ -61,6 +61,8 @@ export interface DupFile {
   label?: string
   /** 命中洗版策略优先级第几条（0 最优），-1 没命中 */
   rank: number
+  /** 库里已有的那份（新进来的文件改名后和它同名）：只留新的时它移冗余，都留时它不动、新的加 #B */
+  in_library?: boolean
 }
 
 /** 一组改名后会重名的文件 */
