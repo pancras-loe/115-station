@@ -187,6 +187,26 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
 export const submitDupChoice = (id: number, actions: DupAction[]) =>
   http.post<QueuedReply>(`/organize/records/${id}/dup`, { actions })
 
+/** 库内疑似同集多份（只读台账）的一组 */
+export interface DupScanItem {
+  /** 分类 / 标题目录（整理记录的 target_dir 口径） */
+  title_rel: string
+  title: string
+  /** 这几份所在的目录（台账口径，含库名） */
+  dir: string
+  /** same_name 两份同名 / auto_renamed 被 115 自动改成 xxx(1) */
+  kind: string
+  files: { file_id: string; name: string; size?: number }[]
+  /** 能发起严格重新整理的整理记录；没有时到网盘文件页对片目「整理」 */
+  record_id?: number
+}
+
+export const dupScan = () => http.get<{ data: DupScanItem[] }>('/organize/dup-scan', { timeoutMs: 30_000 })
+
+/** 按记录严格重新整理一次：同名并排的也停下来，在记录上选 */
+export const dupScanRedo = (recordId: number) =>
+  http.post<QueuedReply>('/organize/dup-scan/redo', { record_id: recordId })
+
 /** 批量按识别结果入库；没识别出来的由后端跳过 */
 /** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */
 export const ignoreRecord = (id: number) => http.post<QueuedReply>(`/organize/records/${id}/ignore`, {})

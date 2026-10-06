@@ -114,7 +114,7 @@ func execRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if err := redoPrecheck(&rec); err != nil {
 		return jobOutcome{}, err
 	}
-	if err := h.redoOrganize(&rec, p.TmdbID, p.MediaType); err != nil {
+	if err := h.redoOrganizeWith(&rec, p.TmdbID, p.MediaType, &redoOpts{strictDup: p.StrictDup}); err != nil {
 		return jobOutcome{}, err
 	}
 	return jobOutcome{Message: rec.Message}, nil

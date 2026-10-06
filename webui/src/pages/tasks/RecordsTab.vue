@@ -30,6 +30,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
 import DupChoiceDialog from '@/components/organize/DupChoiceDialog.vue'
+import DupScanDialog from '@/components/organize/DupScanDialog.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import { organizeApi, resourcesApi } from '@/api'
 import type { DupAction, OrganizeRecord } from '@/api/organize'
@@ -350,6 +351,8 @@ function dupNote(r: OrganizeRecord) {
 }
 
 const dupShow = ref(false)
+/** 库内同集多份体检弹窗 */
+const scanShow = ref(false)
 const dupTarget = ref<OrganizeRecord | null>(null)
 
 function openDup(r: OrganizeRecord) {
@@ -504,6 +507,10 @@ async function clearAll() {
           </HButton>
         </HTooltip>
         <span class="grow" />
+        <HButton variant="tertiary" title="找出库里已经并排的同一集几份（两份同名、被 115 改成 xxx(1) 的）" @click="scanShow = true">
+          <template #icon><Copy /></template>
+          <span class="btn-label">库内同集多份</span>
+        </HButton>
         <HPopconfirm danger confirm-text="清空" :disabled="!total" @confirm="clearAll">
           <HButton variant="danger-soft" :disabled="!total">
             <template #icon><Trash2 /></template>
@@ -822,6 +829,7 @@ async function clearAll() {
 
     <RedoDialog v-model:show="pickShow" :record="pickTarget" :mode="pickMode" @confirm="doPick" @stage="doStage" />
     <DupChoiceDialog v-model:show="dupShow" :record="dupTarget" @submit="doDup" />
+    <DupScanDialog v-model:show="scanShow" />
   </div>
 </template>
 

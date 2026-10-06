@@ -82,6 +82,8 @@ type jobParams struct {
 	Local *localScrapeParams `json:"local,omitempty"`
 	// Probe 手动 Emby 提前探测（embyprobejob.go）
 	Probe *probeJobParams `json:"probe,omitempty"`
+	// StrictDup 库内同集多份体检发起的重新整理：同名并排的也停下来问（orgdupscan.go）
+	StrictDup bool `json:"strict_dup,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

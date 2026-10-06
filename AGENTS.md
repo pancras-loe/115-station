@@ -491,7 +491,10 @@ git tag v1.2.0 && git push origin v1.2.0
       查到的库内那份以 `InLibrary` 成员进组。选「只留新的」→ `dropLibraryCopies` 走 `applyWashPlans` 让位（去向固定冗余），
       「都留」→ 库内那份不动、占着 A，新的从 `#B` 起；「只留库里的」→ 新的移冗余。散文件（`processSingleFile`）也走这一套：
       同一集几份散文件是一个一个整理的，后一个就撞上库里刚进的那份。同前缀兄弟（`organizeIdentifiedFile`）还没接。
-    - 测试 `orgdup_test.go` / `orgdupbot_test.go` / `redo_dupname_test.go`。
+    - **库内同集多份体检**（`orgdupscan.go`，整理记录页「库内同集多份」）：只读台账、零 115 请求，按「目录 + 视频基名」分组
+      （STRM 新旧写法、115 自动加的 `(1)` 都归一，`#A` `#B` 已分好的不算），找出早就并排躺在库里的几份。
+      整理记录里两份都登记了的可以「处理」：`strictDup` 严格重新整理一次（同名并排的也停下来），之后在记录上选；没记录的引导到网盘文件页对片目「整理」。
+    - 测试 `orgdup_test.go` / `orgdupbot_test.go` / `redo_dupname_test.go` / `orgdupscan_test.go`。
 
 ---
 
