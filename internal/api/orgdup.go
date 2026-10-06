@@ -411,7 +411,7 @@ func parseDupChoice(s string) map[string]string {
 // override：网页可以在排队期间改选（以最后一次为准，执行时才读记录上的选择）；
 // 机器人与超时传 false，只认还没选过的 —— 谁先选算谁的，后到的不能把人刚选的盖掉
 func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction, source string, override bool) (model.TaskJob, error) {
-	if rec.Status != orgStatusAwaiting || !rec.HoldDup {
+	if !rec.HoldDup {
 		return model.TaskJob{}, errors.New("这条记录不在「同集多份待选」状态（可能已经处理过）")
 	}
 	choice, err := buildDupChoice(parseDupGroups(rec.DupGroups), actions)
@@ -419,8 +419,7 @@ func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction
 		return model.TaskJob{}, err
 	}
 	b, _ := json.Marshal(choice)
-	q := h.DB.Model(&model.OrganizeRecord{}).
-		Where("id = ? AND status = ? AND hold_dup = ?", rec.ID, orgStatusAwaiting, true)
+	q := h.DB.Model(&model.OrganizeRecord{}).Where("id = ? AND status = ? AND hold_dup = ?", rec.ID, rec.Status, true)
 	if !override {
 		q = q.Where("dup_choice = '' OR dup_choice IS NULL")
 	}
@@ -435,7 +434,17 @@ func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction
 		return model.TaskJob{}, errors.New("这条记录刚被处理过，请刷新")
 	}
 	rec.DupChoice = string(b)
-	job, err := h.enqueueConfirm(rec, pickReq{})
+	var job model.TaskJob
+	if rec.Status == orgStatusAwaiting {
+		job, err = h.enqueueConfirm(rec, pickReq{})
+	} else {
+		// 重新整理撞名停下的：按停下时那次要整理成的条目（暂存指定）再来一次，这回带着选择
+		pick := pickReq{TmdbID: rec.PendingTmdbID, MediaType: rec.PendingMediaType, Label: rec.PendingLabel}
+		if pick.TmdbID <= 0 {
+			pick = pickReq{TmdbID: rec.TmdbID, MediaType: rec.MediaType}
+		}
+		job, err = h.enqueueRedo(rec, pick)
+	}
 	if err == nil && source != "" && source != "web" {
 		h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("source", source)
 	}

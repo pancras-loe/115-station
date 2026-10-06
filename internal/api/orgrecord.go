@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -205,6 +207,8 @@ type redoOpts struct {
 	pruneDirs map[string]string
 	// message 成功后写进记录的说明（空则用默认的「已按手动指定的 TMDB 条目重新整理」）
 	message string
+	// strictDup 早就同名并排的几份也要问（库内同集多份体检发起的，见 orgdupscan.go）
+	strictDup bool
 }
 
 func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaType string, opt *redoOpts) error {
@@ -273,7 +277,11 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 顺序很重要：破坏性动作（删本地产物、动网盘）必须排在计算之后。
 	// 此前先删本地再算，中途任何一步失败都会让用户落得「STRM 没了还报错」
 	category := classifyMedia(media)
-	plan, err := planRedoLayoutWith(media, category, files, rec.Source, loadReplaceRules(), func(eps map[string]*ParsedName) {
+	po := redoPlanOpts{strict: opt.strictDup}
+	if rec.HoldDup {
+		po.choice = parseDupChoice(rec.DupChoice) // 撞名停下、用户在记录上选过的
+	}
+	plan, err := planRedoLayoutOpt(media, category, files, rec.Source, loadReplaceRules(), func(eps map[string]*ParsedName) {
 		logf := func(m string) { log.Printf("[整理] %s", m) }
 		remapAbsEpisodesTmdb(tc, media, withoutPicked(eps, opt.episodes), logf)
 		names := map[string]string{}
@@ -284,7 +292,11 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 		}
 		matchSpecialsTmdb(tc, media, withoutPicked(eps, opt.episodes), names, logf)
 		applyEpisodePicks(eps, opt.episodes)
-	})
+	}, po)
+	var dupErr *redoDupError
+	if errors.As(err, &dupErr) && len(opt.episodes) == 0 {
+		h.holdRedoDup(rec, dupErr.groups, media, opt.strictDup)
+	}
 	if err != nil {
 		return err
 	}
@@ -305,6 +317,20 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	// 手动重整理是「修一下」的意思：STRM 一律按当前配置重写，
 	// 不受「已存在则跳过」影响（否则换了直链域名也刷不动）
 	sink.skipExist = false
+
+	// 撞名时不要的那几份（含 sha1 相同的多余副本）先移冗余：和改名搬移一样是网盘动作，排在布局算完之后。
+	// 它们的本地 STRM / 集 NFO 不在下面的 keep 里，第 3 步按 fid 一并收掉
+	if len(plan.drops) > 0 {
+		fids := make([]string, 0, len(plan.drops))
+		for _, f := range plan.drops {
+			fids = append(fids, f.Fid)
+		}
+		holding := sanitizePath(pathBase(rootRel))
+		if _, err := moveToHoldingDir(ops, cfg.Redundant, holding, fids); err != nil {
+			return fmt.Errorf("撞名不要的文件移到冗余失败: %w", err)
+		}
+		log.Printf("[整理] ○ 撞名处理：%d 个不要的文件已移到 冗余/%s", len(fids), holding)
+	}
 
 	// ---- 2) 原地改名 + 搬移（原地刷新时整段跳过）----
 	rootCid := rec.TargetCid
@@ -460,6 +486,7 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	rec.TotalSize = totalSize
 	rec.StrmCreated = strmTotal
 	rec.ManualTmdb = true
+	rec.HoldDup, rec.DupGroups, rec.DupChoice = false, "", "" // 撞名选过了，这次已按选择处理
 	rec.RedoCount++
 	if id, _ := currentJob(); id != 0 {
 		rec.JobID = id // 重新整理不经过 orgSink.note，自己记
@@ -491,31 +518,24 @@ func dedupRecordFids(files []orgRecordFile) []orgRecordFile {
 	return out
 }
 
-// redoNameClash 两个视频算出同一个落点时的报错。分两种说：
-//   - 两个都明写了同一个季集号：是同一集的两份文件（网盘允许同目录同名，上一次整理就是这样并排放进去的），
-//     改识别规则没用，得挪走一份；
-//   - 否则才是季集号没认出来，照旧提示加替换规则。
-//
-// 2026-10-06 现场：越狱 S04E22 两份同名文件，提示却叫用户去加替换规则
-func redoNameClash(a, b orgRecordFile, pa, pb *ParsedName, origOf map[string]string, newName string) error {
-	desc := func(f orgRecordFile) string {
-		s := f.Name
-		if o := origOf[f.Fid]; o != "" && o != f.Name {
-			s += "（原名 " + o + "）"
-		}
-		if f.Size > 0 {
-			s += "，" + formatBytes(f.Size)
-		}
-		return s
+// holdRedoDup 重新整理撞名、还没选过：把各组记到记录上（记录页出现「选择保留」），
+// 这次要整理成的条目记进暂存指定，选完按它重新整理（submitDupChoice）
+func (h *Handler) holdRedoDup(rec *model.OrganizeRecord, groups []dupGroup, media *TmdbMedia, strict bool) {
+	b, _ := json.Marshal(groups)
+	label := media.Title
+	if media.Year != "" {
+		label += " (" + media.Year + ")"
 	}
-	if pa != nil && pb != nil && pa.Episode > 0 && pa.Season == pb.Season && pa.Episode == pb.Episode &&
-		pa.EpisodeEnd == pb.EpisodeEnd && !pa.SeasonGuessed && !pb.SeasonGuessed {
-		return fmt.Errorf("这条记录里有两个文件都是 S%02d%s：「%s」和「%s」，是同一集的两份，"+
-			"会落到同一个名字「%s」。请在 115 里删掉或挪走不要的那份，再重新整理",
-			pa.Season, pa.episodeTag(), desc(a), desc(b), newName)
+	h.DB.Model(&model.OrganizeRecord{}).Where("id = ?", rec.ID).Updates(map[string]interface{}{
+		"hold_dup": true, "dup_groups": string(b), "dup_choice": "",
+		"pending_tmdb_id": media.TmdbID, "pending_media_type": media.MediaType, "pending_label": label,
+	})
+	rec.HoldDup, rec.DupGroups, rec.DupChoice = true, string(b), ""
+	what := "重新整理"
+	if strict {
+		what = "库内同集多份体检"
 	}
-	return fmt.Errorf("「%s」和「%s」会被改成同一个文件名「%s」，多半是文件名里认不出季号或集号。"+
-		"请到「识别规则」加一条替换规则把集号写清楚（如把「第01话」替换成「E01」），再重新整理", desc(a), desc(b), newName)
+	log.Printf("[整理] ⏸ %s《%s》：%s", what, rec.Source, dupHoldMessage(groups))
 }
 
 // redoStrmPaths 这次落盘的视频 STRM 的本地绝对路径（按台账取实际写成的名字：同基名冲突时可能是旧写法）
@@ -556,6 +576,7 @@ func findOrigName(files []orgRecordFile, fid string) (string, bool) {
 
 // redoLayout 重新整理的目标布局：文件该改成什么名、落到哪个目录
 type redoLayout struct {
+	drops     []orgRecordFile            // 撞名时用户不要的（含跟着它的字幕 / 集 NFO）：移冗余
 	rootRel   string                     // 标题目录（库内相对，刮削与 Emby 刷新的单位）
 	renames   map[string]string          // fid → 新文件名
 	groups    map[string][]orgRecordFile // 落点相对路径 → 该目录下的视频与字幕
@@ -644,6 +665,37 @@ func planRedoLayout(media *TmdbMedia, category string, files []orgRecordFile, sr
 // 改过名的新名里已经是换算后的季内集号，再换一次也不会通过判定
 func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule,
 	remap func(map[string]*ParsedName)) (*redoLayout, error) {
+	return planRedoLayoutOpt(media, category, files, srcName, rules, remap, redoPlanOpts{})
+}
+
+// redoPlanOpts 撞名怎么处理（orgdup.go）
+type redoPlanOpts struct {
+	// choice 用户在记录上选过的（fid → keep / drop / A..Z）
+	choice map[string]string
+	// strict 早就同名并排的两份也要问（库内同集多份体检发起的，见 orgdupscan.go）；
+	// 默认放行它们：不需要改名，拦下来只会让整部剧都没法重新整理（维护者定的）
+	strict bool
+}
+
+// redoDupError 重新整理撞名、还没选过：任务停下，记录上出现「选择保留」
+type redoDupError struct{ groups []dupGroup }
+
+func (e *redoDupError) Error() string {
+	g := e.groups[0]
+	names := make([]string, 0, len(g.Files))
+	for _, f := range g.Files {
+		names = append(names, "「"+f.Name+"」")
+	}
+	msg := dupHoldMessage(e.groups) + "：" + strings.Join(names, "") + "。已在这条整理记录上「选择保留」，选完会按选择重新整理"
+	if g.Episode == "" {
+		// 没认出集号的几个文件撞名，多半不是同一集的几份，而是集号没认出来
+		msg += "；如果它们其实是不同的集，多半是文件名里认不出集号：请到「识别规则」加一条替换规则把集号写清楚（如把「第01话」替换成「E01」），再重新整理"
+	}
+	return msg
+}
+
+func planRedoLayoutOpt(media *TmdbMedia, category string, files []orgRecordFile, srcName string, rules []ReplaceRule,
+	remap func(map[string]*ParsedName), po redoPlanOpts) (*redoLayout, error) {
 	out := &redoLayout{renames: map[string]string{}, groups: map[string][]orgRecordFile{}}
 	files = dedupRecordFids(files)
 	newBaseOf := map[string]string{} // 视频旧基名 → 新基名（字幕跟随用）
@@ -673,11 +725,17 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 	// 与正常整理的 placeEntryFiles 同一口径。此前它们照剧集模板改名，几部都算出
 	// 「片名.画质.mkv」这同一个名字，整次重新整理被重名拦下（现场：成长的烦恼的两部电影版）
 	specials := media.MediaType == "tv" && hasEpisodes(parses)
-	// 剧集落点 → 第一个占用它的原文件名。两集算出同一个名字时，115 批量改名会半途失败、
-	// 已改的和没改的混在一起；在动网盘之前拦下来，并说清楚是哪两个文件
-	taken := map[string]orgRecordFile{}
-	var vids []metaVideo // NFO / 图片认主人用：视频改名**前**的基名（与它们现在的名字同一时刻）
-
+	// 先把每个视频的落点算出来，再统一查撞名：两个视频算出同一个名字时，115 批量改名会半途失败
+	// （或把后到的悄悄改成 xxx(1).mkv），已改的和没改的混在一起 —— 在动网盘之前拦下来，交给用户选
+	type redoVideo struct {
+		f        orgRecordFile
+		parsed   *ParsedName
+		plain    string // 模板算出的名字（不带后缀字母）
+		mediaRel string
+		special  bool // 没集号的特别篇：保持原名
+	}
+	var vlist []redoVideo
+	byFid := map[string]*redoVideo{}
 	for _, f := range files {
 		if f.Kind != "video" {
 			continue
@@ -694,39 +752,114 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 		if out.rootRel == "" {
 			out.rootRel = libSubPath(base, strings.SplitN(newPath, "/", 2)[0])
 		}
-		if specials && parsed.Episode == 0 {
-			rel := specialsRel(media, base, out.rootRel, parsed, f.Name)
-			out.groups[rel] = append(out.groups[rel], f)
-			vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: rel})
-			videos++
+		v := redoVideo{f: f, parsed: parsed, plain: pathBase(newPath), mediaRel: libSubPath(base, pathDir(newPath))}
+		switch {
+		case specials && parsed.Episode == 0:
+			v.special, v.plain, v.mediaRel = true, f.Name, specialsRel(media, base, out.rootRel, parsed, f.Name)
+		case media.MediaType == "tv" && isSpecialEpisode(parsed):
+			v.mediaRel = specialsRel(media, base, out.rootRel, parsed, f.Name) // 模板对第 0 季不插季目录
+		}
+		vlist = append(vlist, v)
+	}
+	for i := range vlist {
+		byFid[vlist[i].f.Fid] = &vlist[i]
+	}
+	finalName := func(v *redoVideo, letter string) string {
+		if v.special {
+			return v.f.Name
+		}
+		if letter == "" {
+			letter = v.f.Variant // 同集多份保留时的字母按 fid 沿用（orgdup.go）
+		}
+		return withVariant(v.plain, letter)
+	}
+	cands := make([]remoteFile, 0, len(vlist))
+	for _, v := range vlist {
+		cands = append(cands, remoteFile{Fid: v.f.Fid, Name: v.f.Name, Size: v.f.Size, Sha1: v.f.Sha1})
+	}
+	// 洗版策略只在真撞名、要给用户排推荐时才读（大多数重新整理根本不撞）
+	var st *washStrategy
+	stLoaded := false
+	rankOf := func(name string) int {
+		if !stLoaded {
+			stLoaded = true
+			if model.DB != nil {
+				st = matchWashStrategy(media.MediaType, category)
+			}
+		}
+		return washRankIn(st, name)
+	}
+	dup := settleCollisions(cands, func(rf remoteFile) (string, string) {
+		v := byFid[rf.Fid]
+		ep := ""
+		if p := v.parsed; p != nil && p.Episode > 0 && media.MediaType == "tv" {
+			ep = fmt.Sprintf("S%02d%s", p.Season, p.episodeTag())
+		}
+		return v.mediaRel + "/" + finalName(v, ""), ep
+	}, rankOf, po.choice)
+	var unresolved []dupGroup
+	for _, g := range dup.held {
+		same := !po.strict
+		for _, f := range g.Files {
+			if f.Name != pathBase(g.Target) {
+				same = false
+			}
+		}
+		if same {
+			// 早就叫这个名字、并排放在一起（上一次整理就这么放的）：这次不需要改名，放行
+			// （2026-10-06 现场：越狱 S04E22）
+			log.Printf("[整理] ○ 「%s」有 %d 份同名文件，名字已是规范名，保持原样", pathBase(g.Target), len(g.Files))
 			continue
 		}
-		newName := withVariant(pathBase(newPath), f.Variant) // 同集多份保留时的字母按 fid 沿用（orgdup.go）
-		if newName != "" && newName != f.Name {
+		unresolved = append(unresolved, g)
+	}
+	if len(unresolved) > 0 {
+		return nil, &redoDupError{groups: unresolved}
+	}
+	dropped := map[string]bool{}
+	var droppedBases, keptBases []string
+	for _, f := range dup.drop {
+		dropped[f.Fid] = true
+		droppedBases = append(droppedBases, baseName(f.Name))
+	}
+	var vids []metaVideo // NFO / 图片认主人用：视频改名**前**的基名（与它们现在的名字同一时刻）
+	for i := range vlist {
+		v := &vlist[i]
+		f := v.f
+		if dropped[f.Fid] {
+			out.drops = append(out.drops, f)
+			continue
+		}
+		keptBases = append(keptBases, baseName(f.Name))
+		newName := finalName(v, dup.variants[f.Fid])
+		nf := f
+		if l := dup.variants[f.Fid]; l != "" {
+			nf.Variant = l
+		}
+		if !v.special && newName != f.Name {
 			out.renames[f.Fid] = newName
 			newBaseOf[baseName(f.Name)] = baseName(newName)
 		}
-		nf := f
 		nf.Name = newName
-		mediaRel := libSubPath(base, pathDir(newPath))
-		if media.MediaType == "tv" && isSpecialEpisode(parsed) {
-			mediaRel = specialsRel(media, base, out.rootRel, parsed, f.Name) // 模板对第 0 季不插季目录
-		}
-		if media.MediaType == "tv" {
-			key := mediaRel + "/" + newName
-			if prev, dup := taken[key]; dup {
-				// 两份早就叫这个名字、并排放在一起（上一次整理就这么放的，网盘允许同目录同名）：
-				// 这次不需要改它们的名，拦下来只会让整部剧都没法重新整理（2026-10-06 现场：越狱 S04E22）
-				if prev.Name != newName || f.Name != newName {
-					return nil, redoNameClash(prev, f, parses[prev.Fid], parsed, origOf, newName)
-				}
-				log.Printf("[整理] ○ 「%s」有两份同名文件，名字已是规范名，保持原样", newName)
-			}
-			taken[key] = f
-		}
-		out.groups[mediaRel] = append(out.groups[mediaRel], nf)
-		vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: mediaRel})
+		out.groups[v.mediaRel] = append(out.groups[v.mediaRel], nf)
+		vids = append(vids, metaVideo{base: baseName(f.Name), dir: f.Dir, rel: v.mediaRel})
 		videos++
+	}
+	// 不要的那份的字幕 / 集 NFO 跟着它走（同名的另一份留下了就不动：认不清是谁的）
+	if len(droppedBases) > 0 {
+		kept := files[:0:0]
+		for _, f := range files {
+			if f.Kind == "video" {
+				kept = append(kept, f)
+				continue
+			}
+			if assetOwner(baseName(f.Name), droppedBases) >= 0 && assetOwner(baseName(f.Name), keptBases) < 0 {
+				out.drops = append(out.drops, f)
+				continue
+			}
+			kept = append(kept, f)
+		}
+		files = kept
 	}
 	if out.rootRel == "" || videos == 0 {
 		return nil, fmt.Errorf("这条记录里没有可识别的视频文件，无法重新整理")

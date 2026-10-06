@@ -246,9 +246,9 @@ function canSubmit(r: OrganizeRecord) {
   return (r.pending_tmdb_id ?? 0) > 0 || (r.status === 'awaiting' && r.tmdb_id > 0)
 }
 
-/** 同集多份待选、还没提交过选择 */
+/** 同集多份待选、还没提交过选择（待确认的新条目，或重新整理撞名停下的已整理条目） */
 function needsDupPick(r: OrganizeRecord) {
-  return r.status === 'awaiting' && !!r.hold_dup && !Object.keys(r.dup_picked ?? {}).length
+  return !!r.hold_dup && !Object.keys(r.dup_picked ?? {}).length
 }
 const confirmable = computed(() => rows.value.filter(canSubmit))
 const allPicked = computed(
@@ -339,7 +339,16 @@ async function ignoreOne(r: OrganizeRecord) {
   }
 }
 
-// ---- 同集多份：选留哪份（DupChoiceDialog），提交后走确认入库的执行器 ----
+// ---- 同集多份：选留哪份（DupChoiceDialog）。待确认的走确认入库，重新整理撞名停下的按暂存的条目再整理一次 ----
+function dupNote(r: OrganizeRecord) {
+  const n = r.dup_list?.length ?? 0
+  const head = r.dup_list?.[0]
+  const what = head?.episode || '有一组'
+  const labels = (head?.files ?? []).map((f) => f.label).filter(Boolean)
+  const tail = labels.length === head?.files.length ? `（${labels.join(' / ')}）` : ''
+  return `重新整理停下了：${what} 有几份不同的文件改名后会重名${tail}${n > 1 ? `，共 ${n} 组` : ''}，选完按「${r.pending_label || r.title}」再整理一次`
+}
+
 const dupShow = ref(false)
 const dupTarget = ref<OrganizeRecord | null>(null)
 
@@ -626,7 +635,10 @@ async function clearAll() {
                 <template v-else>{{ r.message || '未能自动识别，请重新指定 TMDB 条目' }}</template>
               </div>
 
-              <div v-if="r.pending_tmdb_id" class="plan plan-staged">
+              <!-- 重新整理撞名停下的已整理条目：选完按选择再整理一次 -->
+              <div v-if="r.hold_dup && r.status !== 'awaiting'" class="plan plan-miss">{{ dupNote(r) }}</div>
+
+              <div v-if="r.pending_tmdb_id && !r.hold_dup" class="plan plan-staged">
                 <span class="plan-label">已指定，待提交</span>
                 <b>{{ r.pending_label || `${r.pending_media_type}/${r.pending_tmdb_id}` }}</b>
                 <button type="button" class="link-btn" @click="unstage(r)">撤销</button>
@@ -728,6 +740,17 @@ async function clearAll() {
               </template>
 
               <template v-else>
+                <HButton
+                  v-if="r.hold_dup"
+                  size="sm"
+                  variant="primary"
+                  :disabled="busy || queuedJob(r)?.status === 'running'"
+                  :loading="acting === r.id"
+                  @click="openDup(r)"
+                >
+                  <template #icon><Copy /></template>
+                  {{ needsDupPick(r) ? '选择保留' : '改选' }}
+                </HButton>
                 <HButton
                   v-if="r.file_list?.length"
                   size="sm"

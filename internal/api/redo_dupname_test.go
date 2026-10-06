@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -44,7 +45,44 @@ func TestRedoSameEpisodeCopiesNeedRenameMessage(t *testing.T) {
 		{Fid: "b", Name: "Prison.Break.S04E22.720p.mkv", Kind: "video"},
 	}
 	_, err := planRedoLayout(media, "剧集", files, "越狱/", nil)
-	if err == nil || !strings.Contains(err.Error(), "同一集的两份") || strings.Contains(err.Error(), "替换规则") {
-		t.Fatalf("应说明是同一集的两份：%v", err)
+	var de *redoDupError
+	if !errors.As(err, &de) || len(de.groups) != 1 || de.groups[0].Episode != "S04E22" || strings.Contains(err.Error(), "替换规则") {
+		t.Fatalf("同一集的两份要改名才撞上：交给用户选，不提替换规则：%v", err)
+	}
+	// 选过之后：留 1080p，720p 移冗余
+	plan, err := planRedoLayoutOpt(media, "剧集", files, "越狱/", nil, nil, redoPlanOpts{choice: map[string]string{"a": dupChoiceKeep, "b": dupChoiceDrop}})
+	if err != nil || len(plan.drops) != 1 || plan.drops[0].Fid != "b" {
+		t.Fatalf("按选择处理：%v %+v", err, plan)
+	}
+	// 都留：按 #A #B 改名，字母记进文件
+	plan, err = planRedoLayoutOpt(media, "剧集", files, "越狱/", nil, nil, redoPlanOpts{choice: map[string]string{"a": "A", "b": "B"}})
+	if err != nil || plan.renames["a"] != "越狱 - S04E22#A.mkv" || plan.renames["b"] != "越狱 - S04E22#B.mkv" {
+		t.Fatalf("都留：%v %v", err, plan.renames)
+	}
+	for _, g := range plan.groups {
+		for _, f := range g {
+			if f.Fid == "b" && f.Variant != "B" {
+				t.Fatalf("字母要记进文件：%+v", f)
+			}
+		}
+	}
+}
+
+// 库内同集多份体检发起的（strict）：早就同名并排的也要问
+func TestRedoStrictAsksForSameNameCopies(t *testing.T) {
+	prev := renameTpl
+	renameTpl = nil
+	t.Cleanup(func() { renameTpl = prev })
+	media := &TmdbMedia{TmdbID: 2288, Title: "越狱", Year: "2005", MediaType: "tv"}
+	files := []orgRecordFile{
+		{Fid: "b", Name: "越狱 - S04E22.mkv", Kind: "video", Sha1: "B"},
+		{Fid: "c", Name: "越狱 - S04E22.mkv", Kind: "video", Sha1: "C"},
+	}
+	if _, err := planRedoLayoutOpt(media, "剧集", files, "越狱/", nil, nil, redoPlanOpts{}); err != nil {
+		t.Fatalf("默认放行：%v", err)
+	}
+	var de *redoDupError
+	if _, err := planRedoLayoutOpt(media, "剧集", files, "越狱/", nil, nil, redoPlanOpts{strict: true}); !errors.As(err, &de) {
+		t.Fatalf("strict 要问：%v", err)
 	}
 }

@@ -482,7 +482,11 @@ git tag v1.2.0 && git push origin v1.2.0
       多组逐组点的进度只在内存（`dupBotPicks`），点全了才落库入队。**谁先选算谁的**：机器人与超时 `submitDupChoice(…, override=false)`
       只认还没选过的，网页可以改选。超时 `org-basic.dup_auto_hours`（默认 0 = 一直等）+ `dup_auto_action`（keep_all / recommend），
       每分钟由调度器的 `dupAutoTick` 查，处理了推一条通知。
-    - 散文件（`processSingleFile`）还没接。测试 `orgdup_test.go` / `orgdupbot_test.go`。
+    - 重新整理同一套（`planRedoLayoutOpt`）：先算出每个视频的落点再 `settleCollisions`；**早就同名并排、不需要改名的放行**
+      （维护者定的，`strict` 只给库内体检用），要改名才撞上的返回 `redoDupError`：任务失败，`holdRedoDup` 把各组记到记录上、
+      这次要整理成的条目记进暂存指定；用户在记录上选完，`submitDupChoice` 对非待确认的记录入「重新整理」队列，
+      执行时 `po.choice` 生效：不要的（含字幕 / 集 NFO）移冗余、本地产物第 3 步按 fid 收掉，都留的按 `#A` `#B` 改名。
+    - 散文件（`processSingleFile`）还没接。测试 `orgdup_test.go` / `orgdupbot_test.go` / `redo_dupname_test.go`。
 
 ---
 
