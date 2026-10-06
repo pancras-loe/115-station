@@ -1201,7 +1201,17 @@ func (h *Handler) removeSyncedFile(fileID, localRoot string) string {
 	}
 	h.DB.Delete(&sf)
 	vlog("[同步] 已清理: %s", sf.RelPath)
+	dropStrmCompanions(localRoot, sf.RelPath)
 	return full
+}
+
+// dropStrmCompanions 删掉的是 STRM 时，连它的集 NFO / 剧照一起删（台账里有的网盘镜像不碰，见 removeStrmCompanions）。
+// 此前增量只删 STRM：网盘上删掉 / 改名一集，本地留下「xxx.nfo」「xxx-thumb.jpg」孤儿，
+// Emby 里那一集还挂着（2026-10-06 现场：越狱 S04E22 两份删一份）
+func dropStrmCompanions(localRoot, rel string) {
+	if strings.HasSuffix(strings.ToLower(rel), ".strm") {
+		removeStrmCompanions(localRoot, rel)
+	}
 }
 
 // removeSyncedItem 清理 move/rename/delete 事件的旧位置，三级定位：
@@ -1271,6 +1281,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 					}
 					h.DB.Where("rel_path = ?", cand).Delete(&model.SyncedFile{})
 					vlog("[同步] 已清理: %s", cand)
+					dropStrmCompanions(localRoot, cand)
 					return full
 				}
 			}
@@ -1299,6 +1310,7 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 				}
 				h.DB.Delete(&sf)
 				vlog("[同步] 已清理: %s", sf.RelPath)
+				dropStrmCompanions(localRoot, sf.RelPath)
 				return full
 			}
 		}

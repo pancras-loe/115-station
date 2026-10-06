@@ -347,7 +347,7 @@ func removeStrmCompanions(localRoot, strmRel string) {
 			continue
 		}
 		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
-			log.Printf("[整理] ✗ 清理旧刮削产物失败 %s: %v", rel, err)
+			log.Printf("[STRM] ✗ 清理刮削产物失败 %s: %v", rel, err)
 		}
 	}
 }
