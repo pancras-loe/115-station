@@ -31,6 +31,7 @@ type playbackFixture struct {
 	embyMedia atomic.Int64
 	cdnHits   atomic.Int64
 	fetches   atomic.Int64
+	auths     atomic.Int64 // 播放入口向 Emby 查用户的次数
 	mu        sync.Mutex
 	uas       []string
 	pcs       []string
@@ -80,6 +81,7 @@ func setupPlaybackFixture(t *testing.T) *playbackFixture {
 			return
 		}
 		if strings.HasPrefix(p, "/Users/") && !strings.Contains(strings.TrimPrefix(p, "/Users/"), "/") {
+			f.auths.Add(1)
 			if p != "/Users/Me" && p != "/Users/viewer-id" {
 				w.WriteHeader(http.StatusForbidden)
 				return
@@ -137,6 +139,9 @@ func setupPlaybackFixture(t *testing.T) *playbackFixture {
 	}))
 	t.Cleanup(emby.Close)
 	save("emby", map[string]string{"server_url": emby.URL + "/backend", "api_key": "server-admin"})
+	oldGrants := embyPlayGrants
+	embyPlayGrants = &playGrantCache{m: map[string]playGrant{}}
+	t.Cleanup(func() { embyPlayGrants = oldGrants })
 	old := playbackLinks
 	playbackLinks = newPlaybackLinkResolver(func(_ *gorm.DB, _ *config.Config, pc, ua string) (string, map[string]string, error) {
 		f.fetches.Add(1)
@@ -215,6 +220,33 @@ func TestPlaybackActualVideoRedirectsWithoutRelaying(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 206 || f.cdnHits.Load() != 1 {
 		t.Fatal("客户端 CDN Range 播放失败")
+	}
+}
+
+// 起播一阵子同一个流会被要好几次（播放器探测、LAV 重连），Emby 只该被问一次；
+// 换版本要重新核对，被拒的结果不缓存。
+func TestPlaybackGrantCachedPerStream(t *testing.T) {
+	f := setupPlaybackFixture(t)
+	for i := 0; i < 3; i++ {
+		resp := playbackRequest(t, f, http.MethodGet, "/Videos/one/stream?MediaSourceId=mediasource_b", "Player", "viewer")
+		if resp.StatusCode != 302 || resp.Header.Get("Location") != f.cdn.URL+"/second" {
+			t.Fatalf("第 %d 次: %d", i, resp.StatusCode)
+		}
+	}
+	if f.auths.Load() != 1 {
+		t.Fatalf("同一个流向 Emby 鉴权 %d 次", f.auths.Load())
+	}
+	resp := playbackRequest(t, f, http.MethodGet, "/Videos/one/stream?MediaSourceId=a", "Player", "viewer")
+	if resp.StatusCode != 302 || resp.Header.Get("Location") != f.cdn.URL+"/first" || f.auths.Load() != 2 {
+		t.Fatalf("换版本没有重新核对：%d auths=%d", resp.StatusCode, f.auths.Load())
+	}
+	for i := 0; i < 2; i++ {
+		if resp := playbackRequest(t, f, http.MethodGet, "/Videos/one/stream?MediaSourceId=a", "Player", "blocked"); resp.StatusCode != 403 {
+			t.Fatalf("被拒用户放行了：%d", resp.StatusCode)
+		}
+	}
+	if f.auths.Load() != 4 {
+		t.Fatalf("被拒的结果被缓存了：auths=%d", f.auths.Load())
 	}
 }
 
@@ -399,5 +431,52 @@ func TestPlaybackLinkValidation(t *testing.T) {
 	}
 	if _, err := validatePlaybackLink("https://cdn.example/video?f=1", map[string]string{"Cookie": "optional", "User-Agent": "UA"}, "UA", now); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 限流只管缓存未命中：同一个流反复要 302（播放器探测、ffmpeg 重连）不扣额度，
+// 换着 pickcode 遍历照样在额度用完后 429
+func TestDirectPlaybackRateLimitsOnlyCacheMisses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newTestDB(t, "ratelimit.db")
+	var fetches atomic.Int64
+	old := playbackLinks
+	playbackLinks = newPlaybackLinkResolver(func(_ *gorm.DB, _ *config.Config, pc, ua string) (string, map[string]string, error) {
+		fetches.Add(1)
+		return "https://cdn.example/" + pc, map[string]string{"User-Agent": ua}, nil
+	})
+	t.Cleanup(func() { playbackLinks = old })
+	proxyRateMu.Lock()
+	oldBkts := proxyRateBkts
+	proxyRateBkts = map[string]*proxyBucket{}
+	proxyRateMu.Unlock()
+	t.Cleanup(func() { proxyRateMu.Lock(); proxyRateBkts = oldBkts; proxyRateMu.Unlock() })
+
+	r := gin.New()
+	registerDirectPlaybackRoutes(r, model.DB, &config.Config{})
+	get := func(pc string) int {
+		req := httptest.NewRequest(http.MethodGet, "/d/"+pc+"/movie.mkv", nil)
+		req.RemoteAddr = "203.0.113.9:40000" // 公网客户端，不在 Emby 免限流名单里
+		req.Header.Set("User-Agent", "Lavf/62.8.102")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	for i := 0; i < 60; i++ {
+		if code := get("samefile"); code != http.StatusFound {
+			t.Fatalf("同一个流第 %d 次被拦：%d", i+1, code)
+		}
+	}
+	if fetches.Load() != 1 {
+		t.Fatalf("同一个流取链 %d 次", fetches.Load())
+	}
+	limited := 0
+	for i := 0; i < 40; i++ {
+		if get(fmt.Sprintf("walk%d", i)) == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 || fetches.Load() > 21 {
+		t.Fatalf("遍历没被限住：429 %d 次，取链 %d 次", limited, fetches.Load())
 	}
 }

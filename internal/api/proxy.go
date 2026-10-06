@@ -133,13 +133,23 @@ func proxyRateAllow(ip string) bool {
 }
 
 func handleProxyRedirect(c *gin.Context, db *gorm.DB, cfg *config.Config) {
-	if !proxyRateAllow(c.ClientIP()) {
-		c.String(http.StatusTooManyRequests, "too many requests")
-		return
-	}
 	pickcode := c.Param("pickcode")
 	if pickcode == "" {
 		c.String(http.StatusBadRequest, "missing pickcode")
+		return
+	}
+	// 命中直链缓存的不扣额度：限流防的是拿 pickcode 遍历把 115 打进风控，
+	// 命中缓存一次 115 请求都不发。播放器起播探测、ffmpeg 每次 Range 重连都会回来要 302，
+	// 原先这些也计数，同一部片子起播几秒就能把额度用光（p115strmhelper / qmediasync 入口都不限流，
+	// 只靠直链缓存与 115 侧节流；这里保留对未命中的限流）
+	if u, ok := playbackLinks.peek(pickcode, c.Request.UserAgent()); ok {
+		vlog("[播放] ✓ 返回 CDN 302（缓存，%s，UA=%q）", c.ClientIP(), c.Request.UserAgent())
+		playbackLinksServed.Add(1)
+		playbackRedirect(c.Writer, c.Request, u)
+		return
+	}
+	if !proxyRateAllow(c.ClientIP()) {
+		c.String(http.StatusTooManyRequests, "too many requests")
 		return
 	}
 

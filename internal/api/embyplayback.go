@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +11,9 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"115-station/internal/config"
@@ -235,6 +239,30 @@ func handleEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target 
 		c.String(http.StatusUnauthorized, "缺少 Emby 播放凭据")
 		return true
 	}
+	start := time.Now()
+	grantKey := embyPlayGrantKey(token, embyPlaybackUserID(c.Request), m[2], queryFold(c.Request.URL.Query(), "MediaSourceId"), isDownload)
+	pc, cached := embyPlayGrants.get(grantKey)
+	if !cached {
+		var handled bool
+		if pc, handled = authorizeEmbyPlayback(c, db, cfg, target, m[2], isDownload, token); pc == "" {
+			return handled
+		}
+		embyPlayGrants.put(grantKey, pc)
+	}
+	if baseAction == "master" || baseAction == "main" || baseAction == "hls" || baseAction == "hls1" || baseAction == "live" ||
+		strings.HasSuffix(action, ".m3u8") || strings.EqualFold(queryFold(c.Request.URL.Query(), "Static"), "false") || queryFold(c.Request.URL.Query(), "TranscodeReasons") != "" {
+		c.String(http.StatusUnsupportedMediaType, "115 直连不支持服务器转码，请使用支持原文件格式的播放器")
+		return true
+	}
+	// 「取链」只算 115 那一段；这里记的是 Emby 鉴权 + 读条目的用时，起播慢时先看它
+	vlog("[播放] ⏱ 播放入口鉴权 %s（%s）", time.Since(start).Round(time.Millisecond), map[bool]string{true: "缓存", false: "查 Emby"}[cached])
+	servePickcodeDirect(c, db, cfg, pc)
+	return true
+}
+
+// authorizeEmbyPlayback 用客户端自己的凭据向 Emby 核对用户、条目与媒体源，解析出本站的 pickcode。
+// 返回空 pc 时：handled=true 表示已经写了错误响应，false 表示不是本站媒体、交给普通反代。
+func authorizeEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target *url.URL, itemID string, isDownload bool, token string) (string, bool) {
 	var user struct {
 		ID     string `json:"Id"`
 		Policy struct {
@@ -250,32 +278,32 @@ func handleEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target 
 	status := embyPlaybackJSON(c.Request, target, userPath, token, &user)
 	if status != http.StatusOK {
 		c.String(status, "Emby 用户认证失败")
-		return true
+		return "", true
 	}
 	if user.ID == "" || (userID != "" && user.ID != userID) || user.Policy.EnableMediaPlayback == nil || !*user.Policy.EnableMediaPlayback ||
 		(isDownload && user.Policy.EnableContentDownloading != nil && !*user.Policy.EnableContentDownloading) {
 		c.String(http.StatusForbidden, "该用户不允许播放或下载")
-		return true
+		return "", true
 	}
 	var item embyPlaybackItem
-	status = embyPlaybackJSON(c.Request, target, "/Users/"+url.PathEscape(user.ID)+"/Items/"+url.PathEscape(m[2])+"?Fields=Path,MediaSources", token, &item)
+	status = embyPlaybackJSON(c.Request, target, "/Users/"+url.PathEscape(user.ID)+"/Items/"+url.PathEscape(itemID)+"?Fields=Path,MediaSources", token, &item)
 	if status != http.StatusOK {
 		c.String(status, "无法读取该用户的媒体条目")
-		return true
+		return "", true
 	}
 	// 旧版本返回 PlayAccess，新版 BaseItemDto 已不保证该字段；新版以
 	// 用户库接口的 401/403/404 和已校验的用户播放策略为准，不用缺字段误拒绝。
 	if (item.PlayAccess != "" && !strings.EqualFold(item.PlayAccess, "Full")) || (isDownload && item.CanDownload != nil && !*item.CanDownload) {
 		c.String(http.StatusForbidden, "该用户无权播放此条目")
-		return true
+		return "", true
 	}
 	source, ok := selectEmbyPlaybackSource(item, queryFold(c.Request.URL.Query(), "MediaSourceId"))
 	if !ok {
 		c.String(http.StatusBadRequest, "媒体源不存在或不唯一")
-		return true
+		return "", true
 	}
 	if source.IsInfiniteStream {
-		return false
+		return "", false
 	}
 	if source.Path == "" {
 		source.Path = item.Path
@@ -287,18 +315,56 @@ func handleEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target 
 	}
 	if !managed {
 		vlog("[播放] ○ 非本站媒体，交给 Emby")
-		return false
+		return "", false
 	}
 	if err != nil {
 		log.Printf("[播放] ✗ 本站媒体解析失败，未回源中转")
 		c.String(http.StatusBadGateway, "无法解析本站 STRM，请检查媒体路径映射和同步台账")
-		return true
+		return "", true
 	}
-	if baseAction == "master" || baseAction == "main" || baseAction == "hls" || baseAction == "hls1" || baseAction == "live" ||
-		strings.HasSuffix(action, ".m3u8") || strings.EqualFold(queryFold(c.Request.URL.Query(), "Static"), "false") || queryFold(c.Request.URL.Query(), "TranscodeReasons") != "" {
-		c.String(http.StatusUnsupportedMediaType, "115 直连不支持服务器转码，请使用支持原文件格式的播放器")
-		return true
+	return pc, true
+}
+
+// embyPlayGrants 播放入口的授权结果缓存。一次起播 PotPlayer 先探几次、再交给 LAV，
+// ffmpeg（LAV Splitter Source）每次 Range 重连也都回到这里（302 是 no-store，它不记跳转）；
+// 每次都向 Emby 查用户 + 条目（带 MediaSources，Emby 那边不快）就是起播与拖进度条的主要等待。
+// 只缓存放行的结果，键含客户端凭据：换了用户、凭据、版本都重新核对。
+// 两分钟是权衡：够盖住起播那一阵，撤销权限 / 注销凭据最多晚两分钟生效。
+var embyPlayGrants = &playGrantCache{m: map[string]playGrant{}}
+
+const embyPlayGrantTTL = 2 * time.Minute
+
+type playGrant struct {
+	pc  string
+	exp time.Time
+}
+
+type playGrantCache struct {
+	mu sync.Mutex
+	m  map[string]playGrant
+}
+
+func embyPlayGrantKey(token, userID, itemID, sourceID string, isDownload bool) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{token, strings.ToLower(userID), strings.ToLower(itemID),
+		strings.ToLower(strings.TrimPrefix(sourceID, "mediasource_")), strconv.FormatBool(isDownload)}, "\x00")))
+	return hex.EncodeToString(sum[:])
+}
+
+func (g *playGrantCache) get(key string) (string, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.m[key]
+	if !ok || time.Now().After(e.exp) {
+		return "", false
 	}
-	servePickcodeDirect(c, db, cfg, pc)
-	return true
+	return e.pc, true
+}
+
+func (g *playGrantCache) put(key, pc string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.m) >= 1024 { // 有界：公开入口不能让不同凭据无限堆积
+		clear(g.m)
+	}
+	g.m[key] = playGrant{pc: pc, exp: time.Now().Add(embyPlayGrantTTL)}
 }

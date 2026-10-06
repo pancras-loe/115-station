@@ -70,6 +70,21 @@ func playbackPickcode(db *gorm.DB, id string) (string, error) {
 	return id, nil
 }
 
+// peek 只查缓存、不取链。旧数字 fid 要查库才能换成 pickcode，不在这里认，照旧走限流
+func (r *playbackLinkResolver) peek(id, ua string) (string, bool) {
+	pc := normalizePlaybackID(id)
+	if pc == "" || isAllDigits(pc) {
+		return "", false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cached, ok := r.cache[pc+"|"+ua]
+	if !ok || !time.Now().Before(cached.Expiry) {
+		return "", false
+	}
+	return cached.URL, true
+}
+
 func (r *playbackLinkResolver) resolve(ctx context.Context, db *gorm.DB, cfg *config.Config, id, ua string) (string, error) {
 	pc, err := playbackPickcode(db, id)
 	if err != nil {
