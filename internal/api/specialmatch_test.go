@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 越狱第 0 季（节选）：9 是 2026-10-06 现场那一集
 func prisonBreakS00(lang string) (map[int]tmdbEpisodeInfo, error) {
@@ -125,5 +128,28 @@ func TestPlaceSpecialEpisode(t *testing.T) {
 	pl := placeEntryFiles(media, "", rootRel, rootRel+"/Season 01", videos, nil, eps)
 	if pl.relOf["sp"] == pl.relOf["e1"] || pl.relOf["sp"] == rootRel {
 		t.Fatalf("特别篇落点 %q，正片 %q", pl.relOf["sp"], pl.relOf["e1"])
+	}
+}
+
+// 散文件：认出集号的特别篇进特别篇目录、按集模板改名；正片照旧进季目录
+func TestSingleFileTargetSpecial(t *testing.T) {
+	prev := renameTpl
+	renameTpl = defaultRenameConfig()
+	t.Cleanup(func() { renameTpl = prev })
+	media := &TmdbMedia{TmdbID: 2288, Title: "越狱", Year: "2005", MediaType: "tv"}
+	name := "越狱特别篇：最后一越.Prison.Break.The.Final.Break.2009.1080p.mkv"
+	sp := &ParsedName{Season: 0, Episode: 9, IsTV: true}
+	newPath, targetDir, rootRel := singleFileTarget(media, "", sp, name)
+	if targetDir == rootRel || !strings.HasPrefix(targetDir, rootRel+"/") {
+		t.Fatalf("特别篇应在标题目录下的特别篇目录：targetDir=%q rootRel=%q", targetDir, rootRel)
+	}
+	if !strings.Contains(pathBase(newPath), "S00E09") {
+		t.Fatalf("应按集模板改名成 S00E09：%q", newPath)
+	}
+
+	ep := &ParsedName{Season: 1, Episode: 1, IsTV: true}
+	_, epDir, epRoot := singleFileTarget(media, "", ep, "越狱.S01E01.mkv")
+	if epRoot != rootRel || epDir == targetDir || !strings.HasPrefix(epDir, rootRel+"/") {
+		t.Fatalf("正片落点 %q（标题目录 %q，特别篇 %q）", epDir, epRoot, targetDir)
 	}
 }

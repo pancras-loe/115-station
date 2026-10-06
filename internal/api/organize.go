@@ -788,6 +788,9 @@ func buildNewName(media *TmdbMedia, parsed *ParsedName, ext string) string {
 		}
 		return folder + "/" + subFolder
 	}
+	if isSpecialEpisode(parsed) {
+		return folder + "/Specials/" + fmt.Sprintf("%s - S00%s", media.Title, parsed.episodeTag()) + ext
+	}
 	return folder
 }
 
@@ -2554,8 +2557,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	category := mainResult.Category
-	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
+	newPath, targetDir, rootRel := singleFileTarget(media, category, parsed, f.Name) // 明写 S00Exx 的兄弟同样进特别篇目录
 	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
 	if holdingDir == "" {
 		holdingDir = sourceHoldingDir(f.Name, parsed.Title)
@@ -2584,8 +2586,6 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 		return sibOutcome{result: OrganizeResult{FileName: f.Name, Status: "exists", Message: msg},
 			files: files, decision: decision, holding: holdingDir}
 	}
-
-	rootRel := libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
@@ -2801,13 +2801,17 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		}
 	}
 
+	// 剧集散文件没有集号（单独转存的特别篇）：按 TMDB 第 0 季集名对号，与目录条目同一套（specialmatch.go）
+	if media.MediaType == "tv" && parsed.Episode == 0 {
+		matchSpecialsTmdb(tc, media, map[string]*ParsedName{f.Fid: parsed}, map[string]string{f.Fid: f.Name}, onLog)
+	}
+
 	result.TmdbID = media.TmdbID
 	result.Title = media.Title
 	result.Year = media.Year
 	result.MediaType = media.MediaType
 	category := classifyMedia(media)
-	newPath := buildNewNameWithTemplate(media, parsed, f.Name)
-	targetDir := libSubPath(categoryDir(media.MediaType, category), pathDir(newPath))
+	newPath, targetDir, rootRel := singleFileTarget(media, category, parsed, f.Name)
 	holdingDir := recognizedHoldingDir(media, parsed, f.Name)
 	if holdingDir == "" {
 		holdingDir = sourceHoldingDir(f.Name, parsed.Title)
@@ -2863,8 +2867,6 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		})
 		return result, nil
 	}
-
-	rootRel := libSubPath(categoryDir(media.MediaType, category), strings.SplitN(newPath, "/", 2)[0])
 
 	targetCid, err := ops.ensurePath(cfg.Library, targetDir)
 	if err != nil {
@@ -2930,6 +2932,20 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	onLog(fmt.Sprintf("✓ %s → %s (%s) [%s/%s] → %s", f.Name, media.Title, media.Year, category, media.MediaType, targetDir))
 
 	return result, rec
+}
+
+// singleFileTarget 散文件的新路径（标题目录/…/文件名）、库内目标目录与标题目录。
+// 第 0 季带集号的（明写 S00Exx、或按集名认出来的特别篇）进特别篇目录：
+// 模板对第 0 季不插季目录，不改的话会平铺在标题目录里，与目录条目的口径（placeEntryFiles）不一致
+func singleFileTarget(media *TmdbMedia, category string, parsed *ParsedName, name string) (newPath, targetDir, rootRel string) {
+	base := categoryDir(media.MediaType, category)
+	newPath = buildNewNameWithTemplate(media, parsed, name)
+	targetDir = libSubPath(base, pathDir(newPath))
+	rootRel = libSubPath(base, strings.SplitN(newPath, "/", 2)[0])
+	if media.MediaType == "tv" && isSpecialEpisode(parsed) {
+		targetDir = specialsRel(media, base, rootRel, parsed, name)
+	}
+	return newPath, targetDir, rootRel
 }
 
 // pathDir 取路径中的目录部分（最后一个 / 之前）
