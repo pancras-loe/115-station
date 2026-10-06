@@ -17,6 +17,7 @@ var tgMenu = []map[string]string{
 	{"command": "download", "description": "下载或转存：/download 链接"},
 	{"command": "organize", "description": "执行整理"},
 	{"command": "sync", "description": "执行增量同步"},
+	{"command": "dup", "description": "同集多份：选择保留哪份"},
 	{"command": "cancel", "description": "关闭当前搜索"},
 }
 
@@ -24,7 +25,8 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/search 片名：找资源，观影 / 盘搜 / TG 频道 / 不太灵一起搜\n" +
 	"/gy 片名：只搜观影\n/wp 片名：只搜网盘\n" +
 	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
-	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n\n" +
+	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
+	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n\n" +
 	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
 	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
 	"10 分钟内有效，关闭不会停止已提交的任务。"
@@ -53,11 +55,12 @@ func tgCommand(text string) (string, string) {
 		"/search": "search", "so": "search", "/gy": "gy", "gy": "gy", "/wp": "wp", "wp": "wp",
 		"/download": "download", "dl": "download", "/organize": "organize", "整理": "organize",
 		"/sync": "sync", "同步": "sync", "/cancel": "cancel", "取消": "cancel",
+		"/dup": "dup",
 	}
 	if cmd, ok := aliases[first]; ok {
 		return cmd, args
 	}
-	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}} {
+	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}, {"多份", "dup"}} {
 		if strings.HasPrefix(text, p.prefix) {
 			return p.command, strings.TrimSpace(strings.TrimPrefix(text, p.prefix))
 		}
@@ -107,6 +110,14 @@ func (b *tgConversation) handle(u tgUpdate) {
 		return
 	}
 	b.chat, b.user = m.Chat.ID, from.ID
+	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "d:") {
+		// 同集多份的按钮：d:<记录 id>:<组>:<操作>，认数据库里的记录，不靠会话（orgdupbot.go）
+		text, buttons := b.h.dupTGCallback(u.Callback.Data)
+		if err := b.api.edit(b.ctx, b.chat, m.ID, text, buttons); err != nil && b.ctx.Err() == nil {
+			b.reply(text)
+		}
+		return
+	}
 	if u.Callback != nil {
 		// 按钮：f:<会话 token>:<操作>，操作结果编辑按钮所在的那条消息
 		parts := strings.SplitN(u.Callback.Data, ":", 3)
@@ -140,6 +151,8 @@ func (b *tgConversation) handle(u tgUpdate) {
 		var msg int64
 		v := b.h.botFind(b.flowKey(), source, args, b.flowIO(&msg))
 		b.show(v, &msg)
+	case "dup":
+		b.reply(b.h.dupBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
 	case "status", "download", "organize", "sync":
 		if cmd == "download" && args == "" {
 			b.reply("请在命令后填写链接。")

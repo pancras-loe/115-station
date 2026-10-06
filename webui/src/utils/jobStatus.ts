@@ -36,6 +36,7 @@ export const JOB_KIND: Record<string, string> = {
 export const JOB_SOURCE: Record<string, string> = {
   web: '网页',
   wecom: '企业微信',
+  tg: 'Telegram',
   cron: '定时',
   auto: '自动',
   organize: '整理后',

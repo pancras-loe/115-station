@@ -238,6 +238,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"观影 <片名> / 网盘 <片名> — 只搜观影 / 只搜网盘",
 			"  资源列表里：0 自动择优，n / p 翻页，b 重新选片，r 重搜，q 退出",
 			"整理 / 同步 — 手动触发整理、增量同步",
+			"多份 — 同一集有几份文件、改名会重名时选择保留哪份（多份 <编号> <选择>）",
 		)
 
 	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
@@ -319,6 +320,9 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			return
 		}
 		wecomShow(h.botFind("bot:"+user, source, kw, wecomFlowIO(reply)), reply)
+
+	case strings.HasPrefix(text, "多份"):
+		reply(h.dupBotCommand(user, strings.TrimSpace(strings.TrimPrefix(text, "多份")))...)
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")

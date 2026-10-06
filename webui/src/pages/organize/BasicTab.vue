@@ -6,6 +6,8 @@ import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
+import HNumberInput from '@/components/hero/HNumberInput.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import CronField from '@/components/ui/CronField.vue'
@@ -181,9 +183,13 @@ async function saveAll(): Promise<boolean> {
   return ok
 }
 
-/** 本页管的字段：resolveAll 回填的六个目录 + 人工确认开关 */
+/** 本页管的字段：resolveAll 回填的六个目录 + 人工确认开关 + 同集多份超时 */
 function pickMine() {
-  const d: Record<string, string | boolean> = { manual_confirm: model.value.manual_confirm }
+  const d: Record<string, string | boolean | number> = {
+    manual_confirm: model.value.manual_confirm,
+    dup_auto_hours: model.value.dup_auto_hours,
+    dup_auto_action: model.value.dup_auto_action,
+  }
   for (const { key } of DIRS) {
     d[key] = model.value[key]
     d[`${key}_path`] = model.value[`${key}_path` as const]
@@ -201,6 +207,18 @@ function warnOverlap() {
 }
 
 /** 按钮上的 popconfirm 文案；配置改过时这个气泡不弹，由未保存确认框接管 */
+/** 同集多份超时：老配置没有这个字段，HNumberInput 清空时给 null，都按 0（一直等）存 */
+const dupHours = computed({
+  get: () => model.value.dup_auto_hours ?? 0,
+  set: (v: number | null) => {
+    model.value.dup_auto_hours = Math.max(0, Math.round(v ?? 0))
+  },
+})
+const DUP_ACTIONS = [
+  { label: '超时后都保留（#A #B）', value: 'keep_all' as const },
+  { label: '超时后留推荐的，没有推荐就都保留', value: 'recommend' as const },
+]
+
 const runHint = '确定开始整理？会扫描待整理目录并搬移文件。'
 
 async function runOrganize() {
@@ -276,6 +294,25 @@ const TRIGGERS: { name: string; text: string }[] = [
             <span class="switch-hint">
               {{ model.manual_confirm ? '识别完先停在「待确认」，确认后才入库' : '识别完直接入库（全自动）' }}
             </span>
+          </div>
+        </FieldRow>
+
+        <FieldRow
+          label="同集多份"
+          tip="同一次整理里几份不同的文件（比如同一集的粤语、英语两份）按命名规则会改成同一个名字时，不替你挑，停在「整理记录 → 待确认」等你选：留哪一份、都留（名字后加 #A #B）、都不要（移冗余）。通知里也能选：TG 点按钮，企业微信回复「多份 编号 选择」。这里设等多久没人选就自动处理，0 是一直等。"
+        >
+          <div class="dup-row">
+            <HNumberInput v-model="dupHours" :min="0" :max="720" class="dup-hours">
+              <template #suffix>小时</template>
+            </HNumberInput>
+            <HSelect
+              v-if="model.dup_auto_hours > 0"
+              v-model="model.dup_auto_action"
+              :options="DUP_ACTIONS"
+              class="dup-action"
+              aria-label="超时后怎么处理"
+            />
+            <span v-else class="switch-hint">一直等你选</span>
           </div>
         </FieldRow>
 
@@ -397,6 +434,19 @@ const TRIGGERS: { name: string; text: string }[] = [
   align-items: center;
   gap: 10px;
   min-height: 34px;
+}
+.dup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dup-hours {
+  width: 150px;
+}
+.dup-action {
+  min-width: 0;
+  flex: 1 1 220px;
 }
 .switch-hint {
   font-size: 12.5px;

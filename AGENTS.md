@@ -476,7 +476,13 @@ git tag v1.2.0 && git push origin v1.2.0
     - 字母记在 `orgRecordFile.Variant`，重新整理按 fid 沿用（`planRedoLayoutWith`）；`parseFileName` 剥掉结尾的 `#A`；
       STRM 直链 `?/文件名` 里的 `#` 转义成 `%23`。
     - `HoldDup` 和 `HoldAI` 一样是 `sticky`：「人工确认」开关关着也不被 `adoptAwaiting` 接手；普通「确认入库」与批量提交拒收没选过的。
-    - 散文件（`processSingleFile`）还没接，机器人（TG 按钮 / 企微指令）与超时策略是第二期。测试 `orgdup_test.go`。
+    - 通知与机器人（`orgdupbot.go`）：停下时 `notifyDupHold` 推一条，TG 带按钮（Chat ID 是个人私聊才带：回调只认配置的私聊），
+      企微写回复指令「多份 <编号> <选择>」（TG 私聊同样认，`/dup`），飞书 / QQ 只能指向网页。
+      TG 按钮数据 `d:<记录 id>:<组|*>:<操作>` **认数据库里的记录，别改成找资源那种 10 分钟内存会话**：几个小时后点也得管用；
+      多组逐组点的进度只在内存（`dupBotPicks`），点全了才落库入队。**谁先选算谁的**：机器人与超时 `submitDupChoice(…, override=false)`
+      只认还没选过的，网页可以改选。超时 `org-basic.dup_auto_hours`（默认 0 = 一直等）+ `dup_auto_action`（keep_all / recommend），
+      每分钟由调度器的 `dupAutoTick` 查，处理了推一条通知。
+    - 散文件（`processSingleFile`）还没接。测试 `orgdup_test.go` / `orgdupbot_test.go`。
 
 ---
 

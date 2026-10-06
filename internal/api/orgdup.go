@@ -407,9 +407,10 @@ func parseDupChoice(s string) map[string]string {
 	return out
 }
 
-// submitDupChoice 记下选择并入「确认入库」队列。网页与机器人共用这一个入口。
-// 排队期间再选一次以最后一次为准（执行时才读记录上的选择）
-func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction, source string) (model.TaskJob, error) {
+// submitDupChoice 记下选择并入「确认入库」队列。网页、机器人、超时共用这一个入口。
+// override：网页可以在排队期间改选（以最后一次为准，执行时才读记录上的选择）；
+// 机器人与超时传 false，只认还没选过的 —— 谁先选算谁的，后到的不能把人刚选的盖掉
+func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction, source string, override bool) (model.TaskJob, error) {
 	if rec.Status != orgStatusAwaiting || !rec.HoldDup {
 		return model.TaskJob{}, errors.New("这条记录不在「同集多份待选」状态（可能已经处理过）")
 	}
@@ -418,13 +419,19 @@ func (h *Handler) submitDupChoice(rec *model.OrganizeRecord, actions []dupAction
 		return model.TaskJob{}, err
 	}
 	b, _ := json.Marshal(choice)
-	res := h.DB.Model(&model.OrganizeRecord{}).
-		Where("id = ? AND status = ? AND hold_dup = ?", rec.ID, orgStatusAwaiting, true).
-		Update("dup_choice", string(b))
+	q := h.DB.Model(&model.OrganizeRecord{}).
+		Where("id = ? AND status = ? AND hold_dup = ?", rec.ID, orgStatusAwaiting, true)
+	if !override {
+		q = q.Where("dup_choice = '' OR dup_choice IS NULL")
+	}
+	res := q.Update("dup_choice", string(b))
 	if res.Error != nil {
 		return model.TaskJob{}, res.Error
 	}
 	if res.RowsAffected == 0 {
+		if !override {
+			return model.TaskJob{}, errors.New("这一条刚被别处选过了")
+		}
 		return model.TaskJob{}, errors.New("这条记录刚被处理过，请刷新")
 	}
 	rec.DupChoice = string(b)
@@ -449,7 +456,7 @@ func (h *Handler) SubmitDupChoice(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
 		return
 	}
-	job, err := h.submitDupChoice(&rec, req.Actions, "web")
+	job, err := h.submitDupChoice(&rec, req.Actions, "web", true)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

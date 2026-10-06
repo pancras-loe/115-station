@@ -209,6 +209,7 @@ func StartSyncScheduler(h *Handler) {
 				return
 			}
 			h.pruneSyncEvents()
+			h.dupAutoTick() // 同集多份等过了期限还没人选的（orgdupbot.go，默认不超时）
 			now := time.Now()
 
 			if cron := h.loadFullCron(); cron != "" && CronMatch(cron, now) {

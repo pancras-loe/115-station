@@ -2093,7 +2093,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			groupsJSON, _ := json.Marshal(dup.held)
 			msg := dupHoldMessage(dup.held)
 			onLog(fmt.Sprintf("⏸ %s/ - %s（整理记录 → 待确认），其余照常入库", dir.Name, msg))
-			ctx.sink.note(&model.OrganizeRecord{
+			heldRec := &model.OrganizeRecord{
 				Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
 				Status: orgStatusAwaiting, Stage: "confirm", Message: msg,
 				TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
@@ -2101,7 +2101,9 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 				Category: category, TargetDir: rootRel,
 				Files: marshalRecordFiles(recFiles), VideoCount: len(heldVideos), TotalSize: heldSize,
 				HoldDup: true, DupGroups: string(groupsJSON),
-			})
+			}
+			ctx.sink.note(heldRec)
+			go notifyDupHold(heldRec) // TG 带按钮、企微写回复指令（orgdupbot.go）
 			for _, v := range heldVideos {
 				results = append(results, OrganizeResult{FileName: v.Name, Status: orgStatusAwaiting, Title: media.Title,
 					Year: media.Year, MediaType: media.MediaType, Message: msg})
