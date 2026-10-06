@@ -846,7 +846,8 @@ func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f
 	if format == "pick_code" {
 		streamURL = fmt.Sprintf("%s/d/%s", base, idPart)
 	} else {
-		streamURL = fmt.Sprintf("%s/d/%s?/%s", base, idPart, f.Name)
+		// 「#」要转义：同集多份保留时的「xxx#A.mkv」（orgdup.go），不转的话 # 之后被当成 URL 片段截掉
+		streamURL = fmt.Sprintf("%s/d/%s?/%s", base, idPart, strings.ReplaceAll(f.Name, "#", "%23"))
 	}
 
 	// 本地目录：保持网盘目录结构

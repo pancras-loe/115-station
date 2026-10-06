@@ -318,6 +318,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/organize/records/submit", h.SubmitOrganizeRecords)
 		protected.PUT("/organize/records/:id/pending", h.SetRecordPending)
 		protected.POST("/organize/records/:id/confirm", h.ConfirmOrganizeRecord)
+		protected.POST("/organize/records/:id/dup", h.SubmitDupChoice)
 		protected.POST("/organize/records/:id/ignore", h.IgnoreOrganizeRecord)
 		protected.GET("/organize/records/:id", h.GetOrganizeRecord)
 		protected.POST("/organize/records/:id/redo", h.RedoOrganizeRecord)

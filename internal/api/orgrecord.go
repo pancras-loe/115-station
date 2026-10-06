@@ -36,10 +36,17 @@ type orgRecordDTO struct {
 	model.OrganizeRecord
 	FileList []orgRecordFile     `json:"file_list"`
 	Link     *model.DownloadLink `json:"link,omitempty"`
+	// DupList / DupPicked 同集多份待选的各组与已提交的选择（展开好的 DupGroups / DupChoice，见 orgdup.go）
+	DupList   []dupGroup        `json:"dup_list,omitempty"`
+	DupPicked map[string]string `json:"dup_picked,omitempty"`
 }
 
 func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink) orgRecordDTO {
-	return orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files), Link: links[r.LinkID]}
+	d := orgRecordDTO{OrganizeRecord: r, FileList: unmarshalRecordFiles(r.Files), Link: links[r.LinkID]}
+	if r.HoldDup {
+		d.DupList, d.DupPicked = parseDupGroups(r.DupGroups), parseDupChoice(r.DupChoice)
+	}
+	return d
 }
 
 // recordDTO 单条记录的返回体（详情、确认、重新整理之后回给前端的那一条）
@@ -694,7 +701,7 @@ func planRedoLayoutWith(media *TmdbMedia, category string, files []orgRecordFile
 			videos++
 			continue
 		}
-		newName := pathBase(newPath)
+		newName := withVariant(pathBase(newPath), f.Variant) // 同集多份保留时的字母按 fid 沿用（orgdup.go）
 		if newName != "" && newName != f.Name {
 			out.renames[f.Fid] = newName
 			newBaseOf[baseName(f.Name)] = baseName(newName)

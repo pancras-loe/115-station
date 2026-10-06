@@ -325,6 +325,12 @@ type OrganizeRecord struct {
 	// 与「人工确认」开关无关：开关关着时普通待确认会被自动整理接手，这种不会 ——
 	// 否则每一轮都会重新识别、重新调一次模型、又停回来
 	HoldAI bool `json:"hold_ai"`
+	// HoldDup 这条待确认是「同一次整理里几份不同的文件改出了同一个名字」停下来的（orgdup.go），
+	// 比如同一集的粤语 / 英语两份。同 HoldAI：开关关着也不自动接手，必须由用户选。
+	// DupGroups 是撞名的各组（[]dupGroup 的 JSON），DupChoice 是用户的选择（fid → keep / drop / A..Z）
+	HoldDup   bool   `json:"hold_dup"`
+	DupGroups string `json:"dup_groups" gorm:"type:text"`
+	DupChoice string `json:"dup_choice" gorm:"type:text"`
 	// PendingTmdbID / PendingMediaType / PendingLabel 用户暂存的指定（还没提交到任务队列）。
 	// 放在记录上而不是前端：改了几十条一刷新全丢是最坏的体验，换台设备也要能接着提交。
 	// 提交入队时清空。PendingLabel 是「片名 (年份)」，列表直接显示，不必再查 TMDB

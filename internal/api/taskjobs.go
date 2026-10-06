@@ -142,6 +142,10 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条没有识别出来，请先搜索并指定 TMDB 条目"})
 		return
 	}
+	if rec.HoldDup && rec.DupChoice == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条是同一集有几份文件、改名后会重名，请先选择保留哪份"})
+		return
+	}
 	job, err := h.enqueueConfirm(&rec, req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -474,6 +474,9 @@ type orgRecordFile struct {
 	PickCode string `json:"pickcode,omitempty"`
 	Size     int64  `json:"size,omitempty"`
 	Sha1     string `json:"sha1,omitempty"`
+	// Variant 同一集几份都保留、改名撞上时加的后缀字母（A → 「xxx#A.mkv」，见 orgdup.go）。
+	// 记在这里，重新整理才能按 fid 沿用同一个字母，A / B 不会互换
+	Variant string `json:"variant,omitempty"`
 }
 
 // recordOrig 登记原名：与最终名一样就不存（记录里每个文件省一个字段）

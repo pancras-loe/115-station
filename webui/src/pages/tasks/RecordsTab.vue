@@ -5,6 +5,7 @@ import {
   Ban,
   Check,
   ChevronDown,
+  Copy,
   File as FileIcon,
   Folder,
   PencilLine,
@@ -28,9 +29,10 @@ import HTooltip from '@/components/hero/HTooltip.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceLink from '@/components/ui/SourceLink.vue'
 import RedoDialog from '@/components/organize/RedoDialog.vue'
+import DupChoiceDialog from '@/components/organize/DupChoiceDialog.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import { organizeApi, resourcesApi } from '@/api'
-import type { OrganizeRecord } from '@/api/organize'
+import type { DupAction, OrganizeRecord } from '@/api/organize'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
@@ -240,7 +242,13 @@ const selected = ref(new Set<number>())
  * 前者按暂存的指定执行，后者按识别结果确认入库（后端 planSubmit 同一套口径）
  */
 function canSubmit(r: OrganizeRecord) {
+  if (needsDupPick(r)) return false // 同集多份要先选留哪份，批量提交帮不了它
   return (r.pending_tmdb_id ?? 0) > 0 || (r.status === 'awaiting' && r.tmdb_id > 0)
+}
+
+/** 同集多份待选、还没提交过选择 */
+function needsDupPick(r: OrganizeRecord) {
+  return r.status === 'awaiting' && !!r.hold_dup && !Object.keys(r.dup_picked ?? {}).length
 }
 const confirmable = computed(() => rows.value.filter(canSubmit))
 const allPicked = computed(
@@ -326,6 +334,32 @@ async function ignoreOne(r: OrganizeRecord) {
     await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '忽略失败')
+  } finally {
+    acting.value = 0
+  }
+}
+
+// ---- 同集多份：选留哪份（DupChoiceDialog），提交后走确认入库的执行器 ----
+const dupShow = ref(false)
+const dupTarget = ref<OrganizeRecord | null>(null)
+
+function openDup(r: OrganizeRecord) {
+  dupTarget.value = r
+  dupShow.value = true
+}
+
+async function doDup(actions: DupAction[]) {
+  const target = dupTarget.value
+  if (!target) return
+  dupShow.value = false
+  acting.value = target.id
+  try {
+    const d = await organizeApi.submitDupChoice(target.id, actions)
+    message.success(d.message)
+    await queue.submitted(d.job_id)
+    await reload()
+  } catch (e) {
+    toastError(e, '提交选择失败')
   } finally {
     acting.value = 0
   }
@@ -556,6 +590,7 @@ async function clearAll() {
                   >tmdb={{ r.tmdb_id }}</a
                 >
                 <HChip v-if="r.stage === 'moved'" color="warning" :title="r.message">已移出媒体库</HChip>
+                <HChip v-if="r.hold_dup" color="warning">同集多份</HChip>
                 <HChip v-if="r.manual_tmdb" color="success">手动指定</HChip>
                 <template v-else-if="r.recog_via">
                   <HTooltip v-if="r.ai_note" :content="r.ai_note">
@@ -582,8 +617,9 @@ async function clearAll() {
               <SourceLink v-if="r.link" class="from" :link="r.link.url" :kind="r.link.kind" />
 
               <!-- 待确认：最要紧的是「会被整理成什么、放到哪」，单独一行突出 -->
-              <div v-if="r.status === 'awaiting'" class="plan" :class="{ 'plan-miss': !r.tmdb_id }">
-                <template v-if="r.tmdb_id">
+              <div v-if="r.status === 'awaiting'" class="plan" :class="{ 'plan-miss': !r.tmdb_id || needsDupPick(r) }">
+                <template v-if="r.hold_dup">{{ r.message }}</template>
+                <template v-else-if="r.tmdb_id">
                   <span class="plan-label">将入库到</span>
                   <code class="plan-dir">{{ r.target_dir || '（确认时按模板生成）' }}</code>
                 </template>
@@ -648,6 +684,18 @@ async function clearAll() {
             <div class="ops">
               <template v-if="r.status === 'awaiting'">
                 <HButton
+                  v-if="r.hold_dup"
+                  size="sm"
+                  variant="primary"
+                  :disabled="busy || queuedJob(r)?.status === 'running'"
+                  :loading="acting === r.id"
+                  @click="openDup(r)"
+                >
+                  <template #icon><Copy /></template>
+                  {{ needsDupPick(r) ? '选择保留' : '改选' }}
+                </HButton>
+                <HButton
+                  v-else
                   size="sm"
                   variant="primary"
                   :disabled="!r.tmdb_id || busy || !!queuedJob(r)"
@@ -658,7 +706,13 @@ async function clearAll() {
                   <template #icon><Check /></template>
                   确认入库
                 </HButton>
-                <HButton size="sm" variant="tertiary" :disabled="busy || queuedJob(r)?.status === 'running'" @click="openPick(r)">
+                <HButton
+                  v-if="!r.hold_dup"
+                  size="sm"
+                  variant="tertiary"
+                  :disabled="busy || queuedJob(r)?.status === 'running'"
+                  @click="openPick(r)"
+                >
                   <template #icon><PencilLine /></template>
                   重新指定
                 </HButton>
@@ -744,6 +798,7 @@ async function clearAll() {
     </SectionCard>
 
     <RedoDialog v-model:show="pickShow" :record="pickTarget" :mode="pickMode" @confirm="doPick" @stage="doStage" />
+    <DupChoiceDialog v-model:show="dupShow" :record="dupTarget" @submit="doDup" />
   </div>
 </template>
 

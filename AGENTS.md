@@ -463,6 +463,21 @@ git tag v1.2.0 && git push origin v1.2.0
     - 占位剧照（`scrape.skip_shared_stills`，默认开）**只在同一季内**判：同季 ≥3 集共用 still_path 或内容 sha1 相同。
     - 测试：`scrapelane_test.go`（不等锁、分队列排位、合并、不建目录、事后收拾、占位剧照按季）。
 
+17. **同一次整理里撞名：交给用户选，不替用户去重**（`orgdup.go`，2026-10-06 起）：
+    同一集的粤语 / 英语两份，命名模板不带语言就改出同一个名字；115 遇到同名会把后到的悄悄改成 `xxx(1).mkv`，
+    记录 / 台账 / STRM 就和网盘对不上。所以 `processDir` 在洗版逐份判定之后、**任何改名搬移之前**按「落点目录 / 新名」分组（`settleCollisions`）：
+    - sha1 相同 = 同一份文件，不问，多余的移冗余；
+    - 不同的文件撞名 → 这几份连同字幕 / 集 NFO 原地不动，登记一条 `HoldDup` 的待确认记录（`DupGroups`：区别词、洗版排名、推荐），
+      同条目其他集照常入库，**源目录不收拾**（有残留会被连同内容搬进冗余）。洗版判输的照旧进「已存在」，不会被问。
+    - 推荐只在洗版策略分得出高下时给；分不出（多半只差语言）就不推荐，**别改成默认替用户挑**（维护者明确要求）。
+    - 用户的选择（`DupChoice`：fid → keep / drop / A..Z，`POST /organize/records/:id/dup`）走「确认入库」的执行器，
+      `orgCtx.dupChoice` 让 `processDir` 放行：不要的移冗余，都留的改名 `xxx#A.mkv` / `xxx#B.mkv`（推荐的那份是 A，其余按体积）。
+      只有留下的那份（几份）去让旧版让位；几份都留时让位的台账行去重。新增网页 / 机器人入口一律调 `submitDupChoice`。
+    - 字母记在 `orgRecordFile.Variant`，重新整理按 fid 沿用（`planRedoLayoutWith`）；`parseFileName` 剥掉结尾的 `#A`；
+      STRM 直链 `?/文件名` 里的 `#` 转义成 `%23`。
+    - `HoldDup` 和 `HoldAI` 一样是 `sticky`：「人工确认」开关关着也不被 `adoptAwaiting` 接手；普通「确认入库」与批量提交拒收没选过的。
+    - 散文件（`processSingleFile`）还没接，机器人（TG 按钮 / 企微指令）与超时策略是第二期。测试 `orgdup_test.go`。
+
 ---
 
 ## 7. 常见任务入口

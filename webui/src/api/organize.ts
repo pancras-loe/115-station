@@ -48,9 +48,39 @@ export interface OrganizeRecordFile {
   pickcode?: string
   size?: number
   sha1?: string
+  /** 同一集几份都保留时的后缀字母（A →「xxx#A.mkv」） */
+  variant?: string
 }
 
-/** awaiting = 开了「人工确认」后识别完停下来的条目，文件还在待整理里原地没动 */
+/** 同集多份（改名后会重名）里的一份 */
+export interface DupFile {
+  fid: string
+  name: string
+  size?: number
+  /** 和同组其他几份不一样的词（粤语 / 英语）；认不出为空 */
+  label?: string
+  /** 命中洗版策略优先级第几条（0 最优），-1 没命中 */
+  rank: number
+}
+
+/** 一组改名后会重名的文件 */
+export interface DupGroup {
+  /** 撞上的落点：库内目录 / 新文件名 */
+  target: string
+  /** S04E22；电影为空 */
+  episode?: string
+  files: DupFile[]
+  /** 洗版策略分得出高下时最优那份；分不出（多半只差语言）为空 */
+  recommend?: string
+  reason?: string
+}
+
+/** 一组的选择：keep 只留 fid 那份 / keep_all 都留（加 #A #B）/ drop_all 都不要（移冗余） */
+export interface DupAction {
+  action: 'keep' | 'keep_all' | 'drop_all'
+  fid?: string
+}
+
 /** 整理记录的来源链接：这批内容是从哪条离线 / 分享链接下来的 */
 export interface OrganizeRecordLink {
   id: number
@@ -97,6 +127,11 @@ export interface OrganizeRecord {
   ai_note?: string
   /** 因为 AI 判定停下来等确认（与「人工确认」开关无关） */
   hold_ai?: boolean
+  /** 同一次整理里几份不同的文件改出同一个名字，停下来等用户选（与「人工确认」开关无关） */
+  hold_dup?: boolean
+  dup_list?: DupGroup[]
+  /** 已提交的选择：fid → keep / drop / A..Z；没选过为空 */
+  dup_picked?: Record<string, string>
   /** 暂存的指定（还没提交到任务队列）；0 = 没有 */
   pending_tmdb_id?: number
   pending_media_type?: string
@@ -145,6 +180,10 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
     `/organize/records/${id}/confirm`,
     pick ? { tmdb_id: pick.tmdbId, media_type: pick.mediaType, label: pick.label } : {},
   )
+
+/** 同集多份：提交每一组的选择 → 入任务队列（走确认入库的执行器） */
+export const submitDupChoice = (id: number, actions: DupAction[]) =>
+  http.post<QueuedReply>(`/organize/records/${id}/dup`, { actions })
 
 /** 批量按识别结果入库；没识别出来的由后端跳过 */
 /** 不要这一条：移到冗余，记录改成未识别（之后仍能「重新整理」捞回） */

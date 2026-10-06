@@ -35,8 +35,12 @@ type awaitingRef struct {
 	created time.Time
 	manual  bool // 用户改指定过 TMDB 条目（写回记录的 ManualTmdb）
 	ai      bool // AI 判定停下的（OrganizeRecord.HoldAI）：「人工确认」开关关着也不自动接手
+	dup     bool // 撞名停下的（OrganizeRecord.HoldDup，orgdup.go）：同上，留哪份只有用户知道
 	fids    []string
 }
+
+// sticky 开关关着也不许自动整理接手：接手就是再判一遍、又停回来
+func (r *awaitingRef) sticky() bool { return r.ai || r.dup }
 
 // loadAwaiting 所有待确认记录，按 fid 索引：记录自身的 SourceFid 与登记的每个文件都算，
 // 散文件的待确认记录挂着同前缀的其他集，它们作为顶层条目时同样要被认出来
@@ -46,9 +50,9 @@ func loadAwaiting() map[string]*awaitingRef {
 		return out
 	}
 	var rows []model.OrganizeRecord
-	model.DB.Select("id, created_at, source_fid, files, hold_ai").Where("status = ?", orgStatusAwaiting).Find(&rows)
+	model.DB.Select("id, created_at, source_fid, files, hold_ai, hold_dup").Where("status = ?", orgStatusAwaiting).Find(&rows)
 	for _, r := range rows {
-		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI}
+		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI, dup: r.HoldDup}
 		if r.SourceFid != "" {
 			ref.fids = append(ref.fids, r.SourceFid)
 		}
@@ -73,8 +77,8 @@ func (c *orgCtx) dropHeld(entries []dirEntry) []dirEntry {
 	}
 	out := entries[:0]
 	for _, e := range entries {
-		// AI 判定停下的不管开关怎样都跳过：接手就是重新识别、再调一次模型、再停回来
-		if ref := c.held[e.Fid]; ref == nil || (!c.cfg.ManualConfirm && !ref.ai) {
+		// AI 判定 / 撞名停下的不管开关怎样都跳过：接手就是重新识别、再调一次模型、再停回来
+		if ref := c.held[e.Fid]; ref == nil || (!c.cfg.ManualConfirm && !ref.sticky()) {
 			out = append(out, e)
 		}
 	}
@@ -225,7 +229,7 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 			rcfg.Pending = rec.SourceCid // 散文件的字幕等附件要回原来的扫描根里找
 		}
 		ctx := &orgCtx{ops: ops, cfg: &rcfg, tc: tc, rules: rules, libAbs: libAbs, sink: sink,
-			pruner: pruner, onLog: logFn, forced: media,
+			pruner: pruner, onLog: logFn, forced: media, dupChoice: parseDupChoice(rec.DupChoice),
 			held: map[string]*awaitingRef{}, handled: map[string]bool{}}
 		sink.reuse = &awaitingRef{id: rec.ID, created: rec.CreatedAt, manual: tmdbID != rec.TmdbID}
 		log.Printf("[整理] ▶ 人工确认《%s》→ %s (%s) [tmdb=%d]", rec.Source, media.Title, media.Year, tmdbID)

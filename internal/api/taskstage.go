@@ -74,6 +74,8 @@ func planSubmit(recs []model.OrganizeRecord) submitPlan {
 	for i := range recs {
 		r := recs[i]
 		switch {
+		case r.Status == orgStatusAwaiting && r.HoldDup && r.DupChoice == "":
+			skip("同一集有几份文件的条目要先选择保留哪份")
 		case r.PendingTmdbID > 0 && r.Status == orgStatusAwaiting:
 			p.staged = append(p.staged, r)
 		case r.PendingTmdbID > 0:

@@ -465,6 +465,7 @@ func parseFileName(filename string) *ParsedName {
 	result.TmdbID, result.TmdbKind = tag.TmdbID, tag.Kind
 	defer applyNameTag(result, tag)
 	name = trimMediaExt(name)
+	name = stripVariant(name) // 同集多份保留时加的「#A」（orgdup.go），不是片名 / 画质的一部分
 	// 先剥离发布站广告（【…】块/域名），再解析
 	name = stripReleaseAds(name)
 	// 「全39集 / 共39集」是整季打包的标志：记下是剧集，再和其他中文噪声词一起剥掉

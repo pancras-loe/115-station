@@ -64,6 +64,8 @@ type orgCtx struct {
 
 	// forced 人工确认/改指定时直接用这个条目，跳过 TMDB 识别（也就不会再停下来等确认）
 	forced *TmdbMedia
+	// dupChoice 撞名的几份用户选了什么（fid → keep / drop / A..Z，见 orgdup.go）；确认时从记录上读
+	dupChoice map[string]string
 	// held fid → 它所在的待确认记录。顶层条目在整理开始时一次列完，
 	// 本轮里新停下来的条目也要登记进来，否则同前缀的兄弟散文件会被当成新条目再识别一遍
 	held map[string]*awaitingRef
@@ -315,40 +317,13 @@ func applySeasonHint(p, hint *ParsedName) {
 //
 // 返回 fid → 最终文件名。一条龙落盘要靠它知道每个文件搬过去之后叫什么——
 // 此前这张表算出来就丢了，STRM 只能等增量同步从生活事件里把新名捞回来。
-// eps 是调用方已经算好的每集季集（episodeParses + 连续编号换算），这里不再各自重新解析
-func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, eps map[string]*ParsedName, onLog func(string)) map[string]string {
-	// 计算单个视频的新名（保持原命名规则）
-	// 统一用模板引擎计算视频新名（与 buildNewNameWithTemplate 同源；
-	// 此前硬编码 "标题 (年份) [tmdb]" 格式导致与用户配置的命名规则不一致）
-	mediaCopy := *media
-	mediaCopy.Title = sanitizeName(mediaCopy.Title)
+// eps 是调用方已经算好的每集季集（episodeParses + 连续编号换算），这里不再各自重新解析。
+// variants 是同一集几份都保留时分到的后缀字母（orgdup.go），没有就是 nil
+func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remoteFile, eps map[string]*ParsedName,
+	variants map[string]string, onLog func(string)) map[string]string {
 	videoNewName := func(vf remoteFile) (string, bool) {
-		p := eps[vf.Fid]
-		if p == nil {
-			p = parseVideoInDir(vf, nil, nil)
-		}
-		var file string
-		if mediaCopy.MediaType == "movie" {
-			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
-			file = ctx.ApplyTemplate(renameTpl.MovieFile)
-		} else if p.Season >= 0 && p.Episode > 0 { // 第 0 季带集号 = 认出了特别篇的集号，照集模板改名
-			ctx := buildRenameContext(&mediaCopy, p, vf.Name)
-			file = ctx.ApplyTemplate(renameTpl.TVFile)
-		} else {
-			return "", false
-		}
-		// 115 不允许文件名含 "\ / : * ? " < > | — 模板输出统一清洗
-		file = sanitizeName(file)
-		// sanitizeName 把 < > 转成 ( )，可能重新引入括号 → 再清一次
-		for strings.Contains(file, "(.)") {
-			file = strings.ReplaceAll(file, "(.)", "")
-		}
-		file = parenValueRe.ReplaceAllString(file, "$1")
-		for strings.Contains(file, "..") {
-			file = strings.ReplaceAll(file, "..", ".")
-		}
-		file = strings.Trim(file, ".-")
-		return file, file != vf.Name
+		n := plannedVideoName(media, vf, eps[vf.Fid], variants[vf.Fid])
+		return n, n != vf.Name
 	}
 
 	names := map[string]string{} // fid -> 新名
@@ -392,6 +367,46 @@ func renameBeforeMove(ops *pan115Ops, media *TmdbMedia, videoFiles, files []remo
 	}
 	onLog(fmt.Sprintf("✓ 批量重命名 %d 个文件（例: %s）", len(renamed), example))
 	return renamed
+}
+
+// templateVideoName 按命名模板算一个视频的新名（只算不改）。电影套电影模板，剧集带集号的套剧集模板；
+// 剧集里没有集号的（特别篇原名入库）返回 ""。p 为 nil 时现场解析
+func templateVideoName(media *TmdbMedia, vf remoteFile, p *ParsedName) string {
+	mediaCopy := *media
+	mediaCopy.Title = sanitizeName(mediaCopy.Title)
+	if p == nil {
+		p = parseVideoInDir(vf, nil, nil)
+	}
+	var file string
+	if mediaCopy.MediaType == "movie" {
+		ctx := buildRenameContext(&mediaCopy, p, vf.Name)
+		file = ctx.ApplyTemplate(renameTpl.MovieFile)
+	} else if p.Season >= 0 && p.Episode > 0 { // 第 0 季带集号 = 认出了特别篇的集号，照集模板改名
+		ctx := buildRenameContext(&mediaCopy, p, vf.Name)
+		file = ctx.ApplyTemplate(renameTpl.TVFile)
+	} else {
+		return ""
+	}
+	// 115 不允许文件名含 "\ / : * ? " < > | — 模板输出统一清洗
+	file = sanitizeName(file)
+	// sanitizeName 把 < > 转成 ( )，可能重新引入括号 → 再清一次
+	for strings.Contains(file, "(.)") {
+		file = strings.ReplaceAll(file, "(.)", "")
+	}
+	file = parenValueRe.ReplaceAllString(file, "$1")
+	for strings.Contains(file, "..") {
+		file = strings.ReplaceAll(file, "..", ".")
+	}
+	return strings.Trim(file, ".-")
+}
+
+// plannedVideoName 视频整理后实际叫什么：模板新名（套不上模板的保持原名），再加同集多份的后缀字母
+func plannedVideoName(media *TmdbMedia, vf remoteFile, p *ParsedName, variant string) string {
+	n := templateVideoName(media, vf, p)
+	if n == "" {
+		n = vf.Name
+	}
+	return withVariant(n, variant)
 }
 
 // moveQuietly 移动并记录失败（失败不再被吞掉）
@@ -1585,7 +1600,7 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 		return results // 已随同前缀的散文件一起入库
 	}
 	if ref, ok := ctx.held[entry.Fid]; ok {
-		if ctx.cfg.ManualConfirm || ref.ai {
+		if ctx.cfg.ManualConfirm || ref.sticky() {
 			onLog(fmt.Sprintf("⏸ %s - 等待人工确认（整理记录 → 待确认），本轮跳过", entry.Name))
 			return results
 		}
@@ -1972,7 +1987,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	sc := newWashScanner(ops, cfg)
 	st := matchWashStrategy(media.MediaType, category)
 	var accepted []remoteFile
-	var plans []*washPlan
+	planOf := map[string]*washPlan{} // fid → 让旧版让位的计划（撞名停下 / 移走的不执行）
 	var rejectFids []string         // 判为已存在的视频 + 跟着它命名的字幕
 	var rejectFiles []orgRecordFile // 同一批的整理记录快照
 	rejectVideos, sameFileVideos := 0, 0
@@ -2005,7 +2020,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		if plan.decision == washReplaced {
 			p := plan
-			plans = append(plans, &p)
+			planOf[vf.Fid] = &p
 		}
 		if plan.decision != washNotBetter && plan.decision != washSameFile {
 			accepted = append(accepted, vf)
@@ -2023,6 +2038,97 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title,
 			Year: media.Year, MediaType: media.MediaType, Message: washExistsMsg(plan.decision)})
+	}
+	// 同一次整理里几份不同的文件改出同一个名字（同一集的粤语 / 英语两份）：不替用户挑，
+	// 停下来让用户选；sha1 相同的多余副本直接移冗余（orgdup.go）。必须在任何改名 / 搬移之前：
+	// 115 遇到同名会把后到的悄悄改成「xxx(1).mkv」，记录、台账、STRM 就和网盘对不上了
+	dup := settleCollisions(accepted, func(vf remoteFile) (string, string) {
+		ep := ""
+		if p := eps[vf.Fid]; p != nil && p.Episode > 0 && media.MediaType == "tv" {
+			ep = fmt.Sprintf("S%02d%s", p.Season, p.episodeTag())
+		}
+		return vplace.relOf[vf.Fid] + "/" + plannedVideoName(media, vf, eps[vf.Fid], ""), ep
+	}, func(name string) int { return washRankIn(st, name) }, ctx.dupChoice)
+	holdLeft := len(dup.held) > 0 // 源目录里还有等着选的文件：收尾不收拾源目录
+	if dup.changed() {
+		accepted = dup.keep
+		if len(dup.drop) > 0 {
+			dropFiles := append(append([]remoteFile(nil), dup.drop...), dupCompanions(dup.drop, files)...)
+			fids := make([]string, 0, len(dropFiles))
+			for _, f := range dropFiles {
+				fids = append(fids, f.Fid)
+				excluded[f.Fid] = true
+			}
+			junkRel := redundantEntryRel(dir)
+			if _, err := moveToHoldingDir(ops, cfg.Redundant, junkRel, fids); err != nil {
+				failMedia("failed", "move", "撞名的多余文件移到冗余失败: "+err.Error(), media, category, targetDir)
+				return append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: err.Error()})
+			}
+			what := fmt.Sprintf("%d 个不要的版本", len(dup.drop)-dup.copies)
+			if dup.copies == len(dup.drop) {
+				what = fmt.Sprintf("%d 个重复副本（sha1 相同）", dup.copies)
+			} else if dup.copies > 0 {
+				what = fmt.Sprintf("%d 个不要的版本与 %d 个重复副本", len(dup.drop)-dup.copies, dup.copies)
+			}
+			onLog(fmt.Sprintf("○ %s/ - 撞名处理：%s已移到 冗余/%s", dir.Name, what, junkRel))
+		}
+		if holdLeft {
+			var heldVideos []remoteFile
+			for _, vf := range videoFiles {
+				if dup.heldFids[vf.Fid] {
+					heldVideos = append(heldVideos, vf)
+				}
+			}
+			heldFiles := append(append([]remoteFile(nil), heldVideos...), dupCompanions(heldVideos, files)...)
+			recFiles := make([]orgRecordFile, 0, len(heldFiles))
+			var heldSize int64
+			for _, f := range heldFiles {
+				excluded[f.Fid] = true
+				recFiles = append(recFiles, orgRecordFile{Fid: f.Fid, Name: f.Name, Dir: f.Path,
+					Kind: recordFileKind(f.Name), PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1})
+			}
+			for _, v := range heldVideos {
+				heldSize += v.Size
+			}
+			groupsJSON, _ := json.Marshal(dup.held)
+			msg := dupHoldMessage(dup.held)
+			onLog(fmt.Sprintf("⏸ %s/ - %s（整理记录 → 待确认），其余照常入库", dir.Name, msg))
+			ctx.sink.note(&model.OrganizeRecord{
+				Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
+				Status: orgStatusAwaiting, Stage: "confirm", Message: msg,
+				TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
+				MediaType: media.MediaType, PosterPath: media.PosterPath,
+				Category: category, TargetDir: rootRel,
+				Files: marshalRecordFiles(recFiles), VideoCount: len(heldVideos), TotalSize: heldSize,
+				HoldDup: true, DupGroups: string(groupsJSON),
+			})
+			for _, v := range heldVideos {
+				results = append(results, OrganizeResult{FileName: v.Name, Status: orgStatusAwaiting, Title: media.Title,
+					Year: media.Year, MediaType: media.MediaType, Message: msg})
+			}
+		}
+	}
+	// 让位计划只给真要入库的：停下的、移冗余的不能先把旧版挤走。
+	// 几份都保留时它们顶的是同一个旧版，让位的台账行去重，否则同一批文件会被搬两次
+	var plans []*washPlan
+	claimed := map[string]bool{}
+	for _, vf := range accepted {
+		p := planOf[vf.Fid]
+		if p == nil {
+			continue
+		}
+		var victims []model.SyncedFile
+		for _, v := range p.victims {
+			if !claimed[v.FileID] {
+				claimed[v.FileID] = true
+				victims = append(victims, v)
+			}
+		}
+		if len(victims) == 0 {
+			continue
+		}
+		p.victims = victims
+		plans = append(plans, p)
 	}
 	// 旧版让位：整批一次网盘请求
 	if len(plans) > 0 {
@@ -2062,8 +2168,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	}
 	if len(accepted) == 0 {
 		// 全部判为已存在时源目录同样要收拾，和正常入库的收尾一致。
-		// 此前直接返回，空壳留在转存目录里，守望者只好再排一轮整理专门来删它
-		pruneOrMove(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", onLog)
+		// 此前直接返回，空壳留在转存目录里，守望者只好再排一轮整理专门来删它。
+		// 还有撞名等着选的就不收拾：「还有残留」会被连同内容搬进冗余
+		if !holdLeft {
+			pruneOrMove(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", onLog)
+		}
 		return results
 	}
 	videoFiles = accepted
@@ -2115,7 +2224,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	for _, vf := range videoFiles {
 		finalNames[vf.Fid] = vf.Name // 补全探测可能已经改过名
 	}
-	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, eps, onLog) {
+	for fid, n := range renameBeforeMove(ops, media, videoFiles, files, eps, dup.variants, onLog) {
 		finalNames[fid] = n
 	}
 
@@ -2244,7 +2353,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 此前一律搬进冗余——冗余目录被空壳越堆越多，点进去什么都没有。
 	// 注意不能只看直接子项：待整理常见 片名/Season 01/*.mkv，文件搬走后
 	// 父目录里还挂着空的 Season 01，pruneOrMove 会递归判断整棵子树
-	if _, deferred := pruneOrMoveSettled(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", goneFids, onLog); deferred {
+	// 还有撞名等着用户选的文件留在源目录里：不收拾（有残留会被连同内容搬进冗余）
+	if holdLeft {
+		onLog(fmt.Sprintf("○ %s/ - 源目录里还有等着选的文件，先不收拾", dir.Name))
+	} else if _, deferred := pruneOrMoveSettled(ops, dir.Fid, ctx.pruner.protectedSet(), cfg.Redundant, dir.Name+"/", goneFids, onLog); deferred {
 		ctx.pruner.mark(dir.Fid, dir.Name+"/")
 	}
 
@@ -2274,7 +2386,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		kind := recordFileKind(f.Name)
 		recFiles = append(recFiles, orgRecordFile{
 			Fid: f.Fid, Name: f.Name, Orig: recordOrig(orig, f.Name), Kind: kind,
-			PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1,
+			PickCode: f.PickCode, Size: f.Size, Sha1: f.Sha1, Variant: dup.variants[f.Fid],
 		})
 		if !movedFids[f.Fid] {
 			continue // 广告/垃圾已进冗余，不落盘
