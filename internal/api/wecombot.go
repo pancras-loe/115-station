@@ -450,7 +450,7 @@ func wecomShow(v botView, reply func(...string)) {
 }
 
 // submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）。
-// source 是提交来源（机器人 / 观影 / TG订阅），整理记录上显示「经谁提交」
+// source 是提交来源（机器人 / 观影…），整理记录上显示「经谁提交」
 func (h *Handler) submitOfflineLink(rawURL, source string) error {
 	cookie, err := h.get115Cookie()
 	if err != nil {

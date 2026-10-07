@@ -118,3 +118,21 @@ func TestSearchResourcesTg(t *testing.T) {
 		t.Fatalf("全部失败应当报错并提示代理: %v", err)
 	}
 }
+
+func TestTgChannelName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://t.me/quanquan_115", "quanquan_115"},
+		{"https://t.me/s/quanquan_115", "quanquan_115"},
+		{"https://t.me/quanquan_115?q=abc", "quanquan_115"},
+		{"https://t.me/quanquan_115/12345", "quanquan_115"},
+		{"@quanquan_115", "quanquan_115"},
+		{"quanquan_115", "quanquan_115"},
+		{"  ", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := tgChannelName(c.in); got != c.want {
+			t.Errorf("tgChannelName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

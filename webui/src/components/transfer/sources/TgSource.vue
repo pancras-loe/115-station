@@ -83,7 +83,7 @@ onMounted(load)
   <FieldRow
     label="频道"
     wide
-    tip="每行一个公开频道：@频道名、频道名或 https://t.me/频道名 都行；也可以直接粘贴 p115strmhelper 导出的频道 JSON，保存时转成每行一个。搜索时按片名查每个频道的公开网页（t.me/s/频道），最多查前 20 个。TG 关键词订阅没配订阅源时用的也是这份清单。"
+    tip="每行一个公开频道：@频道名、频道名或 https://t.me/频道名 都行；也可以直接粘贴 p115strmhelper 导出的频道 JSON，保存时转成每行一个。搜索时按片名查每个频道的公开网页（t.me/s/频道），最多查前 20 个。"
     hint="国内网络连不上 t.me，要在「系统配置 → 代理」里设代理。只收频道里的 115 分享、磁力、ed2k 与其他网盘链接。"
   >
     <HInput v-model="channels" :rows="5" mono placeholder="@频道名（每行一个）" :input-attrs="{ 'aria-label': 'TG 频道清单' }" />

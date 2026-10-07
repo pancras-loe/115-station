@@ -89,7 +89,7 @@ export interface OrganizeRecordLink {
   kind: 'magnet' | 'ed2k' | 'http' | 'ftp' | 'share' | string
   url: string
   name: string
-  /** 提交来源：web / 机器人 / 观影 / 影巢 / TG订阅 */
+  /** 提交来源：web / 机器人 / 观影 / 影巢（老数据里还有已删除的 TG订阅） */
   source: string
   created_at: string
 }

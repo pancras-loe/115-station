@@ -215,7 +215,7 @@ type DownloadLink struct {
 	URL    string `json:"url" gorm:"size:1000"`      // 原始链接（分享链接不含提取码）
 	Hash   string `json:"hash" gorm:"index;size:64"` // 磁力 btih / ed2k 文件 hash / 分享 share_code，与 115 任务列表对账用
 	Name   string `json:"name" gorm:"size:500"`      // 任务名 / 分享标题 / 链接文件名（提交时取得到多少算多少，回填时补全）
-	Source string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 观影 / 影巢 / TG订阅
+	Source string `json:"source" gorm:"size:32"`     // 提交来源：web / 机器人 / 观影 / 影巢（老数据里还有已删除的 TG订阅）
 
 	// ResultFids / ResultNames 产物在转存目录里的定位信息（JSON 数组），
 	// 整理认领时用：fid 精确（离线任务的 file_id），名字兜底（分享转存只有名字）

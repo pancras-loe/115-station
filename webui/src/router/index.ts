@@ -31,7 +31,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'subscriptions',
         name: 'tgsub',
-        // 订阅管理暂未开放，保留旧地址以兼容收藏，统一回到首页。
+        // TG 关键词订阅已于 2026-10-07 删除，保留旧地址以兼容收藏，统一回到首页。
         redirect: { name: 'dashboard' },
       },
       {

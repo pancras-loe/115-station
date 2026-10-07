@@ -139,7 +139,7 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 
 // shareReceiveCore 转存核心（HTTP 接口与企微机器人共用）：
 // 解析分享码 → info → snap（翻页收全）→ sharepost → 逐项 receive；organize=true 时转存后触发整理+增量。
-// source 是提交来源（web / 机器人 / 影巢 / TG 订阅…），只用于链接台账留痕
+// source 是提交来源（web / 机器人 / 影巢…），只用于链接台账留痕
 func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
 	shareCode := extractShareCode(shareURL)
 	if shareCode == "" {

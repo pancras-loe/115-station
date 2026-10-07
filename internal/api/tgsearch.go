@@ -1,7 +1,7 @@
 package api
 
 // TG 频道抓取引擎：抓取 Telegram 频道公开网页预览 https://t.me/s/<频道>?q=<关键词>，
-// 解析消息卡片。两个使用方：TG 关键词订阅（tgsub.go）与影视转存的「TG 频道」来源（transfertg.go）。
+// 解析消息卡片。使用方是影视转存的「TG 频道」来源（transfertg.go）。
 
 import (
 	"context"
@@ -20,12 +20,10 @@ import (
 
 type tgSearchCfg struct {
 	Channels string `json:"channels"` // 每行一个频道名（@xxx 或 xxx）
-	Target   string `json:"target_cid"`
-	Organize bool   `json:"organize"`
 }
 
 func (h *Handler) loadTgSearchCfg() *tgSearchCfg {
-	c := &tgSearchCfg{Organize: true}
+	c := &tgSearchCfg{}
 	if v := h.Config.GetSetting("tgsearch"); v != "" {
 		_ = json.Unmarshal([]byte(v), c)
 	}

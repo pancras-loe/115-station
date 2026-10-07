@@ -5,8 +5,7 @@ package api
 // 抓 Telegram 频道的公开网页版 t.me/s/<频道>?q=<片名>（tgsearch.go 的解析引擎），
 // 不用登录 TG 账号。p115strmhelper 的 TgSearcher 也是这条路（只读思路）。
 //
-// 频道清单存在 setting "tgsearch" 的 channels 里：TG 关键词订阅在没配订阅源时
-// 回落的也是它，两边共用一份，别再另起一个 key。
+// 频道清单存在 setting "tgsearch" 的 channels 里。
 //
 // 频道消息噪音大（同一条消息常挂好几个链接、标题里夹着表情和「名称：」），
 // 片名比对交给 resNormalize 统一做；这里只负责抓、拆、去重。
@@ -27,8 +26,7 @@ import (
 // tgResMaxChannels 一次搜索最多查几个频道：每个频道一次 t.me 请求，太多既慢又容易被限流
 const tgResMaxChannels = 20
 
-// tgResConcurrency 同时抓几个频道。订阅轮询是逐个抓、每个隔 0.8 秒；
-// 这里有人在页面上等着，放开到 3 个并发，但不全开
+// tgResConcurrency 同时抓几个频道：有人在页面上等着，放开到 3 个并发，但不全开
 const tgResConcurrency = 3
 
 // tgResChannels 频道清单：每行一个，@xxx / xxx / https://t.me/xxx 都认，去重保序。
@@ -38,7 +36,7 @@ func tgResChannels(raw string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, line := range tgResChannelTokens(raw) {
-		ch := tgSubParseChannel(line)
+		ch := tgChannelName(line)
 		if ch == "" || seen[strings.ToLower(ch)] {
 			continue
 		}
@@ -46,6 +44,23 @@ func tgResChannels(raw string) []string {
 		out = append(out, ch)
 	}
 	return out
+}
+
+// tgChannelName 从链接/@名/裸名解析频道名（https://t.me/xxx → xxx）
+func tgChannelName(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if i := strings.Index(s, "t.me/"); i >= 0 {
+		s = s[i+5:]
+		s = strings.TrimPrefix(s, "s/")
+	}
+	s = strings.TrimPrefix(s, "@")
+	if j := strings.IndexAny(s, "?#/"); j >= 0 {
+		s = s[:j]
+	}
+	return strings.TrimSpace(s)
 }
 
 // tgResChannelTokens 拆出一个个频道写法。不是合法 JSON 就当普通文本拆
