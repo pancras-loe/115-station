@@ -50,7 +50,8 @@ var (
 	scrapeLane = &jobLane{name: "刮削队列"}
 	probeLane  = &jobLane{name: "探测队列"} // Emby 提前探测（embyprobejob.go）：只等探测 worker，不拿 taskMu
 	personLane = &jobLane{name: "人物队列"} // 演职人员补全（embypeople.go）：只碰 TMDB 与 Emby，不拿 taskMu
-	jobLanes   = []*jobLane{mainLane, scrapeLane, probeLane, personLane}
+	subLane    = &jobLane{name: "订阅队列"} // 资源订阅（subrun.go）：搜资源最慢几十秒，转存本来就不拿 taskMu
+	jobLanes   = []*jobLane{mainLane, scrapeLane, probeLane, personLane, subLane}
 )
 
 // progressKeep 传给 setJobProgress 的 done/total 取这个值表示「不改」。

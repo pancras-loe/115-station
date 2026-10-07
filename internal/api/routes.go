@@ -104,6 +104,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	StartCoverGenScheduler(h)
 	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
+	StartSubscribeScheduler(h)  // 资源订阅：到检查时间的订阅合成一个任务入订阅队列
 
 	// 启动离线任务监视器（完成即触发整理；失败告警——磁力不是百分百成功）
 	StartOfflineTaskMonitor(h)
