@@ -56,7 +56,7 @@ func (h *Handler) recordDTO(r model.OrganizeRecord) orgRecordDTO {
 	return toRecordDTO(r, recordLinks(h.DB, []model.OrganizeRecord{r}))
 }
 
-// ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&target_dir=&page=&size=
+// ListOrganizeRecords GET /organize/records?status=&type=&q=&job_id=&target_dir=&link_id=&page=&size=
 func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 	q := h.DB.Model(&model.OrganizeRecord{})
 	if st := strings.TrimSpace(c.Query("status")); st != "" && st != "all" {
@@ -84,6 +84,10 @@ func (h *Handler) ListOrganizeRecords(c *gin.Context) {
 			job.ID = uint(jid) // 任务已被清理：仍可按 job_id 列查
 		}
 		q = jobRecordsScope(q, &job)
+	}
+	// 订阅详情「整理记录」跳过来时带 link_id：只看这条来源链接认领到的记录
+	if lid, _ := strconv.Atoi(c.Query("link_id")); lid > 0 {
+		q = q.Where("link_id = ?", lid)
 	}
 	if kw := strings.TrimSpace(c.Query("q")); kw != "" {
 		if id, err := strconv.Atoi(kw); err == nil && id > 0 {

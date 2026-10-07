@@ -4,11 +4,15 @@ import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
-import { ArrowLeft, Search } from '@lucide/vue'
+import { ArrowLeft, BellPlus, BellRing, Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
 import ResourcePanel from '@/components/transfer/ResourcePanel.vue'
+import SubscribeDialog from '@/components/subscribe/SubscribeDialog.vue'
+import type { SubTarget } from '@/components/subscribe/SubscribeDialog.vue'
+import { subscribeApi } from '@/api'
+import type { Subscription } from '@/api/subscribe'
 import { resourcesApi, transferApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo, ResourceQuery } from '@/api/transfer'
@@ -82,6 +86,28 @@ function pick(c: TmdbCandidate) {
     query: { tmdb_id: c.id, type: c.media_type, title: c.title, original_title: c.original_title, year: c.year },
   }
   stage.value = 'resources'
+  void loadSub(c)
+}
+
+// ---- 订阅：选定影片后可以直接订阅，订阅过的显示进度、点了去订阅页 ----
+const sub = ref<Subscription | null>(null)
+const subOpen = ref(false)
+const subTarget = computed<SubTarget | null>(() => {
+  const c = selected.value?.cand
+  return c ? { tmdb_id: c.id, media_type: c.media_type, title: c.title, year: c.year, poster: c.poster } : null
+})
+async function loadSub(c: TmdbCandidate) {
+  sub.value = null
+  try {
+    sub.value = (await subscribeApi.of(c.id, c.media_type)).data
+  } catch {
+    // 查不到不影响找资源
+  }
+}
+function subLabel(s: Subscription) {
+  if (s.state === 'done') return '已订阅 · 已完成'
+  if (s.media_type === 'movie') return '已订阅'
+  return s.missing ? `已订阅 · 缺 ${s.missing} 集` : '已订阅'
 }
 
 function skipTmdb() {
@@ -157,6 +183,22 @@ const selOwned = computed(() => {
               {{ selected.cand.media_type === 'tv' ? '剧集' : '电影' }}
             </HChip>
             <HChip v-if="selOwned" color="success">已入库{{ selOwned.category ? ` · ${selOwned.category}` : '' }}</HChip>
+            <template v-if="selected.cand">
+              <HButton
+                v-if="sub"
+                variant="secondary"
+                size="sm"
+                class="sub-btn"
+                @click="router.push({ name: 'subscriptions', query: { sub: String(sub.id) } })"
+              >
+                <template #icon><BellRing :size="14" /></template>
+                {{ subLabel(sub) }}
+              </HButton>
+              <HButton v-else variant="secondary" size="sm" class="sub-btn" @click="subOpen = true">
+                <template #icon><BellPlus :size="14" /></template>
+                订阅
+              </HButton>
+            </template>
           </div>
           <p v-if="selected.cand?.overview" class="sel-overview">{{ selected.cand.overview }}</p>
           <p v-else-if="!selected.cand" class="sel-overview">
@@ -166,6 +208,7 @@ const selOwned = computed(() => {
       </div>
       <ResourcePanel :query="selected.query" :sources="sources" />
     </SectionCard>
+    <SubscribeDialog v-model:show="subOpen" :target="subTarget" @saved="(s) => (sub = s)" />
   </div>
 </template>
 
@@ -243,6 +286,9 @@ const selOwned = computed(() => {
   font-size: 17px;
   font-weight: 600;
   color: var(--foreground);
+}
+.sub-btn {
+  margin-left: auto;
 }
 .sel-year {
   font-size: 13px;

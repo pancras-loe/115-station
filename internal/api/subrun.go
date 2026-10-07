@@ -127,7 +127,9 @@ type subRunItem struct {
 }
 
 type subJobResult struct {
-	Items []subRunItem `json:"items"`
+	Subs      int          `json:"subs"`      // 检查了几个订阅（任务中心摘要用）
+	Submitted int          `json:"submitted"` // 提交了几条资源
+	Items     []subRunItem `json:"items"`
 }
 
 // subRunner 一个任务里所有订阅共用的东西
@@ -179,6 +181,7 @@ func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		}
 		res.Items = append(res.Items, item)
 	}
+	res.Subs, res.Submitted = len(res.Items), submitted
 	if submitted > 0 {
 		// 守望者每分钟也会看转存目录，这里只是让它别等
 		go h.triggerOrganizeAndSync()

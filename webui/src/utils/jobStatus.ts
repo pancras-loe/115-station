@@ -22,6 +22,7 @@ export const JOB_KIND: Record<string, string> = {
   probe: 'Emby 探测',
   person: '演职人员补全',
   metafill: '媒体信息补全',
+  subscribe: '订阅检查',
   libredo: '重新整理片目',
   libepisode: '指定季集',
   filemove: '移动',
@@ -51,6 +52,7 @@ export function laneText(kind: string) {
   if (kind === 'scrape' || kind === 'metafill') return '刮削队列'
   if (kind === 'probe') return '探测队列'
   if (kind === 'person') return '人物队列'
+  if (kind === 'subscribe') return '订阅队列'
   return ''
 }
 
@@ -129,6 +131,9 @@ const RESULT_LABEL: [string, string][] = [
   ['scrape_queued', '补刮'],
   ['probe_lack', '缺媒体信息'],
   ['probe_queued', '探测'],
+  // 资源订阅（subrun.go 的 subJobResult）
+  ['subs', '检查订阅'],
+  ['submitted', '提交资源'],
 ]
 
 /** 刮削结果里嵌套的产物计数 */

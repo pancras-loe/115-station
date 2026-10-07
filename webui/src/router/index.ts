@@ -29,10 +29,11 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '任务中心', desc: '任务队列与历史 / 整理记录', icon: 'tasks' },
       },
       {
+        // 旧版是 TG 关键词订阅（2026-10-07 删除），地址沿用给按 TMDB 条目的资源订阅
         path: 'subscriptions',
-        name: 'tgsub',
-        // TG 关键词订阅已于 2026-10-07 删除，保留旧地址以兼容收藏，统一回到首页。
-        redirect: { name: 'dashboard' },
+        name: 'subscriptions',
+        component: () => import('@/pages/SubscriptionsPage.vue'),
+        meta: { title: '资源订阅', desc: '按影片订阅：定时找缺的集，转存后自动整理入库', icon: 'subscribe' },
       },
       {
         path: 'accounts',

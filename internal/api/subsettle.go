@@ -15,6 +15,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// subReasonAwaiting 在路上、但整理停下来等用户确认（人工确认 / AI 判定 / 同名多份）：详情页的集格子按它标「等确认」
+const subReasonAwaiting = "整理停下来等你确认"
+
 // subAttemptPaid RE0 资源要花的积分超过上限 / 预算：没提交，只记一笔免得反复通知
 const subAttemptPaid = "paid"
 
@@ -57,7 +60,7 @@ func settleSubAttempt(sub *model.Subscription, a *model.SubAttempt, recs []model
 	for _, r := range recs {
 		switch r.Status {
 		case "awaiting":
-			keep.Reason = "整理停下来等你确认"
+			keep.Reason = subReasonAwaiting
 			return keep
 		case "success", "exists":
 			if r.TmdbID != 0 && (r.TmdbID != sub.TmdbID || (r.MediaType != "" && r.MediaType != sub.MediaType)) {

@@ -164,6 +164,8 @@ export const listRecords = (params: {
   job_id?: number
   /** 只看落在这个片目里的记录（库内相对路径，网盘文件页跳过来） */
   target_dir?: string
+  /** 只看这条来源链接认领到的记录（订阅详情跳过来） */
+  link_id?: number
   page?: number
   size?: number
 }) => http.get<OrganizeRecordPage>('/organize/records', { params })

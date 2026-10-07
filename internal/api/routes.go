@@ -346,6 +346,19 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// TMDB 搜索（影视转存页与整理记录的「重新整理」共用：名称或 TMDB ID → 条目选择）
 		protected.GET("/tmdb/search", h.TmdbSearchMulti)
 
+		// 资源订阅（subapi.go）：写操作只改订阅表，搜索与提交入订阅队列
+		protected.GET("/subscriptions", h.ListSubscriptions)
+		protected.POST("/subscriptions", h.CreateSubscription)
+		protected.GET("/subscriptions/of", h.SubscriptionOf)
+		protected.GET("/subscriptions/seasons", h.SubTmdbSeasons)
+		protected.GET("/subscriptions/:id", h.GetSubscription)
+		protected.PUT("/subscriptions/:id", h.UpdateSubscription)
+		protected.DELETE("/subscriptions/:id", h.DeleteSubscription)
+		protected.POST("/subscriptions/:id/run", h.RunSubscription)
+		protected.POST("/subscriptions/:id/attempts/:aid/retry", h.RetrySubAttempt)
+		protected.GET("/subscribe/config", h.SubscribeGetConfig)
+		protected.POST("/subscribe/config", h.SubscribeSaveConfig)
+
 		// 影视转存：按影片聚合各资源站（transferhub.go）。下面四个站点只剩配置 / 登录接口，
 		// 搜索与提交统一走这里
 		protected.GET("/transfer/sources", h.TransferSources)
