@@ -86,9 +86,9 @@ func linkHashOf(raw string) string {
 // dlLinkRecord 提交成功后登记一行。kind 为空则按链接形态自动判定；
 // name 提交时取得到多少算多少（ed2k/http 有文件名，磁力没有，靠监视器回填）；
 // names 是已知的产物名清单（分享转存从 /share/snap 拿，离线为空）
-func dlLinkRecord(h *Handler, rawURL, kind, name, source string, names []string) {
+func dlLinkRecord(h *Handler, rawURL, kind, name, source string, names []string) uint {
 	if h == nil || h.DB == nil || rawURL == "" {
-		return
+		return 0
 	}
 	if kind == "" {
 		kind = classifyLink(rawURL)
@@ -102,7 +102,9 @@ func dlLinkRecord(h *Handler, rawURL, kind, name, source string, names []string)
 	}
 	if err := h.DB.Create(&row).Error; err != nil {
 		log.Printf("[来源链接] ○ 登记失败（不影响下载）: %v", err)
+		return 0
 	}
+	return row.ID
 }
 
 // dlLinkSyncTask 离线监视器回填：按 info_hash（磁力 btih / ed2k hash）或任务名

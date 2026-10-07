@@ -805,11 +805,64 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			label = src.Label
 		}
 	}
-	link, code := strings.TrimSpace(req.URL), strings.TrimSpace(req.Code)
-	if link != "" && removedCloudResource("", link) {
-		return resSubmitResult{}, fmt.Errorf("本站不支持该网盘的链接")
+	rl, err := h.resolveResourceLink(req)
+	if err != nil {
+		return resSubmitResult{}, err
 	}
 
+	switch rl.Action {
+	case "transfer":
+		msg, ok, fail, err := h.shareReceiveCore(rl.URL, rl.Code, "", label, true)
+		if rl.Unlocked {
+			if err != nil {
+				// 积分已经花了：把链接交回去，用户还能自己转存
+				return resSubmitResult{Message: "已解锁，但转存失败：" + err.Error(), OpenURL: rl.URL, Code: rl.Code}, nil
+			}
+			if ok == 0 && fail == 0 {
+				return resSubmitResult{Message: "已解锁，但分享为空", OpenURL: rl.URL, Code: rl.Code}, nil
+			}
+			return resSubmitResult{Message: "已解锁并转存：" + msg}, nil
+		}
+		if err != nil {
+			return resSubmitResult{}, err
+		}
+		if ok == 0 && fail == 0 {
+			return resSubmitResult{Message: "分享为空，没有可转存的内容"}, nil
+		}
+		return resSubmitResult{Message: msg + "，完成后自动整理入库"}, nil
+
+	case "offline":
+		if status, msg := h.offlineSubmitCore(rl.URL, "", label, true); status != http.StatusOK {
+			return resSubmitResult{}, fmt.Errorf("%s", msg)
+		}
+		return resSubmitResult{Message: "已提交 115 离线下载，完成后自动整理入库"}, nil
+
+	case "open":
+		if rl.Unlocked {
+			return resSubmitResult{Message: "已解锁，不是 115 分享，请手动打开", OpenURL: rl.URL, Code: rl.Code}, nil
+		}
+		return resSubmitResult{Message: "请手动打开链接", OpenURL: rl.URL, Code: rl.Code}, nil
+	}
+	return resSubmitResult{}, fmt.Errorf("不支持的操作：%s", rl.Action)
+}
+
+// resLink 一条资源最终落到的链接
+type resLink struct {
+	Action   string // transfer = 115 分享 / offline = 离线下载 / open = 交给用户自己打开
+	URL      string
+	Code     string // 分享提取码
+	Unlocked bool   // RE0 刚解锁出来的：积分可能已经花了，后续失败也要把链接交回去
+}
+
+// resolveResourceLink 把一条资源换成能直接用的链接：直接贴的链接按形态分流、观影详情页取磁力、RE0 解锁。
+// 网页 / 机器人提交（submitResource）与订阅共用，别各写一份。
+// RE0 解锁会扣积分，只认 req.Confirm=true：网页是用户二次确认过的，订阅是用户在配置里事先同意了积分上限、
+// 并由订阅自己核过上限与预算之后才带上 —— 这个函数不替调用方做积分判断
+func (h *Handler) resolveResourceLink(req resSubmitReq) (resLink, error) {
+	link, code := strings.TrimSpace(req.URL), strings.TrimSpace(req.Code)
+	if link != "" && removedCloudResource("", link) {
+		return resLink{}, fmt.Errorf("本站不支持该网盘的链接")
+	}
 	action := req.Action
 	if req.Source == "" {
 		// 直接贴的链接：按链接形态分流
@@ -819,7 +872,7 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		case "magnet", "ed2k", "http", "ftp":
 			action = "offline"
 		default:
-			return resSubmitResult{}, fmt.Errorf("认不出这个链接：支持 115 分享、磁力、ed2k、HTTP")
+			return resLink{}, fmt.Errorf("认不出这个链接：支持 115 分享、磁力、ed2k、HTTP")
 		}
 	}
 
@@ -831,61 +884,43 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			link = u
 		}
 		if link == "" {
-			return resSubmitResult{}, fmt.Errorf("认不出 115 分享链接")
+			return resLink{}, fmt.Errorf("认不出 115 分享链接")
 		}
-		msg, ok, fail, err := h.shareReceiveCore(link, code, "", label, true)
-		if err != nil {
-			return resSubmitResult{}, err
-		}
-		if ok == 0 && fail == 0 {
-			return resSubmitResult{Message: "分享为空，没有可转存的内容"}, nil
-		}
-		return resSubmitResult{Message: msg + "，完成后自动整理入库"}, nil
+		return resLink{Action: "transfer", URL: link, Code: code}, nil
 
 	case "offline":
 		if link == "" && req.Source == "gy" {
 			magnet, _, err := gyFetchMagnet(req.Ref)
 			if err != nil {
-				return resSubmitResult{}, err
+				return resLink{}, err
 			}
 			link = magnet
 		}
 		if link == "" {
-			return resSubmitResult{}, fmt.Errorf("缺少下载链接")
+			return resLink{}, fmt.Errorf("缺少下载链接")
 		}
-		if status, msg := h.offlineSubmitCore(link, "", label, true); status != http.StatusOK {
-			return resSubmitResult{}, fmt.Errorf("%s", msg)
-		}
-		return resSubmitResult{Message: "已提交 115 离线下载，完成后自动整理入库"}, nil
+		return resLink{Action: "offline", URL: link}, nil
 
 	case "unlock":
 		if req.Source != "re0" || req.Ref == "" {
-			return resSubmitResult{}, fmt.Errorf("参数错误")
+			return resLink{}, fmt.Errorf("参数错误")
 		}
 		if !req.Confirm {
-			return resSubmitResult{}, fmt.Errorf("解锁会消耗 RE0 积分，请确认后再提交")
+			return resLink{}, fmt.Errorf("解锁会消耗 RE0 积分，请确认后再提交")
 		}
 		unlocked, ucode, err := re0UnlockSlug(h, req.Ref)
 		if err != nil {
-			return resSubmitResult{}, fmt.Errorf("解锁失败: %w", err)
+			return resLink{}, fmt.Errorf("解锁失败: %w", err)
 		}
 		if !is115ShareLink(unlocked) {
-			return resSubmitResult{Message: "已解锁，不是 115 分享，请手动打开", OpenURL: unlocked, Code: ucode}, nil
+			return resLink{Action: "open", URL: unlocked, Code: ucode, Unlocked: true}, nil
 		}
-		msg, ok, fail, err := h.shareReceiveCore(unlocked, ucode, "", label, true)
-		if err != nil {
-			// 积分已经花了：把链接交回去，用户还能自己转存
-			return resSubmitResult{Message: "已解锁，但转存失败：" + err.Error(), OpenURL: unlocked, Code: ucode}, nil
-		}
-		if ok == 0 && fail == 0 {
-			return resSubmitResult{Message: "已解锁，但分享为空", OpenURL: unlocked, Code: ucode}, nil
-		}
-		return resSubmitResult{Message: "已解锁并转存：" + msg}, nil
+		return resLink{Action: "transfer", URL: unlocked, Code: ucode, Unlocked: true}, nil
 
 	case "open":
-		return resSubmitResult{Message: "请手动打开链接", OpenURL: link, Code: code}, nil
+		return resLink{Action: "open", URL: link, Code: code}, nil
 	}
-	return resSubmitResult{}, fmt.Errorf("不支持的操作：%s", action)
+	return resLink{}, fmt.Errorf("不支持的操作：%s", action)
 }
 
 // ==================== HTTP ====================

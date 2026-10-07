@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,7 +139,7 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 }
 
 // shareReceiveCore 转存核心（HTTP 接口与企微机器人共用）：
-// 解析分享码 → info → snap（翻页收全）→ sharepost → 逐项 receive；organize=true 时转存后触发整理+增量。
+// 解析分享码 → shareList 列根目录 → shareReceive 转存全部顶层条目；organize=true 时转存后触发整理+增量。
 // source 是提交来源（web / 机器人 / 影巢…），只用于链接台账留痕
 func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
 	shareCode := extractShareCode(shareURL)
@@ -170,83 +171,23 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 
 	log.Printf("[上传] ▶ 分享转存开始: %s（提取码 %q）", truncateStr(shareURL, 70), code)
 
-	// 1. 文件列表 + 分享信息（GET /share/snap）。
-	//    此前的 POST /share/info 与 POST /share/snap 均已失效（信息端点恒返
-	//    "开小差"、列表端点 405），p115client 权威协议为 GET + query
-	// 条目名（Name/FileName 三选一非空）：转存后 115 保留原名，整理记录靠它
-	// 认领来源链接。同一个响应里本来就有，不额外请求 115；字段名防御式地都收，
-	// 115 的列表接口在 n / file_name / name 之间换过
-	type snapItem struct {
-		Fid      string `json:"fid"`
-		Name     string `json:"n"`
-		FileName string `json:"file_name"`
-		NameAlt  string `json:"name"`
-	}
-	var allItems []snapItem
-	shareTitle := ""
-	for offset := 0; ; offset += 1150 {
-		snapBody, err := getShareAPI("/share/snap", url.Values{
-			"share_code":   {shareCode},
-			"receive_code": {code},
-			"cid":          {"0"},
-			"offset":       {fmt.Sprint(offset)},
-			"limit":        {"1150"},
-			"asc":          {"1"},
-			"fc_mix":       {"0"},
-		}, cookie, 15*time.Second)
-		if err != nil {
-			return "", 0, 0, fmt.Errorf("获取分享文件列表失败: %s", err.Error())
-		}
-		var snap struct {
-			State bool   `json:"state"`
-			Error string `json:"error"`
-			Data  struct {
-				List      []snapItem `json:"list"`
-				ShareInfo struct {
-					ShareTitle string `json:"share_title"`
-				} `json:"shareinfo"`
-			} `json:"data"`
-		}
-		if json.Unmarshal(snapBody, &snap) != nil || !snap.State {
-			log.Printf("[上传] ✗ 文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(snapBody), 120))
-			return "", 0, 0, fmt.Errorf("文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(snapBody), 120))
-		}
-		if shareTitle == "" {
-			shareTitle = snap.Data.ShareInfo.ShareTitle
-		}
-		allItems = append(allItems, snap.Data.List...)
-		if len(snap.Data.List) < 1150 {
-			break // 最后一页
-		}
+	// 1. 文件列表 + 分享信息（GET /share/snap，只看根这一层：转存顶层条目即整份分享）
+	allItems, shareTitle, err := shareList(shareCode, code, "0", cookie)
+	if err != nil {
+		return "", 0, 0, err
 	}
 	if len(allItems) == 0 {
 		return "分享为空", 0, 0, nil
 	}
 	log.Printf("[上传] ▣ 分享「%s」共 %d 项，开始转存...", shareTitle, len(allItems))
 
-	// 2. 一次性转存到目标目录：POST /share/receive（file_id 逗号分隔）。
-	//    列表端点 /share/snap 是 GET，转存端点是 POST——两者不一样，
-	//    用 GET 打 receive 会拿到 "405 METHOD NOT ALLOWED"（errNo 980005）
-	fids := make([]string, 0, len(allItems))
+	// 2. 一次性转存到目标目录
+	ids := make([]string, 0, len(allItems))
 	for _, f := range allItems {
-		fids = append(fids, f.Fid)
+		ids = append(ids, f.ID)
 	}
-	rBody, err := postShareAPI("/share/receive", url.Values{
-		"share_code":   {shareCode},
-		"receive_code": {code},
-		"file_id":      {strings.Join(fids, ",")},
-		"cid":          {target},
-	}, cookie, shareReferer(shareCode, code), 30*time.Second)
-	if err != nil {
-		return "", 0, 0, fmt.Errorf("转存提交失败: %s", err.Error())
-	}
-	var r struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
-	}
-	if json.Unmarshal(rBody, &r) != nil || !r.State {
-		log.Printf("[上传] ✗ 转存被拒: %s", truncateStr(string(rBody), 120))
-		return "", 0, 0, fmt.Errorf("转存被拒: %s", truncateStr(string(rBody), 120))
+	if err := shareReceive(shareCode, code, ids, target, cookie); err != nil {
+		return "", 0, 0, err
 	}
 	success, fail = len(allItems), 0
 	msg = fmt.Sprintf("「%s」转存完成: 成功 %d（共 %d 项）", shareTitle, success, len(allItems))
@@ -256,8 +197,8 @@ func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organi
 	// 转存后 115 保留原名 —— 整理时按名字认领，不用再问 115 一次
 	names := make([]string, 0, len(allItems))
 	for _, it := range allItems {
-		if n := firstNonEmpty(it.Name, it.FileName, it.NameAlt); n != "" {
-			names = append(names, n)
+		if it.Name != "" {
+			names = append(names, it.Name)
 		}
 	}
 	dlLinkRecord(h, shareURL, "share", shareTitle, source, names)
@@ -286,4 +227,225 @@ func extractShareCode(raw string) string {
 // is115ShareLink 判断链接是否为 115 分享（可自动转存的域）
 func is115ShareLink(raw string) bool {
 	return re115Share.MatchString(raw)
+}
+
+// ==================== 分享列目录与转存（转存核心与订阅共用） ====================
+
+// shareEntry 分享里的一个条目
+type shareEntry struct {
+	ID    string // 转存时 file_id 传它：文件是 fid，目录是 cid
+	Name  string
+	Dir   string // 在分享里所在的目录路径（根为空），不含自己
+	IsDir bool
+	Size  int64
+	Sha1  string
+}
+
+// path 在分享里的完整路径
+func (e shareEntry) path() string {
+	if e.Dir == "" {
+		return e.Name
+	}
+	return e.Dir + "/" + e.Name
+}
+
+// shareEntryOf 解析 snap 列表里的一条。字段口径以 p115client tool/attr.py 的 normalize_attr 为准：
+// fc=0 是目录（id 在 cid、父目录在 pid），文件 id 在 fid、父目录在 cid；没有 fc 时看有没有 sha / fid。
+// 名字字段 115 在 n / fn / file_name / name 之间换过，都收；数字字段可能是数字也可能是字符串
+func shareEntryOf(m map[string]any) shareEntry {
+	str := func(k string) string {
+		switch v := m[k].(type) {
+		case string:
+			return v
+		case json.Number:
+			return v.String()
+		case float64:
+			return strconv.FormatInt(int64(v), 10)
+		case bool:
+			if v {
+				return "1"
+			}
+			return "0"
+		}
+		return ""
+	}
+	e := shareEntry{
+		Name: firstNonEmpty(str("n"), str("fn"), str("file_name"), str("name")),
+		Sha1: firstNonEmpty(str("sha"), str("sha1")),
+	}
+	e.Size, _ = strconv.ParseInt(firstNonEmpty(str("s"), str("fs")), 10, 64)
+	fid, cid := str("fid"), str("cid")
+	switch {
+	case str("fc") != "":
+		e.IsDir = str("fc") == "0"
+	case e.Sha1 != "":
+		e.IsDir = false
+	default:
+		e.IsDir = fid == "" && cid != ""
+	}
+	if e.IsDir {
+		e.ID = firstNonEmpty(cid, fid)
+	} else {
+		e.ID = firstNonEmpty(fid, cid)
+	}
+	return e
+}
+
+// shareList 列分享里某个目录的直接子项（翻页收全），顺带返回分享标题。
+// 经 getShareAPI → httpGet115Full，走全局节流
+func shareList(shareCode, receiveCode, cid, cookie string) ([]shareEntry, string, error) {
+	var out []shareEntry
+	title := ""
+	for offset := 0; ; offset += 1150 {
+		body, err := getShareAPI("/share/snap", url.Values{
+			"share_code":   {shareCode},
+			"receive_code": {receiveCode},
+			"cid":          {cid},
+			"offset":       {fmt.Sprint(offset)},
+			"limit":        {"1150"},
+			"asc":          {"1"},
+			"fc_mix":       {"0"},
+		}, cookie, 15*time.Second)
+		if err != nil {
+			return nil, "", fmt.Errorf("获取分享文件列表失败: %s", err.Error())
+		}
+		var snap struct {
+			State bool   `json:"state"`
+			Error string `json:"error"`
+			Data  struct {
+				List      []map[string]any `json:"list"`
+				ShareInfo struct {
+					ShareTitle string `json:"share_title"`
+				} `json:"shareinfo"`
+			} `json:"data"`
+		}
+		dec := json.NewDecoder(strings.NewReader(string(body)))
+		dec.UseNumber()
+		if dec.Decode(&snap) != nil || !snap.State {
+			log.Printf("[上传] ✗ 文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(body), 120))
+			return nil, "", fmt.Errorf("文件列表获取失败（链接失效或提取码错误）: %s", truncateStr(string(body), 120))
+		}
+		if title == "" {
+			title = snap.Data.ShareInfo.ShareTitle
+		}
+		for _, m := range snap.Data.List {
+			if e := shareEntryOf(m); e.ID != "" {
+				out = append(out, e)
+			}
+		}
+		if len(snap.Data.List) < 1150 {
+			break // 最后一页
+		}
+	}
+	return out, title, nil
+}
+
+// shareWalkMaxDepth 列分享最多往下几层：剧名/Season 1/字幕/xx.ass 已经是三层
+const shareWalkMaxDepth = 4
+
+// shareWalk 广度优先列整个分享，最多进 maxDirs 个目录（每个目录至少一次节流后的请求）。
+// truncated = 还有目录没列（超了目录数或层数）：挑集时据此说明「没看全」
+func shareWalk(shareCode, receiveCode, cookie string, maxDirs int) (entries []shareEntry, title string, truncated bool, err error) {
+	return shareWalkWith(func(cid string) ([]shareEntry, string, error) {
+		return shareList(shareCode, receiveCode, cid, cookie)
+	}, maxDirs)
+}
+
+// shareWalkWith 可注入列目录函数的 shareWalk（测试用假分享树）
+func shareWalkWith(list func(cid string) ([]shareEntry, string, error), maxDirs int) (entries []shareEntry, title string, truncated bool, err error) {
+	type node struct {
+		cid, dir string
+		depth    int
+	}
+	queue := []node{{cid: "0"}}
+	listed := 0
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if listed >= maxDirs {
+			truncated = true
+			break
+		}
+		items, t, err := list(n.cid)
+		if err != nil {
+			if listed == 0 {
+				return nil, "", false, err
+			}
+			// 根列出来了、子目录失败：已有的照样能挑，算没看全
+			log.Printf("[订阅] ○ 分享子目录「%s」列不出来: %v", n.dir, err)
+			truncated = true
+			continue
+		}
+		listed++
+		if title == "" {
+			title = t
+		}
+		for _, it := range items {
+			it.Dir = n.dir
+			entries = append(entries, it)
+			if !it.IsDir {
+				continue
+			}
+			if n.depth+1 >= shareWalkMaxDepth {
+				truncated = true
+				continue
+			}
+			queue = append(queue, node{cid: it.ID, dir: it.path(), depth: n.depth + 1})
+		}
+	}
+	return entries, title, truncated, nil
+}
+
+// shareReceiveBatch 一次 /share/receive 最多带多少个 file_id（上限未实测，保守分批）
+const shareReceiveBatch = 500
+
+// shareReceive 把分享里的若干条目（文件或目录，任意层级）转存到 target。
+// POST webapi.115.com/share/receive，file_id 逗号分隔；列表端点是 GET、转存端点是 POST，
+// 用 GET 打 receive 会拿到 "405 METHOD NOT ALLOWED"（errNo 980005）
+func shareReceive(shareCode, receiveCode string, ids []string, target, cookie string) error {
+	for i := 0; i < len(ids); i += shareReceiveBatch {
+		end := min(i+shareReceiveBatch, len(ids))
+		body, err := postShareAPI("/share/receive", url.Values{
+			"share_code":   {shareCode},
+			"receive_code": {receiveCode},
+			"file_id":      {strings.Join(ids[i:end], ",")},
+			"cid":          {target},
+		}, cookie, shareReferer(shareCode, receiveCode), 30*time.Second)
+		if err != nil {
+			return fmt.Errorf("转存提交失败: %s", err.Error())
+		}
+		var r struct {
+			State bool   `json:"state"`
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(body, &r) != nil || !r.State {
+			log.Printf("[上传] ✗ 转存被拒: %s", truncateStr(string(body), 120))
+			return fmt.Errorf("转存被拒: %s", truncateStr(string(body), 120))
+		}
+	}
+	return nil
+}
+
+// shareReceivePicked 只转存分享里挑中的条目（订阅按集挑选用），并登记来源链接。
+// names 是整理认领用的名字：订阅转进包装目录，传包装目录名；返回 DownloadLink.ID 供结算
+func (h *Handler) shareReceivePicked(shareURL, code string, ids []string, target, title, source string, names []string) (uint, error) {
+	shareCode := extractShareCode(shareURL)
+	if shareCode == "" {
+		return 0, fmt.Errorf("无法从链接解析分享码")
+	}
+	if len(ids) == 0 {
+		return 0, fmt.Errorf("没有要转存的文件")
+	}
+	if target == "" {
+		return 0, fmt.Errorf("没有转存目标目录")
+	}
+	cookie, err := h.get115Cookie()
+	if err != nil {
+		return 0, err
+	}
+	if err := shareReceive(shareCode, code, ids, target, cookie); err != nil {
+		return 0, err
+	}
+	log.Printf("[上传] ✓ 分享「%s」转存 %d 个挑中的文件", title, len(ids))
+	return dlLinkRecord(h, shareURL, "share", title, source, names), nil
 }

@@ -272,3 +272,33 @@ func TestSubmitResourceGuards(t *testing.T) {
 		t.Errorf("其他网盘应当原样交回: %+v %v", r, err)
 	}
 }
+
+// 换链接（网页提交与订阅共用）：分流、提取码、RE0 不确认不解锁、移除的网盘拒收
+func TestResolveResourceLink(t *testing.T) {
+	h := &Handler{}
+	cases := []struct {
+		req        resSubmitReq
+		action     string
+		url, code  string
+		wantErrSub string
+	}{
+		{req: resSubmitReq{URL: "https://115.com/s/sw1abc?password=x1y2"}, action: "transfer", url: "https://115.com/s/sw1abc?password=x1y2", code: "x1y2"},
+		{req: resSubmitReq{URL: "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"}, action: "offline", url: "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"},
+		{req: resSubmitReq{Source: "pansou", Action: "transfer", URL: "https://115.com/s/sw1abc", Code: "abcd"}, action: "transfer", url: "https://115.com/s/sw1abc", code: "abcd"},
+		{req: resSubmitReq{Source: "re0", Action: "unlock", Ref: "slug"}, wantErrSub: "请确认"},
+		{req: resSubmitReq{URL: "https://pan.quark.cn/s/abc"}, wantErrSub: "不支持该网盘"},
+		{req: resSubmitReq{URL: "随便写的"}, wantErrSub: "认不出"},
+	}
+	for i, c := range cases {
+		rl, err := h.resolveResourceLink(c.req)
+		if c.wantErrSub != "" {
+			if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
+				t.Errorf("#%d 应报错含 %q，得到 %v", i, c.wantErrSub, err)
+			}
+			continue
+		}
+		if err != nil || rl.Action != c.action || rl.URL != c.url || rl.Code != c.code {
+			t.Errorf("#%d = %+v, %v", i, rl, err)
+		}
+	}
+}
