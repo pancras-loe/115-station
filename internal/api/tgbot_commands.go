@@ -14,6 +14,8 @@ var tgMenu = []map[string]string{
 	{"command": "search", "description": "找资源（全部来源）：/search 片名"},
 	{"command": "gy", "description": "只搜观影：/gy 片名"},
 	{"command": "wp", "description": "只搜网盘：/wp 片名"},
+	{"command": "sub", "description": "订阅：/sub 片名"},
+	{"command": "subs", "description": "我的订阅"},
 	{"command": "download", "description": "下载或转存：/download 链接"},
 	{"command": "organize", "description": "执行整理"},
 	{"command": "sync", "description": "执行增量同步"},
@@ -24,6 +26,8 @@ var tgMenu = []map[string]string{
 const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/search 片名：找资源，观影 / 盘搜 / TG 频道 / 不太灵一起搜\n" +
 	"/gy 片名：只搜观影\n/wp 片名：只搜网盘\n" +
+	"/sub 片名：订阅，定时找缺的集，转存后自动入库（找资源的结果里也能点「订阅这部」）\n" +
+	"/subs 我的订阅：看进度、立即搜索、暂停、取消\n" +
 	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n\n" +
@@ -56,11 +60,12 @@ func tgCommand(text string) (string, string) {
 		"/download": "download", "dl": "download", "/organize": "organize", "整理": "organize",
 		"/sync": "sync", "同步": "sync", "/cancel": "cancel", "取消": "cancel",
 		"/dup": "dup",
+		"/sub": "sub", "/subscribe": "sub", "/subs": "subs", "我的订阅": "subs", "订阅列表": "subs",
 	}
 	if cmd, ok := aliases[first]; ok {
 		return cmd, args
 	}
-	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}, {"多份", "dup"}} {
+	for _, p := range []struct{ prefix, command string }{{"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}, {"多份", "dup"}, {"订阅", "sub"}} {
 		if strings.HasPrefix(text, p.prefix) {
 			return p.command, strings.TrimSpace(strings.TrimPrefix(text, p.prefix))
 		}
@@ -151,6 +156,17 @@ func (b *tgConversation) handle(u tgUpdate) {
 		var msg int64
 		v := b.h.botFind(b.flowKey(), source, args, b.flowIO(&msg))
 		b.show(v, &msg)
+	case "sub":
+		if args == "" {
+			b.reply("请在命令后填写片名，例如 /sub 三体；发送 /subs 查看已有的订阅。")
+			return
+		}
+		var msg int64
+		v := b.h.botSubFind(b.flowKey(), args, b.flowIO(&msg))
+		b.show(v, &msg)
+	case "subs":
+		var msg int64
+		b.show(b.h.botSubsList(b.flowKey()), &msg)
 	case "dup":
 		b.reply(b.h.dupBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
 	case "status", "download", "organize", "sync":

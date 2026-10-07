@@ -101,6 +101,12 @@ type botFlow struct {
 	page    int
 	sent    map[int]bool // 本会话里提交过的（items 下标）
 	at      time.Time
+
+	// 订阅（botsub.go）：mode 为 sub 时选片即订阅；为 subs 时是订阅列表（stage subs）/ 单个订阅（stage sub）
+	mode       string
+	subs       []model.Subscription
+	subSel     int
+	confirmDel bool
 }
 
 var botFlows = struct {
@@ -166,6 +172,9 @@ func botFlowAct(text string) (string, bool) {
 		return "q", true
 	case "0", "择优", "自动":
 		return "0", true
+	case "s", "a", "z", "x", "xx":
+		// 订阅：s 订阅这部（资源列表）；a 立即搜索、z 暂停 / 恢复、x / xx 取消订阅（/subs，botsub.go）
+		return t, true
 	}
 	if len(t) <= 3 && regexpPureDigits.MatchString(t) {
 		return t, true
@@ -232,7 +241,16 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 	defer f.mu.Unlock()
 	f.at = time.Now()
 
+	if f.mode == botModeSubs {
+		return h.botSubsAct(key, f, act, io), true
+	}
+
 	switch act {
+	case "s":
+		if f.stage != "resource" || f.media.ID == 0 {
+			return botSay("选定影片后才能订阅（按关键词搜的结果不能订阅）。"), true
+		}
+		return botSay(h.botSubscribe(f.media)...), true
 	case "q":
 		botFlowDrop(key, f)
 		return botNote("已关闭。已提交的任务继续执行。"), true
@@ -257,6 +275,9 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		f.stage, f.page, f.items, f.note, f.sent = "media", 0, nil, "", nil
 		return f.render(), true
 	case "k":
+		if f.mode == botModeSub {
+			return botSay("订阅要先在 TMDB 上定下是哪一部，不能按关键词。"), true
+		}
 		if f.stage != "media" {
 			return botSay("已经在资源列表里了。"), true
 		}
@@ -286,6 +307,10 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 	case "media":
 		if n < 1 || n > len(f.movies) {
 			return botSay(fmt.Sprintf("请选择 1-%d。", len(f.movies))), true
+		}
+		if f.mode == botModeSub {
+			botFlowDrop(key, f)
+			return botNote(h.botSubscribe(f.movies[n-1])...), true
 		}
 		return h.botLoad(f, f.movies[n-1], false, io, ""), true
 	case "resource":
@@ -373,6 +398,9 @@ func (f *botFlow) bestIndex() int {
 // ==================== 渲染 ====================
 
 func (f *botFlow) total() int {
+	if f.mode == botModeSubs {
+		return len(f.subs)
+	}
 	if f.stage == "media" {
 		return len(f.movies)
 	}
@@ -398,6 +426,9 @@ func botTypeName(kind string) string {
 }
 
 func (f *botFlow) render() botView {
+	if f.mode == botModeSubs {
+		return f.renderSubs()
+	}
 	if f.page >= f.pages() {
 		f.page = f.pages() - 1
 	}
@@ -415,7 +446,11 @@ func (f *botFlow) render() botView {
 	}
 
 	if f.stage == "media" {
-		v.Lines = append(v.Lines, fmt.Sprintf("「%s」TMDB 找到 %d 部%s，选一部：", f.keyword, len(f.movies), pageNote))
+		verb := "选一部："
+		if f.mode == botModeSub {
+			verb = "选一部订阅："
+		}
+		v.Lines = append(v.Lines, fmt.Sprintf("「%s」TMDB 找到 %d 部%s，%s", f.keyword, len(f.movies), pageNote, verb))
 		for i := start; i < end; i++ {
 			m := f.movies[i]
 			line := fmt.Sprintf("%d. %s", i+1, m.Title)
@@ -445,7 +480,11 @@ func (f *botFlow) render() botView {
 			}
 			v.Cards = append(v.Cards, a)
 		}
-		hint = append(hint, fmt.Sprintf("回复 1-%d 选片", len(f.movies)))
+		if f.mode == botModeSub {
+			hint = append(hint, fmt.Sprintf("回复 1-%d 订阅", len(f.movies)))
+		} else {
+			hint = append(hint, fmt.Sprintf("回复 1-%d 选片", len(f.movies)))
+		}
 	} else {
 		head := "「" + f.media.Title + "」"
 		if f.media.Year != "" {
@@ -483,8 +522,19 @@ func (f *botFlow) render() botView {
 		}
 		v.Buttons = append(v.Buttons, nums[i:j])
 	}
-	if f.stage == "resource" && len(f.items) > 0 {
-		v.Buttons = append(v.Buttons, []botBtn{{Text: "⭐ 自动择优", Act: "0"}})
+	if f.stage == "resource" {
+		var row []botBtn
+		if len(f.items) > 0 {
+			row = append(row, botBtn{Text: "⭐ 自动择优", Act: "0"})
+		}
+		// 搜到一半想改成订阅（没资源、或者想等新集）：不用重来
+		if f.media.ID > 0 {
+			row = append(row, botBtn{Text: "🔔 订阅这部", Act: "s"})
+			hint = append(hint, "s 订阅这部")
+		}
+		if len(row) > 0 {
+			v.Buttons = append(v.Buttons, row)
+		}
 	}
 	var nav []botBtn
 	if f.page > 0 {
@@ -498,10 +548,10 @@ func (f *botFlow) render() botView {
 		hint = append(hint, "n/p 翻页")
 	}
 	var tail []botBtn
-	if f.stage == "media" {
+	if f.stage == "media" && f.mode != botModeSub {
 		tail = append(tail, botBtn{Text: "🔎 不选片，按关键词搜", Act: "k"})
 		hint = append(hint, "k 不选片直接按关键词搜")
-	} else {
+	} else if f.stage == "resource" {
 		if len(f.movies) > 1 {
 			tail = append(tail, botBtn{Text: "↩ 重新选片", Act: "b"})
 			hint = append(hint, "b 重新选片")

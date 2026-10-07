@@ -157,31 +157,26 @@ func (h *Handler) SubscriptionOf(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": toSubDTO(sub, subInflightCounts(h.DB), subRunningSet(h.DB))})
 }
 
-// CreateSubscription POST /subscriptions
-func (h *Handler) CreateSubscription(c *gin.Context) {
-	var f subForm
-	if err := c.ShouldBindJSON(&f); err != nil || f.TmdbID <= 0 || (f.MediaType != "movie" && f.MediaType != "tv") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
-		return
-	}
+// errSubExists 这部已经订阅过了（同一部只能订阅一次）
+var errSubExists = errors.New("这部已经订阅过了")
+
+// createSubscription 新建订阅并马上排一次检查（网页与机器人共用）。
+// 已订阅过时返回那一条与 errSubExists
+func (h *Handler) createSubscription(f subForm, source string) (model.Subscription, uint, error) {
 	var exist model.Subscription
 	if h.DB.Where("tmdb_id = ? AND media_type = ?", f.TmdbID, f.MediaType).First(&exist).Error == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "这部已经订阅过了", "data": toSubDTO(exist, subInflightCounts(h.DB), subRunningSet(h.DB))})
-		return
+		return exist, 0, errSubExists
 	}
 	tc, err := loadTmdbClient()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		return exist, 0, err
 	}
 	m, err := tc.getByTmdbID(f.TmdbID, f.MediaType == "tv")
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB 查询失败：" + err.Error()})
-		return
+		return exist, 0, fmt.Errorf("TMDB 查询失败：%w", err)
 	}
 	if m == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "TMDB 上没有这个条目"})
-		return
+		return exist, 0, errors.New("TMDB 上没有这个条目")
 	}
 	now := time.Now()
 	sub := model.Subscription{
@@ -189,18 +184,38 @@ func (h *Handler) CreateSubscription(c *gin.Context) {
 		Year: m.Year, PosterPath: m.PosterPath, State: subStateActive, NextCheckAt: &now,
 	}
 	if _, err := applySubForm(&sub, f, now); err != nil {
+		return exist, 0, err
+	}
+	if err := h.DB.Create(&sub).Error; err != nil {
+		return exist, 0, fmt.Errorf("保存失败：%w", err)
+	}
+	// 建完马上查一轮：用户要立刻看到缺几集、能不能找到
+	var jobID uint
+	if job, err := enqueueSubscribeJob(h, []uint{sub.ID}, true, sub.Title, source); err == nil {
+		jobID = job.ID
+	}
+	return sub, jobID, nil
+}
+
+// CreateSubscription POST /subscriptions
+func (h *Handler) CreateSubscription(c *gin.Context) {
+	var f subForm
+	if err := c.ShouldBindJSON(&f); err != nil || f.TmdbID <= 0 || (f.MediaType != "movie" && f.MediaType != "tv") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	sub, jobID, err := h.createSubscription(f, "web")
+	switch {
+	case errors.Is(err, errSubExists):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "data": toSubDTO(sub, subInflightCounts(h.DB), subRunningSet(h.DB))})
+		return
+	case err != nil:
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.DB.Create(&sub).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})
-		return
-	}
-	// 建完马上查一轮：用户要立刻看到缺几集、能不能找到
-	job, err := enqueueSubscribeJob(h, []uint{sub.ID}, true, sub.Title, "web")
-	resp := gin.H{"data": toSubDTO(sub, nil, map[uint]bool{sub.ID: err == nil}), "message": "已订阅，正在检查"}
-	if err == nil {
-		resp["job_id"] = job.ID
+	resp := gin.H{"data": toSubDTO(sub, nil, map[uint]bool{sub.ID: jobID > 0}), "message": "已订阅，正在检查"}
+	if jobID > 0 {
+		resp["job_id"] = jobID
 	}
 	c.JSON(http.StatusOK, resp)
 }

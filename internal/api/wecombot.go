@@ -239,6 +239,8 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"  资源列表里：0 自动择优，n / p 翻页，b 重新选片，r 重搜，q 退出",
 			"整理 / 同步 — 手动触发整理、增量同步",
 			"多份 — 同一集有几份文件、改名会重名时选择保留哪份（多份 <编号> <选择>）",
+			"订阅 <片名> — 订阅：定时找缺的集，转存后自动入库（找资源的列表里回复 s 订阅这部）",
+			"我的订阅 — 看进度；选一个后 a 立即搜索，z 暂停 / 恢复，x 取消订阅",
 		)
 
 	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
@@ -320,6 +322,20 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			return
 		}
 		wecomShow(h.botFind("bot:"+user, source, kw, wecomFlowIO(reply)), reply)
+
+	case lower == "我的订阅" || lower == "订阅列表" || lower == "subs":
+		wecomShow(h.botSubsList("bot:"+user), reply)
+
+	case strings.HasPrefix(text, "订阅"), strings.HasPrefix(lower, "sub "):
+		kw := strings.TrimSpace(strings.TrimPrefix(text, "订阅"))
+		if strings.HasPrefix(lower, "sub ") {
+			kw = strings.TrimSpace(text[4:])
+		}
+		if kw == "" {
+			reply("用法：订阅 <片名>，例如：订阅 三体；发「我的订阅」查看已有的订阅")
+			return
+		}
+		wecomShow(h.botSubFind("bot:"+user, kw, wecomFlowIO(reply)), reply)
 
 	case strings.HasPrefix(text, "多份"):
 		reply(h.dupBotCommand(user, strings.TrimSpace(strings.TrimPrefix(text, "多份")))...)

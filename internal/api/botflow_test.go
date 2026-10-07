@@ -87,7 +87,8 @@ func TestBotFlowPaging(t *testing.T) {
 			nums = append(nums, b.Act)
 		}
 	}
-	if !strings.HasPrefix(strings.Join(nums, ","), "9,10,0,p,") {
+	// 自动择优与「订阅这部」一排（选定了 TMDB 条目才有订阅）
+	if !strings.HasPrefix(strings.Join(nums, ","), "9,10,0,s,p,") {
 		t.Fatalf("第二页按钮 %v", nums)
 	}
 	if v, _ := h.botAct("t3", "n", "", botNoIO); !v.Toast {
