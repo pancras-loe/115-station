@@ -140,6 +140,8 @@ type tmdbDetail struct {
 	Seasons             map[int]string // 季号 → 该季首播日期（仅剧集）
 	SeasonEps           map[int]int    // 季号 → 该季集数（仅剧集；全剧连续编号换算用，见 absepisode.go）
 	SeasonNames         map[int]string // 季号 → 季名（仅剧集；重命名的 {season_name}）
+	Status              string         // Ended / Canceled / Returning Series / Released …（订阅判完结用）
+	ReleaseDate         string         // 电影上映日期（订阅在没有发行日期表时兜底）
 }
 
 var (
@@ -170,6 +172,8 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 		return nil, err
 	}
 	var raw struct {
+		Status              string           `json:"status"`
+		ReleaseDate         string           `json:"release_date"`
 		OriginCountry       []string         `json:"origin_country"`
 		ProductionCountries []tmdbISOCountry `json:"production_countries"`
 		AlternativeTitles   struct {
@@ -198,7 +202,7 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
-	d := &tmdbDetail{OriginCountry: raw.OriginCountry, ProductionCountries: isoCountries(raw.ProductionCountries), Seasons: map[int]string{}, SeasonEps: map[int]int{}, SeasonNames: map[int]string{}}
+	d := &tmdbDetail{Status: raw.Status, ReleaseDate: raw.ReleaseDate, OriginCountry: raw.OriginCountry, ProductionCountries: isoCountries(raw.ProductionCountries), Seasons: map[int]string{}, SeasonEps: map[int]int{}, SeasonNames: map[int]string{}}
 	for _, t := range raw.AlternativeTitles.Titles {
 		d.Names = append(d.Names, t.Title)
 	}

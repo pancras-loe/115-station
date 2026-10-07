@@ -277,6 +277,76 @@ type MetaFillMark struct {
 	TriedAt time.Time `json:"tried_at"`
 }
 
+// Subscription 资源订阅：一部片一条（api/subscribe*.go，设计见 docs SUBSCRIBE-PLAN.md）。
+// 以 TMDB 条目为单位，定时回答「缺什么 → 哪条资源能补 → 补上了没有」。
+// 同一部只能订阅一次（tmdb_id + media_type 唯一），范围在条目内调整
+type Subscription struct {
+	ID         uint   `json:"id" gorm:"primaryKey"`
+	TmdbID     int    `json:"tmdb_id" gorm:"uniqueIndex:idx_sub_tmdb;not null"`
+	MediaType  string `json:"media_type" gorm:"uniqueIndex:idx_sub_tmdb;size:10;not null"` // movie / tv
+	Title      string `json:"title" gorm:"size:255"`
+	OrigTitle  string `json:"orig_title" gorm:"size:255"`
+	Year       string `json:"year" gorm:"size:10"`
+	PosterPath string `json:"poster_path" gorm:"size:255"`
+
+	// 剧集范围：all 全剧 / season 某一季 / range 某一季的集段（EpEnd 为 0 = 到这季最后一集）
+	Scope    string `json:"scope" gorm:"size:10"`
+	Season   int    `json:"season"`
+	EpStart  int    `json:"ep_start"`
+	EpEnd    int    `json:"ep_end"`
+	Specials bool   `json:"specials"` // 全剧范围是否含第 0 季
+	// Follow missing = 补缺集（范围内所有已播的都要有，默认）/ new = 只追 FollowFrom 之后播出的
+	Follow     string     `json:"follow" gorm:"size:10"`
+	FollowFrom *time.Time `json:"follow_from"`
+
+	Sources string `json:"sources" gorm:"type:text"` // JSON 数组，空 = 跟随影视转存页的来源开关
+	// RankLimit 画质门槛：只要命中洗版策略前 N 条规则的资源；0 = 不限（只用于排序）。
+	// 不用「-1 = 不限」：GORM 对带 default 的字段遇到零值会改填默认值，显式设 0 存不进去
+	RankLimit int    `json:"rank_limit"`
+	Include   string `json:"include" gorm:"size:255"` // 逗号分隔，资源标题须命中其一
+	Exclude   string `json:"exclude" gorm:"size:255"` // 逗号分隔，命中任一即丢
+
+	// State active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到（降频检查）
+	State       string     `json:"state" gorm:"index;size:10"`
+	NextCheckAt *time.Time `json:"next_check_at" gorm:"index"`
+	LastCheckAt *time.Time `json:"last_check_at"`
+	LastResult  string     `json:"last_result" gorm:"size:255"`
+	// Have / Total / Missing 上一轮算出的数字（范围内已播的集：已有 / 应有 / 缺），列表直接显示
+	Have        int `json:"have"`
+	Total       int `json:"total"`
+	Missing     int `json:"missing"`
+	EmptyRounds int `json:"empty_rounds"` // 连续没找到可用资源的轮数，退避用
+
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DoneAt    *time.Time `json:"done_at"`
+}
+
+// SubAttempt 订阅试过的资源：一次提交一条。
+// 不能只靠 DownloadLink.Hash 判断「试过」：一个合集分享对 A 剧没用，不代表对 B 剧也没用；
+// 连载分享更新后也要能再看一次（RetryAt）
+type SubAttempt struct {
+	ID     uint   `json:"id" gorm:"primaryKey"`
+	SubID  uint   `json:"sub_id" gorm:"index;not null"`
+	Hash   string `json:"hash" gorm:"index;size:64"` // 与 DownloadLink.Hash 同口径（linkHashOf）
+	LinkID uint   `json:"link_id" gorm:"index"`      // 对应的 DownloadLink.ID：按它找整理记录结算
+	Source string `json:"source" gorm:"size:16"`
+	Kind   string `json:"kind" gorm:"size:16"`
+	Title  string `json:"title" gorm:"size:500"`
+	URL    string `json:"url" gorm:"size:1000"`
+	// Wrapper 转存目录下的包装目录名：整理记录按它认领来源链接
+	Wrapper  string `json:"wrapper" gorm:"size:255"`
+	Episodes string `json:"episodes" gorm:"type:text"` // JSON 数组 ["S01E05", …]，电影为空
+	// Status inflight 在路上 / ingested 补上了 / partial 补上一部分 / rejected 内容不对 /
+	// failed 提交或整理失败 / useless 里面没有缺的集
+	Status     string     `json:"status" gorm:"index;size:10"`
+	Reason     string     `json:"reason" gorm:"size:500"`
+	RetryAt    *time.Time `json:"retry_at"`
+	Points     int        `json:"points"` // 为它花了多少 RE0 积分（每日预算按它累计）
+	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
+	ResolvedAt *time.Time `json:"resolved_at"`
+}
+
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。
 // 与 MediaLibrary 的区别：MediaLibrary 是「一部影视一条」的去重快照（仪表盘用），
 // 这里是「一次动作一条」的流水，失败与未识别同样留痕——识别错了要能回溯并重做。
@@ -456,6 +526,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&PersonMeta{},
 		&EmbyPersonMark{},
 		&MetaFillMark{},
+		&Subscription{},
+		&SubAttempt{},
 	); err != nil {
 		return nil, err
 	}
