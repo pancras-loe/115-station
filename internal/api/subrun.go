@@ -157,6 +157,8 @@ type subRunner struct {
 	rmdir   func(cid string) error
 	offline func(link, target string) (status int, msg string, linkID uint)
 	quota   func() (left, total int, err error) // 115 离线剩余配额
+	// re0Files RE0 文件预览（付费解锁前核对缺集）；nil = 不预览，按标题判
+	re0Files func(slug string) (*re0Preview, error)
 	// identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
 	identity func(sub *model.Subscription) (subIdentity, error)
 }
@@ -240,6 +242,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	}
 	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
 	r.identity = func(sub *model.Subscription) (subIdentity, error) { return subIdentityOf(r.tc, sub) }
+	r.re0Files = func(slug string) (*re0Preview, error) { return re0PreviewFiles(h, slug) }
 	return r, nil
 }
 
@@ -479,6 +482,10 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	for _, a := range rows {
 		tried[a.Hash] = subTried{Status: a.Status, RetryAt: a.RetryAt}
 	}
+	missing := map[epKey]bool{}
+	for _, k := range ev.Missing {
+		missing[k] = true
+	}
 	pctx := subPickCtx{
 		Sub: sub, Missing: ev.Missing, Tried: tried, Now: now,
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
@@ -488,13 +495,10 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
 		MissingAir: ev.MissingAir, Skipped: map[string]int{},
 	}
+	pctx.Re0Preview = r.re0PreviewFn(sub, missing)
 	cands, over := planSubCandidates(items, pctx)
 	r.recordOverLimit(sub, over, tried)
 
-	missing := map[epKey]bool{}
-	for _, k := range ev.Missing {
-		missing[k] = true
-	}
 	submitted, tries, paidUsed, offlineUsed := false, 0, false, false
 	for i, c := range cands {
 		if len(missing) == 0 || tries >= r.cfg.MaxTriesPerSub || subLane.stopRequested() {
@@ -503,8 +507,8 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		if c.Paid > 0 && (paidUsed || r.stopPaid || (r.re0Left >= 0 && c.Paid > r.re0Left)) {
 			continue
 		}
-		// 前面的资源补上了一部分：标题写明的范围里已经没有还缺的，就不用再试它
-		if sub.MediaType != "movie" && (c.Cov.known() || c.Item.Action == "offline") && !c.Cov.coversAny(missing) {
+		// 前面的资源补上了一部分：预览核实的 / 标题写明的范围里已经没有还缺的，就不用再试它
+		if !c.coversAnyMissing(missing, sub.MediaType == "movie") {
 			continue
 		}
 		// 离线：一个订阅一轮最多一个任务（配额按任务数扣），剩下的缺集里要有播出够久的，再过每月上限与 115 配额
@@ -771,26 +775,7 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	if err != nil {
 		return fail(err.Error(), true)
 	}
-	opts := sharePickOpts{
-		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
-		HaveSha1: subLedgerHasSha1,
-		Rank:     func(n string) int { return resWashRank(sub.MediaType, n) },
-	}
-	if cond := subCondOf(r.cfg, sub.Cond); !cond.empty() {
-		title, tags := c.Item.Title, c.Item.Tags
-		opts.Accept = func(e shareEntry, hasSub bool) (bool, string) {
-			return cond.fileOK(e.Name, e.Size, title, tags, hasSub)
-		}
-	}
-	if sub.MediaType == "tv" {
-		if sub.Scope == subScopeSeason || sub.Scope == subScopeRange {
-			opts.SeasonHint = &ParsedName{Season: sub.Season}
-		}
-		opts.Remap = func(eps map[string]*ParsedName) {
-			remapAbsEpisodesTmdb(r.tc, &TmdbMedia{TmdbID: sub.TmdbID, MediaType: "tv"}, eps, func(string) {})
-		}
-	}
-	pick := pickShareEpisodes(entries, opts)
+	pick := pickShareEpisodes(entries, r.sharePickOpts(sub, c.Item, missing))
 	covered := pick.Covered
 	if sub.MediaType == "movie" && len(pick.Picks) > 0 {
 		covered = []epKey{{}}
@@ -834,6 +819,71 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	db.Create(att)
 	log.Printf("[订阅] ✓ 《%s》从「%s」转存 %d 个文件（%s）→ %s", sub.Title, truncateStr(c.Item.Title, 50), len(ids), subEpisodesText(sub, covered), wrapper)
 	return *att, covered
+}
+
+// sharePickOpts 从分享里按集挑文件的条件：真正转存（tryShare）与 RE0 解锁前的文件预览共用，两边判得一样
+func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, missing map[epKey]bool) sharePickOpts {
+	opts := sharePickOpts{
+		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
+		HaveSha1: subLedgerHasSha1,
+		Rank:     func(n string) int { return resWashRank(sub.MediaType, n) },
+	}
+	if cond := subCondOf(r.cfg, sub.Cond); !cond.empty() {
+		title, tags := it.Title, it.Tags
+		opts.Accept = func(e shareEntry, hasSub bool) (bool, string) {
+			return cond.fileOK(e.Name, e.Size, title, tags, hasSub)
+		}
+	}
+	if sub.MediaType == "tv" {
+		if sub.Scope == subScopeSeason || sub.Scope == subScopeRange {
+			opts.SeasonHint = &ParsedName{Season: sub.Season}
+		}
+		opts.Remap = func(eps map[string]*ParsedName) {
+			remapAbsEpisodesTmdb(r.tc, &TmdbMedia{TmdbID: sub.TmdbID, MediaType: "tv"}, eps, func(string) {})
+		}
+	}
+	return opts
+}
+
+// subRe0PreviewMax 一个订阅一轮最多预览几条要花积分的 RE0 资源（预览本身有 6 小时缓存，这里管的是冷启动那一轮）
+const subRe0PreviewMax = 5
+
+// errSubPreviewOff 这一轮不预览了（次数用完 / 没有 slug）：按标题判
+var errSubPreviewOff = errors.New("不预览")
+
+// re0PreviewFn 给挑选用的预览：列预览 → 和真正转存同一套按集挑（sharePickOpts）→ 能补上的集
+func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool) func(ResourceItem) ([]epKey, string, error) {
+	if r.re0Files == nil {
+		return nil
+	}
+	used := 0
+	return func(it ResourceItem) ([]epKey, string, error) {
+		if it.Ref == "" || used >= subRe0PreviewMax {
+			return nil, "", errSubPreviewOff
+		}
+		used++
+		subLane.setSub("预览 RE0 文件", 0, 0, truncateStr(it.Title, 40))
+		p, err := r.re0Files(it.Ref)
+		if err != nil {
+			log.Printf("[订阅] ○ 《%s》RE0 文件预览不可用，按标题判「%s」: %v", sub.Title, truncateStr(it.Title, 50), err)
+			return nil, "", err
+		}
+		if p.Invalid != "" {
+			return nil, "显示资源已失效", nil
+		}
+		pick := pickShareEpisodes(p.Entries, r.sharePickOpts(sub, it, missing))
+		if len(pick.Picks) == 0 {
+			log.Printf("[订阅] ○ 《%s》RE0「%s」文件预览里没有能用的：%s", sub.Title, truncateStr(it.Title, 50), pick.summary())
+			if len(pick.Rejected) > 0 {
+				return nil, "不符合资源条件", nil
+			}
+			return nil, "里没有缺的集", nil
+		}
+		if sub.MediaType == "movie" {
+			return []epKey{{}}, "", nil
+		}
+		return pick.Covered, "", nil
+	}
 }
 
 // tryOffline 磁力 / ed2k：整包离线进包装目录。挑不了集，在路上的集按标题估计算

@@ -92,7 +92,8 @@ func TestRe0CallErrorPassthrough(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &re0Cfg{BaseURL: srv.URL, ClientSecret: "sec"}
+	// 新版文档：ping 也要用户 Token（没 Token 时 re0Call 直接报未授权，不发请求）
+	cfg := &re0Cfg{BaseURL: srv.URL, ClientSecret: "sec", AccessToken: "at"}
 	err := re0Call(nil, cfg, http.MethodGet, "/api/open/ping", nil, nil, nil)
 	if err == nil {
 		t.Fatal("未获批应用应报错")

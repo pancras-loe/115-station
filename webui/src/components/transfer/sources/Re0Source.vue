@@ -2,11 +2,14 @@
 import { onMounted, ref } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
+import HSwitch from '@/components/hero/HSwitch.vue'
+import HAlert from '@/components/hero/HAlert.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
 import { resourcesApi } from '@/api'
+import type { Re0CheckResult, Re0Checkin } from '@/api/resources'
 import { plainProps } from '@/utils/autofill'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { copyText } from '@/utils/clipboard'
@@ -16,6 +19,13 @@ const { message } = useFeedback()
 
 const form = ref({ base_url: 'https://re0.me', client_id: '', client_secret: '' })
 const authorized = ref(false)
+const authorizedAs = ref('')
+// 授权里缺的权限：2026-10 之前授权的没有 meta（检查状态）/ write（签到），要重新授权一次
+const missingScopes = ref<string[]>([])
+const account = ref<Re0CheckResult | null>(null)
+const checkin = ref<Re0Checkin | null>(null)
+const checkinSaving = ref(false)
+const checkinRunning = ref(false)
 const saving = ref(false)
 const checking = ref(false)
 const egress = ref<{ ip: string; ipv6: boolean; exact: boolean } | null>(null)
@@ -30,8 +40,46 @@ async function load() {
       client_secret: d.client_secret ?? '',
     }
     authorized.value = !!d.authorized
+    authorizedAs.value = d.authorized_as ?? ''
+    missingScopes.value = d.missing_scopes ?? []
   } catch {
     // 首次使用尚无配置
+  }
+  await loadCheckin()
+}
+
+async function loadCheckin() {
+  try {
+    checkin.value = await resourcesApi.re0Checkin()
+  } catch {
+    checkin.value = null
+  }
+}
+
+async function toggleCheckin(on: boolean) {
+  if (!checkin.value) return
+  checkinSaving.value = true
+  try {
+    await resourcesApi.re0SaveCheckin(on)
+    checkin.value.enabled = on
+    message.success(on ? `已开启：每天 ${checkin.value.hour}:00 后自动签到` : '已关闭自动签到')
+  } catch (e) {
+    toastError(e, '保存失败')
+  } finally {
+    checkinSaving.value = false
+  }
+}
+
+async function runCheckin() {
+  checkinRunning.value = true
+  try {
+    const d = await resourcesApi.re0RunCheckin()
+    message.success(d.message)
+  } catch (e) {
+    toastError(e, '签到失败')
+  } finally {
+    checkinRunning.value = false
+    await loadCheckin()
   }
 }
 
@@ -53,7 +101,13 @@ async function check() {
   try {
     const d = await resourcesApi.re0Check()
     authorized.value = d.authorized
-    message[d.authorized ? 'success' : 'warning'](d.message || (d.authorized ? '授权有效' : '尚未授权'))
+    account.value = d.authorized ? d : null
+    missingScopes.value = d.missing_scopes ?? []
+    if (d.user) authorizedAs.value = d.user
+    message[d.authorized && !missingScopes.value.length ? 'success' : 'warning'](
+      d.message || (d.authorized ? '授权有效' : '尚未授权'),
+    )
+    await loadCheckin()
     emit('changed')
   } catch (e) {
     toastError(e, '状态检查失败')
@@ -118,12 +172,42 @@ onMounted(load)
 
   <FieldRow
     label="账号授权"
-    tip="保存应用信息后点「授权」，跳转 RE0 官方授权页确认一次。授权后以你的身份查询 / 解锁资源（消耗站内积分，每次解锁前都会先确认），Token 自动续期。"
+    tip="保存应用信息后点「授权」，跳转 RE0 官方授权页确认一次。授权后以你的身份查询 / 预览 / 解锁资源（解锁消耗站内积分，手动解锁前都会先确认）并每日签到，Token 自动续期。RE0 OpenAPI 只对有效 V / 长期 V 用户开放。"
   >
     <div class="app-row">
       <HButton variant="primary" @click="authorize">授权 RE0 账号</HButton>
       <HButton variant="tertiary" :loading="checking" @click="check">检查状态</HButton>
       <LoginBadge :on="authorized" />
+      <span v-if="authorized && authorizedAs" class="hint">{{ authorizedAs }}</span>
+    </div>
+    <div v-if="account" class="account">
+      <span v-if="account.points != null">积分 <b>{{ account.points }}</b></span>
+      <span v-if="account.level != null && account.level !== ''">等级 {{ account.level }}</span>
+      <span v-if="account.app_name">应用 {{ account.app_name }}</span>
+      <span v-if="account.banned" class="danger">账号处于封禁状态</span>
+    </div>
+    <HAlert v-if="authorized && missingScopes.length" status="warning" class="scope-alert">
+      这次授权缺少 {{ missingScopes.join(' / ') }} 权限（RE0 新版接口要求「检查状态」带 meta、签到要 write），请点「授权 RE0 账号」重新授权一次。
+    </HAlert>
+  </FieldRow>
+
+  <FieldRow
+    label="每日签到"
+    :tip="`开启后每天 ${checkin?.hour ?? 8}:00 之后自动签到一次（普通模式，4–10 积分），没签成一小时后再试，结果推送到消息通知。签到需要授权里带 write 权限。`"
+  >
+    <div class="app-row">
+      <HSwitch
+        :model-value="!!checkin?.enabled"
+        :disabled="!checkin || checkinSaving"
+        aria-label="自动签到"
+        @update:model-value="toggleCheckin"
+      />
+      <HButton variant="tertiary" :loading="checkinRunning" :disabled="!!checkin?.blocked" @click="runCheckin">立即签到</HButton>
+      <span v-if="checkin?.blocked" class="hint">{{ checkin.blocked }}</span>
+      <span v-else-if="checkin?.done_today" class="hint">今天已签到</span>
+    </div>
+    <div v-if="checkin?.last_result" class="hint last">
+      上次（{{ checkin.last_result_at }}）：{{ checkin.last_result }}
     </div>
   </FieldRow>
 
@@ -167,5 +251,25 @@ onMounted(load)
 .hint {
   color: var(--muted);
   font-size: 12px;
+}
+.account {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.account b {
+  color: var(--foreground);
+}
+.danger {
+  color: var(--danger);
+}
+.scope-alert {
+  margin-top: 8px;
+}
+.last {
+  margin-top: 6px;
 }
 </style>

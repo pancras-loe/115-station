@@ -101,6 +101,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
+	StartRe0CheckinScheduler(h) // RE0 每日签到：08:00 后今天没签成就签
 	StartCoverGenScheduler(h)
 	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
@@ -384,6 +385,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/re0/check", h.Re0Check)
 		protected.GET("/re0/oauth/start", h.Re0OAuthStart)
 		protected.GET("/re0/egress-ip", h.Re0EgressIP)
+		protected.GET("/re0/checkin", h.Re0CheckinGet)
+		protected.POST("/re0/checkin", h.Re0CheckinSave)
+		protected.POST("/re0/checkin/run", h.Re0CheckinRun)
 
 		// 分享链接转存（转存到接收文件夹后由整理+增量接管）
 		protected.POST("/share/receive", h.ShareReceive)

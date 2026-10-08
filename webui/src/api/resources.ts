@@ -62,10 +62,42 @@ export const mkLogin = (body: { username: string; password: string; code: string
 
 // ============ RE0 ============
 export const re0Config = () =>
-  http.get<{ base_url?: string; client_id?: string; client_secret?: string; authorized?: boolean }>('/re0/config')
+  http.get<{
+    base_url?: string
+    client_id?: string
+    client_secret?: string
+    authorized?: boolean
+    authorized_as?: string
+    /** 授权里缺的权限（2026-10 之前的授权没有 meta / write），非空要重新授权 */
+    missing_scopes?: string[] | null
+  }>('/re0/config')
 export const re0SaveConfig = (body: { base_url: string; client_id: string; client_secret: string }) =>
   http.post('/re0/config', body)
-export const re0Check = () => http.get<{ authorized: boolean; message?: string }>('/re0/check')
+export interface Re0CheckResult {
+  app_ok: boolean
+  app_name?: string
+  authorized: boolean
+  user?: string
+  level?: string | number | null
+  points?: number | null
+  banned?: boolean
+  missing_scopes?: string[] | null
+  message?: string
+}
+export const re0Check = () => http.get<Re0CheckResult>('/re0/check')
+export interface Re0Checkin {
+  enabled: boolean
+  last_done?: string
+  last_result?: string
+  last_result_at?: string
+  done_today: boolean
+  hour: number
+  /** 签不了的原因（未授权 / 授权缺 write），空 = 可以签 */
+  blocked?: string
+}
+export const re0Checkin = () => http.get<Re0Checkin>('/re0/checkin')
+export const re0SaveCheckin = (enabled: boolean) => http.post('/re0/checkin', { enabled })
+export const re0RunCheckin = () => http.post<{ message: string }>('/re0/checkin/run', {}, { timeoutMs: 60_000 })
 export const re0OAuthStart = (redirectUri: string) =>
   http.get<{ authorize_url?: string }>('/re0/oauth/start', { params: { redirect_uri: redirectUri } })
 export const re0EgressIP = () => http.get<{ ip: string; ipv6: boolean; exact: boolean }>('/re0/egress-ip')

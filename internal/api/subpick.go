@@ -3,7 +3,8 @@ package api
 // 订阅：从搜到的资源里挑出值得试的，排好顺序（纯函数，不发请求）。
 //
 // 过滤顺序与理由见 SUBSCRIBE-PLAN.md §5.2；RE0 要花积分的另有几道闸（§5.4）：
-// 解锁之前看不到分享里有什么，积分花了就拿不回来，所以比免费资源严。
+// 积分花了就拿不回来，所以比免费资源严。解锁前能看的只有 RE0 的文件预览（Re0Preview，
+// 只给文件名不给链接），预览不可用时只能看标题。
 
 import (
 	"regexp"
@@ -101,6 +102,24 @@ type subCand struct {
 	Cov    resCoverage
 	Covers int // 估计能补几集（电影 1）
 	Paid   int // 要花的 RE0 积分（0 = 不花）
+	// Exact RE0 文件预览核实过、这条资源能补上的集（电影是一个零值）；nil = 没预览过，覆盖按标题估计
+	Exact []epKey
+}
+
+// coversAnyMissing 还有没有能补的：预览核实过的按文件，其余按标题估计（估计不出的当作可能有）
+func (c subCand) coversAnyMissing(missing map[epKey]bool, movie bool) bool {
+	if c.Exact != nil {
+		for _, k := range c.Exact {
+			if movie || missing[k] {
+				return true
+			}
+		}
+		return false
+	}
+	if movie || !(c.Cov.known() || c.Item.Action == "offline") {
+		return true
+	}
+	return c.Cov.coversAny(missing)
 }
 
 // share 提交后能不能按集挑（115 分享，含 RE0 解锁出来的）
@@ -127,6 +146,9 @@ type subPickCtx struct {
 	Identity *subIdentity
 	Re0Max   int // RE0 单条自动解锁上限，0 = 不自动解锁
 	Re0Left  int // 今天还能花多少，<0 = 不限
+	// Re0Preview 付费解锁前看一眼 RE0 的文件预览：返回按文件能补上的缺集（电影挑得出能用的视频就是一个零值），
+	// 一集都补不上时 why 说明原因；err 非空 = 预览不可用，退回按标题判。nil = 不预览（测试 / 没接）
+	Re0Preview func(it ResourceItem) (covered []epKey, why string, err error)
 
 	// 离线：OfflineMode 空 = 不限；剧集只算播出满 OfflineWait 的缺集（MissingAir 里没有日期的不等）
 	OfflineMode string
@@ -271,15 +293,34 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			}
 			if !it.Owned && *it.Points > 0 {
 				cand.Paid = *it.Points
-				// 付费的额外要求：确认能覆盖缺集、画质命中洗版规则（§5.4）
-				if cand.Covers == 0 || (c.Sub.RankLimit == 0 && it.Rank < 0) {
+				// 付费的额外要求：画质命中洗版规则、确认能覆盖缺集、看得出合不合资源条件（§5.4）
+				if c.Sub.RankLimit == 0 && it.Rank < 0 {
+					continue
+				}
+				over := c.Re0Max <= 0 || cand.Paid > c.Re0Max || (c.Re0Left >= 0 && cand.Paid > c.Re0Left)
+				// 上限以内的先看 RE0 文件预览：按真实文件名核对缺集与资源条件，标题没写的也能用、标题写了文件里却没有的也拦得住。
+				// 超限的不预览（只通知用户手动解锁，不值得多一次请求）
+				if !over && c.Re0Preview != nil {
+					covered, pwhy, err := c.Re0Preview(it)
+					if err == nil {
+						if len(covered) == 0 {
+							c.skip("要花积分、文件预览" + pwhy)
+							continue
+						}
+						cand.Exact, cand.Covers = covered, len(covered)
+						cands = append(cands, cand)
+						continue
+					}
+					// 预览不可用（没开放 / 这个网盘不支持 / 出错）：退回按标题判
+				}
+				if cand.Covers == 0 {
 					continue
 				}
 				if verdict == condUnknown {
-					c.skip("要花积分、" + why) // 解锁前看不到文件，看不出合不合条件就不花积分
+					c.skip("要花积分、" + why) // 看不到文件、标题又看不出合不合条件，就不花积分
 					continue
 				}
-				if c.Re0Max <= 0 || cand.Paid > c.Re0Max || (c.Re0Left >= 0 && cand.Paid > c.Re0Left) {
+				if over {
 					overLimit = append(overLimit, cand)
 					continue
 				}
