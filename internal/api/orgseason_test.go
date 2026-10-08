@@ -259,3 +259,23 @@ func TestSplitContainerMeta(t *testing.T) {
 		t.Errorf("与标题目录重名的应为 p，得到 %s", got)
 	}
 }
+
+// 文件名最后一段数字是广告域名（www.5266ys.com）：01–09 带前导零认得出集号，10–30 认不出，
+// 要靠同模板的兄弟补。此前只比最后一段数字，模板对不上，21 集全进了 Season 0（2026-10-08 现场）
+func TestEpisodeParsesSiblingTemplateNotLastDigits(t *testing.T) {
+	var vids []remoteFile
+	for i := 1; i <= 30; i++ {
+		n := fmt.Sprintf("%d.2160p.60fps.HD国语中字无水印[最新电影www.5266ys.com].mp4", i)
+		if i < 10 {
+			n = "0" + n
+		}
+		vids = append(vids, remoteFile{Fid: fmt.Sprint(i), Name: n, Path: "凡人修仙传.2160p.60fps/" + n})
+	}
+	got := episodeParses(vids, nil, nil)
+	for i := 1; i <= 30; i++ {
+		p := got[fmt.Sprint(i)]
+		if p == nil || p.Season != 1 || p.Episode != i {
+			t.Fatalf("第 %d 个应认成 S01E%02d: %+v", i, i, p)
+		}
+	}
+}

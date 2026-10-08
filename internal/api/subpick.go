@@ -123,8 +123,10 @@ type subPickCtx struct {
 	Exclude []string // 内置排除词 + 订阅自己的
 	Include []string
 	Cond    subCond // 资源条件（subcond.go）
-	Re0Max  int     // RE0 单条自动解锁上限，0 = 不自动解锁
-	Re0Left int     // 今天还能花多少，<0 = 不限
+	// Identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
+	Identity *subIdentity
+	Re0Max   int // RE0 单条自动解锁上限，0 = 不自动解锁
+	Re0Left  int // 今天还能花多少，<0 = 不限
 
 	// 离线：OfflineMode 空 = 不限；剧集只算播出满 OfflineWait 的缺集（MissingAir 里没有日期的不等）
 	OfflineMode string
@@ -202,6 +204,13 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		}
 		if c.Sub.RankLimit > 0 && (it.Rank < 0 || it.Rank >= c.Sub.RankLimit) {
 			continue
+		}
+		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）
+		if c.Identity != nil {
+			if ok, why := subTwinVerdict(it.Title, *c.Identity, resCoverageOf(it.Title)); !ok {
+				c.skip(why)
+				continue
+			}
 		}
 		// 资源条件：标题明确不符的丢；没写的分享到文件一级再判，磁力只有标题可看、又扣离线配额，不下
 		verdict, why := c.Cond.titleVerdict(it.Title, it.Tags, movie, it.SizeBytes)

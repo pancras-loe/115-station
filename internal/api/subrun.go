@@ -157,6 +157,8 @@ type subRunner struct {
 	rmdir   func(cid string) error
 	offline func(link, target string) (status int, msg string, linkID uint)
 	quota   func() (left, total int, err error) // 115 离线剩余配额
+	// identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
+	identity func(sub *model.Subscription) (subIdentity, error)
 }
 
 func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
@@ -237,6 +239,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		return h.offlineSubmitLinked(link, target, "订阅", true)
 	}
 	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
+	r.identity = func(sub *model.Subscription) (subIdentity, error) { return subIdentityOf(r.tc, sub) }
 	return r, nil
 }
 
@@ -458,6 +461,18 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		item.Note = note
 	}
 
+	// 同名的另一部查不到就这一轮不提交：分不清是哪一部时宁可晚一轮（现场把真人版当成动画入了库）
+	var identity *subIdentity
+	if r.identity != nil {
+		id, err := r.identity(sub)
+		if err != nil {
+			item.Skipped = "查同名条目失败，本轮不提交：" + truncateStr(err.Error(), 120)
+			log.Printf("[订阅] ✗ 《%s》%s", sub.Title, item.Skipped)
+			return false
+		}
+		identity = &id
+	}
+
 	tried := map[string]subTried{}
 	var rows []model.SubAttempt
 	db.Where("sub_id = ?", sub.ID).Order("id ASC").Find(&rows)
@@ -468,8 +483,8 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		Sub: sub, Missing: ev.Missing, Tried: tried, Now: now,
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
 		Include: splitKeywords(sub.Include),
-		Cond:    subCondOf(r.cfg, sub.Cond),
-		Re0Max:  r.cfg.Re0UnlockMax, Re0Left: r.re0Left,
+		Cond:    subCondOf(r.cfg, sub.Cond), Identity: identity,
+		Re0Max: r.cfg.Re0UnlockMax, Re0Left: r.re0Left,
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
 		MissingAir: ev.MissingAir, Skipped: map[string]int{},
 	}

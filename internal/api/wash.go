@@ -952,8 +952,12 @@ func washQualityOf(name string) string {
 
 // destLabelOf 旧版去向的中文名（日志用）
 func destLabelOf(oldTarget string) string {
-	if oldTarget == "existing" {
+	switch oldTarget {
+	case "existing":
 		return "已存在"
+	case "delete":
+		// 漏了这一支时汇总日志写「去向 冗余」、逐条写「已移到 115 回收站」，用户照着去冗余目录找不到旧版
+		return "115 回收站"
 	}
 	return "冗余"
 }

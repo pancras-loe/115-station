@@ -291,6 +291,22 @@ func lastDigitsTemplate(name string) (tpl, digits string) {
 	return name[:l[0]] + "#" + name[l[1]:], name[l[0]:l[1]]
 }
 
+// digitTemplate 名字里某一段数字换成 # 之后的模板
+type digitTemplate struct{ tpl, digits string }
+
+// digitTemplates 去掉扩展名后，每一段数字各出一个模板（按出现顺序）。
+// 补集号不能只看最后一段：「08.2160p.60fps.HD国语中字无水印[最新电影www.5266ys.com].mp4」最后一段是
+// 广告域名里的 5266，模板永远对不上，10–30 集因此没补上集号、全进了 Season 0（2026-10-08 现场）
+func digitTemplates(name string) []digitTemplate {
+	name = baseName(name)
+	locs := reLastDigits.FindAllStringIndex(name, -1)
+	out := make([]digitTemplate, 0, len(locs))
+	for _, l := range locs {
+		out = append(out, digitTemplate{name[:l[0]] + "#" + name[l[1]:], name[l[0]:l[1]]})
+	}
+	return out
+}
+
 // fillEpisodesFromSiblings 同一条目里按兄弟视频的命名模板补集号。
 // plausibleEpisode 单看一个名字时把 480 / 576 / 720 / 1080 当分辨率排除，这本身没错
 // （「某剧 - 1080.mkv」多半是画质）；但 873 集的「蜡笔小新第二季-NNN.mp4」里，
@@ -309,26 +325,42 @@ func fillEpisodesFromSiblings(names map[string]string, parses map[string]*Parsed
 		if p == nil || p.Episode <= 0 || p.EpisodeEnd > 0 {
 			continue
 		}
-		tpl, d := lastDigitsTemplate(names[fid])
-		if n, err := strconv.Atoi(d); tpl != "" && err == nil && n == p.Episode {
-			agree[tpl]++
+		// 哪一段数字就是集号，那一段的模板记一票（一个名字里只认第一段对得上的）
+		for _, t := range digitTemplates(names[fid]) {
+			if n, err := strconv.Atoi(t.digits); err == nil && n == p.Episode {
+				agree[t.tpl]++
+				break
+			}
 		}
+	}
+	hasTpl := func(name, tpl string) bool {
+		for _, t := range digitTemplates(name) {
+			if t.tpl == tpl {
+				return true
+			}
+		}
+		return false
 	}
 	for fid, p := range parses {
 		if p == nil || p.Episode > 0 {
 			continue
 		}
-		tpl, d := lastDigitsTemplate(names[fid])
-		if tpl == "" || agree[tpl] < siblingTemplateMin {
-			continue
+		tpl, n := "", 0
+		for _, t := range digitTemplates(names[fid]) {
+			if agree[t.tpl] < siblingTemplateMin {
+				continue
+			}
+			if v, err := strconv.Atoi(t.digits); err == nil && v > 0 {
+				tpl, n = t.tpl, v
+				break
+			}
 		}
-		n, err := strconv.Atoi(d)
-		if err != nil || n <= 0 {
+		if tpl == "" {
 			continue
 		}
 		var ref *ParsedName // 季号与片名取同模板的兄弟：它自己的解析在这一处是残的
 		for f2, p2 := range parses {
-			if t2, _ := lastDigitsTemplate(names[f2]); t2 == tpl && p2 != nil && p2.Episode > 0 {
+			if p2 != nil && p2.Episode > 0 && hasTpl(names[f2], tpl) {
 				ref = p2
 				break
 			}
