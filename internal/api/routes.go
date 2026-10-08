@@ -345,6 +345,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// TMDB 搜索（影视转存页与整理记录的「重新整理」共用：名称或 TMDB ID → 条目选择）
 		protected.GET("/tmdb/search", h.TmdbSearchMulti)
+		protected.GET("/tmdb/discover", h.TmdbDiscover)
 
 		// 资源订阅（subapi.go）：写操作只改订阅表，搜索与提交入订阅队列
 		protected.GET("/subscriptions", h.ListSubscriptions)

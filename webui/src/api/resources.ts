@@ -16,6 +16,15 @@ export interface TmdbCandidate {
 export const tmdbSearch = (query: string) =>
   http.get<{ data?: TmdbCandidate[]; hint?: string }>('/tmdb/search', { params: { query } })
 
+/** TMDB 榜单（找资源页的趋势 / 热门）：不带 list 只返回榜单清单 */
+export interface DiscoverList {
+  key: string
+  label: string
+}
+export const tmdbDiscoverLists = () => http.get<{ lists: DiscoverList[] }>('/tmdb/discover')
+export const tmdbDiscover = (list: string, page = 1) =>
+  http.get<{ data?: TmdbCandidate[]; has_more?: boolean }>('/tmdb/discover', { params: { list, page } })
+
 export const tmdbImageUrl = (path: string, size = 'w154') =>
   `/api/tmdb/img?path=${encodeURIComponent(path)}&size=${size}`
 

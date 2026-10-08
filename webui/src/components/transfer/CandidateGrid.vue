@@ -17,6 +17,8 @@ defineProps<{
   owned: Record<string, OwnedInfo>
   loading?: boolean
   hint?: string
+  /** 榜单里用：没有「跳过 TMDB」这回事 */
+  noSkip?: boolean
 }>()
 const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
 </script>
@@ -53,7 +55,7 @@ const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
         </button>
       </div>
     </template>
-    <button v-if="!loading" type="button" class="skip" @click="emit('skip')">
+    <button v-if="!loading && !noSkip" type="button" class="skip" @click="emit('skip')">
       TMDB 里没有？跳过 TMDB，直接用关键词搜各站
     </button>
   </div>

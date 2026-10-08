@@ -8,6 +8,7 @@ import { ArrowLeft, BellPlus, BellRing, Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
+import DiscoverPanel from '@/components/transfer/DiscoverPanel.vue'
 import ResourcePanel from '@/components/transfer/ResourcePanel.vue'
 import SubscribeDialog from '@/components/subscribe/SubscribeDialog.vue'
 import type { SubTarget } from '@/components/subscribe/SubscribeDialog.vue'
@@ -55,6 +56,8 @@ const cands = ref<TmdbCandidate[]>([])
 const candHint = ref('')
 const owned = ref<Record<string, OwnedInfo>>({})
 const selected = ref<{ query: ResourceQuery; cand?: TmdbCandidate } | null>(null)
+// 从哪儿点进来的：「换一部」回到榜单还是搜索结果
+const from = ref<'pick' | 'idle'>('pick')
 
 async function searchTmdb(q: string) {
   busy.value = true
@@ -80,7 +83,8 @@ async function searchTmdb(q: string) {
   }
 }
 
-function pick(c: TmdbCandidate) {
+function pick(c: TmdbCandidate, origin: 'pick' | 'idle' = 'pick') {
+  from.value = origin
   selected.value = {
     cand: c,
     query: { tmdb_id: c.id, type: c.media_type, title: c.title, original_title: c.original_title, year: c.year },
@@ -114,11 +118,19 @@ function skipTmdb() {
   const kw = input.value.trim()
   if (!kw) return
   selected.value = { query: { title: kw } }
+  from.value = 'pick'
   stage.value = 'resources'
 }
 
 function back() {
-  stage.value = cands.value.length ? 'pick' : 'idle'
+  stage.value = from.value === 'pick' && cands.value.length ? 'pick' : 'idle'
+}
+
+// 从搜索结果回到榜单
+function toDiscover() {
+  cands.value = []
+  candHint.value = ''
+  stage.value = 'idle'
 }
 
 const sources = computed(() => srcState.value?.sources ?? [])
@@ -160,7 +172,15 @@ const selOwned = computed(() => {
       </div>
     </SectionCard>
 
+    <!-- 榜单用 v-show 保活：点进一部再「换一部」回来，页签与翻到的页数还在 -->
+    <SectionCard v-show="stage === 'idle'" title="趋势与热门" hint="TMDB 榜单，点一部直接去各站找资源">
+      <DiscoverPanel @pick="(c) => pick(c, 'idle')" />
+    </SectionCard>
+
     <SectionCard v-if="stage === 'pick'" title="选择影片" hint="先在 TMDB 定下是哪一部，再拿规范片名去各站搜">
+      <template #extra>
+        <HButton variant="ghost" size="sm" @click="toDiscover">返回榜单</HButton>
+      </template>
       <CandidateGrid :items="cands" :owned="owned" :loading="busy" :hint="candHint" @pick="pick" @skip="skipTmdb" />
     </SectionCard>
 
