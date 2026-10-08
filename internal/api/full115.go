@@ -387,26 +387,42 @@ func (h *Handler) RelaxedMediaPerms() {
 		local = fullCfg.LocalPath
 	}
 	go func() {
-		dirs, files := 0, 0
-		filepath.WalkDir(local, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				if os.Chmod(p, 0o777) == nil {
-					dirs++
-				}
-			} else {
-				if os.Chmod(p, 0o666) == nil {
-					files++
-				}
-			}
-			return nil
-		})
+		dirs, files := relaxMediaPerms(local)
 		if dirs+files > 0 {
 			log.Printf("[系统] ○ 媒体目录宽松权限已应用: %d 个目录 / %d 个文件（Emby 可写入 poster/nfo）", dirs, files)
 		}
 	}()
+}
+
+// relaxMediaPerms 只给权限不对的条目 chmod，返回实际改了几个。
+//
+// ⚠️ 别改回「每个都 chmod 一遍」：Linux 上权限没变的 chmod 照样发 inotify IN_ATTRIB，
+// Emby 的实时监控把整棵树每一集都排进刷新队列。2026-10-08 现场：容器重启后几秒内
+// 「剧集」「动漫番剧」上万条 will be refreshed，Emby 的刷新队列堵了十三分钟，
+// 期间整理提交的入库刷新一直排在后面，凡人修仙传 189 集晚了 11 分钟才入库
+func relaxMediaPerms(root string) (dirs, files int) {
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		want := os.FileMode(0o666)
+		if d.IsDir() {
+			want = 0o777
+		}
+		// os.Stat 跟随软链，与 os.Chmod 改的是同一个对象
+		if st, err := os.Stat(p); err != nil || st.Mode().Perm() == want {
+			return nil
+		}
+		if os.Chmod(p, want) == nil {
+			if d.IsDir() {
+				dirs++
+			} else {
+				files++
+			}
+		}
+		return nil
+	})
+	return dirs, files
 }
 
 // orgSkipCids 整理工作区（待整理/已存在/冗余/转存目录）的 cid 集合，
