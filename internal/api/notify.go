@@ -263,6 +263,7 @@ func NotifyMessage(title, content string) {
 // NotifyMessageRich 富媒体通知：带封面图与链接。
 // Telegram 直接发图片（sendPhoto）；企业微信应用消息发 news 图文卡片（picurl 外链封面）。
 // posterURL 为空时自动退回纯文本通知。
+// 飞书 / QQ 发不了图，照 NotifyMessage 发文本 —— 此前这里漏了它们，带海报的订阅通知飞书 / QQ 一条都收不到
 func NotifyMessageRich(title, content, posterURL, linkURL string) {
 	cfg, err := loadMessageConfig()
 	if err != nil {
@@ -279,6 +280,7 @@ func NotifyMessageRich(title, content, posterURL, linkURL string) {
 	if cfg.TG.isEnabled() && cfg.TG.Token != "" && cfg.TG.ChatID != "" {
 		go sendTelegramPhoto(cfg.TG, title, content, posterURL)
 	}
+	sendExtraChannels(cfg, title, content)
 }
 
 // NewsArticle 图文卡片单篇
