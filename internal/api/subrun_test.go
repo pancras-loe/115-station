@@ -13,8 +13,9 @@ import (
 	"115-station/internal/model"
 )
 
-// 端到端：假 TMDB（剧集 4 集已播）+ 假资源（一个分享、一个磁力、一个排除词）+ 假 115 分享接口。
-// 第一轮：分享里只挑缺的 E02 E03，磁力补 E04；第二轮结算入库；离线失败后第三轮不再重试那条磁力
+// 端到端：假 TMDB（剧集 4 集已播）+ 假资源（一个分享、一个合集磁力、一个单集磁力、一个排除词）+ 假 115 分享接口。
+// 第一轮：分享里只挑缺的 E02 E03，合集磁力补 E04，单集磁力按「只下合集包」不下；第二轮结算入库；
+// 离线失败后第三轮不再重试那条磁力（再提交要再扣一次离线配额）
 func TestSubRunnerEndToEnd(t *testing.T) {
 	newTestDB(t, "subrun.db")
 	subTestLayout(t)
@@ -74,7 +75,8 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 	magnet := "magnet:?xt=urn:btih:4444444444444444444444444444444444444444"
 	items := []ResourceItem{
 		{Source: "pansou", Kind: "share115", Action: "transfer", Title: "剧 S01 1080p", URL: "https://115.com/s/sw1abc?password=x1y2", Relevant: true, Rank: -1},
-		{Source: "tg", Kind: "magnet", Action: "offline", Title: "剧 S01E04 1080p", URL: magnet, Relevant: true, Rank: -1},
+		{Source: "tg", Kind: "magnet", Action: "offline", Title: "剧 S01 E03-E04 1080p", URL: magnet, Relevant: true, Rank: -1},
+		{Source: "tg", Kind: "magnet", Action: "offline", Title: "剧 S01E04 2160p", URL: "magnet:?xt=urn:btih:6666666666666666666666666666666666666666", Relevant: true, Rank: -1},
 		{Source: "tg", Kind: "share115", Action: "transfer", Title: "剧 S01 枪版", URL: "https://115.com/s/sw2zzz", Relevant: true, Rank: -1},
 	}
 	var dirs []string
@@ -115,6 +117,9 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 	if len(offlines) != 1 || offlines[0] != magnet+"@W2" {
 		t.Fatalf("离线 = %v", offlines)
 	}
+	if item.Skipped != "1 条磁力按离线策略没下（单集磁力 1）" {
+		t.Fatalf("单集磁力应按策略跳过并说明: %q", item.Skipped)
+	}
 	model.DB.First(&sub, sub.ID)
 	if sub.Missing != 0 || sub.Have != 1 || sub.Total != 4 || sub.NextCheckAt == nil || !sub.NextCheckAt.Equal(now.Add(subAfterSubmit)) {
 		t.Fatalf("第一轮后的订阅: %+v", sub)
@@ -153,7 +158,11 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 	now = now.Add(time.Hour)
 	item, _ = r.run(&sub, false)
 	if len(item.Submitted) != 0 || len(offlines) != 1 {
-		t.Fatalf("失败过的磁力不该马上重试: %+v", item)
+		t.Fatalf("失败过的磁力不该再试: %+v", item)
+	}
+	model.DB.First(&atts[1], atts[1].ID)
+	if atts[1].Status != subAttemptFailed || atts[1].RetryAt != nil {
+		t.Fatalf("115 报离线失败的不设重试: %+v", atts[1])
 	}
 	model.DB.First(&sub, sub.ID)
 	if sub.Missing != 1 || sub.EmptyRounds != 1 || !sub.NextCheckAt.Equal(now.Add(time.Hour)) {
@@ -206,5 +215,76 @@ func TestSubRunnerDropsWrapperOnFailure(t *testing.T) {
 	}
 	if len(removed) != 1 || removed[0] != "W1" {
 		t.Fatalf("应删掉空包装目录: %v", removed)
+	}
+}
+
+// 离线的几道闸：只下合集包、一轮一个、新集先等分享、每月上限、115 配额保留
+func TestSubOfflineGates(t *testing.T) {
+	newTestDB(t, "suboffline.db")
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.Local)
+	e := func(n int) epKey { return epKey{S: 1, E: n} }
+	old := now.AddDate(0, 0, -30)
+	ev := subEval{Missing: []epKey{e(1), e(2), e(3), e(4)}, MissingAir: map[epKey]time.Time{
+		e(1): old, e(2): old, e(3): old, e(4): now.Add(-2 * time.Hour), // E04 刚播
+	}}
+	mag := func(title, hash string) ResourceItem {
+		return ResourceItem{Source: "tg", Kind: "magnet", Action: "offline", Title: title,
+			URL: "magnet:?xt=urn:btih:" + strings.Repeat(hash, 40), Relevant: true, Rank: -1}
+	}
+	items := []ResourceItem{mag("剧 S01 E01-E02", "a"), mag("剧 S01 E03-E04", "b"), mag("剧 S01E03", "c")}
+
+	type res struct {
+		offlines []string
+		item     subRunItem
+	}
+	run := func(subID uint, ev subEval, quotaLeft int) res {
+		var out res
+		r := &subRunner{
+			h: &Handler{DB: model.DB}, cfg: defaultSubscribeCfg(), target: "T", re0Left: -1,
+			now:    func() time.Time { return now },
+			search: func(*model.Subscription) ([]ResourceItem, string) { return append([]ResourceItem(nil), items...), "" },
+			mkdir:  func(parent, name string) (string, error) { return "W", nil },
+			offline: func(link, target string) (int, string, uint) {
+				out.offlines = append(out.offlines, link)
+				return 200, "ok", uint(len(out.offlines))
+			},
+			quota: func() (int, int, error) { return quotaLeft, 100, nil },
+		}
+		sub := &model.Subscription{ID: subID, TmdbID: int(subID), MediaType: "tv", Title: "剧", Scope: subScopeAll}
+		r.searchAndSubmit(sub, ev, &out.item)
+		return out
+	}
+
+	// 能补的集多的先下（E01-E02 两集都播够了；E03-E04 只有 E03 播够），一轮只下一个，单集磁力不下
+	got := run(1, ev, 50)
+	if len(got.offlines) != 1 || !strings.Contains(got.offlines[0], "aaaa") {
+		t.Fatalf("应只下 E01-E02 那个合集: %v", got.offlines)
+	}
+	if got.item.Skipped != "2 条磁力按离线策略没下（一轮只下一个 1、单集磁力 1）" {
+		t.Fatalf("跳过说明: %q", got.item.Skipped)
+	}
+
+	// 只缺刚播的 E04：先等分享
+	young := subEval{Missing: []epKey{e(4)}, MissingAir: ev.MissingAir}
+	if got = run(2, young, 50); len(got.offlines) != 0 || !strings.Contains(got.item.Skipped, "新集先等分享") {
+		t.Fatalf("刚播的集不该下离线: %+v", got)
+	}
+
+	// 115 配额低于保留值：不下
+	if got = run(3, ev, 5); len(got.offlines) != 0 || !strings.Contains(got.item.Skipped, "115 离线配额只剩 5") {
+		t.Fatalf("配额不足不该下: %+v", got)
+	}
+
+	// 本月用到上限（默认 30，上面已经提交过 1 个）：不下
+	for i := 0; i < 29; i++ {
+		model.DB.Create(&model.SubAttempt{SubID: 99, Kind: "offline", LinkID: uint(1000 + i), Status: subAttemptIngested, CreatedAt: now})
+	}
+	// 被 115 拒掉的提交没扣配额，不算
+	model.DB.Create(&model.SubAttempt{SubID: 99, Kind: "offline", Status: subAttemptFailed, CreatedAt: now})
+	if n := subOfflineUsedThisMonth(model.DB, now); n != 30 {
+		t.Fatalf("本月用量应是 30: %d", n)
+	}
+	if got = run(4, ev, 50); len(got.offlines) != 0 || !strings.Contains(got.item.Skipped, "到了上限") {
+		t.Fatalf("到了每月上限不该下: %+v", got)
 	}
 }

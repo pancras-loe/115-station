@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // 订阅范围与追剧模式
@@ -37,6 +39,19 @@ const (
 	subMovieWaitNow        = "now"             // 立刻
 )
 
+// 订阅用不用离线下载（subscribeCfg.OfflineMode / Subscription.OfflineMode）。
+// 磁力在下载前看不到里面有什么（115 列种子文件要 .torrent 的 sha1，来源给的都是磁力），挑不了集，
+// 而 115 的离线配额按任务数扣：一集一个磁力的话追一部剧就是几十次配额
+const (
+	subOfflinePack      = "pack"       // 只下合集包：标题写着单集的磁力不下（剧集默认；电影一个磁力就是整部，照下）
+	subOfflineShareOnly = "share_only" // 只转存 115 分享，不用离线
+	subOfflineAny       = "any"        // 不限
+)
+
+func validSubOfflineMode(m string) bool {
+	return m == subOfflinePack || m == subOfflineShareOnly || m == subOfflineAny
+}
+
 // subscribeCfg 全局配置（setting "subscribe"）
 type subscribeCfg struct {
 	Enabled bool `json:"enabled"`
@@ -54,6 +69,15 @@ type subscribeCfg struct {
 	// NotifyVer 通知类型清单的版本：新增类型时加一，老配置读出来时把新类型补进 Notify。
 	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
 	NotifyVer int `json:"notify_ver"`
+
+	// 离线下载的几道闸（见 subOffline* 常量的说明）
+	OfflineMode string `json:"offline_mode"` // 默认的离线策略，订阅自己可以改
+	// OfflineWaitHours 一集播出后这么久之内只等分享：新集的分享一般几小时内就有，先别花离线配额
+	OfflineWaitHours int `json:"offline_wait_hours"`
+	// OfflineMonthly 订阅每月最多提交多少个离线任务，0 = 不限
+	OfflineMonthly int `json:"offline_monthly"`
+	// OfflineReserve 115 剩余离线配额低于它就不再提交，留给手动离线；0 = 不查配额
+	OfflineReserve int `json:"offline_reserve"`
 }
 
 // subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集）
@@ -73,6 +97,11 @@ func defaultSubscribeCfg() subscribeCfg {
 		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
 		Notify:          "submit,ingested,done,stalled",
 		NotifyVer:       subNotifyVer,
+
+		OfflineMode:      subOfflinePack,
+		OfflineWaitHours: 24,
+		OfflineMonthly:   30,
+		OfflineReserve:   10,
 	}
 }
 
@@ -82,7 +111,7 @@ func loadSubscribeCfg() subscribeCfg {
 	if v := settingValueCompat("subscribe"); v != "" {
 		c.NotifyVer = 0 // 老配置里没有这个键
 		_ = json.Unmarshal([]byte(v), &c)
-		// 原来一类都不推的，是用户关掉了通知，新类型也不替他打开
+		// 原来一类都不推的，是用户关掉了通知，新类型也不替用户打开
 		for ver := c.NotifyVer + 1; ver <= subNotifyVer && strings.TrimSpace(c.Notify) != ""; ver++ {
 			if k := subNotifyAdded[ver]; k != "" && !strings.Contains(","+c.Notify+",", ","+k+",") {
 				c.Notify = strings.Trim(c.Notify+","+k, ",")
@@ -118,6 +147,18 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 		c.Re0DailyBudget = 0
 	}
 	c.ExcludeDefault = strings.TrimSpace(c.ExcludeDefault)
+	if !validSubOfflineMode(c.OfflineMode) {
+		c.OfflineMode = d.OfflineMode
+	}
+	if c.OfflineWaitHours < 0 || c.OfflineWaitHours > 24*7 {
+		c.OfflineWaitHours = d.OfflineWaitHours
+	}
+	if c.OfflineMonthly < 0 {
+		c.OfflineMonthly = 0
+	}
+	if c.OfflineReserve < 0 {
+		c.OfflineReserve = 0
+	}
 	// 读的时候已经补过新类型；保存时记成当前版本，用户之后关掉的类型不会再被补回来
 	c.NotifyVer = subNotifyVer
 	return c
@@ -125,4 +166,12 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 
 func (c subscribeCfg) airDelay() time.Duration {
 	return time.Duration(c.AirDelayHours) * time.Hour
+}
+
+// offlineModeOf 这个订阅的离线策略：订阅自己设了用自己的，否则跟全局
+func (c subscribeCfg) offlineModeOf(sub *model.Subscription) string {
+	if validSubOfflineMode(sub.OfflineMode) {
+		return sub.OfflineMode
+	}
+	return c.OfflineMode
 }

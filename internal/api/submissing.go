@@ -386,7 +386,9 @@ func subMovieSearchFrom(rel subMovieRelease, mode string) time.Time {
 type subEval struct {
 	Have, Total int     // 范围内已播的集：已有 / 应有（电影是 0/1 或 1/1）
 	Missing     []epKey // 已播、没有、不在路上的，排好序；电影缺时是一个零值占位
-	Inflight    []epKey // 在路上的（只算范围内已播的）
+	// MissingAir 剧集缺集的播出日期（TMDB 只有日期，按当天 0 点）：离线要等新集播出一阵、分享没出来再下
+	MissingAir map[epKey]time.Time
+	Inflight   []epKey // 在路上的（只算范围内已播的）
 	// NextAt 剧集：范围内下一集可以开始搜的时间；电影：可以开始搜的时间。零值 = 没有排期 / 现在就能搜
 	NextAt time.Time
 	Done   bool // 订阅可以结束了
@@ -429,6 +431,10 @@ func evalSubTV(sub *model.Subscription, have subHave, sch subTVSchedule, infligh
 			ev.Inflight = append(ev.Inflight, e.Key)
 		default:
 			ev.Missing = append(ev.Missing, e.Key)
+			if ev.MissingAir == nil {
+				ev.MissingAir = map[epKey]time.Time{}
+			}
+			ev.MissingAir[e.Key] = e.Air
 		}
 	}
 	sortEpKeys(ev.Missing)

@@ -305,6 +305,8 @@ type Subscription struct {
 	RankLimit int    `json:"rank_limit"`
 	Include   string `json:"include" gorm:"size:255"` // 逗号分隔，资源标题须命中其一
 	Exclude   string `json:"exclude" gorm:"size:255"` // 逗号分隔，命中任一即丢
+	// OfflineMode 离线策略：pack 只下合集包 / share_only 只转存分享 / any 不限；空 = 跟随订阅设置
+	OfflineMode string `json:"offline_mode" gorm:"size:16"`
 
 	// State active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到（降频检查）
 	State       string     `json:"state" gorm:"index;size:10"`

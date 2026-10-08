@@ -51,7 +51,7 @@ func settleSubAttempt(sub *model.Subscription, a *model.SubAttempt, recs []model
 			return keep
 		}
 		if a.Kind == "offline" {
-			return subSettleResult{Status: subAttemptFailed, Reason: "离线下载 3 天还没有整理记录", Retry: true}
+			return subSettleResult{Status: subAttemptFailed, Reason: "离线下载 3 天还没有整理记录"}
 		}
 		return subSettleResult{Status: subAttemptFailed, Reason: "转存后 6 小时还没有整理记录（转存守望者可能熔断了，看任务中心）", Retry: true}
 	}
@@ -83,7 +83,8 @@ func settleSubAttempt(sub *model.Subscription, a *model.SubAttempt, recs []model
 	case ok > 0:
 		return subSettleResult{Status: subAttemptIngested}
 	}
-	return subSettleResult{Status: subAttemptFailed, Reason: firstNonEmpty(strings.Join(fails, "；"), "整理失败"), Retry: true}
+	// 离线的不自动重试：再提交一次同一个磁力又扣一次离线配额，下回来的还是同一份内容；要试在订阅详情里手动重试
+	return subSettleResult{Status: subAttemptFailed, Reason: firstNonEmpty(strings.Join(fails, "；"), "整理失败"), Retry: a.Kind != "offline"}
 }
 
 // settleSubscription 结算一个订阅所有在路上的尝试。返回这轮被判「内容不对」的与入了库的（ingested / partial），
@@ -160,7 +161,8 @@ func subLandedText(sub *model.Subscription, eps []epKey, ev subEval) string {
 	return s
 }
 
-// subMarkOfflineFailed 离线监视器看到任务失败：对应的订阅尝试直接判失败，不用等 3 天超时
+// subMarkOfflineFailed 离线监视器看到任务失败：对应的订阅尝试直接判失败，不用等 3 天超时。
+// 不设重试时间：115 报失败多半是资源本身的问题（死种、版权屏蔽），再提交只是再扣一次配额
 func subMarkOfflineFailed(db *gorm.DB, linkID uint, name string) {
 	if db == nil || linkID == 0 {
 		return
@@ -168,7 +170,7 @@ func subMarkOfflineFailed(db *gorm.DB, linkID uint, name string) {
 	now := time.Now()
 	db.Model(&model.SubAttempt{}).Where("link_id = ? AND status = ?", linkID, subAttemptInflight).
 		Updates(map[string]any{"status": subAttemptFailed, "reason": "115 离线任务失败：" + truncateStr(name, 200),
-			"resolved_at": now, "retry_at": now.Add(subRetryFailed)})
+			"resolved_at": now})
 }
 
 // ==================== 排期 ====================

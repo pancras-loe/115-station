@@ -663,6 +663,33 @@ type offlineTaskInfo struct {
 	delTime int64 // 完成时间戳（秒；115 任务列表会长期保留历史任务，用它区分新旧）
 }
 
+// offlineQuota115 115 离线下载剩余 / 总配额（GET /web/lixian/?ac=get_quota_info，只要 cookie）。
+// 响应 {state, quota: 剩余, total: 总数}：openStrm 的 cloud-115/offline.ts 用真实账号验证过（只读参考）
+func offlineQuota115(cookie string) (left, total int, err error) {
+	body, err := httpGet115("https://115.com/web/lixian/", url.Values{"ac": {"get_quota_info"}}, cookie, 15*time.Second)
+	if err != nil {
+		return 0, 0, err
+	}
+	var resp struct {
+		State bool        `json:"state"`
+		Quota json.Number `json:"quota"`
+		Total json.Number `json:"total"`
+		Error string      `json:"error"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return 0, 0, fmt.Errorf("解析离线配额失败: %s", truncateStr(string(body), 200))
+	}
+	if !resp.State {
+		return 0, 0, fmt.Errorf("读离线配额失败: %s", firstNonEmpty(resp.Error, truncateStr(string(body), 200)))
+	}
+	q, qerr := resp.Quota.Int64()
+	t, _ := resp.Total.Int64()
+	if qerr != nil {
+		return 0, 0, fmt.Errorf("离线配额响应里没有 quota: %s", truncateStr(string(body), 200))
+	}
+	return int(q), int(t), nil
+}
+
 // fetchOfflineTaskList 拉取离线任务列表（web lixian 加密接口，防御式解析）
 func fetchOfflineTaskList(cookie string) ([]offlineTaskInfo, error) {
 	raws, err := fetchLixianTasksRaw(cookie)

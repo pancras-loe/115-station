@@ -50,6 +50,7 @@ const blank = (): SubForm => ({
   rank_limit: 0,
   include: '',
   exclude: '',
+  offline_mode: '',
 })
 const form = ref<SubForm>(blank())
 const seasons = ref<TmdbSeason[]>([])
@@ -70,7 +71,7 @@ const tv = computed(() => head.value?.media_type === 'tv')
 watch(show, async (open) => {
   if (!open) return
   form.value = props.edit ? subscribeApi.toForm(props.edit) : blank()
-  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude)
+  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode)
   seasons.value = []
   ended.value = false
   if (!tv.value || !head.value) return
@@ -109,6 +110,20 @@ const epEnd = computed({
 const rankLimit = computed({
   get: () => (form.value.rank_limit > 0 ? form.value.rank_limit : null),
   set: (v) => (form.value.rank_limit = v ?? 0),
+})
+
+const offlineHint = computed(() => {
+  switch (form.value.offline_mode) {
+    case 'pack':
+      return tv.value
+        ? '磁力挑不了集，115 的离线配额又按任务数扣：标题写着单集的磁力不下，只下季包 / 多集合集'
+        : '电影一个磁力就是整部，照常下'
+    case 'share_only':
+      return '只转存 115 分享，不用离线配额'
+    case 'any':
+      return '单集磁力也下，追一部剧可能用掉几十次离线配额'
+  }
+  return '按「订阅设置 → 离线下载」的默认策略；每月上限、配额保留这些闸对所有订阅都生效'
 })
 
 const scopeHint = computed(() => {
@@ -203,7 +218,7 @@ async function submit() {
       </template>
 
       <button type="button" class="adv-toggle" :aria-expanded="advanced" @click="advanced = !advanced">
-        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、画质、关键词
+        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、画质、关键词、离线
       </button>
       <div v-if="advanced" class="adv">
         <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 来源设置」里开着的来源">
@@ -220,6 +235,17 @@ async function submit() {
         </FieldRow>
         <FieldRow label="排除" hint="资源标题含任何一个就不要；全局排除词（枪版等）在订阅设置里">
           <HInput v-model="form.exclude" placeholder="如：国语, 无字" />
+        </FieldRow>
+        <FieldRow label="离线下载" :hint="offlineHint">
+          <HSegmented
+            v-model="form.offline_mode"
+            :options="[
+              { label: '跟随设置', value: '' },
+              { label: '只下合集包', value: 'pack' },
+              { label: '只转存分享', value: 'share_only' },
+              { label: '不限', value: 'any' },
+            ]"
+          />
         </FieldRow>
       </div>
 

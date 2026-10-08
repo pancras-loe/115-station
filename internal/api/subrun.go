@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"115-station/internal/model"
+
+	"gorm.io/gorm"
 )
 
 const jobKindSubscribe = "subscribe"
@@ -122,8 +125,10 @@ type subRunItem struct {
 	Missing   int      `json:"missing"`
 	Submitted []string `json:"submitted,omitempty"` // 「盘搜 · 资源名：S01E05–E06」
 	Tried     []string `json:"tried,omitempty"`     // 试了但没成的：「资源名：原因」
-	Note      string   `json:"note,omitempty"`
-	Err       string   `json:"err,omitempty"`
+	// Skipped 因离线策略没下的磁力：「2 条磁力按离线策略没下（单集磁力 2）」，没提交东西时写进上一轮结果
+	Skipped string `json:"skipped,omitempty"`
+	Note    string `json:"note,omitempty"`
+	Err     string `json:"err,omitempty"`
 }
 
 type subJobResult struct {
@@ -141,12 +146,17 @@ type subRunner struct {
 	cookie   string
 	re0Left  int  // 今天还能自动解锁多少积分，<0 = 不限
 	stopPaid bool // 解锁报了积分不足 / 没登录：这一轮不再付费解锁
-	now      func() time.Time
+	// 离线：offlineStop 非空 = 这一轮不再提交离线（原因）；offlineLeft 本月还能提交几个、quotaLeft 115 剩余配额，<0 = 不限 / 没查
+	offlineChecked         bool
+	offlineStop            string
+	offlineLeft, quotaLeft int
+	now                    func() time.Time
 	// 下面三个是对外的动作，做成字段是为了测试能换成假的
 	search  func(sub *model.Subscription) ([]ResourceItem, string)
 	mkdir   func(parent, name string) (string, error)
 	rmdir   func(cid string) error
 	offline func(link, target string) (status int, msg string, linkID uint)
+	quota   func() (left, total int, err error) // 115 离线剩余配额
 }
 
 func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
@@ -226,6 +236,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	r.offline = func(link, target string) (int, string, uint) {
 		return h.offlineSubmitLinked(link, target, "订阅", true)
 	}
+	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
 	return r, nil
 }
 
@@ -319,10 +330,14 @@ func subResultLine(sub *model.Subscription, ev subEval, item subRunItem) string 
 	case len(item.Submitted) > 0:
 		return fmt.Sprintf("缺 %d 集，提交了 %d 条资源", len(ev.Missing)+len(ev.Inflight), len(item.Submitted))
 	case len(ev.Missing) > 0:
+		s := fmt.Sprintf("缺 %d 集，没有找到能用的资源", len(ev.Missing))
 		if len(item.Tried) > 0 {
-			return fmt.Sprintf("缺 %d 集，试了 %d 条资源都没用上", len(ev.Missing), len(item.Tried))
+			s = fmt.Sprintf("缺 %d 集，试了 %d 条资源都没用上", len(ev.Missing), len(item.Tried))
 		}
-		return fmt.Sprintf("缺 %d 集，没有找到能用的资源", len(ev.Missing))
+		if item.Skipped != "" {
+			s += "；" + item.Skipped
+		}
+		return s
 	case len(ev.Inflight) > 0:
 		return fmt.Sprintf("%d 集在路上，等整理", len(ev.Inflight))
 	case sub.MediaType == "movie" && !ev.NextAt.IsZero():
@@ -417,19 +432,22 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	for _, a := range rows {
 		tried[a.Hash] = subTried{Status: a.Status, RetryAt: a.RetryAt}
 	}
-	cands, over := planSubCandidates(items, subPickCtx{
+	pctx := subPickCtx{
 		Sub: sub, Missing: ev.Missing, Tried: tried, Now: now,
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
 		Include: splitKeywords(sub.Include),
 		Re0Max:  r.cfg.Re0UnlockMax, Re0Left: r.re0Left,
-	})
+		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
+		MissingAir: ev.MissingAir, Skipped: map[string]int{},
+	}
+	cands, over := planSubCandidates(items, pctx)
 	r.recordOverLimit(sub, over, tried)
 
 	missing := map[epKey]bool{}
 	for _, k := range ev.Missing {
 		missing[k] = true
 	}
-	submitted, tries, paidUsed := false, 0, false
+	submitted, tries, paidUsed, offlineUsed := false, 0, false, false
 	for i, c := range cands {
 		if len(missing) == 0 || tries >= r.cfg.MaxTriesPerSub || subLane.stopRequested() {
 			break
@@ -441,11 +459,29 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		if sub.MediaType != "movie" && (c.Cov.known() || c.Item.Action == "offline") && !c.Cov.coversAny(missing) {
 			continue
 		}
+		// 离线：一个订阅一轮最多一个任务（配额按任务数扣），剩下的缺集里要有播出够久的，再过每月上限与 115 配额
+		if c.Item.Action == "offline" {
+			if offlineUsed {
+				pctx.skip("一轮只下一个")
+				continue
+			}
+			if sub.MediaType != "movie" && !c.coversRipe(missing, pctx) {
+				continue
+			}
+			if why := r.offlineGate(); why != "" {
+				pctx.skip(why)
+				continue
+			}
+		}
 		tries++
 		subLane.setSub("尝试资源", i+1, len(cands), truncateStr(c.Item.Title, 40))
 		att, covered := r.tryOne(sub, c, missing)
 		if att.Points > 0 {
 			paidUsed = true
+		}
+		if att.Kind == "offline" && att.LinkID > 0 {
+			offlineUsed = true
+			r.offlineSpent()
 		}
 		if att.Status == subAttemptInflight {
 			submitted = true
@@ -457,10 +493,127 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			item.Tried = append(item.Tried, fmt.Sprintf("%s：%s", truncateStr(c.Item.Title, 50), att.Reason))
 		}
 	}
+	item.Skipped = subSkippedText(pctx.Skipped)
 	if len(item.Submitted) > 0 {
 		r.notifyKind("submit", "📥 订阅已提交资源", fmt.Sprintf("订阅《%s》：\n%s\n完成后自动整理入库", sub.Title, strings.Join(item.Submitted, "\n")), sub)
 	}
 	return submitted
+}
+
+// coversRipe 估计的范围里有没有还缺、且播出够久可以下离线的
+func (c subCand) coversRipe(missing map[epKey]bool, ctx subPickCtx) bool {
+	for k := range missing {
+		if c.Cov.covers(k) && ctx.offlineRipe(k) {
+			return true
+		}
+	}
+	return false
+}
+
+// subSkippedText 「3 条磁力按离线策略没下（单集磁力 2、新集先等分享 1）」
+func subSkippedText(m map[string]int) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	n := 0
+	for k, v := range m {
+		keys = append(keys, k)
+		n += v
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s %d", k, m[k])
+	}
+	return fmt.Sprintf("%d 条磁力按离线策略没下（%s）", n, strings.Join(parts, "、"))
+}
+
+// ==================== 离线的闸 ====================
+
+// subOfflineStopNotified 停下离线的通知去重：每月上限一个月推一次，配额不足一天推一次（重启后会再推一次，可以接受）
+var subOfflineStopNotified = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+// offlineGate 这一轮还能不能提交离线，不能就返回原因。第一次要提交离线时才查：
+// 本月用量读订阅自己的记账（零 115 请求），115 剩余配额一次请求、整个任务只查一次
+func (r *subRunner) offlineGate() string {
+	if r.offlineStop != "" || r.offlineChecked {
+		return r.offlineStop
+	}
+	r.offlineChecked = true
+	r.offlineLeft, r.quotaLeft = -1, -1
+	now := r.now()
+	if n := r.cfg.OfflineMonthly; n > 0 {
+		used := subOfflineUsedThisMonth(r.h.DB, now)
+		if used >= n {
+			r.stopOffline("month:"+now.Format("2006-01"), 30*24*time.Hour,
+				fmt.Sprintf("本月已提交 %d 个离线任务，到了上限", used),
+				fmt.Sprintf("订阅这个月已经提交了 %d 个离线任务，到了「订阅设置」里的每月上限 %d，下个月 1 号恢复。这期间只转存 115 分享", used, n))
+			return r.offlineStop
+		}
+		r.offlineLeft = n - used
+	}
+	if r.cfg.OfflineReserve > 0 && r.quota != nil {
+		left, total, err := r.quota()
+		if err != nil {
+			// 查不到不拦：每月上限还管着，别因为一次网络错误整轮不下
+			log.Printf("[订阅] ○ 读 115 离线配额失败，本轮不按配额拦: %v", err)
+		} else {
+			r.quotaLeft = left
+			if left < r.cfg.OfflineReserve {
+				r.stopOffline("quota", 24*time.Hour, fmt.Sprintf("115 离线配额只剩 %d", left),
+					fmt.Sprintf("115 离线配额剩 %d / %d，低于「订阅设置」里保留的 %d 次，订阅暂停离线下载（留给手动离线），只转存 115 分享", left, total, r.cfg.OfflineReserve))
+			}
+		}
+	}
+	return r.offlineStop
+}
+
+// offlineSpent 提交了一个离线任务：本地扣一次，用完就停（不再请求 115）
+func (r *subRunner) offlineSpent() {
+	if r.offlineLeft > 0 {
+		r.offlineLeft--
+		if r.offlineLeft == 0 {
+			r.offlineStop = "本月离线任务到了上限"
+		}
+	}
+	if r.quotaLeft > 0 {
+		r.quotaLeft--
+		if r.quotaLeft < r.cfg.OfflineReserve {
+			r.offlineStop = fmt.Sprintf("115 离线配额只剩 %d", r.quotaLeft)
+		}
+	}
+}
+
+// stopOffline 这一轮不再提交离线；同一个原因在 quiet 之内只通知一次
+func (r *subRunner) stopOffline(key string, quiet time.Duration, why, text string) {
+	r.offlineStop = why
+	log.Printf("[订阅] ○ 暂停离线下载：%s", why)
+	subOfflineStopNotified.Lock()
+	last, seen := subOfflineStopNotified.at[key]
+	send := !seen || r.now().Sub(last) > quiet
+	if send {
+		subOfflineStopNotified.at[key] = r.now()
+	}
+	subOfflineStopNotified.Unlock()
+	if send {
+		r.notify("⚠ 订阅暂停离线下载", text, nil, false)
+	}
+}
+
+// subOfflineUsedThisMonth 本月（本地 1 号 0 点起）订阅提交成功的离线任务数。
+// 提交被 115 拒掉的（没有来源链接、状态 failed）没扣配额，不算
+func subOfflineUsedThisMonth(db *gorm.DB, now time.Time) int {
+	if db == nil {
+		return 0
+	}
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	var n int64
+	db.Model(&model.SubAttempt{}).Where("kind = ? AND created_at >= ? AND (link_id > 0 OR status <> ?)", "offline", start, subAttemptFailed).Count(&n)
+	return int(n)
 }
 
 // coversAny 估计的范围里有没有还缺的
@@ -644,6 +797,9 @@ func (r *subRunner) tryOffline(sub *model.Subscription, c subCand, rl resLink, m
 	status, msg, linkID := r.offline(rl.URL, cid)
 	if status != 200 {
 		r.dropWrapper(cid, wrapper)
+		if strings.Contains(msg, "配额") || strings.Contains(msg, "次数") {
+			r.offlineStop = "115 离线配额用完了"
+		}
 		return fail(msg, true)
 	}
 	att.Status, att.LinkID, att.Wrapper = subAttemptInflight, linkID, wrapper

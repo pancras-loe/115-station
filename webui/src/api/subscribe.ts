@@ -22,6 +22,7 @@ export interface Subscription {
   rank_limit: number
   include: string
   exclude: string
+  offline_mode: OfflineMode
   /** active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到 */
   state: 'active' | 'paused' | 'done' | 'stalled'
   next_check_at?: string | null
@@ -53,7 +54,11 @@ export interface SubForm {
   rank_limit: number
   include: string
   exclude: string
+  offline_mode: OfflineMode
 }
+
+/** 离线策略：pack 只下合集包 / share_only 只转存分享 / any 不限；订阅上为空 = 跟随订阅设置 */
+export type OfflineMode = '' | 'pack' | 'share_only' | 'any'
 
 export type EpState = 'have' | 'inflight' | 'awaiting' | 'missing' | 'unaired' | 'skipped'
 
@@ -107,6 +112,10 @@ export interface SubscribeConfig {
   re0_daily_budget: number
   exclude_default: string
   notify: string
+  offline_mode: Exclude<OfflineMode, ''>
+  offline_wait_hours: number
+  offline_monthly: number
+  offline_reserve: number
 }
 
 export const list = () => http.get<{ data: Subscription[] }>('/subscriptions')
@@ -139,6 +148,7 @@ export function toForm(s: Subscription): SubForm {
     rank_limit: s.rank_limit,
     include: s.include,
     exclude: s.exclude,
+    offline_mode: s.offline_mode || '',
   }
 }
 

@@ -31,6 +31,8 @@ type subForm struct {
 	RankLimit int      `json:"rank_limit"`
 	Include   string   `json:"include"`
 	Exclude   string   `json:"exclude"`
+	// OfflineMode 空 = 跟随订阅设置
+	OfflineMode string `json:"offline_mode"`
 }
 
 // applySubForm 校验表单并写进订阅；范围变了返回 true（要立刻重新检查）
@@ -86,6 +88,10 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 	sub.RankLimit = f.RankLimit
 	sub.Include = truncateStr(strings.TrimSpace(f.Include), 250)
 	sub.Exclude = truncateStr(strings.TrimSpace(f.Exclude), 250)
+	if f.OfflineMode != "" && !validSubOfflineMode(f.OfflineMode) {
+		return false, errors.New("离线策略只能是 只下合集包 / 只转存分享 / 不限")
+	}
+	sub.OfflineMode = f.OfflineMode
 	return before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
 }
 

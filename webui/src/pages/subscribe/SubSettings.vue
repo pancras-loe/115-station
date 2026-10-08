@@ -81,6 +81,31 @@ async function save() {
       </FieldRow>
     </SectionCard>
 
+    <SectionCard
+      title="离线下载"
+      hint="磁力在下载前看不到里面有哪些文件，挑不了集；115 的离线配额按任务数扣，一集一个磁力的话追一部剧就是几十次。所以磁力排在 115 分享之后，还有下面几道闸"
+    >
+      <FieldRow label="默认策略" hint="单个订阅可以在「修改订阅 → 高级」里另设。电影一个磁力就是整部，「只下合集包」对电影照常下">
+        <HSegmented
+          v-model="cfg.offline_mode"
+          :options="[
+            { label: '只下合集包', value: 'pack' },
+            { label: '只转存分享', value: 'share_only' },
+            { label: '不限', value: 'any' },
+          ]"
+        />
+      </FieldRow>
+      <FieldRow label="新集先等分享" hint="一集播出后这么久之内只找 115 分享，新集的分享一般几小时内就有；0 = 不等">
+        <div class="unit"><HNumberInput v-model="cfg.offline_wait_hours" :min="0" :max="168" aria-label="小时" /><span>小时</span></div>
+      </FieldRow>
+      <FieldRow label="每月最多" hint="订阅每月最多提交多少个离线任务（每个订阅每轮最多一个）；0 = 不限">
+        <div class="unit"><HNumberInput v-model="cfg.offline_monthly" :min="0" aria-label="任务数" /><span>个任务</span></div>
+      </FieldRow>
+      <FieldRow label="配额保留" hint="要提交离线时先查一次 115 剩余配额，低于这个数就停下，留给手动离线；0 = 不查">
+        <div class="unit"><HNumberInput v-model="cfg.offline_reserve" :min="0" aria-label="次数" /><span>次</span></div>
+      </FieldRow>
+    </SectionCard>
+
     <SectionCard title="RE0 自动解锁" hint="解锁之前看不到分享里有什么，积分花了拿不回来，所以只有下面几条都满足才会花">
       <FieldRow label="单条上限" hint="一条资源要的积分不超过它才自动解锁；0 = 不自动解锁（解锁过的、免费的照常用）">
         <div class="unit"><HNumberInput v-model="cfg.re0_unlock_max" :min="0" aria-label="积分" /><span>积分</span></div>

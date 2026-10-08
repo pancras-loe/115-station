@@ -28,6 +28,9 @@ type resCoverage struct {
 // known 标题里写了能用的范围
 func (c resCoverage) known() bool { return c.SeasonLo > 0 || c.EpLo > 0 || c.All }
 
+// single 标题写的是单独一集（S01E05 / 第5集）：离线「只下合集包」时不下这种
+func (c resCoverage) single() bool { return !c.All && c.EpLo > 0 && c.EpLo == c.EpHi }
+
 // covers 估计这一集在不在里面；估计不出（!known）一律 false
 func (c resCoverage) covers(k epKey) bool {
 	if !c.known() {
@@ -121,6 +124,25 @@ type subPickCtx struct {
 	Include []string
 	Re0Max  int // RE0 单条自动解锁上限，0 = 不自动解锁
 	Re0Left int // 今天还能花多少，<0 = 不限
+
+	// 离线：OfflineMode 空 = 不限；剧集只算播出满 OfflineWait 的缺集（MissingAir 里没有日期的不等）
+	OfflineMode string
+	OfflineWait time.Duration
+	MissingAir  map[epKey]time.Time
+	// Skipped 因离线策略跳过的条数，按原因计（传了才记），任务结果里说清为什么没下
+	Skipped map[string]int
+}
+
+// offlineRipe 这一集播出够久了，分享还没补上才轮到离线
+func (c subPickCtx) offlineRipe(k epKey) bool {
+	air := c.MissingAir[k]
+	return air.IsZero() || !air.Add(c.OfflineWait).After(c.Now)
+}
+
+func (c subPickCtx) skip(reason string) {
+	if c.Skipped != nil {
+		c.Skipped[reason]++
+	}
 }
 
 // subResHash 资源的去重键：有链接按链接（同 DownloadLink.Hash），观影 / RE0 还没换出链接的按来源 + 引用
@@ -194,9 +216,34 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				continue // 写明了范围，缺的不在里面
 			}
 		}
-		// 离线只能整包下，标题估计不出覆盖缺集的不下（多出来的集交给整理去重，但不能全是多余的）
-		if it.Action == "offline" && cand.Covers == 0 {
-			continue
+		// 离线只能整包下，标题估计不出覆盖缺集的不下（多出来的集交给整理去重，但不能全是多余的）。
+		// 115 离线配额按任务数扣，所以另有策略：只转存分享的不下、只下合集包的不下单集磁力、
+		// 剧集只算播出满等待时间的缺集（新集先等分享）
+		if it.Action == "offline" {
+			if c.OfflineMode == subOfflineShareOnly {
+				c.skip("只转存分享")
+				continue
+			}
+			if !movie {
+				if c.OfflineMode == subOfflinePack && cand.Cov.single() {
+					c.skip("单集磁力")
+					continue
+				}
+				ripe := 0
+				for _, k := range c.Missing {
+					if cand.Cov.covers(k) && c.offlineRipe(k) {
+						ripe++
+					}
+				}
+				if ripe == 0 && cand.Covers > 0 {
+					c.skip("新集先等分享")
+					continue
+				}
+				cand.Covers = ripe
+			}
+			if cand.Covers == 0 {
+				continue
+			}
 		}
 		if it.Action == "unlock" {
 			if it.Points == nil && !it.Owned {

@@ -66,8 +66,8 @@ func TestSettleSubscriptionAndOfflineFailed(t *testing.T) {
 
 	subMarkOfflineFailed(model.DB, 13, "某种子")
 	model.DB.First(&off, off.ID)
-	if off.Status != subAttemptFailed || off.RetryAt == nil {
-		t.Fatalf("离线失败应判失败并可重试: %+v", off)
+	if off.Status != subAttemptFailed || off.RetryAt != nil {
+		t.Fatalf("离线失败应判失败、不自动重试（再提交又扣一次配额）: %+v", off)
 	}
 }
 
