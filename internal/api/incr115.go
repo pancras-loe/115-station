@@ -435,7 +435,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	}
 
 	// 删除与移动旧路径单独收集，避免新增目录或同步根覆盖实际清理范围。
+	// 网盘上真删掉的（panDeleted）与改名 / 移动清掉的旧位置（deletedPaths）分开：
+	// 前者要让用户收到删除通知，后者只是同一份内容换了地方
 	var deletedPaths []string
+	var panDeleted []string
 	var relocatedPaths []string
 	// 库内改名/移动命中台账的 fid：这些文件在库里本来就有，重建出来的 STRM
 	// 只是换了个名字，Emby 随后推回来的 library.new 不是新片入库
@@ -636,12 +639,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			case "library":
 				// 精确删除：台账 → 路径推导（支持整目录删除与无台账的旧文件）
 				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, false, false); removed != "" {
-					deletedPaths = append(deletedPaths, removed)
+					panDeleted = append(panDeleted, removed)
 					sum.Deleted++
 				}
 			default: // unknown（cid=0 等）：仅按台账名称匹配，静默处理
 				if removed := h.removeSyncedItem(d, ev, p.Cid, libName, p.LocalPath, true, false); removed != "" {
-					deletedPaths = append(deletedPaths, removed)
+					panDeleted = append(panDeleted, removed)
 					sum.Deleted++
 				} else {
 					sum.Ignored++
@@ -1038,7 +1041,10 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 	// 不通知的话网盘删了片子、strm 也删了，Emby 里条目还在，点进去播放 404。
 	// 与新增分开发是因为删除场景要先把目标上移到还存在的父目录（见 notifyEmbyDeleted）
 	if len(deletedPaths) > 0 {
-		d.notifyDeleted(dedupeStrings(deletedPaths)...)
+		d.notifyDeleted(false, dedupeStrings(deletedPaths)...)
+	}
+	if len(panDeleted) > 0 {
+		d.notifyDeleted(true, dedupeStrings(panDeleted)...)
 	}
 
 	sum.Elapsed = time.Since(incrStart).Truncate(time.Second).String()

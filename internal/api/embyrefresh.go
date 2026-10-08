@@ -146,6 +146,13 @@ func notifyEmbyDeleted(localPaths ...string) {
 	notifyEmbyPaths(localPaths, embyRefreshDeleted)
 }
 
+// notifyEmbyPanDeleted 同 notifyEmbyDeleted，但起因是用户在 115 上删了内容（增量同步的删除事件）：
+// Emby 推回来的 library.deleted 照常发删除通知，标明是网盘那边删的。
+// 网盘上改名 / 移动清掉的旧位置不走这里，那还是回声
+func notifyEmbyPanDeleted(localPaths ...string) {
+	notifyEmbyPathsAs(localPaths, embyRefreshDeleted, true, true)
+}
+
 // notifyEmbyPaths 通知 Emby 一批本地路径发生了变化。
 //
 // 删除场景先试一次「按路径精确删条目」，成功的就不必再刷新了。
@@ -163,6 +170,11 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 // 本地文件页手动刮削只是给已在库的片目补元数据，不是入库：走回查的话，用户在刮削弹窗里关掉的
 // 「轨道探测」会被全局开关顶回来（2026-09-30 现场：剧集全选刮削、弹窗关了探测，照样探了一遍）
 func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool, verifyLocal ...string) {
+	notifyEmbyPathsAs(localPaths, kind, ingest, false, verifyLocal...)
+}
+
+// notifyEmbyPathsAs pan 只对删除有意义：见 notifyEmbyPanDeleted
+func notifyEmbyPathsAs(localPaths []string, kind embyRefreshKind, ingest, pan bool, verifyLocal ...string) {
 	if len(localPaths) == 0 {
 		return
 	}
@@ -185,9 +197,10 @@ func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool,
 	if kind == embyRefreshDeleted {
 		// 这批删除是本站自己做的（洗版让位、增量同步清 strm、深度删除）。
 		// Emby 处理完会把 library.deleted 推回来，那条事件不该再当成
-		// 「有人在 Emby 里删了东西」推一条通知给用户
+		// 「有人在 Emby 里删了东西」推一条通知给用户；
+		// 网盘删除引起的（pan）另记一笔，webhook 那边改推「网盘删除」
 		for _, local := range localPaths {
-			markEmbySelfDeleted(embyPathOf(cfg, local))
+			markEmbyDeleted(embyPathOf(cfg, local), pan)
 		}
 		// 精确删掉的路径不再进入刷新流程；全删干净就整轮结束
 		if localPaths = embyDeleteItems(cfg, loadLibs, localPaths); len(localPaths) == 0 {
@@ -601,35 +614,58 @@ func embyTargetPaths(localPaths []string, cfg embyRefreshCfg, kind embyRefreshKi
 // 窗口给得比较宽：删不掉条目时走的是刷新，Emby 实测能拖到 9 分钟才扫到
 const embySelfDeleteTTL = 15 * time.Minute
 
+// embySelfDelMark pan=true：这条删除虽然也是本站让 Emby 删的，但起因是用户在 115 上删了片子
+// （增量同步跟着清 STRM）。它不是噪音，是用户想知道的「库里少了一部」——
+// 2026-10-08 现场：网盘删了凡人修仙传，增量清了本地、Emby 也删了条目，却一条消息都没有
+type embySelfDelMark struct {
+	at  time.Time
+	pan bool
+}
+
 var (
 	embySelfDelMu sync.Mutex
-	embySelfDel   = map[string]time.Time{}
+	embySelfDel   = map[string]embySelfDelMark{}
 )
 
-func markEmbySelfDeleted(embyPath string) {
+func markEmbySelfDeleted(embyPath string) { markEmbyDeleted(embyPath, false) }
+
+func markEmbyDeleted(embyPath string, pan bool) {
 	if embyPath == "" {
 		return
 	}
 	embySelfDelMu.Lock()
 	defer embySelfDelMu.Unlock()
 	now := time.Now()
-	for k, t := range embySelfDel {
-		if now.Sub(t) > embySelfDeleteTTL {
+	for k, m := range embySelfDel {
+		if now.Sub(m.at) > embySelfDeleteTTL {
 			delete(embySelfDel, k)
 		}
 	}
-	embySelfDel[embyDelKey(embyPath)] = now
+	embySelfDel[embyDelKey(embyPath)] = embySelfDelMark{at: now, pan: pan}
 }
 
-// embySelfDeleted 这条删除事件是不是本站自己捅出来的
+// embySelfDeleted 这条删除事件是不是本站自己捅出来的（含网盘删除引起的）
 func embySelfDeleted(embyPath string) bool {
+	_, ok := embySelfDelMarkOf(embyPath)
+	return ok
+}
+
+// embyPanDeleted 这条删除事件是不是网盘删除引起的。只认精确路径：
+// 删掉最后一集后 Emby 顺手收掉的季 / 剧集条目按包含关系会落到 embySelfDeletedRelated，当回声不推，
+// 否则删一集收两三条
+func embyPanDeleted(embyPath string) bool {
+	m, ok := embySelfDelMarkOf(embyPath)
+	return ok && m.pan
+}
+
+func embySelfDelMarkOf(embyPath string) (embySelfDelMark, bool) {
 	if embyPath == "" {
-		return false
+		return embySelfDelMark{}, false
 	}
 	embySelfDelMu.Lock()
 	defer embySelfDelMu.Unlock()
-	t, ok := embySelfDel[embyDelKey(embyPath)]
-	return ok && time.Since(t) <= embySelfDeleteTTL
+	m, ok := embySelfDel[embyDelKey(embyPath)]
+	return m, ok && time.Since(m.at) <= embySelfDeleteTTL
 }
 
 // embySelfDeletedRelated 目录型条目（剧集 / 季）的删除事件是不是本站动作的回声：
@@ -644,8 +680,8 @@ func embySelfDeletedRelated(embyPath string) bool {
 	}
 	embySelfDelMu.Lock()
 	defer embySelfDelMu.Unlock()
-	for p, t := range embySelfDel {
-		if time.Since(t) <= embySelfDeleteTTL && embyPathRelated(p, k) {
+	for p, m := range embySelfDel {
+		if time.Since(m.at) <= embySelfDeleteTTL && embyPathRelated(p, k) {
 			return true
 		}
 	}

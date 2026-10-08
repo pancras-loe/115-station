@@ -40,6 +40,7 @@ type stubIncrDeps struct {
 	walked     []walkArg // 每次遍历的目标与范围
 	refreshed  []string
 	deleted    []string
+	panDeleted []string // 其中网盘真删掉的（要推删除通知）
 	saved      map[string]string
 	scraped    []string // 交给同步后刮削的新 STRM
 	// scrapeTakes 模拟刮削任务接下了 Emby 刷新
@@ -107,7 +108,12 @@ func (s *stubIncrDeps) invalidateDirCache()           {}
 func (s *stubIncrDeps) setting(key string) string     { return s.settings[key] }
 func (s *stubIncrDeps) saveSetting(key, val string)   { s.saved[key] = val }
 func (s *stubIncrDeps) notifyRefresh(base string)     { s.refreshed = append(s.refreshed, base) }
-func (s *stubIncrDeps) notifyDeleted(paths ...string) { s.deleted = append(s.deleted, paths...) }
+func (s *stubIncrDeps) notifyDeleted(pan bool, paths ...string) {
+	s.deleted = append(s.deleted, paths...)
+	if pan {
+		s.panDeleted = append(s.panDeleted, paths...)
+	}
+}
 
 func (s *stubIncrDeps) autoScrape(rels []string, refresh string) bool {
 	s.scraped = append(s.scraped, rels...)

@@ -47,6 +47,9 @@ func TestIncrDeletionNotifiesActualPaths(t *testing.T) {
 			if sum.Deleted != 1 || len(d.deleted) != 1 || d.deleted[0] != want {
 				t.Fatalf("删除通知应为 %q，实际 %v，删除数 %d", want, d.deleted, sum.Deleted)
 			}
+			if len(d.panDeleted) != 1 || d.panDeleted[0] != want {
+				t.Fatalf("网盘真删的内容要标成网盘删除（推通知），实际 %v", d.panDeleted)
+			}
 			if _, err := os.Stat(full); !os.IsNotExist(err) {
 				t.Fatalf("文件未删除: %v", err)
 			}
@@ -66,6 +69,9 @@ func TestIncrMoveNotifiesOldDirectory(t *testing.T) {
 	want := filepath.Join(p.LocalPath, "媒体库", "旧目录")
 	if sum.Moved != 1 || len(d.deleted) != 1 || d.deleted[0] != want {
 		t.Fatalf("应通知搬迁前的目录 %q，实际 %v，移动数 %d", want, d.deleted, sum.Moved)
+	}
+	if len(d.panDeleted) != 0 {
+		t.Fatalf("移动只是换了位置，不该标成网盘删除: %v", d.panDeleted)
 	}
 	newPath := filepath.Join(p.LocalPath, "媒体库", "剧集", "X", "新目录")
 	if len(d.refreshed) != 1 || d.refreshed[0] != newPath {

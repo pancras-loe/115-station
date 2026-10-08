@@ -76,6 +76,29 @@ func embyDeleteTitle(label string) string {
 	return "🗑️ Emby 删除 · " + label
 }
 
+// panDeleteTitle 网盘上删了、Emby 跟着删掉的条目：标题写「网盘删除」，免得读成有人在 Emby 里删的
+func panDeleteTitle(label string) string {
+	if label == "" {
+		return "🗑️ 网盘删除"
+	}
+	return "🗑️ 网盘删除 · " + label
+}
+
+// embyDeleteContent 删除通知正文：条目名，带上年份（名字里没有时）
+func embyDeleteContent(payload map[string]interface{}, itemName, event string) string {
+	content := itemName
+	if content == "" {
+		content = event
+	}
+	item, _ := payload["Item"].(map[string]interface{})
+	if y, ok := item["ProductionYear"].(float64); ok && y > 0 {
+		if ys := fmt.Sprintf("%d", int(y)); !strings.Contains(content, ys) {
+			content += " (" + ys + ")"
+		}
+	}
+	return content
+}
+
 // trackEmbyDelete 登记一条删除事件并跑它的深删（run），同一 key 的事件合成一条通知。
 // title 为空表示这次删除本身不推通知。key 为空（拿不到条目 id 与路径）时单独成一份，
 // 宁可重复通知，也不要把两次真实删除吃掉一次

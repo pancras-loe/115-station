@@ -139,3 +139,27 @@ func TestEmbyDeleteKind(t *testing.T) {
 		t.Fatal("没有类型时不带后缀")
 	}
 }
+
+// 网盘删除引起的删除只在精确路径上推「网盘删除」；Emby 顺手收掉的季 / 剧集按回声处理，
+// 改名 / 移动清掉的旧位置（普通自产标记）照旧不推
+func TestEmbyPanDeletedMarks(t *testing.T) {
+	embySelfDelMu.Lock()
+	embySelfDel = map[string]embySelfDelMark{}
+	embySelfDelMu.Unlock()
+	markEmbyDeleted("/media/动漫/凡人修仙传.2020", true)
+	markEmbyDeleted("/media/剧集/某剧/Season 1/某剧.S01E02.strm", true)
+	markEmbySelfDeleted("/media/电影/旧名.2020")
+
+	if !embyPanDeleted(`\media\动漫\凡人修仙传.2020\`) || !embySelfDeleted("/media/动漫/凡人修仙传.2020") {
+		t.Fatal("网盘删掉的剧集目录应认作网盘删除")
+	}
+	if embyPanDeleted("/media/剧集/某剧") || !embySelfDeletedRelated("/media/剧集/某剧") {
+		t.Fatal("删一集后 Emby 收掉的剧集条目应按回声处理，不再推一条")
+	}
+	if embyPanDeleted("/media/电影/旧名.2020") || !embySelfDeleted("/media/电影/旧名.2020") {
+		t.Fatal("改名 / 移动的旧位置仍是回声")
+	}
+	if panDeleteTitle("剧集") != "🗑️ 网盘删除 · 剧集" || panDeleteTitle("") != "🗑️ 网盘删除" {
+		t.Fatal("标题")
+	}
+}

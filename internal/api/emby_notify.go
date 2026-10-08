@@ -152,19 +152,16 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		switch {
 		case !notifiable:
 			log.Printf("[Emby Webhook] ○ 目录条目的删除（%s，%s），不推通知", itemType, itemName)
+		case embyPanDeleted(itemPath):
+			// 用户在 115 上删的，增量同步跟着清了 STRM：这是真删除，要推（写明是网盘那边删的）
+			title = panDeleteTitle(label)
+			content = embyDeleteContent(payload, itemName, event) + "\n115 网盘上已删除，增量同步已清理本地 STRM"
+			log.Printf("[Emby Webhook] %s %s", title, itemName)
 		case embySelfDeleted(itemPath) || (embyIsDirItemType(itemType) && embySelfDeletedRelated(itemPath)):
 			log.Printf("[Emby Webhook] 本站自产的删除事件（%s），跳过通知", itemName)
 		default:
 			title = embyDeleteTitle(label)
-			if content == "" {
-				content = event
-			}
-			item, _ := payload["Item"].(map[string]interface{})
-			if y, ok := item["ProductionYear"].(float64); ok && y > 0 {
-				if ys := fmt.Sprintf("%d", int(y)); !strings.Contains(content, ys) {
-					content += " (" + ys + ")"
-				}
-			}
+			content = embyDeleteContent(payload, itemName, event)
 			log.Printf("[Emby Webhook] %s %s", title, content)
 		}
 		key := getNested([]string{"Item"}, []string{"Id"})

@@ -123,7 +123,7 @@ func TestPurgeStaleTitleDir(t *testing.T) {
 // 本站删了一集集 STRM / 旧标题目录，Emby 报回来的是 Series / Season：按路径包含关系认作回声
 func TestEmbySelfDeletedRelated(t *testing.T) {
 	embySelfDelMu.Lock()
-	embySelfDel = map[string]time.Time{}
+	embySelfDel = map[string]embySelfDelMark{}
 	embySelfDelMu.Unlock()
 	markEmbySelfDeleted("/media/动漫/旧剧/Season 4/剧.S04E01.strm")
 	if !embySelfDeletedRelated("/media/动漫/旧剧") || !embySelfDeletedRelated(`\media\动漫\旧剧\Season 4\`) {
