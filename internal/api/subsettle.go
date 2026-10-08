@@ -86,8 +86,9 @@ func settleSubAttempt(sub *model.Subscription, a *model.SubAttempt, recs []model
 	return subSettleResult{Status: subAttemptFailed, Reason: firstNonEmpty(strings.Join(fails, "；"), "整理失败"), Retry: true}
 }
 
-// settleSubscription 结算一个订阅所有在路上的尝试，返回这轮被判「内容不对」的（要推通知）
-func settleSubscription(db *gorm.DB, sub *model.Subscription, now time.Time) (rejected []model.SubAttempt) {
+// settleSubscription 结算一个订阅所有在路上的尝试。返回这轮被判「内容不对」的与入了库的（ingested / partial），
+// 两种都要推通知
+func settleSubscription(db *gorm.DB, sub *model.Subscription, now time.Time) (rejected, landed []model.SubAttempt) {
 	var rows []model.SubAttempt
 	db.Where("sub_id = ? AND status = ?", sub.ID, subAttemptInflight).Find(&rows)
 	for i := range rows {
@@ -108,12 +109,55 @@ func settleSubscription(db *gorm.DB, sub *model.Subscription, now time.Time) (re
 			upd["retry_at"] = now.Add(subRetryFailed)
 		}
 		db.Model(a).Updates(upd)
-		if r.Status == subAttemptRejected {
-			a.Reason = r.Reason
+		a.Status, a.Reason = r.Status, r.Reason
+		switch r.Status {
+		case subAttemptRejected:
 			rejected = append(rejected, *a)
+		case subAttemptIngested, subAttemptPartial:
+			landed = append(landed, *a)
 		}
 	}
-	return rejected
+	return rejected, landed
+}
+
+// subLandedEpisodes 这轮入了库的尝试实际补上的集：挑中的集里已经不缺、也不在路上的
+// （partial 里没整理成的那几集回到了「缺」，不算补上）
+func subLandedEpisodes(landed []model.SubAttempt, ev subEval) []epKey {
+	pending := map[epKey]bool{}
+	for _, k := range ev.Missing {
+		pending[k] = true
+	}
+	for _, k := range ev.Inflight {
+		pending[k] = true
+	}
+	seen := map[epKey]bool{}
+	var out []epKey
+	for _, a := range landed {
+		for _, k := range unmarshalEpKeys(a.Episodes) {
+			if !pending[k] && !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
+	sortEpKeys(out)
+	return out
+}
+
+// subLandedText 「补上了」通知的正文（剧集；电影入库就是完成，走完成通知）
+func subLandedText(sub *model.Subscription, eps []epKey, ev subEval) string {
+	s := fmt.Sprintf("订阅《%s》补上 %s", sub.Title, subEpisodesText(sub, eps))
+	switch left := len(ev.Missing) + len(ev.Inflight); {
+	case left > 0 && len(ev.Inflight) > 0:
+		s += fmt.Sprintf("\n还差 %d 集（%d 集在路上）", left, len(ev.Inflight))
+	case left > 0:
+		s += fmt.Sprintf("\n还差 %d 集", left)
+	case !ev.NextAt.IsZero():
+		s += "\n已追平，下一集 " + ev.NextAt.Format("01-02") + " 播出"
+	default:
+		s += "\n已追平"
+	}
+	return s
 }
 
 // subMarkOfflineFailed 离线监视器看到任务失败：对应的订阅尝试直接判失败，不用等 3 天超时

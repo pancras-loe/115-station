@@ -52,9 +52,12 @@ func TestSettleSubscriptionAndOfflineFailed(t *testing.T) {
 	model.DB.Create(&model.OrganizeRecord{LinkID: 11, Status: "success", TmdbID: 100, MediaType: "tv"})
 	model.DB.Create(&model.OrganizeRecord{LinkID: 12, Status: "success", TmdbID: 999, MediaType: "tv", Title: "别的"})
 
-	rejected := settleSubscription(model.DB, sub, now)
+	rejected, landed := settleSubscription(model.DB, sub, now)
 	if len(rejected) != 1 || rejected[0].ID != wrong.ID {
 		t.Fatalf("认错的应推通知: %+v", rejected)
+	}
+	if len(landed) != 1 || landed[0].ID != ok.ID || landed[0].Status != subAttemptIngested {
+		t.Fatalf("入库的应推「补上了」: %+v", landed)
 	}
 	model.DB.First(&ok, ok.ID)
 	if ok.Status != subAttemptIngested || ok.ResolvedAt == nil {
@@ -65,6 +68,48 @@ func TestSettleSubscriptionAndOfflineFailed(t *testing.T) {
 	model.DB.First(&off, off.ID)
 	if off.Status != subAttemptFailed || off.RetryAt == nil {
 		t.Fatalf("离线失败应判失败并可重试: %+v", off)
+	}
+}
+
+func TestSubLandedEpisodes(t *testing.T) {
+	e := func(s, ep int) epKey { return epKey{S: s, E: ep} }
+	landed := []model.SubAttempt{
+		{Status: subAttemptIngested, Episodes: marshalEpKeys([]epKey{e(1, 5), e(1, 6)})},
+		// partial：E07 没整理成、回到了缺；E06 与上一条重复
+		{Status: subAttemptPartial, Episodes: marshalEpKeys([]epKey{e(1, 6), e(1, 7)})},
+	}
+	ev := subEval{Missing: []epKey{e(1, 7)}, Inflight: []epKey{e(1, 8)}}
+	got := subLandedEpisodes(landed, ev)
+	if len(got) != 2 || got[0] != e(1, 5) || got[1] != e(1, 6) {
+		t.Fatalf("补上的应是 E05 E06: %v", got)
+	}
+	sub := &model.Subscription{Title: "三体", MediaType: "tv"}
+	if txt := subLandedText(sub, got, ev); txt != "订阅《三体》补上 S01E05–E06（2 集）\n还差 2 集（1 集在路上）" {
+		t.Fatalf("正文: %q", txt)
+	}
+	next := time.Date(2026, 10, 12, 3, 0, 0, 0, time.Local)
+	if txt := subLandedText(sub, got, subEval{NextAt: next}); txt != "订阅《三体》补上 S01E05–E06（2 集）\n已追平，下一集 10-12 播出" {
+		t.Fatalf("追平的正文: %q", txt)
+	}
+}
+
+func TestLoadSubscribeCfgNotifyMigrate(t *testing.T) {
+	newTestDB(t, "subcfg.db")
+	save := func(v string) {
+		model.DB.Where("key = ?", "subscribe").Delete(&model.Setting{})
+		model.DB.Create(&model.Setting{Key: "subscribe", Value: v})
+	}
+	save(`{"notify":"submit,done"}`)
+	if c := loadSubscribeCfg(); c.Notify != "submit,done,ingested" || c.NotifyVer != subNotifyVer {
+		t.Fatalf("老配置应补上 ingested: %+v", c)
+	}
+	save(`{"notify":""}`)
+	if c := loadSubscribeCfg(); c.Notify != "" {
+		t.Fatalf("原来都不推的不替用户打开: %q", c.Notify)
+	}
+	save(`{"notify":"submit","notify_ver":1}`)
+	if c := loadSubscribeCfg(); c.Notify != "submit" {
+		t.Fatalf("新版本保存时关掉的不补回来: %q", c.Notify)
 	}
 }
 

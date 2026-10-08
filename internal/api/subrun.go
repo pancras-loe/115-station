@@ -251,7 +251,8 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 		}
 	}
 
-	for _, a := range settleSubscription(db, sub, now) {
+	rejected, landed := settleSubscription(db, sub, now)
+	for _, a := range rejected {
 		r.notify("⚠ 订阅资源内容不对", fmt.Sprintf("订阅《%s》：资源「%s」%s，这条资源不再使用", sub.Title, truncateStr(a.Title, 60), a.Reason), sub, true)
 	}
 
@@ -262,6 +263,11 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 		next := now.Add(time.Hour)
 		db.Model(sub).Updates(map[string]any{"last_check_at": now, "next_check_at": next, "last_result": truncateStr(item.Err, 250)})
 		return item, true
+	}
+
+	// 补上了：按盘点结果说还差几集。这轮补齐、订阅要完成的交给完成通知，不连推两条
+	if eps := subLandedEpisodes(landed, ev); len(eps) > 0 && sub.MediaType == "tv" && !ev.Done {
+		r.notifyKind("ingested", "🎉 订阅补上了", subLandedText(sub, eps, ev), sub)
 	}
 
 	submitted := false

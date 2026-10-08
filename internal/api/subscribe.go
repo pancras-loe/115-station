@@ -50,8 +50,17 @@ type subscribeCfg struct {
 	Re0UnlockMax   int    `json:"re0_unlock_max"`
 	Re0DailyBudget int    `json:"re0_daily_budget"`
 	ExcludeDefault string `json:"exclude_default"` // 内置排除词，订阅自己的 Exclude 叠加在上面
-	Notify         string `json:"notify"`          // 推哪几类通知：submit,done,stalled
+	Notify         string `json:"notify"`          // 推哪几类通知：submit,ingested,done,stalled
+	// NotifyVer 通知类型清单的版本：新增类型时加一，老配置读出来时把新类型补进 Notify。
+	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
+	NotifyVer int `json:"notify_ver"`
 }
+
+// subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集）
+const subNotifyVer = 1
+
+// subNotifyAdded 每个版本新增的通知类型，默认开启
+var subNotifyAdded = map[int]string{1: "ingested"}
 
 func defaultSubscribeCfg() subscribeCfg {
 	return subscribeCfg{
@@ -62,7 +71,8 @@ func defaultSubscribeCfg() subscribeCfg {
 		MaxTriesPerSub:  3,
 		MaxSnapDirs:     30,
 		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
-		Notify:          "submit,done,stalled",
+		Notify:          "submit,ingested,done,stalled",
+		NotifyVer:       subNotifyVer,
 	}
 }
 
@@ -70,7 +80,14 @@ func defaultSubscribeCfg() subscribeCfg {
 func loadSubscribeCfg() subscribeCfg {
 	c := defaultSubscribeCfg()
 	if v := settingValueCompat("subscribe"); v != "" {
+		c.NotifyVer = 0 // 老配置里没有这个键
 		_ = json.Unmarshal([]byte(v), &c)
+		// 原来一类都不推的，是用户关掉了通知，新类型也不替他打开
+		for ver := c.NotifyVer + 1; ver <= subNotifyVer && strings.TrimSpace(c.Notify) != ""; ver++ {
+			if k := subNotifyAdded[ver]; k != "" && !strings.Contains(","+c.Notify+",", ","+k+",") {
+				c.Notify = strings.Trim(c.Notify+","+k, ",")
+			}
+		}
 	}
 	return normalizeSubscribeCfg(c)
 }
@@ -101,6 +118,8 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 		c.Re0DailyBudget = 0
 	}
 	c.ExcludeDefault = strings.TrimSpace(c.ExcludeDefault)
+	// 读的时候已经补过新类型；保存时记成当前版本，用户之后关掉的类型不会再被补回来
+	c.NotifyVer = subNotifyVer
 	return c
 }
 

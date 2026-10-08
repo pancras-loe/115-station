@@ -100,6 +100,7 @@ async function save() {
           v-model="notify"
           :options="[
             { label: '提交了资源', value: 'submit' },
+            { label: '补上了缺集', value: 'ingested' },
             { label: '订阅完成', value: 'done' },
             { label: '长期找不到', value: 'stalled' },
           ]"
