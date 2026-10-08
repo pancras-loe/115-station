@@ -343,22 +343,29 @@ func (tc *TmdbClient) searchTVSeason(query, year string, season int) (*TmdbMedia
 	return m, e
 }
 
-// SeasonEpisodeCount 某季总集数（TMDB season 详情；失败返回 0 不影响主流程）
-func (tc *TmdbClient) SeasonEpisodeCount(tvID, season int) int {
-	if tvID <= 0 || season <= 0 {
-		return 0
-	}
+// SeasonAiredEpisodes 某季到 now 为止已经播出的集号（没排期的不算）。
+// 入库通知的「缺集」只能拿已播的比：连载中的番剧 TMDB 常把后面几周的集先列出来
+func (tc *TmdbClient) SeasonAiredEpisodes(tvID, season int, now time.Time) ([]int, error) {
 	body, err := tc.get(fmt.Sprintf("/tv/%d/season/%d", tvID, season), nil)
 	if err != nil {
-		return 0
+		return nil, err
 	}
 	var out struct {
-		Episodes []struct{} `json:"episodes"`
+		Episodes []struct {
+			EpisodeNumber int    `json:"episode_number"`
+			AirDate       string `json:"air_date"`
+		} `json:"episodes"`
 	}
-	if json.Unmarshal(body, &out) != nil {
-		return 0
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
 	}
-	return len(out.Episodes)
+	var eps []int
+	for _, e := range out.Episodes {
+		if at := parseTmdbDate(e.AirDate); e.EpisodeNumber > 0 && !at.IsZero() && !at.After(now) {
+			eps = append(eps, e.EpisodeNumber)
+		}
+	}
+	return eps, nil
 }
 
 // SeasonEpisodeNumbers 某季在 TMDB 上实际的集号。多数剧是 1..N，但海贼王这类

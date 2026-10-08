@@ -102,6 +102,7 @@ func subSchedulerTick(h *Handler, now time.Time) {
 	if running > 0 {
 		return
 	}
+	subWakeSettled(h.DB, now)
 	var ids []uint
 	h.DB.Model(&model.Subscription{}).
 		Where("state IN ? AND (next_check_at IS NULL OR next_check_at <= ?)", []string{subStateActive, subStateStalled}, now).
@@ -112,6 +113,25 @@ func subSchedulerTick(h *Handler, now time.Time) {
 	if _, err := enqueueSubscribeJob(h, ids, false, "", "cron"); err != nil {
 		log.Printf("[订阅] ✗ 定时检查入队失败: %v", err)
 	}
+}
+
+// subWakeSettled 在路上的资源已经整理完（有整理记录、没有一条还在等确认）的订阅，下次检查提前到现在。
+// 结算只在订阅自己那一轮做，而还缺集、又找不到资源的订阅会退避到一天、长期找不到的三天才查一次：
+// 现场转存的三条资源早已入库，列表上一直挂着「在路上 3」，已有集数也停在上一轮。
+// 只查库、零 115 请求；还在等确认的不提前（结算会原样保持在路上，提前了也是白跑一轮）
+func subWakeSettled(db *gorm.DB, now time.Time) {
+	var subIDs []uint
+	db.Model(&model.SubAttempt{}).
+		Where("status = ? AND link_id > 0", subAttemptInflight).
+		Where("EXISTS (SELECT 1 FROM organize_records r WHERE r.link_id = sub_attempts.link_id)").
+		Where("NOT EXISTS (SELECT 1 FROM organize_records r WHERE r.link_id = sub_attempts.link_id AND r.status = ?)", "awaiting").
+		Distinct().Pluck("sub_id", &subIDs)
+	if len(subIDs) == 0 {
+		return
+	}
+	db.Model(&model.Subscription{}).
+		Where("id IN ? AND state IN ? AND next_check_at > ?", subIDs, []string{subStateActive, subStateStalled}, now).
+		Update("next_check_at", now)
 }
 
 // ==================== 执行 ====================

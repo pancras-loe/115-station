@@ -20,7 +20,7 @@ func TestEpisodeMissingFormat(t *testing.T) {
 		}
 		return out
 	}
-	// 不测 TMDB 网络；SeasonEpisodeCount 走不通时 miss 为空
+	// 不测 TMDB 网络；SeasonAiredEpisodes 走不通时 miss 为空
 	// 这里验证纯本地路径：无 tv id / movie 不出缺集
 	_, m1 := episodeRangeWithMissing(mk("剧 - S01E01.mkv", "剧 - S01E02.mkv"), &TmdbMedia{MediaType: "movie", TmdbID: 1})
 	if m1 != "" {

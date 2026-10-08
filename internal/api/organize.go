@@ -3547,7 +3547,7 @@ func episodeRangeStr(videoFiles []remoteFile) string {
 }
 
 // episodeRangeWithMissing 集数区间 + 缺集描述。
-// 缺集 = TMDB 该季总集数范围内未入库的集；无法取到总集数时只返回区间。
+// 缺集 = TMDB 该季已播出、这一批与库里都没有的集；取不到播出信息时只返回区间。
 func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string, string) {
 	rng := episodeRangeStr(videoFiles)
 	if rng == "" || media == nil || media.MediaType != "tv" || media.TmdbID == 0 {
@@ -3578,28 +3578,26 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 			return rng, "" // 多季合集：缺集只能逐季算，混在一起比就全错了
 		}
 	}
-	total := 0
-	if tc, err := loadTmdbClient(); err == nil {
-		total = tc.SeasonEpisodeCount(media.TmdbID, season)
+	tc, err := loadTmdbClient()
+	if err != nil {
+		return rng, ""
 	}
-	if total <= 0 {
+	aired, err := tc.SeasonAiredEpisodes(media.TmdbID, season, time.Now())
+	if err != nil || len(aired) == 0 {
 		return rng, ""
 	}
 	have := map[int]bool{}
-	maxEp := 0
 	for _, e := range eps {
 		have[e.ep] = true
-		if e.ep > maxEp {
-			maxEp = e.ep
+	}
+	// 库里早就有的集也算有：追更时一次只进一两集，只拿这一批比，
+	// 通知就成了「S01E194（缺 E01-E193）」（2026-10-08 现场）
+	for k := range subHaveOf(model.DB, scanLedgerTitlesCached(), media.TmdbID, "tv").Eps {
+		if k.S == season {
+			have[k.E] = true
 		}
 	}
-	// 缺集 = 1..total 中没有的
-	var missing []int
-	for i := 1; i <= total; i++ {
-		if !have[i] {
-			missing = append(missing, i)
-		}
-	}
+	missing := missingAired(aired, have)
 	if len(missing) == 0 {
 		return rng, ""
 	}
@@ -3627,6 +3625,18 @@ func episodeRangeWithMissing(videoFiles []remoteFile, media *TmdbMedia) (string,
 		}
 	}
 	return rng, strings.Join(parts, ",")
+}
+
+// missingAired 已播的集里没有的，升序
+func missingAired(aired []int, have map[int]bool) []int {
+	var out []int
+	for _, e := range aired {
+		if !have[e] {
+			out = append(out, e)
+		}
+	}
+	sort.Ints(out)
+	return out
 }
 
 // notifyMediaStoredFull 整理入库 → 入库卡片（TMDB 封面 + 画质/文件数/集数）。

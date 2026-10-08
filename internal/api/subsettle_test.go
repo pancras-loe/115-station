@@ -151,3 +151,48 @@ func TestPlanSubNext(t *testing.T) {
 		}
 	}
 }
+
+// 在路上的资源整理完了：订阅提前回来结算，不等退避（现场挂了一天多的「在路上 3」）
+func TestSubWakeSettled(t *testing.T) {
+	newTestDB(t, "subwake.db")
+	now := time.Now()
+	later := now.Add(24 * time.Hour)
+	n := 0
+	mk := func(state string) *model.Subscription {
+		n++ // 一部一条：tmdb_id 唯一
+		s := &model.Subscription{TmdbID: n, MediaType: "tv", State: state, NextCheckAt: &later}
+		model.DB.Create(s)
+		return s
+	}
+	done, waiting, none, paused := mk(subStateStalled), mk(subStateActive), mk(subStateActive), mk(subStatePaused)
+	att := func(sub *model.Subscription, link uint) {
+		model.DB.Create(&model.SubAttempt{SubID: sub.ID, LinkID: link, Status: subAttemptInflight})
+	}
+	att(done, 1)
+	att(waiting, 2)
+	att(none, 3)
+	att(paused, 4)
+	model.DB.Create(&model.OrganizeRecord{LinkID: 1, Status: "success"})
+	model.DB.Create(&model.OrganizeRecord{LinkID: 2, Status: "success"})
+	model.DB.Create(&model.OrganizeRecord{LinkID: 2, Status: "awaiting"})
+	model.DB.Create(&model.OrganizeRecord{LinkID: 4, Status: "success"})
+
+	subWakeSettled(model.DB, now)
+	for _, c := range []struct {
+		sub  *model.Subscription
+		wake bool
+	}{{done, true}, {waiting, false}, {none, false}, {paused, false}} {
+		var s model.Subscription
+		model.DB.First(&s, c.sub.ID)
+		if woke := !s.NextCheckAt.After(now); woke != c.wake {
+			t.Errorf("订阅 %d（%s）提前 = %v，应为 %v", s.ID, s.State, woke, c.wake)
+		}
+	}
+}
+
+func TestMissingAired(t *testing.T) {
+	got := missingAired([]int{1, 2, 3, 4, 5}, map[int]bool{1: true, 2: true, 4: true, 9: true})
+	if len(got) != 2 || got[0] != 3 || got[1] != 5 {
+		t.Fatalf("缺 = %v", got)
+	}
+}
