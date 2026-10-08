@@ -501,8 +501,9 @@ func (h *Handler) redoOrganizeWith(rec *model.OrganizeRecord, tmdbID int, mediaT
 	dropRetryLeftovers(h.DB, rec.SourceFid, rec.ID)
 	log.Printf("[整理] ✅ 重新整理完成：%s (%s) → %s（本地根 %s），视频 %d 个，生成 STRM %d 个",
 		media.Title, media.Year, rootRel, sink.localRoot, videoTotal, strmTotal)
-	// 选了和原来不同的条目 = 自动识别在这个名字上错了，记下人工结论
-	if tmdbID != prevID || media.MediaType != prevType {
+	// 选了和原来不同的条目 = 自动识别在这个名字上错了，记下人工结论。
+	// 识别时同名同分的不记（OrganizeRecord.HoldTwin）：名字里没年份，记下来另一部同名的内容会被永远认错
+	if !rec.HoldTwin && (tmdbID != prevID || media.MediaType != prevType) {
 		rememberRecognition(rec.RecogKey, rec.Source, media)
 	}
 	return nil

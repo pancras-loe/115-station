@@ -46,6 +46,9 @@ type OrgConfig struct {
 	// ManualConfirm 人工确认：识别完只登记「待确认」记录、文件原地不动，
 	// 用户在整理记录里确认（或改指定 TMDB 条目）之后才继续后面的流水线
 	ManualConfirm bool   `json:"manual_confirm"`
+	// NoTwinHold 关掉「同名待确认」（twinHold）：TMDB 上同名同分时照旧取相关度第一的。
+	// 反着存是为了老配置里没有这个键时默认开着
+	NoTwinHold bool `json:"no_twin_hold"`
 	MinSize       int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
 	ShareCid      string `json:"-"` // 转存目录 cid（loadOrgConfig 注入；同为工作区根，绝不被当条目处理）
 }
@@ -91,6 +94,25 @@ func (c *orgCtx) aiHold(media *TmdbMedia) string {
 		c.sink.recog.holdAI = true
 	}
 	return reason
+}
+
+// twinHold TMDB 上有同名同分的另一部（choose 记在 media.Twins）：分不出是哪一部，
+// 不管「人工确认」开关都停下来等人确认；要停返回给人看的原因（同时标成同名停下的，见 OrganizeRecord.HoldTwin）
+func (c *orgCtx) twinHold(media *TmdbMedia) string {
+	if c.forced != nil || media == nil || len(media.Twins) == 0 || c.cfg.NoTwinHold {
+		return ""
+	}
+	c.sink.recog.holdTwin = true
+	return twinHoldReason(media) + "，请确认是哪一部：是暂定这部点「确认入库」，不是就「改指定」"
+}
+
+// twinHoldReason 「TMDB 上同名的有 2 部：……。名字里没有能区分的年份」
+func twinHoldReason(media *TmdbMedia) string {
+	labels := []string{tmdbTwin{ID: media.TmdbID, Title: media.Title, Year: media.Year}.label() + "（暂定）"}
+	for _, t := range media.Twins {
+		labels = append(labels, t.label())
+	}
+	return fmt.Sprintf("TMDB 上同名的有 %d 部：%s。名字里没有能区分的年份", len(labels), strings.Join(labels, "、"))
 }
 
 // withPending 换一个扫描根（转存目录兜底扫描用），其余配置不变
@@ -1930,6 +1952,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
 				snapshot(nil), reason))
 		}
+		if reason := ctx.twinHold(media); reason != "" {
+			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
+				snapshot(nil), reason))
+		}
 		if ctx.holdable() {
 			return append(results, ctx.holdForConfirm(dir.Name+"/", dir.Fid, "dir", media, parsed, mainVideo.Name,
 				snapshot(nil), ""))
@@ -2934,6 +2960,9 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		onLog(fmt.Sprintf("✦ 识别成功: %s → %s (%s)", shortLogName(f.Name), media.Title, media.Year))
 		ctx.sink.recog.markAI(media)
 		if reason := ctx.aiHold(media); reason != "" {
+			return ctx.holdForConfirm(f.Name, f.Fid, "file", media, parsed, f.Name, holdFiles(), reason), nil
+		}
+		if reason := ctx.twinHold(media); reason != "" {
 			return ctx.holdForConfirm(f.Name, f.Fid, "file", media, parsed, f.Name, holdFiles(), reason), nil
 		}
 		if ctx.holdable() {

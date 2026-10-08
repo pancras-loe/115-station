@@ -57,6 +57,8 @@ type TmdbMedia struct {
 	AINote  string `json:"-"` // 打分依据，给人看的一句话
 	// matchHow 候选校验在哪一关通过（choose 的 how），AI 打分要看它
 	matchHow string
+	// Twins 片名同样相等、得分也一样的其他候选：分不出是哪一部，整理停下来等确认（orgCtx.twinHold）
+	Twins []tmdbTwin `json:"-"`
 }
 
 // loadTmdbClient 从数据库加载配置构建客户端

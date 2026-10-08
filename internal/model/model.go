@@ -399,6 +399,10 @@ type OrganizeRecord struct {
 	// 与「人工确认」开关无关：开关关着时普通待确认会被自动整理接手，这种不会 ——
 	// 否则每一轮都会重新识别、重新调一次模型、又停回来
 	HoldAI bool `json:"hold_ai"`
+	// HoldTwin TMDB 上有同名同分的另一部、分不出是哪一部而停下（tmdbmatch.go 的 choose / orgCtx.twinHold）。
+	// 和 HoldAI 一样「人工确认」关着也不自动接手；确认或改指定之后也不清，靠它不写识别记忆
+	// （名字里没年份，记下「凡人修仙传| → 某一部」会把另一部的内容永远认错）
+	HoldTwin bool `json:"hold_twin"`
 	// HoldDup 这条待确认是「同一次整理里几份不同的文件改出了同一个名字」停下来的（orgdup.go），
 	// 比如同一集的粤语 / 英语两份。同 HoldAI：开关关着也不自动接手，必须由用户选。
 	// DupGroups 是撞名的各组（[]dupGroup 的 JSON），DupChoice 是用户的选择（fid → keep / drop / A..Z）

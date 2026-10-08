@@ -528,7 +528,8 @@ type recogMeta struct {
 	via    string // ai_title / ai_pick；规则环节识别的为空
 	score  int
 	note   string
-	holdAI bool // 因为 AI 判定停下来等确认
+	holdAI   bool // 因为 AI 判定停下来等确认
+	holdTwin bool // 因为同名同分、分不出是哪一部停下来等确认
 }
 
 // markAI 记下 AI 判定的标注（规则环节识别的结果什么都不记）
@@ -553,6 +554,9 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 	if rec.Status == orgStatusAwaiting && s.recog.holdAI {
 		rec.HoldAI = true
 	}
+	if rec.Status == orgStatusAwaiting && s.recog.holdTwin {
+		rec.HoldTwin = true
+	}
 	// 来源链接：这批内容如果是某条离线/分享链接下来的，记录上挂它的 id，记录页据此带出原始链接
 	if rec.LinkID == 0 {
 		rec.LinkID = dlLinkMatch(model.DB, rec)
@@ -567,6 +571,7 @@ func (s *orgSink) note(rec *model.OrganizeRecord) {
 		s.reuse = nil
 		rec.ID, rec.CreatedAt = ref.id, ref.created
 		rec.ManualTmdb = rec.ManualTmdb || ref.manual
+		rec.HoldTwin = rec.HoldTwin || ref.twin // 确认之后也留着：重新整理改指定时据此不写识别记忆
 		err = model.DB.Save(rec).Error
 	} else {
 		err = model.DB.Create(rec).Error

@@ -187,6 +187,7 @@ async function saveAll(): Promise<boolean> {
 function pickMine() {
   const d: Record<string, string | boolean | number> = {
     manual_confirm: model.value.manual_confirm,
+    no_twin_hold: model.value.no_twin_hold,
     dup_auto_hours: model.value.dup_auto_hours,
     dup_auto_action: model.value.dup_auto_action,
   }
@@ -208,6 +209,14 @@ function warnOverlap() {
 
 /** 按钮上的 popconfirm 文案；配置改过时这个气泡不弹，由未保存确认框接管 */
 /** 同集多份超时：老配置没有这个字段，HNumberInput 清空时给 null，都按 0（一直等）存 */
+/** 「同名待确认」开关：存的是反着的 no_twin_hold（老配置没有这个键 = 开着） */
+const twinHold = computed({
+  get: () => !model.value.no_twin_hold,
+  set: (v: boolean) => {
+    model.value.no_twin_hold = !v
+  },
+})
+
 const dupHours = computed({
   get: () => model.value.dup_auto_hours ?? 0,
   set: (v: number | null) => {
@@ -293,6 +302,18 @@ const TRIGGERS: { name: string; text: string }[] = [
             <HSwitch v-model="model.manual_confirm" />
             <span class="switch-hint">
               {{ model.manual_confirm ? '识别完先停在「待确认」，确认后才入库' : '识别完直接入库（全自动）' }}
+            </span>
+          </div>
+        </FieldRow>
+
+        <FieldRow
+          label="同名待确认"
+          tip="TMDB 上片名完全相同的不止一部（比如《凡人修仙传》2020 年的动画和 2025 年的真人剧），名字里又没有能区分的年份时，整理不再按 TMDB 排第一的去猜，停在「整理记录 → 待确认」等你确认是哪一部。和「人工确认」开关无关，关着人工确认也会停。在这种记录上改指定不会写进识别记忆：名字里没有年份，记下来另一部的内容就会被永远认错。"
+        >
+          <div class="switch-row">
+            <HSwitch v-model="twinHold" />
+            <span class="switch-hint">
+              {{ twinHold ? '同名分不出是哪一部时停下等你确认' : '同名时取 TMDB 排第一的（可能认错）' }}
             </span>
           </div>
         </FieldRow>

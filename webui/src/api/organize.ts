@@ -129,6 +129,8 @@ export interface OrganizeRecord {
   ai_note?: string
   /** 因为 AI 判定停下来等确认（与「人工确认」开关无关） */
   hold_ai?: boolean
+  /** TMDB 上同名同分、分不出是哪一部而停下（与「人工确认」开关无关）；确认之后也留着，改指定不写识别记忆 */
+  hold_twin?: boolean
   /** 同一次整理里几份不同的文件改出同一个名字，停下来等用户选（与「人工确认」开关无关） */
   hold_dup?: boolean
   dup_list?: DupGroup[]

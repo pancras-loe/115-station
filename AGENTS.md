@@ -376,7 +376,14 @@ git tag v1.2.0 && git push origin v1.2.0
       「AI 增强识别 → 判定后」的 off / auto / force 与分数线决定）：开关关着时**也不许**被
       `adoptAwaiting` 接手 —— 接手就是重新识别、再调一次模型、又停回来，每轮都烧一次模型调用。
       `dropHeld` 与 `processEntry` 两处都认 `ref.ai`，改这块别只改一处。
-    - 测试：`orgconfirm_test.go`、`aiflow_test.go`。
+    - **同名停下的待确认是第三种**（`OrganizeRecord.HoldTwin`，2026-10-08 起）：`choose` 第一关里片名相等、得分也一样的
+      不止一条（年份没帮上忙），记在 `TmdbMedia.Twins`（没海报也没简介的空壳不算），`ctx.twinHold` 不管「人工确认」开关都停，
+      同样 sticky（`awaitingRef.twin`）。开关 `org-basic.no_twin_hold`（反着存，默认开）。**这种记录确认 / 改指定 / 重新整理都不写识别记忆**：
+      名字里没年份，`recogKey` 是「片名|」，记下来另一部同名的内容会被永远认成这一部；所以 `HoldTwin` 确认之后也不清。
+      网盘文件页的片目自动整理（`filelibrary.go`）与本地文件页按目录名刮削（`localscrape.go`）碰到同名直接报错让用户指定，
+      同步后自动刮削（`recognizeStrict`）不认。现场：凡人修仙传 2020 动画 / 2025 真人剧，真人版被认成动画顶掉了库里的集。
+      注意它挡不住「名字里带了年份、年份却是假的」：订阅的包装目录名就带订阅那部的年份，所以订阅在挑资源时另有一道（`subtwin.go`）。
+    - 测试：`orgconfirm_test.go`、`aiflow_test.go`、`twinhold_test.go`。
 
 15. **STRM 文件名不带视频扩展名**（`strmname.go`，2026-09-28 起）：`xxx.mkv` → `xxx.strm`，
     这样网盘上同基名的 `xxx.nfo` / `xxx-thumb.jpg` / `xxx.chs.ass` 落到本地正好被 Emby 配对

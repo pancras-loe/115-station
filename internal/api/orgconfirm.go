@@ -36,11 +36,12 @@ type awaitingRef struct {
 	manual  bool // 用户改指定过 TMDB 条目（写回记录的 ManualTmdb）
 	ai      bool // AI 判定停下的（OrganizeRecord.HoldAI）：「人工确认」开关关着也不自动接手
 	dup     bool // 撞名停下的（OrganizeRecord.HoldDup，orgdup.go）：同上，留哪份只有用户知道
+	twin    bool // 同名同分停下的（OrganizeRecord.HoldTwin）：同上，是哪一部只有用户知道
 	fids    []string
 }
 
 // sticky 开关关着也不许自动整理接手：接手就是再判一遍、又停回来
-func (r *awaitingRef) sticky() bool { return r.ai || r.dup }
+func (r *awaitingRef) sticky() bool { return r.ai || r.dup || r.twin }
 
 // loadAwaiting 所有待确认记录，按 fid 索引：记录自身的 SourceFid 与登记的每个文件都算，
 // 散文件的待确认记录挂着同前缀的其他集，它们作为顶层条目时同样要被认出来
@@ -50,9 +51,9 @@ func loadAwaiting() map[string]*awaitingRef {
 		return out
 	}
 	var rows []model.OrganizeRecord
-	model.DB.Select("id, created_at, source_fid, files, hold_ai, hold_dup").Where("status = ?", orgStatusAwaiting).Find(&rows)
+	model.DB.Select("id, created_at, source_fid, files, hold_ai, hold_dup, hold_twin").Where("status = ?", orgStatusAwaiting).Find(&rows)
 	for _, r := range rows {
-		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI, dup: r.HoldDup}
+		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI, dup: r.HoldDup, twin: r.HoldTwin}
 		if r.SourceFid != "" {
 			ref.fids = append(ref.fids, r.SourceFid)
 		}
@@ -140,7 +141,7 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 	res.Message = rec.Message
 	c.sink.note(rec)
 	// 本轮后面的顶层条目里还有这些文件（同前缀的其他集），别再当新条目识别一遍
-	ref := &awaitingRef{id: rec.ID, created: rec.CreatedAt, ai: rec.HoldAI}
+	ref := &awaitingRef{id: rec.ID, created: rec.CreatedAt, ai: rec.HoldAI, twin: rec.HoldTwin}
 	for _, f := range files {
 		ref.fids = append(ref.fids, f.Fid)
 	}
@@ -231,13 +232,14 @@ func (h *Handler) confirmAwaiting(recs []model.OrganizeRecord, pick *confirmPick
 		ctx := &orgCtx{ops: ops, cfg: &rcfg, tc: tc, rules: rules, libAbs: libAbs, sink: sink,
 			pruner: pruner, onLog: logFn, forced: media, dupChoice: parseDupChoice(rec.DupChoice),
 			held: map[string]*awaitingRef{}, handled: map[string]bool{}}
-		sink.reuse = &awaitingRef{id: rec.ID, created: rec.CreatedAt, manual: tmdbID != rec.TmdbID}
+		sink.reuse = &awaitingRef{id: rec.ID, created: rec.CreatedAt, manual: tmdbID != rec.TmdbID, twin: rec.HoldTwin}
 		log.Printf("[整理] ▶ 人工确认《%s》→ %s (%s) [tmdb=%d]", rec.Source, media.Title, media.Year, tmdbID)
 
 		autoID, autoType, key := rec.TmdbID, rec.MediaType, rec.RecogKey
 		msg := confirmOne(ctx, &rec)
-		// 改了指定（或本来就没识别出来、由人指定）= 人给出的结论，记进识别记忆
-		if msg == "" && (tmdbID != autoID || mediaType != autoType) {
+		// 改了指定（或本来就没识别出来、由人指定）= 人给出的结论，记进识别记忆。
+		// 同名同分停下的不记：名字里没年份，记下来就把另一部同名的内容永远认成这一部
+		if msg == "" && !rec.HoldTwin && (tmdbID != autoID || mediaType != autoType) {
 			rememberRecognition(key, rec.Source, media)
 		}
 		if msg != "" {

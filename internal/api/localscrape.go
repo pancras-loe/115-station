@@ -230,6 +230,10 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 		if err != nil || media == nil {
 			return t, errors.New("目录名里没有 TMDB 编号，也按片名识别不出来：请指定 TMDB 条目")
 		}
+		if len(media.Twins) > 0 {
+			// 同名同分：猜错就把另一部的 NFO 钉进 Emby
+			return t, errors.New("目录名里没有 TMDB 编号，" + twinHoldReason(media) + "，请指定 TMDB 条目")
+		}
 		t.TmdbID, t.Title, t.Year = media.TmdbID, media.Title, media.Year
 		if media.MediaType != "" {
 			t.Kind = media.MediaType

@@ -171,6 +171,10 @@ func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		if err != nil || media == nil {
 			return jobOutcome{}, errors.New("识别不出 TMDB 条目：请改用「指定 TMDB 条目」")
 		}
+		if len(media.Twins) > 0 {
+			// 同名同分：按 TMDB 相关度取第一条是在猜，猜错就把整个片目搬到另一部名下
+			return jobOutcome{}, errors.New(twinHoldReason(media) + "，请改用「指定 TMDB 条目」")
+		}
 		tmdbID, mediaType = media.TmdbID, media.MediaType
 		if mediaType == "" {
 			mediaType = rec.MediaType

@@ -623,6 +623,7 @@ async function clearAll() {
                 >
                 <HChip v-if="r.stage === 'moved'" color="warning" :title="r.message">已移出媒体库</HChip>
                 <HChip v-if="r.hold_dup" color="warning">同集多份</HChip>
+                <HChip v-if="r.hold_twin && r.status === 'awaiting'" color="warning">同名待确认</HChip>
                 <HChip v-if="r.manual_tmdb" color="success">手动指定</HChip>
                 <template v-else-if="r.recog_via">
                   <HTooltip v-if="r.ai_note" :content="r.ai_note">
@@ -657,6 +658,8 @@ async function clearAll() {
                 </template>
                 <template v-else>{{ r.message || '未能自动识别，请重新指定 TMDB 条目' }}</template>
               </div>
+              <!-- 同名停下：列出几部同名、各自的 tmdb 编号，用户据此判断是不是暂定的那部 -->
+              <div v-if="r.status === 'awaiting' && r.hold_twin && r.tmdb_id" class="plan plan-miss">{{ r.message }}</div>
 
               <!-- 重新整理撞名停下的已整理条目：选完按选择再整理一次 -->
               <div v-if="r.hold_dup && r.status !== 'awaiting'" class="plan plan-miss">{{ dupNote(r) }}</div>

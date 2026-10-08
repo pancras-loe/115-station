@@ -50,6 +50,22 @@ type tmdbCand struct {
 	Backdrop string
 	OrigLang string
 	Vote     float64
+	// twins 同一关里片名同样相等、得分也一样的其他候选（choose 填）：分不出是哪一部，见 TmdbMedia.Twins
+	twins []tmdbTwin
+}
+
+// tmdbTwin 同名的另一部
+type tmdbTwin struct {
+	ID    int
+	Title string
+	Year  string
+}
+
+func (t tmdbTwin) label() string {
+	if t.Year != "" {
+		return fmt.Sprintf("《%s》(%s) tmdb=%d", t.Title, t.Year, t.ID)
+	}
+	return fmt.Sprintf("《%s》 tmdb=%d", t.Title, t.ID)
 }
 
 func (c tmdbCand) year() string {
@@ -111,6 +127,7 @@ func (c tmdbCand) media(kind string, d *tmdbDetail) *TmdbMedia {
 		TmdbID: c.ID, Title: c.Title, OriginalTitle: c.Original, Year: c.year(), MediaType: kind,
 		GenreIDs: c.GenreIDs, Overview: c.Overview, PosterPath: c.Poster, BackdropPath: c.Backdrop,
 		OrigLanguage: c.OrigLang, OrigCountry: origCountry, ProdCountry: prodCountry, VoteAverage: c.Vote,
+		Twins: c.twins,
 	}
 }
 
@@ -394,6 +411,13 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 	}
 	finish := func(s scoredCand, how string) (*tmdbCand, *tmdbDetail, string, error) {
 		vlog("[整理] 候选采用: %s（%s，得分 %d）", s.c, how, s.score)
+		if len(s.c.twins) > 0 {
+			labels := make([]string, len(s.c.twins))
+			for i, t := range s.c.twins {
+				labels[i] = t.label()
+			}
+			vlog("[整理] ○ 同名同分的还有 %s：分不出是哪一部", strings.Join(labels, "、"))
+		}
 		c := s.c
 		return &c, detail(c.ID), how, nil
 	}
@@ -416,7 +440,17 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 				}
 			}
 		}
-		return finish(exact[0], chooseHowExact)
+		// 片名相等、得分也一样的不止一条：年份没帮上忙（名字里没写，或者跟谁都对不上），
+		// 按 TMDB 相关度取第一条就是在猜。记下另外几条，整理据此停下来等人确认（orgCtx.twinHold）。
+		// 现场：「凡人修仙传.2160p.60fps」2020 动画与 2025 真人剧同分，真人版被认成动画顶掉了库里的集（2026-10-08）。
+		// 没海报也没简介的不算：TMDB 上同名的空壳条目很多，算上的话常见片名个个都要停
+		best := exact[0]
+		for _, s := range exact[1:] {
+			if s.score == best.score && (s.c.Poster != "" || s.c.Overview != "") {
+				best.c.twins = append(best.c.twins, tmdbTwin{ID: s.c.ID, Title: s.c.Title, Year: s.c.year()})
+			}
+		}
+		return finish(best, chooseHowExact)
 	}
 
 	// 第二关：别名 / 译名相等（只看前 5 名，每条一次详情请求，有缓存）
@@ -537,8 +571,12 @@ func (tc *TmdbClient) recognizeStrict(parsed *ParsedName, kind string) (*TmdbMed
 				}
 				continue
 			}
-			if m != nil && m.matchHow == chooseHowExact {
+			if m != nil && m.matchHow == chooseHowExact && len(m.Twins) == 0 {
 				return m, nil
+			}
+			if m != nil && len(m.Twins) > 0 {
+				vlog("[影视刮削] 搜索 %q 有同名同分的 %d 部，分不出是哪一部，同步后刮削不用", q, len(m.Twins)+1)
+				continue
 			}
 			if m != nil {
 				vlog("[影视刮削] 搜索 %q 采用的是「%s」（%s），同步后刮削只认片名相等，不用", q, m.matchHow, m.Title)
