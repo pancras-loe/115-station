@@ -2,7 +2,9 @@ package api
 
 // 订阅的资源条件：分辨率 / 质量 / 特效 / 编码 / 发布组 / 中字 / 体积，避免转存、离线下来又被洗版判输的东西。
 //
-// 字段与匹配语义沿用洗版规则（washRule + matchField，CMS 同款）：逗号分隔多个值命中任一即可，「!」开头是排除。
+// 字段与写法沿用洗版规则（washRule）：逗号分隔多个值命中任一即可，「!」开头是排除。
+// 但匹配不用洗版的 matchField：它对名字做子串查找，DV 会命中 DVDRip、!TS 会排掉所有带 ts 的名字。
+// 这里一个词要么包含在解析出的归一值里，要么在名字里前后都不挨着字母数字（condTokenHit）。
 // MoviePilot 的订阅有质量 / 分辨率 / 特效三项正则；P115StrgmSub 把这三项放到分享里逐个文件判，
 // 默认严格（不符合就不转）——这里同样在文件一级严格判，只读思路。
 //
@@ -73,27 +75,59 @@ const (
 	condFail
 )
 
-// condField 一项条件对一个名字：matchField 通过就是符合；命中排除词、或名字里认出了别的值是明确不符；
-// 只有正值、名字里又认不出这一项的是没写
+// condField 一项条件对一个名字：命中排除词是明确不符；命中任一正值是符合；
+// 有正值都没命中时，名字里认出了这一项的别的值是明确不符，认不出是没写
 func condField(name, cond, value string) condVerdict {
-	if strings.TrimSpace(cond) == "" || matchField(name, cond, value) {
-		return condOK
-	}
 	lname, lvalue := strings.ToLower(name), strings.ToLower(value)
+	hasPos, posHit := false, false
 	for _, part := range strings.Split(cond, ",") {
-		part = strings.TrimSpace(part)
-		if !strings.HasPrefix(part, "!") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		neg := strings.HasPrefix(part, "!")
+		want := strings.TrimSpace(strings.TrimPrefix(part, "!"))
+		if want == "" {
 			continue
 		}
-		if want := strings.ToLower(strings.TrimPrefix(part, "!")); want != "" &&
-			(strings.Contains(lname, want) || strings.Contains(lvalue, want)) {
-			return condFail
+		hit := condTokenHit(lname, lvalue, want)
+		if neg {
+			if hit {
+				return condFail
+			}
+			continue
 		}
+		hasPos = true
+		posHit = posHit || hit
 	}
-	if value != "" {
+	switch {
+	case !hasPos || posHit:
+		return condOK
+	case value != "":
 		return condFail
 	}
 	return condUnknown
+}
+
+// condTokenHit 一个词命中：包含在归一值里（HEVC 归一成 H265），或者在名字里单独出现——
+// 前后不是字母数字（「4K杜比视界」里的 4k 算，「DVDRip」里的 dv 不算）。参数都已转小写
+func condTokenHit(lname, lvalue, want string) bool {
+	if lvalue != "" && strings.Contains(lvalue, want) {
+		return true
+	}
+	alnum := func(b byte) bool { return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' }
+	for from := 0; ; {
+		i := strings.Index(lname[from:], want)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(want)
+		// 词本身首尾是符号（hdr10+）时那一侧不用看边界
+		before := i == 0 || !alnum(want[0]) || !alnum(lname[i-1])
+		after := end == len(lname) || !alnum(want[len(want)-1]) || !alnum(lname[end])
+		if before && after {
+			return true
+		}
+		from = i + 1
+	}
 }
 
 // sizeOK 体积在范围内（size ≤ 0 = 不知道，不拦）

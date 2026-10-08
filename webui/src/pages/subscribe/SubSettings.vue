@@ -136,6 +136,7 @@ async function save() {
         <HMultiSelect
           v-model="notify"
           :options="[
+            { label: '新订阅', value: 'created' },
             { label: '提交了资源', value: 'submit' },
             { label: '补上了缺集', value: 'ingested' },
             { label: '订阅完成', value: 'done' },

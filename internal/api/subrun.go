@@ -253,6 +253,9 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 	db := r.h.DB
 	now := r.now()
 	item := subRunItem{ID: sub.ID, Title: sub.Title}
+	// 头一次检查：新订阅通知放在这里而不是建订阅时，能顺带说清已有几集、缺几集
+	// （网页与机器人新建后都会马上入队查一轮）
+	first := sub.LastCheckAt == nil
 	if !manual {
 		if sub.State == subStatePaused || sub.State == subStateDone {
 			return item, false
@@ -269,6 +272,9 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 
 	subLane.setSub("盘点缺集", 0, 0, "")
 	ev, err := evaluateSubscription(db, r.tc, sub, r.cfg, now)
+	if first {
+		r.notifyKind("created", "🔔 新订阅", subCreatedText(sub, ev, err), sub)
+	}
 	if err != nil {
 		item.Err = "盘点失败：" + err.Error()
 		next := now.Add(time.Hour)
@@ -346,6 +352,32 @@ func subResultLine(sub *model.Subscription, ev subEval, item subRunItem) string 
 		return "不缺，等下一集（" + ev.NextAt.Format("01-02 15:04") + "）"
 	}
 	return "不缺"
+}
+
+// subCreatedText 新订阅通知：范围 + 盘点结果
+func subCreatedText(sub *model.Subscription, ev subEval, err error) string {
+	s := fmt.Sprintf("订阅《%s》", sub.Title)
+	if sub.Year != "" {
+		s = fmt.Sprintf("订阅《%s》（%s）", sub.Title, sub.Year)
+	}
+	s += "：" + botSubScopeText(sub)
+	switch {
+	case err != nil:
+		return s + "\n盘点缺集失败，稍后重试：" + truncateStr(err.Error(), 100)
+	case ev.Done && sub.MediaType == "movie":
+		return s + "\n库里已经有了"
+	case ev.Done:
+		return s + fmt.Sprintf("\n范围内 %d 集都有了", ev.Have)
+	case sub.MediaType == "movie" && len(ev.Missing) == 0 && !ev.NextAt.IsZero():
+		return s + "\n还没到发行日期，" + ev.NextAt.Format("01-02") + " 开始找"
+	case sub.MediaType == "movie":
+		return s + "\n开始找资源"
+	case len(ev.Missing) > 0:
+		return s + fmt.Sprintf("\n已有 %d / %d 集，缺 %d 集，开始找资源", ev.Have, ev.Total, len(ev.Missing))
+	case !ev.NextAt.IsZero():
+		return s + fmt.Sprintf("\n已播的 %d 集都有了，下一集 %s 播出后开始找", ev.Have, ev.NextAt.Format("01-02"))
+	}
+	return s + "\n还没有已播的集，等排期"
 }
 
 func subDoneText(sub *model.Subscription, ev subEval) string {

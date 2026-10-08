@@ -65,7 +65,7 @@ type subscribeCfg struct {
 	Re0UnlockMax   int    `json:"re0_unlock_max"`
 	Re0DailyBudget int    `json:"re0_daily_budget"`
 	ExcludeDefault string `json:"exclude_default"` // 内置排除词，订阅自己的 Exclude 叠加在上面
-	Notify         string `json:"notify"`          // 推哪几类通知：submit,ingested,done,stalled
+	Notify         string `json:"notify"`          // 推哪几类通知：created,submit,ingested,done,stalled
 	// NotifyVer 通知类型清单的版本：新增类型时加一，老配置读出来时把新类型补进 Notify。
 	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
 	NotifyVer int `json:"notify_ver"`
@@ -83,11 +83,11 @@ type subscribeCfg struct {
 	Cond subCond `json:"cond"`
 }
 
-// subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集）
-const subNotifyVer = 1
+// subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集），2 = 加了 created（新订阅）
+const subNotifyVer = 2
 
 // subNotifyAdded 每个版本新增的通知类型，默认开启
-var subNotifyAdded = map[int]string{1: "ingested"}
+var subNotifyAdded = map[int]string{1: "ingested", 2: "created"}
 
 func defaultSubscribeCfg() subscribeCfg {
 	return subscribeCfg{
@@ -98,7 +98,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		MaxTriesPerSub:  3,
 		MaxSnapDirs:     30,
 		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
-		Notify:          "submit,ingested,done,stalled",
+		Notify:          "created,submit,ingested,done,stalled",
 		NotifyVer:       subNotifyVer,
 
 		OfflineMode:      subOfflinePack,

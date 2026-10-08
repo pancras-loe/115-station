@@ -288,3 +288,19 @@ func TestSubOfflineGates(t *testing.T) {
 		t.Fatalf("到了每月上限不该下: %+v", got)
 	}
 }
+
+func TestSubCreatedText(t *testing.T) {
+	tv := &model.Subscription{Title: "三体", Year: "2023", MediaType: "tv", Scope: subScopeSeason, Season: 1, Follow: subFollowMissing}
+	ev := subEval{Have: 3, Total: 10, Missing: make([]epKey, 7)}
+	if s := subCreatedText(tv, ev, nil); s != "订阅《三体》（2023）：第 1 季 · 补缺集\n已有 3 / 10 集，缺 7 集，开始找资源" {
+		t.Fatalf("剧集: %q", s)
+	}
+	next := time.Date(2026, 10, 12, 0, 0, 0, 0, time.Local)
+	if s := subCreatedText(tv, subEval{Have: 10, Total: 10, NextAt: next}, nil); s != "订阅《三体》（2023）：第 1 季 · 补缺集\n已播的 10 集都有了，下一集 10-12 播出后开始找" {
+		t.Fatalf("不缺: %q", s)
+	}
+	mv := &model.Subscription{Title: "片", MediaType: "movie"}
+	if s := subCreatedText(mv, subEval{Total: 0, Unaired: 1, NextAt: next}, nil); s != "订阅《片》：电影\n还没到发行日期，10-12 开始找" {
+		t.Fatalf("电影: %q", s)
+	}
+}

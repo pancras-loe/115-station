@@ -21,6 +21,13 @@ func TestCondField(t *testing.T) {
 		{"剧.S01E01.2160p.DV.mkv", "!DV", "DV", condFail},             // 命中排除词
 		{"剧.S01E01.2160p.mkv", "!DV", "", condOK},                    // 只有排除词、没命中
 		{"剧 4K 杜比视界", "2160p", "2160p", condOK},                      // 中文标题的 4K 由标签认成 2160p
+		{"剧 4K杜比视界", "杜比视界,dv", "", condOK},                          // 汉字挨着也算单独出现
+		{"剧.1080p.DVDRip.mkv", "!dv", "", condOK},                    // DVDRip 里的 dv 不算杜比视界
+		{"剧.1080p.DVDRip.mkv", "dv", "", condUnknown},
+		{"剧.2160p.DV.HDR.mkv", "!dv", "DV", condFail},
+		{"剧.Atmos.mkv", "!ts", "", condOK}, // 排除 TS 不误伤带 ts 字母的名字
+		{"剧.HDR10+.mkv", "hdr10+", "HDR10+", condOK},
+		{"剧.H.265.mkv", "h265,x265,hevc", "H265", condOK}, // 名字写 H.265，靠归一值命中
 	}
 	for _, c := range cases {
 		if got := condField(c.name, c.cond, c.value); got != c.want {
