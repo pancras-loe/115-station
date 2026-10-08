@@ -12,6 +12,7 @@ import HSelect from '@/components/hero/HSelect.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import PosterImage from '@/components/PosterImage.vue'
+import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import { resourcesApi } from '@/api'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubForm, Subscription, TmdbSeason } from '@/api/subscribe'
@@ -51,6 +52,7 @@ const blank = (): SubForm => ({
   include: '',
   exclude: '',
   offline_mode: '',
+  cond: null,
 })
 const form = ref<SubForm>(blank())
 const seasons = ref<TmdbSeason[]>([])
@@ -71,7 +73,7 @@ const tv = computed(() => head.value?.media_type === 'tv')
 watch(show, async (open) => {
   if (!open) return
   form.value = props.edit ? subscribeApi.toForm(props.edit) : blank()
-  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode)
+  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.cond)
   seasons.value = []
   ended.value = false
   if (!tv.value || !head.value) return
@@ -111,6 +113,21 @@ const rankLimit = computed({
   get: () => (form.value.rank_limit > 0 ? form.value.rank_limit : null),
   set: (v) => (form.value.rank_limit = v ?? 0),
 })
+
+// 改成自定义时从订阅设置的默认条件抄一份起步，用户多半只是在默认上改一两项
+async function setCondMode(v: string | undefined) {
+  if (v !== 'custom') {
+    form.value.cond = null
+    return
+  }
+  form.value.cond = subscribeApi.blankCond()
+  try {
+    const d = await subscribeApi.getConfig()
+    if (form.value.cond) form.value.cond = { ...subscribeApi.blankCond(), ...d.data.cond }
+  } catch {
+    // 读不到默认值就从空的开始
+  }
+}
 
 const offlineHint = computed(() => {
   switch (form.value.offline_mode) {
@@ -218,7 +235,7 @@ async function submit() {
       </template>
 
       <button type="button" class="adv-toggle" :aria-expanded="advanced" @click="advanced = !advanced">
-        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、画质、关键词、离线
+        <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源条件、关键词、离线
       </button>
       <div v-if="advanced" class="adv">
         <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 来源设置」里开着的来源">
@@ -230,6 +247,20 @@ async function submit() {
         >
           <HNumberInput v-model="rankLimit" :min="1" placeholder="不限" aria-label="画质门槛" />
         </FieldRow>
+        <FieldRow
+          label="资源条件"
+          hint="分辨率、质量、特效、编码、发布组、中字、大小。分享里每个视频逐个判，不符合的不转；磁力只能看标题，标题没写的不下"
+        >
+          <HSegmented
+            :model-value="form.cond ? 'custom' : 'follow'"
+            :options="[
+              { label: '跟随设置', value: 'follow' },
+              { label: '自定义', value: 'custom' },
+            ]"
+            @update:model-value="setCondMode"
+          />
+        </FieldRow>
+        <SubCondFields v-if="form.cond" v-model="form.cond" />
         <FieldRow label="包含" hint="资源标题要含其中一个（逗号分隔），留空不限">
           <HInput v-model="form.include" placeholder="如：4K, 杜比视界" />
         </FieldRow>

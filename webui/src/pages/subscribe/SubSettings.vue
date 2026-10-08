@@ -10,6 +10,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
+import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubscribeConfig } from '@/api/subscribe'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -24,7 +25,7 @@ const notify = ref<string[]>([])
 async function load() {
   try {
     const d = await subscribeApi.getConfig()
-    cfg.value = d.data
+    cfg.value = { ...d.data, cond: { ...subscribeApi.blankCond(), ...d.data.cond } }
     spent.value = d.re0_spent_today
     notify.value = (d.data.notify || '').split(',').filter(Boolean)
   } catch (e) {
@@ -79,6 +80,17 @@ async function save() {
       <FieldRow label="排除词" hint="资源标题含任何一个就不要，所有订阅都生效（逗号分隔）；单个订阅还能另加">
         <HInput v-model="cfg.exclude_default" />
       </FieldRow>
+    </SectionCard>
+
+    <SectionCard
+      title="资源条件"
+      hint="所有订阅默认用这一组，单个订阅可以在「修改订阅 → 高级」里自定义。写法同洗版规则：逗号分隔命中任一，「!」开头排除；留空不限"
+    >
+      <SubCondFields v-model="cfg.cond" />
+      <HAlert status="accent" class="note">
+        资源标题写明不符合的直接跳过。分享里每个视频再逐个判：文件名没写的看资源标题，两边都没写算不符合、不转。
+        磁力只能看标题、又要扣离线配额，标题没写的不下；RE0 要花积分的资源同样要标题写明符合才解锁。
+      </HAlert>
     </SectionCard>
 
     <SectionCard

@@ -23,6 +23,8 @@ export interface Subscription {
   include: string
   exclude: string
   offline_mode: OfflineMode
+  /** 资源条件；null = 跟随订阅设置 */
+  cond: SubCond | null
   /** active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到 */
   state: 'active' | 'paused' | 'done' | 'stalled'
   next_check_at?: string | null
@@ -55,7 +57,38 @@ export interface SubForm {
   include: string
   exclude: string
   offline_mode: OfflineMode
+  /** 资源条件；null = 跟随订阅设置 */
+  cond: SubCond | null
 }
+
+/**
+ * 资源条件（同洗版规则的写法：逗号分隔命中任一，「!」开头排除）。
+ * 标题明确不符的不要；分享里每个视频再按文件名判（文件名没写看资源标题，都没写算不符）；
+ * 磁力只能看标题，没写的不下
+ */
+export interface SubCond {
+  pix: string
+  type: string
+  effect: string
+  video: string
+  audio: string
+  team: string
+  zh: boolean
+  min_gb: number
+  max_gb: number
+}
+
+export const blankCond = (): SubCond => ({
+  pix: '',
+  type: '',
+  effect: '',
+  video: '',
+  audio: '',
+  team: '',
+  zh: false,
+  min_gb: 0,
+  max_gb: 0,
+})
 
 /** 离线策略：pack 只下合集包 / share_only 只转存分享 / any 不限；订阅上为空 = 跟随订阅设置 */
 export type OfflineMode = '' | 'pack' | 'share_only' | 'any'
@@ -116,6 +149,7 @@ export interface SubscribeConfig {
   offline_wait_hours: number
   offline_monthly: number
   offline_reserve: number
+  cond: SubCond
 }
 
 export const list = () => http.get<{ data: Subscription[] }>('/subscriptions')
@@ -149,6 +183,7 @@ export function toForm(s: Subscription): SubForm {
     include: s.include,
     exclude: s.exclude,
     offline_mode: s.offline_mode || '',
+    cond: s.cond ? { ...blankCond(), ...s.cond } : null,
   }
 }
 

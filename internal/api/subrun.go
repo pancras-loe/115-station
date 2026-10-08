@@ -125,7 +125,7 @@ type subRunItem struct {
 	Missing   int      `json:"missing"`
 	Submitted []string `json:"submitted,omitempty"` // 「盘搜 · 资源名：S01E05–E06」
 	Tried     []string `json:"tried,omitempty"`     // 试了但没成的：「资源名：原因」
-	// Skipped 因离线策略没下的磁力：「2 条磁力按离线策略没下（单集磁力 2）」，没提交东西时写进上一轮结果
+	// Skipped 因资源条件 / 离线策略跳过的：「跳过 2 条资源（单集磁力 2）」，没提交东西时写进上一轮结果
 	Skipped string `json:"skipped,omitempty"`
 	Note    string `json:"note,omitempty"`
 	Err     string `json:"err,omitempty"`
@@ -436,6 +436,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		Sub: sub, Missing: ev.Missing, Tried: tried, Now: now,
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
 		Include: splitKeywords(sub.Include),
+		Cond:    subCondOf(r.cfg, sub.Cond),
 		Re0Max:  r.cfg.Re0UnlockMax, Re0Left: r.re0Left,
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
 		MissingAir: ev.MissingAir, Skipped: map[string]int{},
@@ -510,23 +511,30 @@ func (c subCand) coversRipe(missing map[epKey]bool, ctx subPickCtx) bool {
 	return false
 }
 
-// subSkippedText 「3 条磁力按离线策略没下（单集磁力 2、新集先等分享 1）」
+// subSkippedText 「跳过 3 条资源（分辨率不符 2、单集磁力 1）」
 func subSkippedText(m map[string]int) string {
 	if len(m) == 0 {
 		return ""
 	}
-	keys := make([]string, 0, len(m))
 	n := 0
-	for k, v := range m {
-		keys = append(keys, k)
+	for _, v := range m {
 		n += v
+	}
+	return fmt.Sprintf("跳过 %d 条资源（%s）", n, countsText(m))
+}
+
+// countsText 「分辨率不符 2、单集磁力 1」：按原因排序，输出稳定
+func countsText(m map[string]int) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
 		parts[i] = fmt.Sprintf("%s %d", k, m[k])
 	}
-	return fmt.Sprintf("%d 条磁力按离线策略没下（%s）", n, strings.Join(parts, "、"))
+	return strings.Join(parts, "、")
 }
 
 // ==================== 离线的闸 ====================
@@ -720,6 +728,12 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 		MediaType: sub.MediaType, Missing: missing, Rules: loadReplaceRules(),
 		HaveSha1: subLedgerHasSha1,
 		Rank:     func(n string) int { return resWashRank(sub.MediaType, n) },
+	}
+	if cond := subCondOf(r.cfg, sub.Cond); !cond.empty() {
+		title, tags := c.Item.Title, c.Item.Tags
+		opts.Accept = func(e shareEntry, hasSub bool) (bool, string) {
+			return cond.fileOK(e.Name, e.Size, title, tags, hasSub)
+		}
 	}
 	if sub.MediaType == "tv" {
 		if sub.Scope == subScopeSeason || sub.Scope == subScopeRange {

@@ -78,6 +78,9 @@ type subscribeCfg struct {
 	OfflineMonthly int `json:"offline_monthly"`
 	// OfflineReserve 115 剩余离线配额低于它就不再提交，留给手动离线；0 = 不查配额
 	OfflineReserve int `json:"offline_reserve"`
+
+	// Cond 默认的资源条件（subcond.go），订阅自己可以另设
+	Cond subCond `json:"cond"`
 }
 
 // subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集）
@@ -159,6 +162,7 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	if c.OfflineReserve < 0 {
 		c.OfflineReserve = 0
 	}
+	c.Cond = normalizeSubCond(c.Cond)
 	// 读的时候已经补过新类型；保存时记成当前版本，用户之后关掉的类型不会再被补回来
 	c.NotifyVer = subNotifyVer
 	return c

@@ -117,7 +117,7 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 	if len(offlines) != 1 || offlines[0] != magnet+"@W2" {
 		t.Fatalf("离线 = %v", offlines)
 	}
-	if item.Skipped != "1 条磁力按离线策略没下（单集磁力 1）" {
+	if item.Skipped != "跳过 1 条资源（单集磁力 1）" {
 		t.Fatalf("单集磁力应按策略跳过并说明: %q", item.Skipped)
 	}
 	model.DB.First(&sub, sub.ID)
@@ -260,7 +260,7 @@ func TestSubOfflineGates(t *testing.T) {
 	if len(got.offlines) != 1 || !strings.Contains(got.offlines[0], "aaaa") {
 		t.Fatalf("应只下 E01-E02 那个合集: %v", got.offlines)
 	}
-	if got.item.Skipped != "2 条磁力按离线策略没下（一轮只下一个 1、单集磁力 1）" {
+	if got.item.Skipped != "跳过 2 条资源（一轮只下一个 1、单集磁力 1）" {
 		t.Fatalf("跳过说明: %q", got.item.Skipped)
 	}
 

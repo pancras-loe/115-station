@@ -28,6 +28,8 @@ type sharePickOpts struct {
 	HaveSha1 func(sha1 string) bool // 库里已经有这一份（台账 sha1）
 	// Rank 文件名的洗版排名（resWashRank），越小越好、-1 = 没命中；nil 时只比体积
 	Rank func(name string) int
+	// Accept 资源条件（subCond.fileOK）：hasSub = 同目录有跟着它的字幕。nil = 不限
+	Accept func(e shareEntry, hasSub bool) (bool, string)
 }
 
 // sharePick 挑选结果
@@ -38,6 +40,8 @@ type sharePick struct {
 	Disc    int          // 光盘结构的视频（ISO / BDMV / VIDEO_TS），不挑
 	Unknown int          // 认不出集号的视频
 	InLib   int          // 库里已经有同一份（sha1 相同）的视频
+	// Rejected 不符合资源条件的视频，按原因计
+	Rejected map[string]int
 }
 
 // summary 给人看的一句话（尝试记录的原因 / 日志）
@@ -54,6 +58,9 @@ func (p sharePick) summary() string {
 	}
 	if p.Disc > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个光盘结构不要", p.Disc))
+	}
+	if len(p.Rejected) > 0 {
+		parts = append(parts, "不符合资源条件的 "+countsText(p.Rejected))
 	}
 	return strings.Join(parts, "，")
 }
@@ -85,6 +92,22 @@ func (a shareVideo) better(b shareVideo) bool {
 func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 	var res sharePick
 	var vids []shareVideo
+	// 有字幕跟着的视频（同目录、字幕名以视频基名开头）：资源条件要中字时算有
+	subBases := map[string]bool{}
+	for _, e := range entries {
+		if !e.IsDir && classifyFile(e.Name) == FileTypeSubtitle {
+			subBases[e.Dir+"/"+e.Name] = true
+		}
+	}
+	hasSub := func(v shareEntry) bool {
+		base := v.Dir + "/" + baseName(v.Name)
+		for k := range subBases {
+			if strings.HasPrefix(k, base+".") || strings.HasPrefix(k, base+"-") {
+				return true
+			}
+		}
+		return false
+	}
 	for _, e := range entries {
 		if e.IsDir || classifyFile(e.Name) != FileTypeVideo {
 			continue
@@ -97,6 +120,15 @@ func pickShareEpisodes(entries []shareEntry, o sharePickOpts) sharePick {
 		if e.Sha1 != "" && o.HaveSha1 != nil && o.HaveSha1(strings.ToUpper(e.Sha1)) {
 			res.InLib++
 			continue
+		}
+		if o.Accept != nil {
+			if ok, why := o.Accept(e, hasSub(e)); !ok {
+				if res.Rejected == nil {
+					res.Rejected = map[string]int{}
+				}
+				res.Rejected[why]++
+				continue
+			}
 		}
 		rank := -1
 		if o.Rank != nil {

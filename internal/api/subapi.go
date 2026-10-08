@@ -33,6 +33,8 @@ type subForm struct {
 	Exclude   string   `json:"exclude"`
 	// OfflineMode 空 = 跟随订阅设置
 	OfflineMode string `json:"offline_mode"`
+	// Cond 资源条件，nil = 跟随订阅设置
+	Cond *subCond `json:"cond"`
 }
 
 // applySubForm 校验表单并写进订阅；范围变了返回 true（要立刻重新检查）
@@ -92,6 +94,11 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		return false, errors.New("离线策略只能是 只下合集包 / 只转存分享 / 不限")
 	}
 	sub.OfflineMode = f.OfflineMode
+	sub.Cond = ""
+	if f.Cond != nil {
+		b, _ := json.Marshal(normalizeSubCond(*f.Cond))
+		sub.Cond = string(b)
+	}
 	return before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
 }
 
@@ -99,6 +106,7 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 type subDTO struct {
 	model.Subscription
 	Sources  []string `json:"sources"`
+	Cond     *subCond `json:"cond"`     // nil = 跟随订阅设置
 	Inflight int      `json:"inflight"` // 在路上的尝试数
 	Running  bool     `json:"running"`  // 正在排队 / 检查
 }
@@ -108,6 +116,12 @@ func toSubDTO(s model.Subscription, inflight map[uint]int, running map[uint]bool
 	_ = json.Unmarshal([]byte(s.Sources), &d.Sources)
 	if d.Sources == nil {
 		d.Sources = []string{}
+	}
+	if strings.TrimSpace(s.Cond) != "" {
+		var c subCond
+		if json.Unmarshal([]byte(s.Cond), &c) == nil {
+			d.Cond = &c
+		}
 	}
 	return d
 }

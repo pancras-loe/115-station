@@ -122,14 +122,15 @@ type subPickCtx struct {
 	Now     time.Time
 	Exclude []string // 内置排除词 + 订阅自己的
 	Include []string
-	Re0Max  int // RE0 单条自动解锁上限，0 = 不自动解锁
-	Re0Left int // 今天还能花多少，<0 = 不限
+	Cond    subCond // 资源条件（subcond.go）
+	Re0Max  int     // RE0 单条自动解锁上限，0 = 不自动解锁
+	Re0Left int     // 今天还能花多少，<0 = 不限
 
 	// 离线：OfflineMode 空 = 不限；剧集只算播出满 OfflineWait 的缺集（MissingAir 里没有日期的不等）
 	OfflineMode string
 	OfflineWait time.Duration
 	MissingAir  map[epKey]time.Time
-	// Skipped 因离线策略跳过的条数，按原因计（传了才记），任务结果里说清为什么没下
+	// Skipped 因资源条件 / 离线策略跳过的条数，按原因计（传了才记），任务结果里说清为什么没用
 	Skipped map[string]int
 }
 
@@ -202,6 +203,16 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		if c.Sub.RankLimit > 0 && (it.Rank < 0 || it.Rank >= c.Sub.RankLimit) {
 			continue
 		}
+		// 资源条件：标题明确不符的丢；没写的分享到文件一级再判，磁力只有标题可看、又扣离线配额，不下
+		verdict, why := c.Cond.titleVerdict(it.Title, it.Tags, movie, it.SizeBytes)
+		if verdict == condFail {
+			c.skip(why)
+			continue
+		}
+		if verdict == condUnknown && it.Action == "offline" {
+			c.skip("磁力" + why)
+			continue
+		}
 		cand := subCand{Item: it, Hash: hash}
 		if movie {
 			cand.Covers = 1
@@ -253,6 +264,10 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				cand.Paid = *it.Points
 				// 付费的额外要求：确认能覆盖缺集、画质命中洗版规则（§5.4）
 				if cand.Covers == 0 || (c.Sub.RankLimit == 0 && it.Rank < 0) {
+					continue
+				}
+				if verdict == condUnknown {
+					c.skip("要花积分、" + why) // 解锁前看不到文件，看不出合不合条件就不花积分
 					continue
 				}
 				if c.Re0Max <= 0 || cand.Paid > c.Re0Max || (c.Re0Left >= 0 && cand.Paid > c.Re0Left) {
