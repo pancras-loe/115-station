@@ -162,6 +162,19 @@ html[data-palette='fresh']:not(.dark) {
   --muted: oklch(0.54 0.02 240);
 }
 
+/* 媒体类型色（2026-10-08）：「电影」「剧集」标签全站只用这两个，组件是 components/MediaTypeChip.vue。
+   不借 accent / warning：暗色下强调色是琥珀橙、warning 是黄，两种类型拿它们区分几乎看不出来，
+   还会被读成状态（「警告」）。色相避开三套强调色（46 / 52 / 218）与 success / danger：
+   电影紫（295），剧集蓝（255）。暗色提亮度，压得住深底 */
+:root {
+  --media-movie: oklch(0.55 0.17 295);
+  --media-tv: oklch(0.55 0.15 255);
+}
+html.dark {
+  --media-movie: oklch(0.74 0.13 295);
+  --media-tv: oklch(0.74 0.12 250);
+}
+
 /* 暗色下 HeroUI 把卡片阴影置空，卡片和页面只差一点亮度，看久了糊成一片。
    补一圈极淡的内描边，勾出边界又不抢眼 */
 html.dark .card--default {

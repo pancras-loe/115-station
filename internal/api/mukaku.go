@@ -306,7 +306,7 @@ type mukakuVideo struct {
 func mukakuVideoResources(id int64) ([]gin.H, error) {
 	cfg := loadMukakuCfg()
 	if cfg.AccessToken == "" {
-		return nil, fmt.Errorf("资源仅对 VIP 可见：请先在来源设置里粘贴 access_token 或用验证码登录")
+		return nil, fmt.Errorf("资源仅对 VIP 可见：请先在「影视转存 → 设置」里粘贴 access_token 或用验证码登录")
 	}
 	data, err := mukakuAPI(cfg, http.MethodGet, "getVideoDetail", url.Values{"id": {fmt.Sprint(id)}}, nil)
 	if err != nil {

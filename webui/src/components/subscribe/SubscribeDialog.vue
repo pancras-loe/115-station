@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { computed, ref, watch } from 'vue'
 import { ChevronDown } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
@@ -188,7 +189,7 @@ async function submit() {
         <div class="head-text">
           <b>{{ head.title }}</b>
           <span v-if="head.year" class="muted">{{ head.year }}</span>
-          <span class="muted">{{ tv ? '剧集' : '电影' }}</span>
+          <MediaTypeChip :type="head.media_type" />
           <p class="muted desc">
             {{
               tv
@@ -238,7 +239,7 @@ async function submit() {
         <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源条件、关键词、离线
       </button>
       <div v-if="advanced" class="adv">
-        <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 来源设置」里开着的来源">
+        <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 设置」里开着的来源">
           <HMultiSelect v-model="form.sources" :options="sourceOptions" placeholder="全部开着的来源" />
         </FieldRow>
         <FieldRow

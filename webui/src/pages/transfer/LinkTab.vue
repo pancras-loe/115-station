@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
@@ -7,16 +8,15 @@ import { CircleCheck, CircleX, LoaderCircle } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import Cid115Input from '@/components/Cid115Input.vue'
-import { storageApi, transferApi } from '@/api'
-import { useSetting } from '@/composables/useSetting'
+import { transferApi } from '@/api'
 import { useTransferSources } from '@/composables/transferSources'
 import { type ParsedLink, parseLinks, pendingLinkText } from '@/composables/transferLinks'
 import { useFeedback } from '@/composables/useFeedback'
-import { confirmUnsaved } from '@/composables/confirmUnsaved'
 
+const router = useRouter()
 const { message, dialog } = useFeedback()
-const { reload } = useTransferSources()
+const { state: srcState } = useTransferSources()
+const folderPath = computed(() => srcState.value?.folder_path || srcState.value?.folder || '')
 
 // ---- 提交链接 ----
 const text = ref('')
@@ -60,7 +60,6 @@ async function submit() {
     message.warning(text.value.trim() ? '没认出能提交的链接：支持 115 分享、磁力、ed2k、HTTP' : '请粘贴链接')
     return
   }
-  if (shareDirty.value && !(await confirmUnsaved('直接提交会存进原来的目录。', saveShare))) return
   if (list.some((l) => l.kind === 'http')) {
     const ok = await dialog.confirm({
       title: '提交 HTTP 离线下载',
@@ -97,71 +96,18 @@ async function submit() {
   }
 }
 
-// ---- 转存目录（原在「上传下载 → 转存下载」） ----
-const share = useSetting('share', { folder: '', folder_path: '' })
-const shareCid = ref({ cid: '', path: '' })
-const shareInput = ref<InstanceType<typeof Cid115Input> | null>(null)
-
-/** 输入框里给人看的是路径，落库的是 cid；folder_path 只为显示而存 */
-watch(
-  () => [share.model.value.folder, share.model.value.folder_path] as const,
-  async ([cid, savedPath]) => {
-    if (!cid) {
-      shareCid.value = { cid: '', path: '' }
-      return
-    }
-    const displayPath = savedPath || cid
-    if (cid !== shareCid.value.cid || displayPath !== shareCid.value.path) {
-      shareCid.value = { cid, path: displayPath }
-    }
-    // 只存过 cid 的旧配置：进页面反查一次可读路径，别让用户对着数字猜目录。
-    if (!savedPath) {
-      try {
-        const resolved = await storageApi.path115(cid)
-        if (share.model.value.folder === cid && resolved.path) {
-          shareCid.value = { cid, path: resolved.path }
-        }
-      } catch {
-        // Cookie 暂不可用时保留 cid；重新选择目录或下次保存仍可补齐。
-      }
-    }
-  },
-  { immediate: true },
-)
-
-async function saveShare(): Promise<boolean> {
-  const cid = (await shareInput.value?.ensureCid()) ?? ''
-  if (!cid) {
-    message.error('目录路径无法识别：请点「选择目录」重新选择，或输入纯数字 cid')
-    return false
-  }
-  share.model.value.folder = cid
-  let readablePath = shareCid.value.path.trim()
-  if (!readablePath || /^\d+$/.test(readablePath)) {
-    try {
-      readablePath = (await storageApi.path115(cid)).path
-    } catch {
-      readablePath = ''
-    }
-  }
-  share.model.value.folder_path = readablePath
-  const ok = await share.save()
-  if (ok) reload() // 找资源页上方显示的转存目录跟着变
-  return ok
-}
-
-/**
- * 转存目录改了没保存 = 东西会落进旧目录：提交时后端回落到 setting `share` 里已保存的那份。
- * 比 cid 不比 path：Cid115Input 在路径一改就把 cid 作废，改动立刻可见
- */
-const shareDirty = computed(
-  () => share.dirty.value || shareCid.value.cid.trim() !== (share.model.value.folder || '').trim(),
-)
 </script>
 
 <template>
   <div class="stack">
     <SectionCard title="提交链接" hint="115 分享转存，磁力 / ed2k / HTTP 提交 115 离线下载">
+      <template #extra>
+        <button type="button" class="folder" @click="router.push({ query: { tab: 'settings' } })">
+          <template v-if="folderPath">存到 <b>{{ folderPath }}</b></template>
+          <span v-else-if="srcState" class="warn">还没设置转存目录</span>
+          <span class="link">{{ folderPath ? '更改' : '去设置' }}</span>
+        </button>
+      </template>
       <FieldRow
         label="链接"
         wide
@@ -198,14 +144,6 @@ const shareDirty = computed(
       </ul>
     </SectionCard>
 
-    <SectionCard title="转存目录" hint="链接转存、离线下载与找资源提交的内容都落在这里，由自动整理接管入库">
-      <FieldRow label="转存目录" tip="必须与媒体库目录互不包含。提交后立即触发一次整理，没赶上的由守望者每分钟检查一次这个目录兜底。">
-        <Cid115Input ref="shareInput" v-model="shareCid" placeholder="转存 / 离线下载的目标目录" />
-      </FieldRow>
-      <FormActions>
-        <HButton variant="primary" :loading="share.saving.value" @click="saveShare">保存目录</HButton>
-      </FormActions>
-    </SectionCard>
   </div>
 </template>
 
@@ -214,6 +152,30 @@ const shareDirty = computed(
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.folder {
+  all: unset;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.folder b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--foreground);
+  word-break: break-all;
+}
+.folder .warn {
+  color: var(--warning);
+}
+.folder .link {
+  color: var(--accent);
+}
+.folder:hover .link {
+  text-decoration: underline;
 }
 .code {
   max-width: 160px;

@@ -187,9 +187,9 @@ function sourceHint(s: TransferSource): string {
     case 'error':
       return st.error
     case 'unavailable':
-      return `${st.reason}，点击去来源设置`
+      return `${st.reason}，点击去设置`
     case 'off':
-      return '已在来源设置里关闭，点击去打开'
+      return '已在设置里关闭，点击去打开'
   }
   return ''
 }
@@ -197,7 +197,7 @@ function sourceHint(s: TransferSource): string {
 function onSourceClick(s: TransferSource) {
   const st = perSource.value[s.key]
   if (st?.status === 'unavailable' || st?.status === 'off') {
-    router.push({ query: { tab: 'sources', focus: s.key } })
+    router.push({ query: { tab: 'settings', sec: s.key } })
     return
   }
   if (st?.status === 'error') {

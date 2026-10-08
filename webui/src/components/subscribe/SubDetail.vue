@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ExternalLink, Pause, Pencil, Play, Search, Trash2, X } from '@lucide/vue'
@@ -164,7 +165,8 @@ function openRecords(linkId: number) {
             </div>
             <div class="chips">
               <HChip :color="STATE_TONE[s.state]" variant="primary">{{ STATE_TEXT[s.state] }}</HChip>
-              <HChip>{{ scopeText(s) }}</HChip>
+              <MediaTypeChip :type="s.media_type" size="md" />
+              <HChip v-if="s.media_type === 'tv'">{{ scopeText(s) }}</HChip>
               <HChip v-if="s.running" color="accent">检查中</HChip>
               <a :href="tmdbUrl" target="_blank" rel="noopener noreferrer" class="tmdb">
                 TMDB {{ s.tmdb_id }}<ExternalLink :size="11" />

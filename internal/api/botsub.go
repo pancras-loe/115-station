@@ -87,7 +87,7 @@ func (h *Handler) botSubscribe(hit wecomTmdbHit) []string {
 	}
 	lines := []string{fmt.Sprintf("🔔 已订阅%s（%s）", name, botSubScopeText(&sub)), "正在检查缺什么，找到资源会自动转存入库，提交时会通知。"}
 	if sub.MediaType == "tv" && sub.Scope == subScopeSeason {
-		lines = append(lines, "剧集还在播，默认只订最新一季；要订全剧或改范围，到网页「资源订阅」里修改。")
+		lines = append(lines, "剧集还在播，默认只订最新一季；要订全剧或改范围，到网页「影视转存 → 订阅」里修改。")
 	}
 	return lines
 }

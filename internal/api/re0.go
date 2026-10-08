@@ -213,7 +213,7 @@ func re0NeedsReauth(code string) bool {
 }
 
 // errRe0Reauth 授权失效：Token 已清掉，界面上显示为未授权
-var errRe0Reauth = errors.New("RE0 授权已失效，请在「影视转存 → 来源设置 → RE0」重新授权")
+var errRe0Reauth = errors.New("RE0 授权已失效，请在「影视转存 → 设置 → RE0」重新授权")
 
 // re0Call 调用 /api/open/* 业务接口：带 X-API-Key + Bearer（ping 也要，见文件头），
 // 收到 OPENAPI_REFRESH_REQUIRED 时刷新 Token 重放一次；要重新授权的清掉 Token

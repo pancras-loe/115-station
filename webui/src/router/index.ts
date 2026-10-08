@@ -29,11 +29,17 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '任务中心', desc: '任务队列与历史 / 整理记录', icon: 'tasks' },
       },
       {
-        // 旧版是 TG 关键词订阅（2026-10-07 删除），地址沿用给按 TMDB 条目的资源订阅
+        // 资源订阅 2026-10-08 并进影视转存的「订阅」页签。旧地址可能被收藏：
+        // /subscriptions?sub=3 → 订阅页签并打开详情，?tab=settings → 设置里的订阅小节
         path: 'subscriptions',
         name: 'subscriptions',
-        component: () => import('@/pages/SubscriptionsPage.vue'),
-        meta: { title: '资源订阅', desc: '按影片订阅：定时找缺的集，转存后自动整理入库', icon: 'subscribe' },
+        redirect: (to) => ({
+          name: 'media-transfer',
+          query:
+            to.query.tab === 'settings'
+              ? { tab: 'settings', sec: 'check' }
+              : { tab: 'subs', ...(to.query.sub ? { sub: to.query.sub } : {}) },
+        }),
       },
       {
         path: 'accounts',
@@ -86,7 +92,7 @@ const routes: RouteRecordRaw[] = [
         path: 'media-transfer',
         name: 'media-transfer',
         component: () => import('@/pages/MediaTransferPage.vue'),
-        meta: { title: '影视转存', desc: '按影片聚合各资源站 / 链接转存与离线下载', icon: 'download' },
+        meta: { title: '影视转存', desc: '按影片找资源 / 订阅追更 / 链接转存与离线下载', icon: 'download' },
       },
       {
         path: 'settings',

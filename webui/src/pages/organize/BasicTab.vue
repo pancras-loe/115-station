@@ -369,7 +369,7 @@ const TRIGGERS: { name: string; text: string }[] = [
         <p class="dir-note">
           <Info :size="14" />
           <span>
-            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」，转存目录在「<RouterLink :to="{ name: 'media-transfer', query: { tab: 'link' } }">影视转存 → 链接转存</RouterLink>」。
+            媒体库目录在「<RouterLink :to="{ name: 'accounts' }">账号与媒体库</RouterLink>」，转存目录在「<RouterLink :to="{ name: 'media-transfer', query: { tab: 'settings' } }">影视转存 → 设置</RouterLink>」。
             第一次用之前，先配好二级分类策略并跑一次全量同步。
           </span>
         </p>

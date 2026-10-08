@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { computed, ref, watch } from 'vue'
 import { Star } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
-import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
@@ -138,9 +138,7 @@ async function search() {
 
             <div class="cand-body">
               <div class="cand-head">
-                <HChip :color="it.media_type === 'tv' ? 'accent' : 'warning'">
-                  {{ it.media_type === 'tv' ? '剧集' : '电影' }}
-                </HChip>
+                <MediaTypeChip :type="it.media_type" />
                 <b class="cand-title">{{ it.title }}</b>
                 <span class="cand-year">{{ it.year }}</span>
                 <span class="cand-id">tmdb={{ it.id }}</span>

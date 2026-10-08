@@ -177,7 +177,7 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 	}
 	if lastErr != "" {
 		if strings.Contains(lastErr, "503") || strings.Contains(lastErr, "502") {
-			lastErr += "——公开实例可能过载/限流，请稍后重试；或到 115-Station 网页端「影视转存 → 来源设置」配置自建实例（docker run ghcr.io/fish2018/pansou）"
+			lastErr += "——公开实例可能过载/限流，请稍后重试；或到 115-Station 网页端「影视转存 → 设置 → 盘搜」配置自建实例（docker run ghcr.io/fish2018/pansou）"
 		}
 		return nil, fmt.Errorf("%s", lastErr)
 	}

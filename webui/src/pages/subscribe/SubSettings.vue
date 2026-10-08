@@ -8,14 +8,18 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import * as subscribeApi from '@/api/subscribe'
 import type { SubscribeConfig } from '@/api/subscribe'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
-/** 订阅的全局设置（setting "subscribe"，整存整取） */
+/**
+ * 订阅的全局设置（setting "subscribe"，整存整取）。
+ * 在影视转存「设置」页签里按小节一次显示一张卡片（section），整个组件保持挂载：
+ * 小节之间切换不丢没保存的改动，底下的「保存」存的是全部小节。
+ */
+defineProps<{ section: 'check' | 'cond' | 'offline' | 'unlock' | 'notify' }>()
 const { message } = useFeedback()
 const cfg = ref<SubscribeConfig | null>(null)
 const spent = ref(0)
@@ -51,7 +55,7 @@ async function save() {
 
 <template>
   <div v-if="cfg" class="stack">
-    <SectionCard title="检查">
+    <SectionCard v-show="section === 'check'" title="检查">
       <FieldRow label="定时检查" hint="关掉后不再自动检查，订阅详情里的「立即搜索」仍可用">
         <HSwitch v-model="cfg.enabled" aria-label="定时检查" />
       </FieldRow>
@@ -83,6 +87,7 @@ async function save() {
     </SectionCard>
 
     <SectionCard
+      v-show="section === 'cond'"
       title="资源条件"
       hint="所有订阅默认用这一组，单个订阅可以在「修改订阅 → 高级」里自定义。写法同洗版规则：逗号分隔命中任一，「!」开头排除；留空不限"
     >
@@ -94,6 +99,7 @@ async function save() {
     </SectionCard>
 
     <SectionCard
+      v-show="section === 'offline'"
       title="离线下载"
       hint="磁力在下载前看不到里面有哪些文件，挑不了集；115 的离线配额按任务数扣，一集一个磁力的话追一部剧就是几十次。所以磁力排在 115 分享之后，还有下面几道闸"
     >
@@ -118,7 +124,7 @@ async function save() {
       </FieldRow>
     </SectionCard>
 
-    <SectionCard title="RE0 自动解锁" hint="解锁之前看不到分享里有什么，积分花了拿不回来，所以只有下面几条都满足才会花">
+    <SectionCard v-show="section === 'unlock'" title="RE0 自动解锁" hint="解锁之前看不到分享里有什么，积分花了拿不回来，所以只有下面几条都满足才会花">
       <FieldRow label="单条上限" hint="一条资源要的积分不超过它才自动解锁；0 = 不自动解锁（解锁过的、免费的照常用）">
         <div class="unit"><HNumberInput v-model="cfg.re0_unlock_max" :min="0" aria-label="积分" /><span>积分</span></div>
       </FieldRow>
@@ -127,11 +133,11 @@ async function save() {
       </FieldRow>
       <HAlert status="accent" class="note">
         另外几道闸是固定的：资源标题要能看出包含缺的集（「全集」「合集」这种估不出的不花钱）、画质要命中洗版策略里至少一条规则、
-        一个订阅一轮最多花钱解锁 1 条，解锁报积分不足或没登录时这一轮全部停下。超出上限的资源只通知一次，到「影视转存」手动解锁。
+        一个订阅一轮最多花钱解锁 1 条，解锁报积分不足或没登录时这一轮全部停下。超出上限的资源只通知一次，到「找资源」手动解锁。
       </HAlert>
     </SectionCard>
 
-    <SectionCard title="通知">
+    <SectionCard v-show="section === 'notify'" title="通知">
       <FieldRow label="推送" hint="自动解锁花了积分、资源内容不对（整理认成了别的片）这两种总是推">
         <HMultiSelect
           v-model="notify"
@@ -145,10 +151,11 @@ async function save() {
           placeholder="都不推"
         />
       </FieldRow>
-      <FormActions>
-        <HButton variant="primary" :loading="saving" @click="save">保存</HButton>
-      </FormActions>
     </SectionCard>
+    <div class="save">
+      <span class="save-hint">各小节一起保存</span>
+      <HButton variant="primary" :loading="saving" @click="save">保存订阅设置</HButton>
+    </div>
   </div>
 </template>
 
@@ -167,6 +174,16 @@ async function save() {
 }
 .unit > :first-child {
   width: 120px;
+}
+.save {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.save-hint {
+  font-size: 12px;
+  color: var(--muted);
 }
 .note {
   margin-top: 6px;

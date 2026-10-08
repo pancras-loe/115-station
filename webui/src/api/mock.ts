@@ -294,7 +294,67 @@ const FILE_ROOTS = { '2894561234': 'library', '301': 'pending', '302': 'share', 
 
 type Route = unknown | ((q: URLSearchParams) => unknown)
 
+
+// ---- 影视转存 / 资源订阅（2026-10-08 合并页预览用） ----
+const SUBS = (
+  [
+    [1, 'tv', '凡人修仙传', '2020', 'active', 152, 160, 8, 2, false],
+    [2, 'tv', '漫长的季节', '2023', 'done', 12, 12, 0, 0, false],
+    [3, 'movie', '沙丘：第二部', '2024', 'active', 0, 1, 1, 0, true],
+    [4, 'tv', '三体', '2023', 'stalled', 20, 30, 10, 0, false],
+    [5, 'tv', '繁花', '2023', 'paused', 18, 30, 12, 0, false],
+    [6, 'tv', '最后生还者', '2023', 'active', 9, 9, 0, 0, false],
+    [7, 'movie', '奥本海默', '2023', 'done', 1, 1, 0, 0, false],
+  ] as const
+).map(([id, type, title, year, state, have, total, missing, inflight, running]) => ({
+  id, tmdb_id: 90000 + id, media_type: type, title, year, poster_path: '', state, have, total, missing, inflight, running,
+  scope: type === 'tv' ? 'all' : '', season: 0, ep_start: 0, ep_end: 0, specials: false, follow: type === 'tv' ? 'missing' : '',
+  sources: [], rank_limit: 0, include: '', exclude: '', offline_mode: '', cond: null, last_result: '找到 2 条资源，提交 1 条',
+  last_check_at: new Date(Date.now() - 3_600_000).toISOString(), next_check_at: new Date(Date.now() + 3_600_000).toISOString(),
+  empty_rounds: 0, created_at: new Date(Date.now() - 86_400_000 * 9).toISOString(),
+}))
+const DISCOVER = TITLES.map(([title, year, cat], i) => ({
+  id: i === 0 ? 693134 : 90001 + i, media_type: cat.endsWith('剧集') ? 'tv' : 'movie', title, year, vote: 7 + (i % 3) * 0.6, poster: '',
+  overview: '演示条目的简介。',
+}))
+const subRoutes: Record<string, unknown> = {
+  '/subscriptions': { data: SUBS },
+  '/subscribe/config': {
+    re0_spent_today: 5,
+    data: {
+      enabled: true, air_delay_hours: 6, movie_wait: 'digital', max_subs_per_round: 10, max_tries_per_sub: 3, max_snap_dirs: 40,
+      re0_unlock_max: 10, re0_daily_budget: 30, exclude_default: '预告,花絮', notify: 'created,ingested,stalled',
+      offline_mode: 'pack', offline_wait_hours: 24, offline_monthly: 30, offline_reserve: 10,
+      cond: { pix: '2160p,1080p', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },
+    },
+  },
+  '/tmdb/discover': (q: URLSearchParams) =>
+    q.get('list')
+      ? { data: DISCOVER, has_more: false }
+      : { lists: [{ key: 'trending', label: '本周趋势' }, { key: 'movie_popular', label: '热门电影' }, { key: 'tv_popular', label: '热门剧集' }] },
+  '/guanying/config': { base_url: 'https://www.gyg.si', username: 'demo', logged_in: true },
+  '/guanying/check': { logged_in: true },
+  '/pansou/config': { base_url: 'https://pansou.app' },
+  '/mukaku/config': { base_url: 'https://www.mukaku.com', has_token: false },
+  '/re0/config': { base_url: 'https://re0.me', client_id: 'demo', client_secret: '••••', authorized: true, authorized_as: 'demo' },
+  '/re0/check': { app_ok: true, app_name: 'StrmStation', authorized: true, user: 'demo', level: 'V3', points: 128 },
+  '/re0/checkin': { enabled: true, done_today: true, hour: 8, last_result: '签到成功 +3 积分' },
+}
+for (const s of SUBS) {
+  subRoutes[`/subscriptions/${s.id}`] = {
+    data: s,
+    grid:
+      s.media_type === 'tv'
+        ? [{ season: 1, eps: Array.from({ length: Math.min(s.total, 24) }, (_, i) => ({ e: i + 1, state: i < s.total - s.missing ? 'have' : i < s.total - s.missing + s.inflight ? 'inflight' : 'missing' })) }]
+        : undefined,
+    attempts: [
+      { id: 1, source: 'pansou', kind: 'share115', title: `${s.title} 2160p 内封中字`, url: 'https://115cdn.com/s/demo', wrapper: '', episodes: ['S01E09'], status: 'ingested', reason: '', points: 0, link_id: 0, records: 1, created_at: new Date(Date.now() - 86_400_000).toISOString() },
+    ],
+  }
+}
+
 const ROUTES: Record<string, Route> = {
+  ...(subRoutes as Record<string, Route>),
   '/config/setting': (q: URLSearchParams) => {
     const v = SETTINGS[q.get('key') ?? '']
     return v === undefined ? {} : { value: JSON.stringify(v) }

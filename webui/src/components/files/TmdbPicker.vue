@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { onMounted, ref } from 'vue'
 import { Star } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
-import HChip from '@/components/hero/HChip.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSkeleton from '@/components/hero/HSkeleton.vue'
 import PosterImage from '@/components/PosterImage.vue'
@@ -85,7 +85,7 @@ const isPicked = (it: TmdbCandidate) => picked.value?.id === it.id && picked.val
         />
         <div class="cand-body">
           <div class="cand-head">
-            <HChip :color="it.media_type === 'tv' ? 'accent' : 'warning'">{{ it.media_type === 'tv' ? '剧集' : '电影' }}</HChip>
+            <MediaTypeChip :type="it.media_type" />
             <b class="cand-title">{{ it.title }}</b>
             <span class="cand-meta">{{ it.year }}</span>
             <span class="cand-meta">tmdb={{ it.id }}</span>

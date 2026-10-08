@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -225,9 +226,6 @@ function showMsg(r: OrganizeRecord) {
   return !(r.status === 'success' && r.message.startsWith('→'))
 }
 
-function typeText(t: string) {
-  return t === 'tv' ? '剧集' : t === 'movie' ? '电影' : ''
-}
 
 // ---- 文件清单展开 ----
 const expanded = ref(new Set<number>())
@@ -612,7 +610,7 @@ async function clearAll() {
                 <b v-if="r.title" class="title">{{ r.title }}</b>
                 <b v-else class="title untitled">未识别</b>
                 <span v-if="r.year" class="dim">{{ r.year }}</span>
-                <HChip v-if="typeText(r.media_type)">{{ typeText(r.media_type) }}</HChip>
+                <MediaTypeChip :type="r.media_type" />
                 <a
                   v-if="r.tmdb_id"
                   class="dim link"

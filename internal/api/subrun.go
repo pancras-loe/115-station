@@ -219,7 +219,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	cfg := loadSubscribeCfg()
 	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1}
 	if r.target == "" {
-		return nil, errors.New("未配置转存目录（影视转存 → 链接转存）")
+		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
 	ops, err := h.newPan115Ops()
 	if err != nil {

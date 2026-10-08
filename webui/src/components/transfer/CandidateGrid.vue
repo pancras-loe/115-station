@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import HChip from '@/components/hero/HChip.vue'
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import HSpinner from '@/components/hero/HSpinner.vue'
 import { Star } from '@lucide/vue'
 import PosterImage from '@/components/PosterImage.vue'
@@ -48,7 +48,7 @@ const emit = defineEmits<{ pick: [TmdbCandidate]; skip: [] }>()
           </div>
           <div class="cand-title">{{ it.title }}</div>
           <div class="cand-meta">
-            <HChip :color="it.media_type === 'tv' ? 'accent' : 'warning'">{{ it.media_type === 'tv' ? '剧集' : '电影' }}</HChip>
+            <MediaTypeChip :type="it.media_type" />
             <span v-if="it.year">{{ it.year }}</span>
             <span v-if="it.vote" class="vote"><Star :size="11" />{{ it.vote.toFixed(1) }}</span>
           </div>

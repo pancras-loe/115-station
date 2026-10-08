@@ -27,7 +27,7 @@ const META: Record<WsSlot['key'], { label: string; desc: string; icon: Component
     label: '转存',
     desc: '分享转存 / 离线下载落地，守望者自动接管整理',
     icon: FolderInput,
-    to: { name: 'media-transfer', query: { tab: 'link' } },
+    to: { name: 'media-transfer', query: { tab: 'settings' } },
   },
   pending: { label: '待整理', desc: '手动丢进来的素材，定时整理会处理', icon: Inbox, to: { name: 'organize', query: { tab: 'basic' } } },
   existing: { label: '已存在', desc: '洗版判输或重复的文件搬到这里', icon: Copy, to: { name: 'organize', query: { tab: 'basic' } } },

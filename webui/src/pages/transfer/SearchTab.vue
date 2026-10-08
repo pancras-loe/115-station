@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
-import { ArrowLeft, BellPlus, BellRing, Search } from '@lucide/vue'
+import { ArrowLeft, BellPlus, BellRing, FolderInput, Search } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
@@ -12,8 +13,8 @@ import DiscoverPanel from '@/components/transfer/DiscoverPanel.vue'
 import ResourcePanel from '@/components/transfer/ResourcePanel.vue'
 import SubscribeDialog from '@/components/subscribe/SubscribeDialog.vue'
 import type { SubTarget } from '@/components/subscribe/SubscribeDialog.vue'
-import { subscribeApi } from '@/api'
 import type { Subscription } from '@/api/subscribe'
+import { useSubscriptions } from '@/composables/subscriptions'
 import { resourcesApi, transferApi } from '@/api'
 import type { TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo, ResourceQuery } from '@/api/transfer'
@@ -90,24 +91,20 @@ function pick(c: TmdbCandidate, origin: 'pick' | 'idle' = 'pick') {
     query: { tmdb_id: c.id, type: c.media_type, title: c.title, original_title: c.original_title, year: c.year },
   }
   stage.value = 'resources'
-  void loadSub(c)
 }
 
-// ---- 订阅：选定影片后可以直接订阅，订阅过的显示进度、点了去订阅页 ----
-const sub = ref<Subscription | null>(null)
+// ---- 订阅：选定影片后可以直接订阅，订阅过的显示进度、点了在原地打开详情抽屉 ----
+// 订阅过没有直接看页面上那份订阅列表：抽屉里取消订阅、改状态都会刷新它，这里跟着变
+const subs = useSubscriptions()
+const sub = computed(() => {
+  const c = selected.value?.cand
+  return c ? subs.findSub(c.id, c.media_type) : null
+})
 const subOpen = ref(false)
 const subTarget = computed<SubTarget | null>(() => {
   const c = selected.value?.cand
   return c ? { tmdb_id: c.id, media_type: c.media_type, title: c.title, year: c.year, poster: c.poster } : null
 })
-async function loadSub(c: TmdbCandidate) {
-  sub.value = null
-  try {
-    sub.value = (await subscribeApi.of(c.id, c.media_type)).data
-  } catch {
-    // 查不到不影响找资源
-  }
-}
 function subLabel(s: Subscription) {
   if (s.state === 'done') return '已订阅 · 已完成'
   if (s.media_type === 'movie') return '已订阅'
@@ -143,37 +140,40 @@ const selOwned = computed(() => {
 
 <template>
   <div class="stack">
-    <SectionCard>
-      <div class="bar">
-        <HInput
-          v-model="input"
-          class="bar-input"
-          placeholder="片名（中英文均可）或 TMDB ID"
-          :input-attrs="{ 'aria-label': '片名或 TMDB ID', autocomplete: 'off' }"
-          @enter="go"
-        />
-        <HButton variant="primary" :loading="busy" @click="go">
-          <template #icon><Search :size="15" /></template>
-          搜索
-        </HButton>
-      </div>
+    <!-- 搜索条不套卡片：一行输入框 + 按钮，转存目录挤在同一行右侧（MoviePilot 也是顶栏一个搜索框，不占一整块） -->
+    <div class="bar">
+      <HInput
+        v-model="input"
+        class="bar-input"
+        placeholder="搜索片名（中英文均可）或 TMDB ID"
+        :input-attrs="{ 'aria-label': '片名或 TMDB ID', autocomplete: 'off' }"
+        @enter="go"
+      />
+      <HButton variant="primary" :loading="busy" @click="go">
+        <template #icon><Search :size="15" /></template>
+        搜索
+      </HButton>
       <div class="bar-sub">
         <template v-if="looksLikeLink">
-          <span class="kind">这是下载链接，不是片名</span>
+          <span class="kind">这是下载链接</span>
           <button type="button" class="link" @click="toLinkTab">带到「链接转存」提交</button>
         </template>
-        <template v-else>
-          <span v-if="folderPath">找到的资源转存到 <b class="mono">{{ folderPath }}</b>，完成后自动整理入库</span>
-          <span v-else-if="srcState" class="warn">还没设置转存目录，分享链接转存不了</span>
-          <button type="button" class="link" @click="router.push({ query: { tab: 'link' } })">
-            {{ folderPath ? '更改' : '去设置' }}
-          </button>
-        </template>
+        <button
+          v-else-if="srcState"
+          type="button"
+          class="folder"
+          :title="folderPath ? `找到的资源转存到 ${folderPath}，完成后自动整理入库。点击更改` : '去设置转存目录'"
+          @click="router.push({ query: { tab: 'settings' } })"
+        >
+          <FolderInput :size="14" />
+          <span v-if="folderPath" class="mono">{{ folderPath }}</span>
+          <span v-else class="warn">还没设置转存目录</span>
+        </button>
       </div>
-    </SectionCard>
+    </div>
 
     <!-- 榜单用 v-show 保活：点进一部再「换一部」回来，页签与翻到的页数还在 -->
-    <SectionCard v-show="stage === 'idle'" title="趋势与热门" hint="TMDB 榜单，点一部直接去各站找资源">
+    <SectionCard v-show="stage === 'idle'" title="趋势与热门">
       <DiscoverPanel @pick="(c) => pick(c, 'idle')" />
     </SectionCard>
 
@@ -199,9 +199,7 @@ const selOwned = computed(() => {
             </HButton>
             <h2 class="sel-title">{{ selected.query.title }}</h2>
             <span v-if="selected.query.year" class="sel-year">{{ selected.query.year }}</span>
-            <HChip v-if="selected.cand" :color="selected.cand.media_type === 'tv' ? 'accent' : 'warning'">
-              {{ selected.cand.media_type === 'tv' ? '剧集' : '电影' }}
-            </HChip>
+            <MediaTypeChip v-if="selected.cand" :type="selected.cand.media_type" />
             <HChip v-if="selOwned" color="success">已入库{{ selOwned.category ? ` · ${selOwned.category}` : '' }}</HChip>
             <template v-if="selected.cand">
               <HButton
@@ -209,7 +207,7 @@ const selOwned = computed(() => {
                 variant="secondary"
                 size="sm"
                 class="sub-btn"
-                @click="router.push({ name: 'subscriptions', query: { sub: String(sub.id) } })"
+                @click="subs.openDetail(sub.id)"
               >
                 <template #icon><BellRing :size="14" /></template>
                 {{ subLabel(sub) }}
@@ -228,7 +226,7 @@ const selOwned = computed(() => {
       </div>
       <ResourcePanel :query="selected.query" :sources="sources" />
     </SectionCard>
-    <SubscribeDialog v-model:show="subOpen" :target="subTarget" @saved="(s) => (sub = s)" />
+    <SubscribeDialog v-model:show="subOpen" :target="subTarget" @saved="subs.load()" />
   </div>
 </template>
 
@@ -236,7 +234,7 @@ const selOwned = computed(() => {
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 .bar {
   display: flex;
@@ -244,29 +242,30 @@ const selOwned = computed(() => {
   align-items: center;
 }
 .bar-input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
+  max-width: 560px;
 }
 .bar-sub {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 12px;
-  margin-top: 8px;
+  gap: 4px 10px;
+  min-width: 0;
+  margin-left: auto;
   font-size: 12.5px;
   color: var(--muted);
 }
 .bar-sub .kind {
   color: var(--accent);
 }
-.bar-sub .warn {
+.warn {
   color: var(--warning);
 }
 .mono {
   font-family: var(--font-mono);
-  font-weight: 500;
-  color: var(--foreground);
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .link {
   all: unset;
@@ -275,6 +274,25 @@ const selOwned = computed(() => {
 }
 .link:hover {
   text-decoration: underline;
+}
+.folder {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 280px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--default);
+  color: var(--muted);
+  cursor: pointer;
+}
+.folder:hover {
+  color: var(--foreground);
+}
+.folder:focus-visible {
+  outline: 2px solid var(--focus);
 }
 
 .sel {
@@ -330,7 +348,12 @@ const selOwned = computed(() => {
     flex-wrap: wrap;
   }
   .bar-input {
+    flex: 1 1 0;
+    max-width: none;
+  }
+  .bar-sub {
     flex-basis: 100%;
+    margin-left: 0;
   }
   .sel-poster {
     width: 56px;

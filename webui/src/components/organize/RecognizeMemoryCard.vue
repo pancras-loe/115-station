@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MediaTypeChip from '@/components/MediaTypeChip.vue'
 /**
  * 识别记忆：人工在「待确认」里改指定、或重新整理选了别的条目时记下的
  * 「片名 + 年份 → TMDB 条目」。同名内容下次直接采用，所以记错了要能在这里删掉。
@@ -7,10 +8,8 @@
 import { computed, onMounted, ref } from 'vue'
 import HTooltip from '@/components/hero/HTooltip.vue'
 import HButton from '@/components/hero/HButton.vue'
-import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
-import { heroTone } from '@/components/hero/tone'
 import { RefreshCw, Search, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -121,9 +120,7 @@ function shortDate(s: string) {
         </div>
         <div class="target">
           <span class="arrow">→</span>
-          <HChip :color="heroTone(r.media_type === 'tv' ? 'info' : 'default')">
-            {{ r.media_type === 'tv' ? '剧集' : '电影' }}
-          </HChip>
+          <MediaTypeChip :type="r.media_type" />
           <a
             class="title"
             :href="`https://www.themoviedb.org/${r.media_type}/${r.tmdb_id}`"

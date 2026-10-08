@@ -9,7 +9,6 @@ import {
   Clapperboard,
   ArrowDownUp,
   Download,
-  BellRing,
   Settings,
   MessageSquare,
   Blocks,
@@ -45,7 +44,6 @@ export const navItems: NavItem[] = [
   { name: 'tasks', label: '任务中心', icon: ListChecks },
 
   { name: 'media-transfer', label: '影视转存', icon: Download, group: '传输' },
-  { name: 'subscriptions', label: '资源订阅', icon: BellRing },
   { name: 'upload-download', label: '监控上传', icon: ArrowDownUp },
 
   { name: 'settings', label: '系统配置', icon: Settings, group: '系统' },
