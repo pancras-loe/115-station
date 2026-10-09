@@ -239,19 +239,37 @@ func ensure115PathUncached(cookie, parentCid, dirPath string, onCreate func(cid 
 	return currentCid, nil
 }
 
+// move115Form 组装 webapi files/move 的表单。
+//
+// 字段格式以 p115client fs_move 为准：fid[0]、fid[1]...（重复的裸 fid 已失效）。
+//
+// conflict_policy 逐个 fid 显式写 keep_both（重名时后到的改名加「(1)」）：
+// p115client 0.0.9.7（2026-09-30）的 fs_move 文档写明不传时**文件默认 replace，
+// 目标文件被覆盖、不可恢复**，文件夹默认 keep_both。现场我们见到的一直是「(1)」，
+// orgdup.go / orgdupscan.go 的撞名处理也建立在这个行为上；但洗版判输、「已存在」
+// 整批搬进 已存在 / 冗余 时目标里本来就可能有同名文件，默认值一旦按文档生效就是静默丢文件，
+// 所以不赌默认值。目录也写 keep_both，免得哪天默认成 merge 把两部片并进一个目录。
+// OpenAPI 的 /open/ufile/move 文档没有这个参数（只有 file_ids / to_cid），那条通道管不了。
+func move115Form(targetCid string, fileIds []string) url.Values {
+	form := url.Values{
+		"pid": {targetCid},
+	}
+	policy := make(map[string]map[string]string, len(fileIds))
+	for i, fid := range fileIds {
+		form.Set(fmt.Sprintf("fid[%d]", i), fid)
+		policy[fid] = map[string]string{"action": "keep_both"}
+	}
+	b, _ := json.Marshal(policy)
+	form.Set("conflict_policy", string(b))
+	return form
+}
+
 // move115Files 将文件/文件夹移动到目标目录
 func move115Files(cookie, targetCid string, fileIds []string) error {
 	if len(fileIds) == 0 {
 		return nil
 	}
-	// 字段格式以 p115client fs_move 为准：fid[0]、fid[1]...（重复的裸 fid 已失效）
-	form := url.Values{
-		"pid": {targetCid},
-	}
-	for i, fid := range fileIds {
-		form.Set(fmt.Sprintf("fid[%d]", i), fid)
-	}
-	body, err := httpPostForm115("https://webapi.115.com/files/move", form, cookie, 20*time.Second)
+	body, err := httpPostForm115("https://webapi.115.com/files/move", move115Form(targetCid, fileIds), cookie, 20*time.Second)
 	if err != nil {
 		return err
 	}

@@ -336,8 +336,18 @@ func get115DownloadURLForUA(pickcode, cookie, signUA string) (string, map[string
 		}
 	}
 
-	// ---- 回退：GET https://webapi.115.com/files/download?pickcode=xxx ----
 	dlFastClear() // app 通道整体失败：清粘滞回全序
+
+	// ---- 回退一：POST webapi files/download（加密载荷）----
+	// 封禁 / 受限的大文件 App 接口拿不到，只有它能拿到，见 web115DownloadPost
+	u, hdrs, webErr := web115DownloadPost(pickcode, cookie, signUA)
+	if webErr == nil {
+		return u, hdrs, nil
+	}
+	appErr += "；[webapi POST]: " + webErr.Error()
+
+	// ---- 回退二：GET https://webapi.115.com/files/download?pickcode=xxx ----
+	// 不超过 200 MB 的文件（含已删除 / 封禁的）它仍能给，留着兜底
 	apiURL := "https://webapi.115.com/files/download"
 	params := fmt.Sprintf("pickcode=%s", pickcode)
 	fullURL := apiURL + "?" + params
@@ -388,6 +398,85 @@ func get115DownloadURLForUA(pickcode, cookie, signUA string) (string, map[string
 		return string(m[1]), nil, nil
 	}
 	return "", nil, fmt.Errorf("获取下载链接失败 [app接口]: %s；[webapi接口]: %s", appErr, truncateStr(string(body), 150))
+}
+
+// web115DownloadPost 网页端取直链的加密写法：POST webapi files/download，
+// 表单 data = encrypt115({"pickcode": …})，响应的 data 字段同样要 decrypt115。
+//
+// 出处 p115client 0.0.9.7（2026-09-30）的 download_url_web（默认改成 POST）
+// 与 tool/download.py get_url 的说明：
+//   - 不超过 200 MB 的文件：已删除、被封禁的也能拿到链接（旧的 GET 写法也是这样）；
+//   - 超过 200 MB 的文件：没删除就能用这个网页接口拿到，没封禁才能用 App 接口拿到。
+// 所以被封禁 / 受限（is_collect）的大视频，App 接口和旧 GET 都不给链接，只有它能拿到；
+// 上游 iter_115_to_115 也因此去掉了「受限文件超过 200 MB 就跳过」。
+// 直链与 App 接口一样绑定请求时的 UA，CDN 要求 f=3 时还要回带响应的 Set-Cookie。
+func web115DownloadPost(pickcode, cookie, signUA string) (string, map[string]string, error) {
+	payload, _ := json.Marshal(map[string]string{"pickcode": pickcode})
+	form := url.Values{"data": {encrypt115(payload)}}
+	body, resp, err := post115FormResp("https://webapi.115.com/files/download", form, cookie, signUA, 15*time.Second)
+	if err != nil {
+		return "", nil, err
+	}
+	u, err := parseWebDownloadPost(body)
+	if err != nil {
+		return "", nil, err
+	}
+	var parts []string
+	for _, ck := range resp.Cookies() {
+		parts = append(parts, ck.Name+"="+ck.Value)
+	}
+	headers := map[string]string{"User-Agent": signUA}
+	if len(parts) > 0 {
+		headers["Cookie"] = strings.Join(parts, "; ")
+	}
+	return u, headers, nil
+}
+
+// parseWebDownloadPost 解析 web115DownloadPost 的响应（纯函数，便于测试）。
+// 解密后的 data 里链接在 file_url（p115client download_url 的 web 分支读的就是它）；
+// 目录、文件不存在时 state=false，原样把 error / errno 报出去
+func parseWebDownloadPost(body []byte) (string, error) {
+	var env struct {
+		State json.RawMessage `json:"state"`
+		ErrNo int             `json:"errno"`
+		Error string          `json:"error"`
+		Msg   string          `json:"msg"`
+		Data  json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return "", fmt.Errorf("响应非 JSON: %s", truncateStr(string(body), 150))
+	}
+	if !openStateOK(env.State) {
+		msg := env.Error
+		if msg == "" {
+			msg = env.Msg
+		}
+		if msg == "" {
+			msg = "未知错误"
+		}
+		if env.ErrNo != 0 {
+			msg += fmt.Sprintf("（errno=%d）", env.ErrNo)
+		}
+		return "", fmt.Errorf("拒绝: %s", msg)
+	}
+	var cipher string
+	if json.Unmarshal(env.Data, &cipher) != nil || cipher == "" {
+		return "", fmt.Errorf("响应无加密数据: %s", truncateStr(string(body), 150))
+	}
+	plain, err := decrypt115(cipher)
+	if err != nil {
+		return "", fmt.Errorf("解密失败: %v", err)
+	}
+	var d struct {
+		FileURL string `json:"file_url"`
+	}
+	if json.Unmarshal(plain, &d) == nil && d.FileURL != "" {
+		return d.FileURL, nil
+	}
+	if m := reJSONURL.FindSubmatch(plain); m != nil {
+		return string(m[1]), nil
+	}
+	return "", fmt.Errorf("解密后无链接: %s", truncateStr(string(plain), 150))
 }
 
 // post115Form 带 Cookie 的 115 表单 POST（可指定 UA，空串表示发空 UA 头）
