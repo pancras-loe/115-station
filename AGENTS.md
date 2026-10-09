@@ -3,6 +3,7 @@
 面向 AI 编码助手与新加入的开发者。阅读本文即可掌握项目定位、目录结构、关键约定与雷区。
 用户向文档见 [README.md](README.md) 与 [USAGE.md](USAGE.md)。
 **动 115 接口前先看 `docs/115-station-notes/REFERENCES.md`**（仓库内，但 `/docs/` 已 gitignore，不会提交）—— 外部参考项目清单与已验证的接口事实。
+**动 Emby 接口前先看 `docs/emby-api/README.md`**（同样不入库）—— Emby 4.10 REST API 中文参考：按路径的接口总表、各服务参数表、数据结构，以及本项目踩过的坑。
 
 ---
 
@@ -538,6 +539,7 @@ git tag v1.2.0 && git push origin v1.2.0
 | 改空目录清理 | `internal/api/emptydir.go` 的 `pruneEmptyDirTree` / `pruneOrMove`；守卫见 §6.8 |
 | 改深度删除 | `internal/api/deepdel.go`：执行在 `runDeepDelete`、事件范围在 `deepDelEventRows`、守卫在 `checkLibRoots`、网盘空目录在 `pruneDeepDelDirs`；Emby 事件那条线在 `deepdelemby.go`。**先读 §6.10 再动**，配套测试 `deepdel_test.go` / `deepdelemby_test.go`；整体设计与 Emby 事件的真实载荷见 `docs/115-station-notes/DEEP-DELETE-PLAN.md` |
 | 想知道旧版某功能怎么做的 | 查 Git 历史中的 `web/`；现役实现在 `webui/` |
+| 查某个 Emby 接口怎么调 | `docs/emby-api/ENDPOINTS.md` 按路径 grep，再点进 `services/` 看参数、`schemas/` 看返回结构；查询经验与雷区在 `README.md` 和 `guides/browsing.md`。规范不是全集（如 `/Items` 的 `IsVirtualItem` 没列但可用），新踩的坑补进 `_gen/notes.txt` 后重新生成 |
 | 查某个 115 接口怎么调 | `docs/115-station-notes/REFERENCES.md` 的「115 接口实现」，再到 `p115client/client.py` 或 `115driver/pkg/driver/` 里 grep |
 | 做同步/整理类功能 | `docs/115-station-notes/REFERENCES.md` 的「STRM 同步类项目」，里面有五个项目的策略对比 |
 | 动增量同步任何一环 | 先读 `docs/115-station-notes/INCR-SYNC-UPGRADE.md` —— 2026-09 那轮改造的完整记录：每处改动的原因、与其他项目的逐项对比、踩过的坑、当时验证到什么程度。`§0 速查` 里有文件职责表、新增配置项、以及「改造自己引入的两笔债」是怎么还的 |
