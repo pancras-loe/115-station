@@ -75,8 +75,14 @@ async function save() {
       <FieldRow label="一轮最多检查" hint="到期的订阅超过这个数时，剩下的下一分钟接着查">
         <div class="unit"><HNumberInput v-model="cfg.max_subs_per_round" :min="1" :max="50" aria-label="订阅数" /><span>个订阅</span></div>
       </FieldRow>
-      <FieldRow label="每个订阅最多试" hint="一轮里按顺序试几条资源，缺的补齐就停">
-        <div class="unit"><HNumberInput v-model="cfg.max_tries_per_sub" :min="1" :max="10" aria-label="资源数" /><span>条资源</span></div>
+      <FieldRow label="每个订阅一轮最多补" hint="按集数算：一条分享常常只有一集，补到这么多集就停，剩下的下一轮（约 30 分钟后）接着找">
+        <div class="unit"><HNumberInput v-model="cfg.max_eps_per_sub" :min="1" :max="500" aria-label="集数" /><span>集</span></div>
+      </FieldRow>
+      <FieldRow label="连续没用上就停" hint="提交失败、分享里没有缺的集都算；用上一条就重新计数">
+        <div class="unit"><HNumberInput v-model="cfg.max_fails_per_sub" :min="1" :max="20" aria-label="资源数" /><span>条资源</span></div>
+      </FieldRow>
+      <FieldRow label="资源之间歇" hint="试完一条再试下一条前等一会儿（±30% 随机），叠在 115 请求节流之上，免得连着列分享、转存被风控；0 = 不歇">
+        <div class="unit"><HNumberInput v-model="cfg.try_cooldown_sec" :min="0" :max="120" aria-label="秒" /><span>秒</span></div>
       </FieldRow>
       <FieldRow label="列分享最多进" hint="按集挑选要把分享逐个目录列一遍，每个目录一次 115 请求（走节流）">
         <div class="unit"><HNumberInput v-model="cfg.max_snap_dirs" :min="1" :max="200" aria-label="目录数" /><span>个目录</span></div>

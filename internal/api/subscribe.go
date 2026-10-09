@@ -59,8 +59,13 @@ type subscribeCfg struct {
 	AirDelayHours   int    `json:"air_delay_hours"`
 	MovieWait       string `json:"movie_wait"`
 	MaxSubsPerRound int    `json:"max_subs_per_round"`
-	MaxTriesPerSub  int    `json:"max_tries_per_sub"`
-	MaxSnapDirs     int    `json:"max_snap_dirs"` // 列一个分享最多进几个目录（每个目录一次节流后的请求）
+	// 一个订阅一轮的尝试：补到 MaxEpsPerSub 集就停（一条分享常常只有一集，按条数限会三集一轮），
+	// 连续 MaxFailsPerSub 条没用上（失败 / 里面没有缺的）就停，两条之间隔 TryCooldownSec 秒（±30% 抖动）。
+	// 口径参考 P115StrgmSub：单次同步上限按转存数算（默认 50），请求之间带抖动的间隔
+	MaxEpsPerSub   int `json:"max_eps_per_sub"`
+	MaxFailsPerSub int `json:"max_fails_per_sub"`
+	TryCooldownSec int `json:"try_cooldown_sec"`
+	MaxSnapDirs    int `json:"max_snap_dirs"` // 列一个分享最多进几个目录（每个目录一次节流后的请求）
 	// RE0 自动解锁：单条积分 ≤ Re0UnlockMax 才解锁，0 = 不自动解锁；Re0DailyBudget 每天上限，0 = 不限
 	Re0UnlockMax   int    `json:"re0_unlock_max"`
 	Re0DailyBudget int    `json:"re0_daily_budget"`
@@ -95,7 +100,9 @@ func defaultSubscribeCfg() subscribeCfg {
 		AirDelayHours:   3,
 		MovieWait:       subMovieWaitDigital,
 		MaxSubsPerRound: 10,
-		MaxTriesPerSub:  3,
+		MaxEpsPerSub:    50,
+		MaxFailsPerSub:  3,
+		TryCooldownSec:  5,
 		MaxSnapDirs:     30,
 		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
 		Notify:          "created,submit,ingested,done,stalled",
@@ -137,8 +144,14 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	if c.MaxSubsPerRound <= 0 || c.MaxSubsPerRound > 50 {
 		c.MaxSubsPerRound = d.MaxSubsPerRound
 	}
-	if c.MaxTriesPerSub <= 0 || c.MaxTriesPerSub > 10 {
-		c.MaxTriesPerSub = d.MaxTriesPerSub
+	if c.MaxEpsPerSub <= 0 || c.MaxEpsPerSub > 500 {
+		c.MaxEpsPerSub = d.MaxEpsPerSub
+	}
+	if c.MaxFailsPerSub <= 0 || c.MaxFailsPerSub > 20 {
+		c.MaxFailsPerSub = d.MaxFailsPerSub
+	}
+	if c.TryCooldownSec < 0 || c.TryCooldownSec > 120 {
+		c.TryCooldownSec = d.TryCooldownSec
 	}
 	if c.MaxSnapDirs <= 0 || c.MaxSnapDirs > 200 {
 		c.MaxSnapDirs = d.MaxSnapDirs

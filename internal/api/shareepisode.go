@@ -30,6 +30,9 @@ type sharePickOpts struct {
 	Rank func(name string) int
 	// Accept 资源条件（subCond.fileOK）：hasSub = 同目录有跟着它的字幕。nil = 不限
 	Accept func(e shareEntry, hasSub bool) (bool, string)
+	// MaxEps 剧集最多挑几集（订阅一轮的集数上限还剩多少），超了留集号靠前的；0 = 不限。
+	// 双集文件只要沾上留下的集就整个要，所以可能多出一集
+	MaxEps int
 }
 
 // sharePick 挑选结果
@@ -234,9 +237,43 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 		out = append(out, v)
 	}
 	sortEpKeys(res.Covered)
+	if o.MaxEps > 0 && len(res.Covered) > o.MaxEps {
+		out, res.Covered = capEpisodeVideos(out, res.Covered[:o.MaxEps], o.Missing)
+	}
 	// 按路径排，转存与日志顺序稳定
 	sort.Slice(out, func(i, j int) bool {
 		return path.Join(out[i].e.Dir, out[i].e.Name) < path.Join(out[j].e.Dir, out[j].e.Name)
 	})
 	return out
+}
+
+// capEpisodeVideos 只留覆盖了 keep 里某一集的视频，Covered 按留下的重算
+func capEpisodeVideos(vids []shareVideo, keep []epKey, missing map[epKey]bool) ([]shareVideo, []epKey) {
+	want := map[epKey]bool{}
+	for _, k := range keep {
+		want[k] = true
+	}
+	var out []shareVideo
+	var covered []epKey
+	seen := map[epKey]bool{}
+	for _, v := range vids {
+		hit := false
+		for _, k := range v.eps {
+			if want[k] {
+				hit = true
+			}
+		}
+		if !hit {
+			continue
+		}
+		out = append(out, v)
+		for _, k := range v.eps {
+			if missing[k] && !seen[k] {
+				seen[k] = true
+				covered = append(covered, k)
+			}
+		}
+	}
+	sortEpKeys(covered)
+	return out, covered
 }

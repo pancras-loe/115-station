@@ -139,7 +139,9 @@ export interface SubscribeConfig {
   air_delay_hours: number
   movie_wait: 'digital' | 'theatrical_plus' | 'now'
   max_subs_per_round: number
-  max_tries_per_sub: number
+  max_eps_per_sub: number
+  max_fails_per_sub: number
+  try_cooldown_sec: number
   max_snap_dirs: number
   re0_unlock_max: number
   re0_daily_budget: number

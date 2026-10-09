@@ -209,7 +209,7 @@ func TestSubRunnerDropsWrapperOnFailure(t *testing.T) {
 	}
 	sub := &model.Subscription{ID: 1, MediaType: "movie", Title: "片"}
 	c := subCand{Item: ResourceItem{Source: "tg", Kind: "magnet", Action: "offline", Title: "片 2024", URL: "magnet:?xt=urn:btih:5555555555555555555555555555555555555555"}, Hash: "5555", Covers: 1}
-	att, covered := r.tryOne(sub, c, map[epKey]bool{{}: true})
+	att, covered := r.tryOne(sub, c, map[epKey]bool{{}: true}, 50)
 	if att.Status != subAttemptFailed || att.RetryAt == nil || len(covered) != 0 {
 		t.Fatalf("提交失败应记失败、可重试: %+v", att)
 	}
@@ -302,5 +302,37 @@ func TestSubCreatedText(t *testing.T) {
 	mv := &model.Subscription{Title: "片", MediaType: "movie"}
 	if s := subCreatedText(mv, subEval{Total: 0, Unaired: 1, NextAt: next}, nil); s != "订阅《片》：电影\n还没到发行日期，10-12 开始找" {
 		t.Fatalf("电影: %q", s)
+	}
+}
+
+// 连续几条没用上就停这一轮；两条之间歇一下（冷却）
+func TestSubRunnerStopsAfterConsecutiveFails(t *testing.T) {
+	newTestDB(t, "subrun-fails.db")
+	mag := func(hash string) ResourceItem {
+		return ResourceItem{Source: "tg", Kind: "magnet", Action: "offline", Title: "片 2024 1080p",
+			URL: "magnet:?xt=urn:btih:" + strings.Repeat(hash, 40), Relevant: true, Rank: -1}
+	}
+	items := []ResourceItem{mag("a"), mag("b"), mag("c"), mag("d")}
+	cfg := defaultSubscribeCfg()
+	cfg.MaxFailsPerSub = 2
+	var tries, naps int
+	r := &subRunner{
+		h: &Handler{DB: model.DB}, cfg: cfg, target: "T", re0Left: -1, now: time.Now,
+		search:  func(*model.Subscription) ([]ResourceItem, string) { return items, "" },
+		mkdir:   func(parent, name string) (string, error) { return "W", nil },
+		rmdir:   func(cid string) error { return nil },
+		offline: func(link, target string) (int, string, uint) { tries++; return 502, "115 说不行", 0 },
+		sleep:   func(time.Duration) bool { naps++; return true },
+	}
+	sub := &model.Subscription{ID: 1, TmdbID: 1, MediaType: "movie", Title: "片"}
+	var item subRunItem
+	if r.searchAndSubmit(sub, subEval{Missing: []epKey{{}}}, &item) {
+		t.Fatal("全失败不该算提交")
+	}
+	if tries != 2 || naps != 1 {
+		t.Fatalf("应试 2 条、中间歇 1 次: tries=%d naps=%d", tries, naps)
+	}
+	if !strings.Contains(item.Note, "连续 2 条资源没用上") {
+		t.Fatalf("应说明为什么停: %q", item.Note)
 	}
 }

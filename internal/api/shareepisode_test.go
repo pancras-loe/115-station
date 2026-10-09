@@ -260,3 +260,22 @@ func TestShareReceiveCoreAndPicked(t *testing.T) {
 		t.Fatalf("来源链接登记不对: %+v", picked)
 	}
 }
+
+// 订阅一轮的集数上限：只留集号靠前的，字幕跟着留下的视频走
+func TestPickShareEpisodesMaxEps(t *testing.T) {
+	entries := []shareEntry{
+		fileE("e3", "S01E03.mkv", 1), fileE("e1", "S01E01.mkv", 1), fileE("e1s", "S01E01.chs.ass", 1),
+		fileE("e2", "S01E02.mkv", 1), fileE("e4", "S01E04.mkv", 1), fileE("e4s", "S01E04.chs.ass", 1),
+	}
+	missing := map[epKey]bool{{1, 1}: true, {1, 2}: true, {1, 3}: true, {1, 4}: true}
+	p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: missing, MaxEps: 2})
+	if got := pickIDs(p); !reflect.DeepEqual(got, []string{"e1", "e1s", "e2"}) {
+		t.Fatalf("挑中 %v（%s）", got, p.summary())
+	}
+	if !reflect.DeepEqual(p.Covered, []epKey{{1, 1}, {1, 2}}) {
+		t.Fatalf("Covered = %v", p.Covered)
+	}
+	if p := pickShareEpisodes(entries, sharePickOpts{MediaType: "tv", Missing: missing}); len(p.Covered) != 4 {
+		t.Fatalf("不限时应挑满 4 集: %v", p.Covered)
+	}
+}

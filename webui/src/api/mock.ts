@@ -322,7 +322,7 @@ const subRoutes: Record<string, unknown> = {
   '/subscribe/config': {
     re0_spent_today: 5,
     data: {
-      enabled: true, air_delay_hours: 6, movie_wait: 'digital', max_subs_per_round: 10, max_tries_per_sub: 3, max_snap_dirs: 40,
+      enabled: true, air_delay_hours: 6, movie_wait: 'digital', max_subs_per_round: 10, max_eps_per_sub: 50, max_fails_per_sub: 3, try_cooldown_sec: 5, max_snap_dirs: 40,
       re0_unlock_max: 10, re0_daily_budget: 30, exclude_default: '预告,花絮', notify: 'created,ingested,stalled',
       offline_mode: 'pack', offline_wait_hours: 24, offline_monthly: 30, offline_reserve: 10,
       cond: { pix: '2160p,1080p', type: '', effect: '', video: '', audio: '', team: '', zh: true, min_gb: 0, max_gb: 0 },

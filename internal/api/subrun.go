@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"sort"
 	"strings"
 	"sync"
@@ -181,6 +182,8 @@ type subRunner struct {
 	re0Files func(slug string) (*re0Preview, error)
 	// identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
 	identity func(sub *model.Subscription) (subIdentity, error)
+	// sleep 两条资源之间的冷却（subSleep）；nil = 不歇（测试）
+	sleep func(d time.Duration) bool
 }
 
 func execSubscribeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
@@ -237,7 +240,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		return nil, err
 	}
 	cfg := loadSubscribeCfg()
-	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1}
+	r := &subRunner{h: h, cfg: cfg, tc: tc, target: h.shareFolderCid(), now: time.Now, re0Left: -1, sleep: subSleep}
 	if r.target == "" {
 		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
 	}
@@ -519,9 +522,18 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	cands, over := planSubCandidates(items, pctx)
 	r.recordOverLimit(sub, over, tried)
 
-	submitted, tries, paidUsed, offlineUsed := false, 0, false, false
+	// got 这一轮补上了几集（电影算 1）；fails 连续没用上几条，用上一条就清零
+	submitted, tries, got, fails, paidUsed, offlineUsed := false, 0, 0, 0, false, false
 	for i, c := range cands {
-		if len(missing) == 0 || tries >= r.cfg.MaxTriesPerSub || subLane.stopRequested() {
+		if len(missing) == 0 || subLane.stopRequested() {
+			break
+		}
+		if got >= r.cfg.MaxEpsPerSub {
+			item.Note = joinNote(item.Note, fmt.Sprintf("这一轮补了 %d 集，到了上限，剩下的下一轮接着找", got))
+			break
+		}
+		if fails >= r.cfg.MaxFailsPerSub {
+			item.Note = joinNote(item.Note, fmt.Sprintf("连续 %d 条资源没用上，这一轮先停", fails))
 			break
 		}
 		if c.Paid > 0 && (paidUsed || r.stopPaid || (r.re0Left >= 0 && c.Paid > r.re0Left)) {
@@ -545,9 +557,12 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 				continue
 			}
 		}
+		if tries > 0 && !r.cooldown() {
+			break
+		}
 		tries++
 		subLane.setSub("尝试资源", i+1, len(cands), truncateStr(c.Item.Title, 40))
-		att, covered := r.tryOne(sub, c, missing)
+		att, covered := r.tryOne(sub, c, missing, r.cfg.MaxEpsPerSub-got)
 		if att.Points > 0 {
 			paidUsed = true
 		}
@@ -556,12 +571,14 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			r.offlineSpent()
 		}
 		if att.Status == subAttemptInflight {
-			submitted = true
+			submitted, fails = true, 0
+			got += max(len(covered), 1)
 			for _, k := range covered {
 				delete(missing, k)
 			}
 			item.Submitted = append(item.Submitted, fmt.Sprintf("%s · %s：%s", botSourceLabel(c.Item.Source), truncateStr(c.Item.Title, 50), subEpisodesText(sub, covered)))
 		} else {
+			fails++
 			item.Tried = append(item.Tried, fmt.Sprintf("%s：%s", truncateStr(c.Item.Title, 50), att.Reason))
 		}
 	}
@@ -570,6 +587,31 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		r.notifyKind("submit", "📥 订阅已提交资源", fmt.Sprintf("订阅《%s》：\n%s\n完成后自动整理入库", sub.Title, strings.Join(item.Submitted, "\n")), sub)
 	}
 	return submitted
+}
+
+// cooldown 两条资源之间歇一下：TryCooldownSec 秒、±30% 抖动（P115StrgmSub 的 RateLimiter 同款），
+// 叠在全局节流之上 —— 节流管单个请求，这里管「一条接一条地列分享、转存」的整体节奏。
+// 返回 false = 歇的时候被叫停了
+func (r *subRunner) cooldown() bool {
+	if r.sleep == nil || r.cfg.TryCooldownSec <= 0 {
+		return !subLane.stopRequested()
+	}
+	d := time.Duration(r.cfg.TryCooldownSec) * time.Second
+	d += time.Duration((rand.Float64()*0.6 - 0.3) * float64(d))
+	subLane.setSub("资源之间歇一下", 0, 0, fmt.Sprintf("%.1f 秒", d.Seconds()))
+	return r.sleep(d)
+}
+
+// subSleep 可被「停止」打断的等待
+func subSleep(d time.Duration) bool {
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		if subLane.stopRequested() {
+			return false
+		}
+		time.Sleep(min(500*time.Millisecond, time.Until(end)))
+	}
+	return !subLane.stopRequested()
 }
 
 // coversRipe 估计的范围里有没有还缺、且播出够久可以下离线的
@@ -730,7 +772,8 @@ func (r *subRunner) recordOverLimit(sub *model.Subscription, over []subCand, tri
 
 // tryOne 试一条资源：换链接 →（分享）列目录按集挑 / （离线）整包 → 建包装目录 → 提交。
 // 返回落库的尝试与这次能补上的集
-func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey]bool) (model.SubAttempt, []epKey) {
+// maxEps 这一条最多补几集（这一轮的集数上限还剩多少）：分享按它截，离线挑不了集不截
+func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey]bool, maxEps int) (model.SubAttempt, []epKey) {
 	db := r.h.DB
 	now := r.now()
 	att := model.SubAttempt{SubID: sub.ID, Hash: c.Hash, Source: c.Item.Source, Kind: c.Item.Kind,
@@ -768,7 +811,7 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 
 	switch rl.Action {
 	case "transfer":
-		return r.tryShare(sub, c, rl, missing, &att, fail)
+		return r.tryShare(sub, c, rl, missing, maxEps, &att, fail)
 	case "offline":
 		return r.tryOffline(sub, c, rl, missing, &att, fail)
 	}
@@ -786,7 +829,7 @@ func (r *subRunner) re0SpentText(sub *model.Subscription, c subCand) string {
 type subFailFn func(reason string, retry bool) (model.SubAttempt, []epKey)
 
 // tryShare 分享：列整棵树 → 只挑缺的集 → 转进包装目录
-func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, missing map[epKey]bool, att *model.SubAttempt, fail subFailFn) (model.SubAttempt, []epKey) {
+func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, missing map[epKey]bool, maxEps int, att *model.SubAttempt, fail subFailFn) (model.SubAttempt, []epKey) {
 	db := r.h.DB
 	att.Kind = "share"
 	subLane.setSub("列分享目录", 0, 0, truncateStr(c.Item.Title, 40))
@@ -795,7 +838,9 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	if err != nil {
 		return fail(err.Error(), true)
 	}
-	pick := pickShareEpisodes(entries, r.sharePickOpts(sub, c.Item, missing))
+	opts := r.sharePickOpts(sub, c.Item, missing)
+	opts.MaxEps = maxEps
+	pick := pickShareEpisodes(entries, opts)
 	covered := pick.Covered
 	if sub.MediaType == "movie" && len(pick.Picks) > 0 {
 		covered = []epKey{{}}
