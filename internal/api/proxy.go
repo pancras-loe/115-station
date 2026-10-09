@@ -407,6 +407,7 @@ func get115DownloadURLForUA(pickcode, cookie, signUA string) (string, map[string
 // 与 tool/download.py get_url 的说明：
 //   - 不超过 200 MB 的文件：已删除、被封禁的也能拿到链接（旧的 GET 写法也是这样）；
 //   - 超过 200 MB 的文件：没删除就能用这个网页接口拿到，没封禁才能用 App 接口拿到。
+//
 // 所以被封禁 / 受限（is_collect）的大视频，App 接口和旧 GET 都不给链接，只有它能拿到；
 // 上游 iter_115_to_115 也因此去掉了「受限文件超过 200 MB 就跳过」。
 // 直链与 App 接口一样绑定请求时的 UA，CDN 要求 f=3 时还要回带响应的 Set-Cookie。

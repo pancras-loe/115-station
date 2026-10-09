@@ -137,7 +137,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 带 - 的 tag（v1.2.0-rc1）按预发布发，不会被当成 latest 推给用户
+          # 版本号按日期写：v26.10.9，同一天再发 v26.10.9-2、-3……，序号版也是正式版，照常推给用户。
+          # 只有 - 后面带字母的（v26.10.9-rc1）才按预发布发，不会被当成 latest。
+          # 与 update.go 的 parseVersion 同口径，改一边要改另一边
           pre=""
-          case "${GITHUB_REF_NAME}" in *-*) pre="--prerelease" ;; esac
+          case "${GITHUB_REF_NAME}" in
+            *-*[!0-9]*) pre="--prerelease" ;;
+          esac
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag $pre

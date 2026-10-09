@@ -162,10 +162,13 @@ CI 行为：push 到 `master` 或打 `v*` tag 时触发（PR 只跑测试与构�
 发版：
 
 ```bash
-git tag v1.2.0 && git push origin v1.2.0
+git tag v26.10.9 && git push origin v26.10.9
 ```
 
-版本号按语义化版本走：只修 bug 升 patch，加功能升 minor，要用户改配置 / 迁数据的破坏性改动升 major。
+版本号按发版日期写：`v{年后两位}.{月}.{日}`，月、日不补零（2026-10-09 → `v26.10.9`）。
+同一天再发就加序号：第二次 `v26.10.9-2`、第三次 `-3`……先 `git fetch --tags` 看当天到第几了。
+序号版也是正式版，照常提示用户更新（同一天发几次就提示几次）；`-` 后面带字母的（`v26.10.9-rc1`）才是预发布、不提示。
+这条规则在 CI 的 `release` job（`*-*[!0-9]*` 才加 `--prerelease`）与 `update.go` 的 `parseVersion`（纯数字后缀认成同日序号）各写了一份，改一边要改另一边。
 版本号不写在任何文件里，git tag 是唯一来源（`checkout` 要 `fetch-depth: 0`，否则 `git describe` 看不到 tag）。
 
 > **关于镜像发布的两个坑**：
@@ -238,10 +241,10 @@ git tag v1.2.0 && git push origin v1.2.0
    宿主机 root。用户更新走 `docker compose pull && docker compose up -d`，**不要再把自更新加回来**
    （Watchtower 之类的外部方案也别往本站里接）。
    2026-09-30 起有**更新检测**（`update.go`，维护者明确只要到这一层）：版本号 = CI 里 `git describe --tags`
-   注入的 `main.Version`（正式版 `v1.2.0`，两版之间的 master 构建 `v1.2.0-3-gabc1234`，本地构建 `dev`），
+   注入的 `main.Version`（正式版 `v26.10.9`，同日序号版 `v26.10.9-2`，两版之间的 master 构建 `v26.10.9-3-gabc1234`，本地构建 `dev`；`parseVersion` 先比「年.月.日」三段，同一天再比序号，`v26.10.9-4` 比 `v26.10.9` 新，别按 semver 把 `-4` 当预发布），
    后台每 12 小时读一次 GitHub `releases/latest`（走全局代理），界面「系统配置 → 版本更新」与侧栏小点提示，
    可选推一次通知（`update_notified` 记账，同一版本只推一次）。dev / 裸提交号构建不做新旧比较。
-   **发版 = 推一个 `v*` tag**：CI 出镜像后 `release` job 自动建 Release（`--generate-notes`），带 `-` 的 tag 按预发布发、不会提示给用户。
+   **发版 = 推一个 `v*` tag**：CI 出镜像后 `release` job 自动建 Release（`--generate-notes`）；同日序号版（`-2` `-3`）是正式版，`-` 后带字母的（`-rc1`）才按预发布发、不会提示给用户。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刷 Emby → 本轮片目入刮削队列），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename/delete 以及新建目录（`mkdir` / `ensurePath`，否则 `new_folder` 会触发整目录递归遍历）都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过

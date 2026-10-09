@@ -22,7 +22,8 @@ import (
 // 用户照提示自己跑 docker compose pull && docker compose up -d。
 //
 // 版本号的来源是 git tag：CI 用 `git describe --tags` 算出来注入（main.Version），
-// 正式版是 `v1.2.0`，两个版本之间的 master 构建是 `v1.2.0-3-gabc1234`（比 v1.2.0 新 3 个提交）。
+// 正式版按日期写 `v26.10.9`，同一天再发 `v26.10.9-2`（也是正式版），两个版本之间的 master 构建是
+// `v26.10.9-3-gabc1234`（比 v26.10.9 新 3 个提交）。
 // 新版本以 GitHub Releases 的 latest 为准（打 v* tag 时 CI 自动建 Release，预发布不算）。
 
 // updateRepo 检测更新看的仓库
@@ -231,13 +232,19 @@ func (h *Handler) CheckUpdateNow(c *gin.Context) {
 type semVer struct {
 	major, minor, patch int
 	pre                 string // 预发布标记（-rc1 之类），有它的比同号正式版旧
+	seq                 int    // 同日序号：v26.10.9-4 的 4，当天第一版 v26.10.9 是 0
 	ahead               int    // git describe 的「比 tag 新几个提交」
 }
 
 // describeRe 匹配 git describe 的尾巴：-3-gabc1234（可能还跟着 -dirty）
 var describeRe = regexp.MustCompile(`-(\d+)-g[0-9a-f]+(-dirty)?$`)
 
-// parseVersion 认 v1.2.3 / 1.2.3 / v1.2.3-rc1 / v1.2.3-4-gabc1234；dev 和裸提交号认不出
+// parseVersion 认 v1.2.3 / 1.2.3 / v1.2.3-rc1 / v1.2.3-4-gabc1234；dev 和裸提交号认不出。
+//
+// 版本号按发版日期写（v26.10.9），同一天再发是 v26.10.9-2、-3……（AGENTS.md §4）。
+// 按 semver 的读法 -4 是预发布、比 v26.10.9 旧，装着 -4 的用户会被一直提示「更新」到当天第一版；
+// 所以纯数字的 - 后缀认成同日序号（正式版），只有带字母的（-rc1）才是预发布。
+// git describe 的尾巴先剥：v26.10.9-4-1-gabc1234 = -4 之后 1 个提交，v26.10.9-3-gabc1234 = 当天第一版之后 3 个提交
 func parseVersion(s string) (semVer, bool) {
 	var v semVer
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
@@ -248,6 +255,9 @@ func parseVersion(s string) (semVer, bool) {
 	core := s
 	if i := strings.IndexAny(s, "-+"); i >= 0 {
 		core, v.pre = s[:i], s[i+1:]
+		if n, err := strconv.Atoi(v.pre); err == nil && n > 0 && s[i] == '-' {
+			v.seq, v.pre = n, ""
+		}
 	}
 	parts := strings.Split(core, ".")
 	if len(parts) != 3 {
@@ -281,18 +291,17 @@ func compareVersion(a, b semVer) int {
 			return sign(d)
 		}
 	}
-	// 同号：rank 预发布 < 正式版 < 正式版之后的开发构建
-	return sign(versionRank(a) - versionRank(b))
-}
-
-func versionRank(v semVer) int {
-	switch {
-	case v.pre != "":
-		return 0
-	case v.ahead > 0:
-		return 2
+	// 同号：预发布 < 正式版（同日序号版按序号排）< 它之后的开发构建
+	if (a.pre != "") != (b.pre != "") {
+		if a.pre != "" {
+			return -1
+		}
+		return 1
 	}
-	return 1
+	if d := a.seq - b.seq; d != 0 {
+		return sign(d)
+	}
+	return sign(a.ahead - b.ahead)
 }
 
 func sign(n int) int {
