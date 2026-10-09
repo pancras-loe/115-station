@@ -78,8 +78,8 @@ async function save() {
       <FieldRow label="每个订阅一轮最多补" hint="按集数算：一条分享常常只有一集，补到这么多集就停，剩下的下一轮（约 30 分钟后）接着找">
         <div class="unit"><HNumberInput v-model="cfg.max_eps_per_sub" :min="1" :max="500" aria-label="集数" /><span>集</span></div>
       </FieldRow>
-      <FieldRow label="连续没用上就停" hint="提交失败、分享里没有缺的集都算；用上一条就重新计数">
-        <div class="unit"><HNumberInput v-model="cfg.max_fails_per_sub" :min="1" :max="20" aria-label="资源数" /><span>条资源</span></div>
+      <FieldRow label="一轮最多试" hint="搜到的资源从头试到尾，没用上的接着试下一条；这个上限只防一次搜出几百条，平时碰不到">
+        <div class="unit"><HNumberInput v-model="cfg.max_res_per_sub" :min="1" :max="200" aria-label="资源数" /><span>条资源</span></div>
       </FieldRow>
       <FieldRow label="资源之间歇" hint="试完一条再试下一条前等一会儿（±30% 随机），叠在 115 请求节流之上，免得连着列分享、转存被风控；0 = 不歇">
         <div class="unit"><HNumberInput v-model="cfg.try_cooldown_sec" :min="0" :max="120" aria-label="秒" /><span>秒</span></div>

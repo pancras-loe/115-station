@@ -140,7 +140,7 @@ export interface SubscribeConfig {
   movie_wait: 'digital' | 'theatrical_plus' | 'now'
   max_subs_per_round: number
   max_eps_per_sub: number
-  max_fails_per_sub: number
+  max_res_per_sub: number
   try_cooldown_sec: number
   max_snap_dirs: number
   re0_unlock_max: number

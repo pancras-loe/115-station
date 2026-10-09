@@ -60,10 +60,13 @@ type subscribeCfg struct {
 	MovieWait       string `json:"movie_wait"`
 	MaxSubsPerRound int    `json:"max_subs_per_round"`
 	// 一个订阅一轮的尝试：补到 MaxEpsPerSub 集就停（一条分享常常只有一集，按条数限会三集一轮），
-	// 连续 MaxFailsPerSub 条没用上（失败 / 里面没有缺的）就停，两条之间隔 TryCooldownSec 秒（±30% 抖动）。
-	// 口径参考 P115StrgmSub：单次同步上限按转存数算（默认 50），请求之间带抖动的间隔
+	// 一轮最多试 MaxResPerSub 条（只防一次搜出几百条的极端情况），两条之间隔 TryCooldownSec 秒（±30% 抖动）。
+	// 口径参考 P115StrgmSub：搜到的结果从头试到尾，只按转存数设上限（默认 50），请求之间带抖动的间隔。
+	// 别加「连续几条没用上就停」：排序看相关性与画质，和分享里有没有缺的集无关，
+	// 加上之后前面一长串没用的资源要拖几十轮（没提交的轮次还按 1h→24h 退避）才轮到后面能用的。
+	// 键名不复用旧的 max_tries_per_sub：保存过设置的老配置里那个值是 3
 	MaxEpsPerSub   int `json:"max_eps_per_sub"`
-	MaxFailsPerSub int `json:"max_fails_per_sub"`
+	MaxResPerSub   int `json:"max_res_per_sub"`
 	TryCooldownSec int `json:"try_cooldown_sec"`
 	MaxSnapDirs    int `json:"max_snap_dirs"` // 列一个分享最多进几个目录（每个目录一次节流后的请求）
 	// RE0 自动解锁：单条积分 ≤ Re0UnlockMax 才解锁，0 = 不自动解锁；Re0DailyBudget 每天上限，0 = 不限
@@ -101,7 +104,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		MovieWait:       subMovieWaitDigital,
 		MaxSubsPerRound: 10,
 		MaxEpsPerSub:    50,
-		MaxFailsPerSub:  3,
+		MaxResPerSub:    50,
 		TryCooldownSec:  5,
 		MaxSnapDirs:     30,
 		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
@@ -147,8 +150,8 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	if c.MaxEpsPerSub <= 0 || c.MaxEpsPerSub > 500 {
 		c.MaxEpsPerSub = d.MaxEpsPerSub
 	}
-	if c.MaxFailsPerSub <= 0 || c.MaxFailsPerSub > 20 {
-		c.MaxFailsPerSub = d.MaxFailsPerSub
+	if c.MaxResPerSub <= 0 || c.MaxResPerSub > 200 {
+		c.MaxResPerSub = d.MaxResPerSub
 	}
 	if c.TryCooldownSec < 0 || c.TryCooldownSec > 120 {
 		c.TryCooldownSec = d.TryCooldownSec

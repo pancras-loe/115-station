@@ -522,8 +522,8 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	cands, over := planSubCandidates(items, pctx)
 	r.recordOverLimit(sub, over, tried)
 
-	// got 这一轮补上了几集（电影算 1）；fails 连续没用上几条，用上一条就清零
-	submitted, tries, got, fails, paidUsed, offlineUsed := false, 0, 0, 0, false, false
+	// got 这一轮补上了几集（电影算 1）。候选从头试到尾，没用上的不提前停（见 subscribeCfg.MaxResPerSub）
+	submitted, tries, got, paidUsed, offlineUsed := false, 0, 0, false, false
 	for i, c := range cands {
 		if len(missing) == 0 || subLane.stopRequested() {
 			break
@@ -532,8 +532,8 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			item.Note = joinNote(item.Note, fmt.Sprintf("这一轮补了 %d 集，到了上限，剩下的下一轮接着找", got))
 			break
 		}
-		if fails >= r.cfg.MaxFailsPerSub {
-			item.Note = joinNote(item.Note, fmt.Sprintf("连续 %d 条资源没用上，这一轮先停", fails))
+		if tries >= r.cfg.MaxResPerSub {
+			item.Note = joinNote(item.Note, fmt.Sprintf("这一轮试了 %d 条资源，到了上限，剩下的下一轮接着试", tries))
 			break
 		}
 		if c.Paid > 0 && (paidUsed || r.stopPaid || (r.re0Left >= 0 && c.Paid > r.re0Left)) {
@@ -571,14 +571,13 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			r.offlineSpent()
 		}
 		if att.Status == subAttemptInflight {
-			submitted, fails = true, 0
+			submitted = true
 			got += max(len(covered), 1)
 			for _, k := range covered {
 				delete(missing, k)
 			}
 			item.Submitted = append(item.Submitted, fmt.Sprintf("%s · %s：%s", botSourceLabel(c.Item.Source), truncateStr(c.Item.Title, 50), subEpisodesText(sub, covered)))
 		} else {
-			fails++
 			item.Tried = append(item.Tried, fmt.Sprintf("%s：%s", truncateStr(c.Item.Title, 50), att.Reason))
 		}
 	}

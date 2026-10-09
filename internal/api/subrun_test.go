@@ -305,16 +305,16 @@ func TestSubCreatedText(t *testing.T) {
 	}
 }
 
-// 连续几条没用上就停这一轮；两条之间歇一下（冷却）
-func TestSubRunnerStopsAfterConsecutiveFails(t *testing.T) {
+// 没用上的不提前停，试满一轮上限才停；两条之间歇一下（冷却）
+func TestSubRunnerTriesUpToLimit(t *testing.T) {
 	newTestDB(t, "subrun-fails.db")
 	mag := func(hash string) ResourceItem {
 		return ResourceItem{Source: "tg", Kind: "magnet", Action: "offline", Title: "片 2024 1080p",
 			URL: "magnet:?xt=urn:btih:" + strings.Repeat(hash, 40), Relevant: true, Rank: -1}
 	}
-	items := []ResourceItem{mag("a"), mag("b"), mag("c"), mag("d")}
+	items := []ResourceItem{mag("a"), mag("b"), mag("c"), mag("d"), mag("e")}
 	cfg := defaultSubscribeCfg()
-	cfg.MaxFailsPerSub = 2
+	cfg.MaxResPerSub = 4
 	var tries, naps int
 	r := &subRunner{
 		h: &Handler{DB: model.DB}, cfg: cfg, target: "T", re0Left: -1, now: time.Now,
@@ -329,10 +329,10 @@ func TestSubRunnerStopsAfterConsecutiveFails(t *testing.T) {
 	if r.searchAndSubmit(sub, subEval{Missing: []epKey{{}}}, &item) {
 		t.Fatal("全失败不该算提交")
 	}
-	if tries != 2 || naps != 1 {
-		t.Fatalf("应试 2 条、中间歇 1 次: tries=%d naps=%d", tries, naps)
+	if tries != 4 || naps != 3 {
+		t.Fatalf("应试满 4 条、中间歇 3 次: tries=%d naps=%d", tries, naps)
 	}
-	if !strings.Contains(item.Note, "连续 2 条资源没用上") {
+	if !strings.Contains(item.Note, "这一轮试了 4 条资源，到了上限") {
 		t.Fatalf("应说明为什么停: %q", item.Note)
 	}
 }
