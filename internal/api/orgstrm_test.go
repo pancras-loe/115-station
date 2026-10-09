@@ -20,6 +20,7 @@ func newTestDB(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sqlDB.Close() })
+	resetSubShareWalks()
 }
 
 // 整理直接落盘的 STRM 路径必须和全量/增量同步算出来的完全一致，

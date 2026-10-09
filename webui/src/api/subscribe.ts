@@ -147,6 +147,8 @@ export interface SubscribeConfig {
   max_res_per_sub: number
   try_cooldown_sec: number
   max_snap_dirs: number
+  /** 一轮先列几条排在前面的 115 分享、按文件实际能补几集重排，0 = 不预看 */
+  share_preview_max: number
   re0_unlock_max: number
   re0_daily_budget: number
   exclude_default: string

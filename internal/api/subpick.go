@@ -101,6 +101,10 @@ type subCand struct {
 	Hash   string // 去重键（SubAttempt.Hash）
 	Cov    resCoverage
 	Covers int // 估计能补几集（电影 1）
+	// Reach 能补到的最靠后的一缺集（越接近已播出的最新一集越好）；Span 资源里一共几集（文件更多的在前）。
+	// 预看过分享的按文件算，其余按标题估计；都只在能补的集数一样时才比
+	Reach epKey
+	Span  int
 	// Stale 发布时间早于缺集里最早那集的播出日：不可能有缺的集（「持续更新」的分享内容会变，所以只排后、不丢）
 	Stale bool
 	Paid  int // 要花的 RE0 积分（0 = 不花）
@@ -272,6 +276,14 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			if cand.Cov.known() && cand.Covers == 0 {
 				continue // 写明了范围，缺的不在里面
 			}
+			for _, k := range c.Missing {
+				if cand.Cov.covers(k) && epKeyLess(cand.Reach, k) {
+					cand.Reach = k
+				}
+			}
+			if cand.Cov.EpLo > 0 && cand.Cov.EpHi >= cand.Cov.EpLo {
+				cand.Span = cand.Cov.EpHi - cand.Cov.EpLo + 1
+			}
 		}
 		// 离线只能整包下，标题估计不出覆盖缺集的不下（多出来的集交给整理去重，但不能全是多余的）。
 		// 115 离线配额按任务数扣，所以另有策略：只转存分享的不下、只下合集包的不下单集磁力、
@@ -322,7 +334,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 							c.skip("要花积分、文件预览" + pwhy)
 							continue
 						}
-						cand.Exact, cand.Covers = covered, len(covered)
+						cand.Exact, cand.Covers, cand.Reach = covered, len(covered), maxEpKey(covered)
 						cands = append(cands, cand)
 						continue
 					}
@@ -357,7 +369,8 @@ func containsAnyKeyword(lower string, kws []string) bool {
 }
 
 // sortSubCandidates 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
-// 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 → 洗版排名好的在前（没命中的最后）→ 新的在前。
+// 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 → 补到的集更接近最新已播出的在前 → 集数多的在前 →
+// 洗版排名好的在前（没命中的最后）→ 新的在前。
 // 别整体改成按时间倒序：一轮按集数限额、先提交的先占集，补老集时会让新发的低画质资源抢在高画质合集前面
 func sortSubCandidates(cs []subCand) {
 	rank := func(r int) int {
@@ -379,6 +392,12 @@ func sortSubCandidates(cs []subCand) {
 		}
 		if a.Paid != b.Paid {
 			return a.Paid < b.Paid
+		}
+		if a.Reach != b.Reach {
+			return epKeyLess(b.Reach, a.Reach)
+		}
+		if a.Span != b.Span {
+			return a.Span > b.Span
 		}
 		if ra, rb := rank(a.Item.Rank), rank(b.Item.Rank); ra != rb {
 			return ra < rb

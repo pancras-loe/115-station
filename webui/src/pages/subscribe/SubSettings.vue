@@ -93,6 +93,9 @@ async function save() {
       <FieldRow label="列分享最多进" hint="按集挑选要把分享逐个目录列一遍，每个目录一次 115 请求（走节流）">
         <div class="unit"><HNumberInput v-model="cfg.max_snap_dirs" :min="1" :max="200" aria-label="目录数" /><span>个目录</span></div>
       </FieldRow>
+      <FieldRow label="先看几条分享的文件" hint="很多整季包标题只写「剧名 4K」，看不出有几集。先列排在前面的几条 115 分享，按文件实际能补几集重排，整季包一次转完，不用一条条转单集；转存时直接用列出的结果，不会再列一次。0 = 不预看，只按标题排">
+        <div class="unit"><HNumberInput v-model="cfg.share_preview_max" :min="0" :max="30" aria-label="条数" /><span>条分享</span></div>
+      </FieldRow>
       <FieldRow label="排除词" hint="资源标题含任何一个就不要，所有订阅都生效（逗号分隔）；单个订阅还能另加">
         <HInput v-model="cfg.exclude_default" />
       </FieldRow>

@@ -73,6 +73,8 @@ type subscribeCfg struct {
 	MaxResPerSub   int `json:"max_res_per_sub"`
 	TryCooldownSec int `json:"try_cooldown_sec"`
 	MaxSnapDirs    int `json:"max_snap_dirs"` // 列一个分享最多进几个目录（每个目录一次节流后的请求）
+	// SharePreviewMax 一轮先列几条排在前面的 115 分享、按文件实际能补几集重排（subpreview.go），0 = 不预看
+	SharePreviewMax int `json:"share_preview_max"`
 	// RE0 自动解锁：单条积分 ≤ Re0UnlockMax 才解锁，0 = 不自动解锁；Re0DailyBudget 每天上限，0 = 不限
 	Re0UnlockMax   int    `json:"re0_unlock_max"`
 	Re0DailyBudget int    `json:"re0_daily_budget"`
@@ -113,6 +115,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		MaxResPerSub:     50,
 		TryCooldownSec:   5,
 		MaxSnapDirs:      30,
+		SharePreviewMax:  8,
 		ExcludeDefault:   "CAM,TS,TC,HDTC,枪版,抢先版",
 		Notify:           "created,submit,ingested,done,stalled",
 		NotifyVer:        subNotifyVer,
@@ -170,6 +173,9 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	}
 	if c.MaxSnapDirs <= 0 || c.MaxSnapDirs > 200 {
 		c.MaxSnapDirs = d.MaxSnapDirs
+	}
+	if c.SharePreviewMax < 0 || c.SharePreviewMax > 30 {
+		c.SharePreviewMax = d.SharePreviewMax
 	}
 	if c.Re0UnlockMax < 0 {
 		c.Re0UnlockMax = 0

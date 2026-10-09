@@ -42,7 +42,9 @@ type sharePick struct {
 	Videos  int          // 分享里的视频数（不含光盘结构）
 	Disc    int          // 光盘结构的视频（ISO / BDMV / VIDEO_TS），不挑
 	Unknown int          // 认不出集号的视频
-	InLib   int          // 库里已经有同一份（sha1 相同）的视频
+	// Episodes 分享里认得出的集一共几集（不只是缺的）：订阅预看分享时「集数多的在前」用
+	Episodes int
+	InLib    int // 库里已经有同一份（sha1 相同）的视频
 	// Rejected 不符合资源条件的视频，按原因计
 	Rejected map[string]int
 }
@@ -198,6 +200,8 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 		o.Remap(parsed)
 	}
 	var cands []shareVideo
+	all := map[epKey]bool{}
+	defer func() { res.Episodes = len(all) }()
 	for _, v := range vids {
 		p := parsed[v.e.ID]
 		if p == nil || p.Episode <= 0 {
@@ -206,6 +210,7 @@ func pickEpisodeVideos(vids []shareVideo, o sharePickOpts, res *sharePick) []sha
 		}
 		for _, e := range p.episodeList() {
 			v.eps = append(v.eps, epKey{p.Season, e})
+			all[epKey{p.Season, e}] = true
 		}
 		for _, k := range v.eps {
 			if o.Missing[k] {

@@ -536,6 +536,11 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	pctx.Re0Preview = r.re0PreviewFn(sub, missing)
 	cands, over := planSubCandidates(items, pctx)
 	r.recordOverLimit(sub, over, tried)
+	// 先列排在前面的几条分享，按文件实际能补几集重排（subpreview.go）
+	cands, ok := r.previewShares(sub, cands, missing)
+	if !ok {
+		return false
+	}
 
 	// got 这一轮补上了几集（电影算 1）。候选从头试到尾，没用上的不提前停（见 subscribeCfg.MaxResPerSub）
 	submitted, tries, got, paidUsed, offlineUsed := false, 0, 0, false, false
@@ -848,7 +853,8 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	att.Kind = "share"
 	subLane.setSub("列分享目录", 0, 0, truncateStr(c.Item.Title, 40))
 	shareCode := extractShareCode(rl.URL)
-	entries, title, truncated, err := shareWalk(shareCode, rl.Code, r.cookie, r.cfg.MaxSnapDirs)
+	w, _ := r.walkShare(shareCode, rl.Code) // 预看过的直接用，不列第二次
+	entries, title, truncated, err := w.entries, w.title, w.truncated, w.err
 	if err != nil {
 		return fail(err.Error(), true)
 	}
@@ -860,22 +866,7 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 		covered = []epKey{{}}
 	}
 	if len(pick.Picks) == 0 {
-		reason := "里面没有缺的集（" + pick.summary() + "）"
-		if sub.MediaType == "movie" {
-			reason = "里面没有能用的视频（" + pick.summary() + "）"
-		}
-		if truncated {
-			reason += "；分享太大，只看了一部分目录"
-		}
-		att.Status, att.Reason = subAttemptUseless, truncateStr(reason, 480)
-		now := r.now()
-		att.ResolvedAt = &now
-		if c.Cov.Ongoing || truncated {
-			t := now.Add(subRetryOngoing)
-			att.RetryAt = &t
-		}
-		db.Create(att)
-		return *att, nil
+		return r.recordShareUseless(sub, c, att, rl.URL, pick, truncated), nil
 	}
 	wrapper, cid, err := r.makeWrapper(sub, covered)
 	if err != nil {
