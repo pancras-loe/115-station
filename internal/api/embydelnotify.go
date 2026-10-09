@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,44 @@ func panDeleteTitle(label string) string {
 		return "🗑️ 网盘删除"
 	}
 	return "🗑️ 网盘删除 · " + label
+}
+
+// panDeleteNoticeMax 网盘删除通知里最多列几项
+const panDeleteNoticeMax = 5
+
+// panDeleteNotice 网盘删除的通知标题与正文。paths 是这条事件认领的网盘删除路径（takeEmbyPanDeleted）：
+// 就是条目自己时照条目类型写；是剧集 / 季下面的几集时（Emby 只推了一条 Series 事件），
+// 标题按「单集」写、正文列出删了哪几集 —— 写成「网盘删除 · 剧集」会被读成整部剧没了
+func panDeleteNotice(label, content, itemPath string, paths []string) (string, string) {
+	self := embyDelKey(itemPath)
+	var names []string
+	files := true
+	for _, p := range paths {
+		if p == self {
+			continue
+		}
+		base := p[strings.LastIndex(p, "/")+1:]
+		if !strings.HasSuffix(strings.ToLower(base), ".strm") {
+			files = false
+		}
+		names = append(names, strings.TrimSuffix(base, filepath.Ext(base)))
+	}
+	if len(names) == 0 {
+		return panDeleteTitle(label), content + "\n115 网盘上已删除，增量同步已清理本地 STRM"
+	}
+	if files {
+		label = "单集"
+	}
+	lines := []string{fmt.Sprintf("%s · 删除 %d 项", content, len(names))}
+	for i, n := range names {
+		if i >= panDeleteNoticeMax {
+			lines = append(lines, fmt.Sprintf("…另有 %d 项", len(names)-panDeleteNoticeMax))
+			break
+		}
+		lines = append(lines, "- "+n)
+	}
+	lines = append(lines, "115 网盘上已删除，增量同步已清理本地 STRM")
+	return panDeleteTitle(label), strings.Join(lines, "\n")
 }
 
 // embyDeleteContent 删除通知正文：条目名，带上年份（名字里没有时）

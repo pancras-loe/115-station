@@ -149,13 +149,16 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		// 每条事件的深删都照跑：神医事件可能带着原生事件没有的定位信息
 		label, notifiable := embyDeleteKind(itemType)
 		title, content := "", itemName
+		var panPaths []string
+		if notifiable {
+			panPaths = takeEmbyPanDeleted(itemPath, embyIsDirItemType(itemType))
+		}
 		switch {
 		case !notifiable:
 			log.Printf("[Emby Webhook] ○ 目录条目的删除（%s，%s），不推通知", itemType, itemName)
-		case embyPanDeleted(itemPath):
+		case len(panPaths) > 0:
 			// 用户在 115 上删的，增量同步跟着清了 STRM：这是真删除，要推（写明是网盘那边删的）
-			title = panDeleteTitle(label)
-			content = embyDeleteContent(payload, itemName, event) + "\n115 网盘上已删除，增量同步已清理本地 STRM"
+			title, content = panDeleteNotice(label, embyDeleteContent(payload, itemName, event), itemPath, panPaths)
 			log.Printf("[Emby Webhook] %s %s", title, itemName)
 		case embySelfDeleted(itemPath) || (embyIsDirItemType(itemType) && embySelfDeletedRelated(itemPath)):
 			log.Printf("[Emby Webhook] 本站自产的删除事件（%s），跳过通知", itemName)

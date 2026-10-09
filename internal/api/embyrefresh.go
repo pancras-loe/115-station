@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -650,12 +651,36 @@ func embySelfDeleted(embyPath string) bool {
 	return ok
 }
 
-// embyPanDeleted 这条删除事件是不是网盘删除引起的。只认精确路径：
-// 删掉最后一集后 Emby 顺手收掉的季 / 剧集条目按包含关系会落到 embySelfDeletedRelated，当回声不推，
-// 否则删一集收两三条
-func embyPanDeleted(embyPath string) bool {
-	m, ok := embySelfDelMarkOf(embyPath)
-	return ok && m.pan
+// takeEmbyPanDeleted 这条删除事件是不是网盘删除引起的，返回它认领的网盘删除路径（空 = 不是）。
+//
+// 文件型条目只认精确路径。剧集 / 季条目（dir=true）还认它【下面】的网盘删除：
+// Emby 4.10 一次清掉同一部剧的几集时不逐集推事件，只推一条 Series 的 library.deleted
+// （标题「已移除了 凡人修仙传 中的 4 项」，Item.Path 是剧集目录）——2026-10-09 现场：
+// 网盘删了 4 集，按精确路径一条都对不上，被当成回声，一条消息都没有。
+//
+// 认领了就把这些标记降成普通自产标记（pan=false）：一份网盘删除只推一次。
+// 删一集时 Emby 若先推了 Episode、再顺手收掉空的季 / 剧集，后者已经没有可认领的，按回声不推；
+// 顺序反过来也一样。上级目录的网盘标记不认（整部剧删了时那是 Series 自己的精确路径）
+func takeEmbyPanDeleted(embyPath string, dir bool) []string {
+	k := embyDelKey(embyPath)
+	if k == "" {
+		return nil
+	}
+	embySelfDelMu.Lock()
+	defer embySelfDelMu.Unlock()
+	var out []string
+	for p, m := range embySelfDel {
+		if !m.pan || time.Since(m.at) > embySelfDeleteTTL {
+			continue
+		}
+		if p == k || (dir && strings.HasPrefix(p, k+"/")) {
+			out = append(out, p)
+			m.pan = false
+			embySelfDel[p] = m
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func embySelfDelMarkOf(embyPath string) (embySelfDelMark, bool) {

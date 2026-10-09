@@ -140,24 +140,51 @@ func TestEmbyDeleteKind(t *testing.T) {
 	}
 }
 
-// 网盘删除引起的删除只在精确路径上推「网盘删除」；Emby 顺手收掉的季 / 剧集按回声处理，
-// 改名 / 移动清掉的旧位置（普通自产标记）照旧不推
+// 网盘删除引起的删除推「网盘删除」，一份只推一次；改名 / 移动清掉的旧位置（普通自产标记）照旧不推
 func TestEmbyPanDeletedMarks(t *testing.T) {
 	embySelfDelMu.Lock()
 	embySelfDel = map[string]embySelfDelMark{}
 	embySelfDelMu.Unlock()
 	markEmbyDeleted("/media/动漫/凡人修仙传.2020", true)
 	markEmbyDeleted("/media/剧集/某剧/Season 1/某剧.S01E02.strm", true)
+	markEmbyDeleted("/media/剧集/某剧/Season 1/某剧.S01E03.strm", true)
+	markEmbyDeleted("/media/剧集/另一部/Season 1/另一部.S01E01.strm", true)
 	markEmbySelfDeleted("/media/电影/旧名.2020")
 
-	if !embyPanDeleted(`\media\动漫\凡人修仙传.2020\`) || !embySelfDeleted("/media/动漫/凡人修仙传.2020") {
+	if len(takeEmbyPanDeleted(`\media\动漫\凡人修仙传.2020\`, true)) != 1 || !embySelfDeleted("/media/动漫/凡人修仙传.2020") {
 		t.Fatal("网盘删掉的剧集目录应认作网盘删除")
 	}
-	if embyPanDeleted("/media/剧集/某剧") || !embySelfDeletedRelated("/media/剧集/某剧") {
-		t.Fatal("删一集后 Emby 收掉的剧集条目应按回声处理，不再推一条")
+	if takeEmbyPanDeleted("/media/动漫/凡人修仙传.2020", true) != nil {
+		t.Fatal("同一份网盘删除只推一次")
 	}
-	if embyPanDeleted("/media/电影/旧名.2020") || !embySelfDeleted("/media/电影/旧名.2020") {
+	// 文件型条目只认精确路径
+	if takeEmbyPanDeleted("/media/剧集/另一部", false) != nil {
+		t.Fatal("文件型条目不该认下面的路径")
+	}
+	// Emby 4.10 删几集只推一条 Series 事件（2026-10-09 现场）：认领下面的几集
+	got := takeEmbyPanDeleted("/media/剧集/某剧", true)
+	if len(got) != 2 {
+		t.Fatalf("Series 事件应认领下面两集，得到 %v", got)
+	}
+	// 之后 Emby 顺手收掉的季条目没有可认领的了，按回声处理
+	if takeEmbyPanDeleted("/media/剧集/某剧/Season 1", true) != nil || !embySelfDeletedRelated("/media/剧集/某剧/Season 1") {
+		t.Fatal("已推过的网盘删除，上级季条目应按回声处理")
+	}
+	// 反过来：Episode 事件先到认领了，再来的 Series 事件不重复推
+	if len(takeEmbyPanDeleted("/media/剧集/另一部/Season 1/另一部.S01E01.strm", false)) != 1 ||
+		takeEmbyPanDeleted("/media/剧集/另一部", true) != nil {
+		t.Fatal("Episode 先认领后 Series 不该再推")
+	}
+	if takeEmbyPanDeleted("/media/电影/旧名.2020", false) != nil || !embySelfDeleted("/media/电影/旧名.2020") {
 		t.Fatal("改名 / 移动的旧位置仍是回声")
+	}
+
+	title, content := panDeleteNotice("剧集", "某剧 (2020)", "/media/剧集/某剧", got)
+	if title != "🗑️ 网盘删除 · 单集" || !strings.Contains(content, "删除 2 项") || !strings.Contains(content, "- 某剧.S01E03") {
+		t.Fatalf("几集的网盘删除通知：%q %q", title, content)
+	}
+	if title, _ := panDeleteNotice("剧集", "凡人修仙传", "/media/动漫/凡人修仙传.2020", []string{"/media/动漫/凡人修仙传.2020"}); title != "🗑️ 网盘删除 · 剧集" {
+		t.Fatalf("整部剧删除标题 %q", title)
 	}
 	if panDeleteTitle("剧集") != "🗑️ 网盘删除 · 剧集" || panDeleteTitle("") != "🗑️ 网盘删除" {
 		t.Fatal("标题")
