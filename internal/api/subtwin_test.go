@@ -99,3 +99,19 @@ func TestPlanSubCandidatesTwin(t *testing.T) {
 		t.Fatalf("跳过原因: %v", skipped)
 	}
 }
+
+// RE0 是按 TMDB 编号列的资源，不过同名检查：标题再看不出是哪一部也是这一部
+func TestPlanSubCandidatesTwinSkipsRe0(t *testing.T) {
+	sub := &model.Subscription{ID: 1, MediaType: "tv", Title: "凡人修仙传"}
+	missing := []epKey{{S: 1, E: 190}}
+	zero := 0
+	items := []ResourceItem{
+		{Source: "re0", Kind: "share115", Action: "unlock", Title: "凡人修仙传 4K 全集", Ref: "slug1", Relevant: true, Points: &zero},
+		{Source: "tg", Kind: "share115", Action: "transfer", Title: "凡人修仙传 4K 全集", URL: "https://115.com/s/bbb", Relevant: true},
+	}
+	id := subIdentity{Anime: true, Year: "2020", Twins: []subTwin{{ID: 999, Kind: "tv", Title: "凡人修仙传", Year: "2025", Episodes: 30}}}
+	cands, _ := planSubCandidates(items, subPickCtx{Sub: sub, Missing: missing, Now: time.Now(), Re0Left: -1, Identity: &id})
+	if len(cands) != 1 || cands[0].Item.Source != "re0" {
+		t.Fatalf("RE0 的该留下、TG 的照旧跳过: %+v", cands)
+	}
+}

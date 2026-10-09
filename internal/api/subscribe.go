@@ -59,11 +59,15 @@ type subscribeCfg struct {
 	AirDelayHours   int    `json:"air_delay_hours"`
 	MovieWait       string `json:"movie_wait"`
 	MaxSubsPerRound int    `json:"max_subs_per_round"`
+	// 有缺、这轮没找到时多久再查（subsettle.go 的 subCadence）：缺的集里有刚播出的按 FreshIntervalMin，
+	// 只缺老集按 GapIntervalHours。固定间隔，不再指数退避
+	FreshIntervalMin int `json:"fresh_interval_min"`
+	GapIntervalHours int `json:"gap_interval_hours"`
 	// 一个订阅一轮的尝试：补到 MaxEpsPerSub 集就停（一条分享常常只有一集，按条数限会三集一轮），
 	// 一轮最多试 MaxResPerSub 条（只防一次搜出几百条的极端情况），两条之间隔 TryCooldownSec 秒（±30% 抖动）。
 	// 口径参考 P115StrgmSub：搜到的结果从头试到尾，只按转存数设上限（默认 50），请求之间带抖动的间隔。
 	// 别加「连续几条没用上就停」：排序看相关性与画质，和分享里有没有缺的集无关，
-	// 加上之后前面一长串没用的资源要拖几十轮（没提交的轮次还按 1h→24h 退避）才轮到后面能用的。
+	// 加上之后前面一长串没用的资源要拖几十轮（每轮之间隔着检查间隔）才轮到后面能用的。
 	// 键名不复用旧的 max_tries_per_sub：保存过设置的老配置里那个值是 3
 	MaxEpsPerSub   int `json:"max_eps_per_sub"`
 	MaxResPerSub   int `json:"max_res_per_sub"`
@@ -99,17 +103,19 @@ var subNotifyAdded = map[int]string{1: "ingested", 2: "created"}
 
 func defaultSubscribeCfg() subscribeCfg {
 	return subscribeCfg{
-		Enabled:         true,
-		AirDelayHours:   3,
-		MovieWait:       subMovieWaitDigital,
-		MaxSubsPerRound: 10,
-		MaxEpsPerSub:    50,
-		MaxResPerSub:    50,
-		TryCooldownSec:  5,
-		MaxSnapDirs:     30,
-		ExcludeDefault:  "CAM,TS,TC,HDTC,枪版,抢先版",
-		Notify:          "created,submit,ingested,done,stalled",
-		NotifyVer:       subNotifyVer,
+		Enabled:          true,
+		AirDelayHours:    3,
+		MovieWait:        subMovieWaitDigital,
+		MaxSubsPerRound:  10,
+		FreshIntervalMin: 60,
+		GapIntervalHours: 12,
+		MaxEpsPerSub:     50,
+		MaxResPerSub:     50,
+		TryCooldownSec:   5,
+		MaxSnapDirs:      30,
+		ExcludeDefault:   "CAM,TS,TC,HDTC,枪版,抢先版",
+		Notify:           "created,submit,ingested,done,stalled",
+		NotifyVer:        subNotifyVer,
 
 		OfflineMode:      subOfflinePack,
 		OfflineWaitHours: 24,
@@ -146,6 +152,12 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	}
 	if c.MaxSubsPerRound <= 0 || c.MaxSubsPerRound > 50 {
 		c.MaxSubsPerRound = d.MaxSubsPerRound
+	}
+	if c.FreshIntervalMin < 10 || c.FreshIntervalMin > 720 {
+		c.FreshIntervalMin = d.FreshIntervalMin
+	}
+	if c.GapIntervalHours < 1 || c.GapIntervalHours > 72 {
+		c.GapIntervalHours = d.GapIntervalHours
 	}
 	if c.MaxEpsPerSub <= 0 || c.MaxEpsPerSub > 500 {
 		c.MaxEpsPerSub = d.MaxEpsPerSub

@@ -175,14 +175,45 @@ func subMarkOfflineFailed(db *gorm.DB, linkID uint, name string) {
 
 // ==================== 排期 ====================
 
-// subBackoff 有缺、但这轮没找到能用的资源时，第 n 轮之后隔多久再看
-var subBackoff = []time.Duration{time.Hour, 3 * time.Hour, 6 * time.Hour, 12 * time.Hour, 24 * time.Hour}
+// 有缺、这轮没找到能用的资源时按固定间隔回来（2026-10-09 起，原来是 1h→24h 指数退避、约两周后每 3 天）：
+// 退避的毛病是新集播出那天查一次没找到，就被排到一天甚至三天之后，追更反而最慢。查一轮本身不发 115 请求
+// （缺集看台账、搜索打资源站），115 请求只在出现没试过的资源时才有，所以间隔只影响资源站的压力。
+//   - 缺的集里有刚播出的（播出日起 subFreshWindow 内）：按「新集」间隔（默认 1 小时），资源多在这几天里冒出来；
+//   - 只缺老集：按「补缺」间隔（默认 12 小时）。
 
-// subStalledRounds 连续这么多轮没找到算「长期找不到」：退避加起来约 14 天
-const subStalledRounds = 17
+// subFreshWindow 一集播出后多久之内算新集（从播出日 0 点算，TMDB 只有日期）
+const subFreshWindow = 72 * time.Hour
 
-// subStalledEvery 长期找不到的多久看一次
-const subStalledEvery = 72 * time.Hour
+// subStallAfter 补缺轮次连续没找到累计这么久算「长期找不到」：只改状态、推一次通知，不再放慢
+const subStallAfter = 14 * 24 * time.Hour
+
+// subCadence 两档检查间隔（配置里来）
+type subCadence struct {
+	Fresh time.Duration // 有刚播出的缺集
+	Gap   time.Duration // 只缺老集
+}
+
+func subCadenceOf(cfg subscribeCfg) subCadence {
+	return subCadence{Fresh: time.Duration(cfg.FreshIntervalMin) * time.Minute, Gap: time.Duration(cfg.GapIntervalHours) * time.Hour}
+}
+
+// stallRounds 补缺间隔下连续多少轮没找到算长期找不到
+func (c subCadence) stallRounds() int {
+	if c.Gap <= 0 {
+		return 1 << 30
+	}
+	return int((subStallAfter + c.Gap - 1) / c.Gap)
+}
+
+// hasFreshMissing 缺的集里有没有刚播出的
+func hasFreshMissing(ev subEval, now time.Time) bool {
+	for _, k := range ev.Missing {
+		if air, ok := ev.MissingAir[k]; ok && !air.IsZero() && air.Add(subFreshWindow).After(now) {
+			return true
+		}
+	}
+	return false
+}
 
 // subWaitAirMax 不缺、等下一集时最多隔多久回来看一眼排期
 const subWaitAirMax = 7 * 24 * time.Hour
@@ -199,7 +230,7 @@ type subSchedule struct {
 }
 
 // planSubNext 算下次检查时间（纯函数）。submitted = 这轮提交了东西
-func planSubNext(ev subEval, submitted bool, prevState string, emptyRounds int, now time.Time) subSchedule {
+func planSubNext(ev subEval, submitted bool, prevState string, emptyRounds int, now time.Time, cad subCadence) subSchedule {
 	s := subSchedule{State: subStateActive}
 	soonest := func(t time.Time, d time.Duration) time.Time {
 		at := now.Add(d)
@@ -226,17 +257,19 @@ func planSubNext(ev subEval, submitted bool, prevState string, emptyRounds int, 
 		default:
 			s.Next = soonest(ev.NextAt, subWaitAirMax)
 		}
+	case hasFreshMissing(ev, now):
+		// 追新集：不计入「长期找不到」，新集的资源晚几个小时出来很正常
+		s.EmptyRounds = emptyRounds
+		s.Next = soonest(ev.NextAt, cad.Fresh)
 	default:
 		s.EmptyRounds = emptyRounds + 1
-		if s.EmptyRounds >= subStalledRounds {
+		if n := cad.stallRounds(); s.EmptyRounds >= n {
 			s.State = subStateStalled
-			s.BecameStall = prevState != subStateStalled
-			s.Next = soonest(ev.NextAt, subStalledEvery)
-			break
+			// 只在刚跨过门槛那一轮通知：中间追过新集（状态回到追更中）再回来不重复推
+			s.BecameStall = s.EmptyRounds == n && prevState != subStateStalled
 		}
-		d := subBackoff[min(s.EmptyRounds, len(subBackoff))-1]
 		// 下一集马上要播的话提前回来：新集出来往往连着旧集的资源一起出现
-		s.Next = soonest(ev.NextAt, d)
+		s.Next = soonest(ev.NextAt, cad.Gap)
 	}
 	if submitted {
 		s.EmptyRounds = 0

@@ -165,7 +165,7 @@ func TestSubRunnerEndToEnd(t *testing.T) {
 		t.Fatalf("115 报离线失败的不设重试: %+v", atts[1])
 	}
 	model.DB.First(&sub, sub.ID)
-	if sub.Missing != 1 || sub.EmptyRounds != 1 || !sub.NextCheckAt.Equal(now.Add(time.Hour)) {
+	if sub.Missing != 1 || sub.EmptyRounds != 1 || !sub.NextCheckAt.Equal(now.Add(12*time.Hour)) {
 		t.Fatalf("第三轮后的订阅: %+v", sub)
 	}
 

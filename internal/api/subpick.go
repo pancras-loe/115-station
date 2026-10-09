@@ -101,7 +101,9 @@ type subCand struct {
 	Hash   string // 去重键（SubAttempt.Hash）
 	Cov    resCoverage
 	Covers int // 估计能补几集（电影 1）
-	Paid   int // 要花的 RE0 积分（0 = 不花）
+	// Stale 发布时间早于缺集里最早那集的播出日：不可能有缺的集（「持续更新」的分享内容会变，所以只排后、不丢）
+	Stale bool
+	Paid  int // 要花的 RE0 积分（0 = 不花）
 	// Exact RE0 文件预览核实过、这条资源能补上的集（电影是一个零值）；nil = 没预览过，覆盖按标题估计
 	Exact []epKey
 }
@@ -201,6 +203,17 @@ func splitKeywords(s string) []string {
 // planSubCandidates 过滤 + 排序。overLimit 是要花积分、但超过上限或今天预算的 RE0 资源（只通知、不提交）
 func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, overLimit []subCand) {
 	movie := c.Sub.MediaType == "movie"
+	var earliestAir time.Time // 缺集里最早的播出日；有没有日期不知道的缺集时不比（零值）
+	for _, k := range c.Missing {
+		air := c.MissingAir[k]
+		if air.IsZero() {
+			earliestAir = time.Time{}
+			break
+		}
+		if earliestAir.IsZero() || air.Before(earliestAir) {
+			earliestAir = air
+		}
+	}
 	for _, it := range items {
 		if !it.Relevant || it.Action == "open" || it.Kind == "pan" {
 			continue
@@ -227,8 +240,9 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		if c.Sub.RankLimit > 0 && (it.Rank < 0 || it.Rank >= c.Sub.RankLimit) {
 			continue
 		}
-		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）
-		if c.Identity != nil {
+		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）。
+		// RE0 不查：它是按 TMDB 编号列的资源，本来就是这一部，再按标题找证据只会误杀（相关性同样对它放行）
+		if c.Identity != nil && it.Source != "re0" {
 			if ok, why := subTwinVerdict(it.Title, *c.Identity, resCoverageOf(it.Title)); !ok {
 				c.skip(why)
 				continue
@@ -245,6 +259,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			continue
 		}
 		cand := subCand{Item: it, Hash: hash}
+		cand.Stale = !movie && !earliestAir.IsZero() && it.TimeUnix > 0 && time.Unix(it.TimeUnix, 0).Before(earliestAir)
 		if movie {
 			cand.Covers = 1
 		} else {
@@ -341,8 +356,9 @@ func containsAnyKeyword(lower string, kws []string) bool {
 	return false
 }
 
-// sortSubCandidates 能补的集多的在前 → 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 →
-// 洗版排名好的在前（没命中的最后）→ 新的在前
+// sortSubCandidates 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
+// 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 → 洗版排名好的在前（没命中的最后）→ 新的在前。
+// 别整体改成按时间倒序：一轮按集数限额、先提交的先占集，补老集时会让新发的低画质资源抢在高画质合集前面
 func sortSubCandidates(cs []subCand) {
 	rank := func(r int) int {
 		if r < 0 {
@@ -354,6 +370,9 @@ func sortSubCandidates(cs []subCand) {
 		a, b := cs[i], cs[j]
 		if a.Covers != b.Covers {
 			return a.Covers > b.Covers
+		}
+		if a.Stale != b.Stale {
+			return !a.Stale
 		}
 		if a.share() != b.share() {
 			return a.share()

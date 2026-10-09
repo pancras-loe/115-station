@@ -76,6 +76,9 @@ var subSchedMu sync.Mutex
 
 // StartSubscribeScheduler 每分钟看一眼哪些订阅到了检查时间，合成一个任务入队
 func StartSubscribeScheduler(h *Handler) {
+	if h.DB != nil {
+		subClampNextChecks(h.DB, loadSubscribeCfg(), time.Now())
+	}
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -88,6 +91,18 @@ func StartSubscribeScheduler(h *Handler) {
 			subSchedulerTick(h, time.Now())
 		}
 	}()
+}
+
+// subClampNextChecks 有缺的订阅下次检查最晚不超过补缺间隔：老版本退避 / 长期找不到排到了一天到三天后，
+// 设置里把间隔调短也要马上生效。不缺、在等下一集播出的不动（那是按排期算的）
+func subClampNextChecks(db *gorm.DB, cfg subscribeCfg, now time.Time) {
+	limit := now.Add(subCadenceOf(cfg).Gap)
+	res := db.Model(&model.Subscription{}).
+		Where("state IN ? AND missing > 0 AND next_check_at > ?", []string{subStateActive, subStateStalled}, limit).
+		Update("next_check_at", limit)
+	if res.Error == nil && res.RowsAffected > 0 {
+		log.Printf("[订阅] ○ %d 个订阅的下次检查提前到 %s（补缺间隔 %d 小时）", res.RowsAffected, limit.Format("01-02 15:04"), cfg.GapIntervalHours)
+	}
 }
 
 func subSchedulerTick(h *Handler, now time.Time) {
@@ -328,7 +343,7 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 	}
 	item.Have, item.Total, item.Missing = ev.Have, ev.Total, len(ev.Missing)
 
-	sch := planSubNext(ev, submitted, sub.State, sub.EmptyRounds, now)
+	sch := planSubNext(ev, submitted, sub.State, sub.EmptyRounds, now, subCadenceOf(r.cfg))
 	state := sch.State
 	if sub.State == subStatePaused {
 		state = subStatePaused // 手动查一次暂停的订阅，不替用户恢复
@@ -350,7 +365,7 @@ func (r *subRunner) run(sub *model.Subscription, manual bool) (subRunItem, bool)
 	}
 	if sch.BecameStall && state == subStateStalled {
 		r.notifyKind("stalled", "⏳ 订阅长期找不到资源",
-			fmt.Sprintf("订阅《%s》缺 %d 集，约两周没找到能用的资源，改为每 %d 天检查一次", sub.Title, len(ev.Missing), int(subStalledEvery.Hours()/24)), sub)
+			fmt.Sprintf("订阅《%s》缺 %d 集，约两周没找到能用的资源，仍每 %d 小时检查一次；新集播出后会加密检查", sub.Title, len(ev.Missing), r.cfg.GapIntervalHours), sub)
 	}
 	db.Model(sub).Updates(upd)
 	item.Note = result

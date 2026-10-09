@@ -139,6 +139,10 @@ export interface SubscribeConfig {
   air_delay_hours: number
   movie_wait: 'digital' | 'theatrical_plus' | 'now'
   max_subs_per_round: number
+  /** 缺的集里有刚播出的（播出 3 天内）：没找到时隔多少分钟再查 */
+  fresh_interval_min: number
+  /** 只缺老集：没找到时隔多少小时再查 */
+  gap_interval_hours: number
   max_eps_per_sub: number
   max_res_per_sub: number
   try_cooldown_sec: number

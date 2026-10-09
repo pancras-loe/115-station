@@ -59,7 +59,7 @@ async function save() {
       <FieldRow label="定时检查" hint="关掉后不再自动检查，订阅详情里的「立即搜索」仍可用">
         <HSwitch v-model="cfg.enabled" aria-label="定时检查" />
       </FieldRow>
-      <FieldRow label="播出后多久开始找" hint="TMDB 只有播出日期没有时刻，网盘资源一般几小时内出现；太早去找只会白白退避">
+      <FieldRow label="播出后多久开始找" hint="TMDB 只有播出日期没有时刻，网盘资源一般几小时内出现；太早去找只会白白多查几轮">
         <div class="unit"><HNumberInput v-model="cfg.air_delay_hours" :min="0" :max="72" aria-label="小时" /><span>小时</span></div>
       </FieldRow>
       <FieldRow label="电影什么时候开始找">
@@ -71,6 +71,12 @@ async function save() {
             { label: '立刻', value: 'now' },
           ]"
         />
+      </FieldRow>
+      <FieldRow label="新集没找到时隔" hint="缺的集里有刚播出的（播出 3 天内）时用这个间隔，新集的资源多在这几天冒出来。查一轮不发 115 请求，只有出现没试过的资源才会去列分享">
+        <div class="unit"><HNumberInput v-model="cfg.fresh_interval_min" :min="10" :max="720" aria-label="分钟" /><span>分钟</span></div>
+      </FieldRow>
+      <FieldRow label="补老集没找到时隔" hint="只缺播出 3 天以上的集时用这个间隔，固定不放慢；约两周还没找到会标成「长期找不到」并通知一次">
+        <div class="unit"><HNumberInput v-model="cfg.gap_interval_hours" :min="1" :max="72" aria-label="小时" /><span>小时</span></div>
       </FieldRow>
       <FieldRow label="一轮最多检查" hint="到期的订阅超过这个数时，剩下的下一分钟接着查">
         <div class="unit"><HNumberInput v-model="cfg.max_subs_per_round" :min="1" :max="50" aria-label="订阅数" /><span>个订阅</span></div>

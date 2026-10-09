@@ -98,6 +98,41 @@ func TestPlanSubCandidates(t *testing.T) {
 	}
 }
 
+// 追新集：缺集播出之前发布的资源不可能有它，排到之后发布的后面（只排后、不丢）；没有发布时间的不比
+func TestPlanSubCandidatesStale(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.Local)
+	air := time.Date(2026, 10, 8, 0, 0, 0, 0, time.Local)
+	sub := &model.Subscription{ID: 1, MediaType: "tv"}
+	missing := epKeys("S01E12")
+	share := func(title, hash string, rank int, at time.Time) ResourceItem {
+		r := ResourceItem{Source: "pansou", Kind: "share115", Action: "transfer", Title: title, URL: "https://115.com/s/" + hash, Relevant: true, Rank: rank}
+		if !at.IsZero() {
+			r.TimeUnix = at.Unix()
+		}
+		return r
+	}
+	items := []ResourceItem{
+		share("剧 4K 高码", "old", 0, air.Add(-30*24*time.Hour)), // 画质好，但发在播出前
+		share("剧 1080p", "new", 3, air.Add(20*time.Hour)),
+		share("剧 720p", "notime", 5, time.Time{}),
+	}
+	ctx := subPickCtx{Sub: sub, Missing: missing, MissingAir: map[epKey]time.Time{missing[0]: air}, Now: now, Re0Left: -1}
+	cands, _ := planSubCandidates(items, ctx)
+	var got []string
+	for _, c := range cands {
+		got = append(got, c.Hash)
+	}
+	if want := []string{"new", "notime", "old"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("候选 = %v, want %v", got, want)
+	}
+	// 补老集（缺集播出很久了）：都不算旧，回到按画质排
+	ctx.MissingAir = map[epKey]time.Time{missing[0]: air.Add(-365 * 24 * time.Hour)}
+	cands, _ = planSubCandidates(items, ctx)
+	if cands[0].Hash != "old" {
+		t.Fatalf("补老集应画质优先: %+v", cands[0])
+	}
+}
+
 func TestPlanSubCandidatesRe0(t *testing.T) {
 	now := time.Now()
 	sub := &model.Subscription{ID: 1, MediaType: "tv"}

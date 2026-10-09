@@ -121,6 +121,10 @@ func TestLoadSubscribeCfgNotifyMigrate(t *testing.T) {
 func TestPlanSubNext(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.Local)
 	next := now.Add(48 * time.Hour)
+	cad := subCadenceOf(defaultSubscribeCfg())
+	day := func(d int) time.Time { return time.Date(2026, 10, 7+d, 0, 0, 0, 0, time.Local) }
+	fresh := subEval{Missing: epKeys("S01E01", "S01E12"), MissingAir: map[epKey]time.Time{epKeys("S01E01")[0]: day(-90), epKeys("S01E12")[0]: day(-1)}}
+	stale := subEval{Missing: epKeys("S01E12"), MissingAir: map[epKey]time.Time{epKeys("S01E12")[0]: day(-4)}}
 	cases := []struct {
 		name   string
 		ev     subEval
@@ -137,15 +141,18 @@ func TestPlanSubNext(t *testing.T) {
 		{"只剩在路上", subEval{Inflight: epKeys("S01E01")}, false, subStateActive, 0, now.Add(subAfterSubmit), subStateActive, false, 0},
 		{"不缺等下一集", subEval{NextAt: next}, false, subStateActive, 0, next, subStateActive, false, 0},
 		{"不缺没排期", subEval{}, false, subStateActive, 0, now.Add(24 * time.Hour), subStateActive, false, 0},
-		{"没找到第 1 轮", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 0, now.Add(time.Hour), subStateActive, false, 1},
-		{"没找到第 3 轮", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 2, now.Add(6 * time.Hour), subStateActive, false, 3},
-		{"没找到很多轮", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 10, now.Add(24 * time.Hour), subStateActive, false, 11},
+		{"没找到：只缺老集按补缺间隔", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 0, now.Add(12 * time.Hour), subStateActive, false, 1},
+		{"没找到很多轮也不放慢", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 10, now.Add(12 * time.Hour), subStateActive, false, 11},
 		{"新集更早播：提前回来", subEval{Missing: epKeys("S01E01"), NextAt: now.Add(2 * time.Hour)}, false, subStateActive, 10, now.Add(2 * time.Hour), subStateActive, false, 11},
-		{"变成长期找不到", subEval{Missing: epKeys("S01E01")}, false, subStateActive, subStalledRounds - 1, now.Add(subStalledEvery), subStateStalled, true, subStalledRounds},
-		{"已经长期找不到", subEval{Missing: epKeys("S01E01")}, false, subStateStalled, subStalledRounds, now.Add(subStalledEvery), subStateStalled, false, subStalledRounds + 1},
+		{"刚播出的缺集按新集间隔、不计轮数", fresh, false, subStateActive, 5, now.Add(time.Hour), subStateActive, false, 5},
+		{"长期找不到的有新集：回到追更中", fresh, false, subStateStalled, 40, now.Add(time.Hour), subStateActive, false, 40},
+		{"播出超过三天算老集", stale, false, subStateActive, 0, now.Add(12 * time.Hour), subStateActive, false, 1},
+		{"补缺约两周变成长期找不到", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 27, now.Add(12 * time.Hour), subStateStalled, true, 28},
+		{"已经长期找不到：间隔不变", subEval{Missing: epKeys("S01E01")}, false, subStateStalled, 28, now.Add(12 * time.Hour), subStateStalled, false, 29},
+		{"追过新集再回来：不重复通知", subEval{Missing: epKeys("S01E01")}, false, subStateActive, 40, now.Add(12 * time.Hour), subStateStalled, false, 41},
 	}
 	for _, c := range cases {
-		s := planSubNext(c.ev, c.sub, c.prev, c.rounds, now)
+		s := planSubNext(c.ev, c.sub, c.prev, c.rounds, now, cad)
 		if !s.Next.Equal(c.want) || s.State != c.state || s.BecameStall != c.stall || s.EmptyRounds != c.after {
 			t.Errorf("%s: %+v", c.name, s)
 		}

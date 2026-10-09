@@ -529,5 +529,8 @@ func (h *Handler) SubscribeSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if h.DB != nil {
+		subClampNextChecks(h.DB, cfg, time.Now())
+	}
 	c.JSON(http.StatusOK, gin.H{"data": cfg, "message": "已保存"})
 }
