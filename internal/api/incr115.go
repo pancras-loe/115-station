@@ -400,11 +400,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		return filter.videoExts[ext] || filter.assetExts[ext]
 	}
 
-	scopeOf := func(cid string) string {
-		if cid == "" || cid == "0" {
-			return "unknown"
-		}
-		abs := d.absPath(cid)
+	scopeOfAbs := func(abs string) string {
 		if abs == "" {
 			return "unknown"
 		}
@@ -420,6 +416,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			return "library"
 		}
 		return "other"
+	}
+	scopeOf := func(cid string) string {
+		if cid == "" || cid == "0" {
+			return "unknown"
+		}
+		return scopeOfAbs(d.absPath(cid))
 	}
 
 	// localRelOf 网盘绝对路径 → 本地相对路径（含库名前缀）；不在库内返回 false
@@ -575,6 +577,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 		// 跳过前不更新缓存的话，缓存就永久停在旧路径上——已搬进冗余的目录
 		// 还被算在媒体库里，守卫与作用域判定跟着一起错
 		movedFrom := ""
+		goneAbs := "" // 被删目录在缓存里最后记下的位置
 		if ev.FileID != "" {
 			switch {
 			case ev.Type == evFolderRename || (ev.FileCat == "0" && (ev.Type == evMove || ev.Type == evMoveImage)):
@@ -584,7 +587,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					}
 				}
 			case ev.Type == evDelete && ev.FileCat == "0":
-				d.dirGone(ev.FileID)
+				goneAbs = d.dirGone(ev.FileID)
 			}
 		}
 
@@ -631,6 +634,31 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 				sum.Relevant++
 			}
 		case evDelete:
+			// 删目录先按目录自己的 id 认位置（缓存里记的），认不出才看事件的父目录。
+			//
+			// 2026-10-10 现场：网盘上删掉整理建的「剧名/Season 0」，事件的父目录定位不到媒体库内，
+			// 落进下面的「只按台账名字匹配」，而库里每部剧都有 Season 0，按名字认不出是哪一个，
+			// 静默跳过，本地 13 个 STRM 一直留着。名字核对是防缓存陈旧：改过名的对不上就不按它删
+			if ev.FileCat == "0" && goneAbs != "" && path.Base(strings.TrimSuffix(goneAbs, "/")) == ev.FileName {
+				switch scopeOfAbs(goneAbs) {
+				case "excluded", "other":
+					sum.Ignored++
+					sum.Structural++
+					continue
+				case "library":
+					// 媒体库根本身不跟：本地整库删掉的代价太大，交给失效 STRM 检测
+					if rel, ok := localRelOf(strings.TrimSuffix(goneAbs, "/")); ok && rel != libName {
+						if removed, done := h.removeSyncedDir(p.LocalPath, rel); done {
+							if removed != "" {
+								panDeleted = append(panDeleted, removed)
+								sum.Deleted++
+							}
+							sum.Structural++
+							continue
+						}
+					}
+				}
+			}
 			// 作用域过滤：待整理/已存在/冗余等非媒体库区域的删除不监控
 			switch scopeOf(ev.Cid) {
 			case "excluded", "other":
@@ -648,6 +676,12 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					sum.Deleted++
 				} else {
 					sum.Ignored++
+					// 删文件静默就行（库外的删除天天有）；删目录要说一声，
+					// 否则用户删了库里的目录、本地 STRM 留着，日志里一个字都没有（2026-10-10 现场）
+					if ev.FileCat == "0" {
+						lg.infof("○ 网盘删除了目录「%s」，但认不出它在哪（事件没带可用的父目录，路径缓存里也没记过这个目录），本地没有处理。"+
+							"若它在媒体库内，残留的 STRM 可由全量同步的失效 STRM 检测找出", ev.FileName)
+					}
 				}
 			}
 			sum.Structural++
@@ -904,7 +938,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			break
 		}
 		noteShallow(path.Join(libName, t.base)) // 必须带库名，与零遍历那条保持一致
-		ctl := &walkCtl{tag: lg.tag, abort: yieldReason}
+		ctl := &walkCtl{tag: lg.tag, abort: yieldReason, panAbs: path.Join(libAbs, t.base)}
 		if !t.deep {
 			ctl.maxDepth = 1 // 浅遍历：只列这一层，不下钻
 		}
@@ -1226,6 +1260,23 @@ func dropStrmCompanions(localRoot, rel string) {
 //     （覆盖"删除整个影视目录"及台账启用前同步的历史文件）
 //  3. 台账按文件名模糊匹配兜底（父目录已被连带删除导致路径推导失败时）
 //
+// removeSyncedDir 网盘上删掉的目录在本地对应的那棵树：整树删除并清掉树下的台账行。
+// rel 是含库名前缀的本地相对路径。本地没有这个目录时 done=false（调用方接着用别的办法找）；
+// 删失败时 done=true、removed=""
+func (h *Handler) removeSyncedDir(localRoot, rel string) (removed string, done bool) {
+	local := filepath.Join(localRoot, filepath.FromSlash(rel))
+	if st, err := os.Stat(local); err != nil || !st.IsDir() {
+		return "", false
+	}
+	if err := os.RemoveAll(local); err != nil {
+		log.Printf("[同步] 删除本地目录失败 %s: %v", rel, err)
+		return "", true
+	}
+	h.DB.Where("rel_path = ? OR rel_path LIKE ?", rel, rel+"/%").Delete(&model.SyncedFile{})
+	log.Printf("[同步] 目录删除-执行成功: %s", rel)
+	return local, true
+}
+
 // removeSyncedItem 清理本地同步产物（strm/附属实体+台账行）。
 // ledgerOnly=true 时只允许按台账 file_id 精确删除：move/rename 事件的
 // Cid 是【新】父目录、FileName 是【新】名，路径推导与按名模糊兜底
@@ -1259,16 +1310,9 @@ func (h *Handler) removeSyncedItem(d incrDeps, ev model.SyncEvent, rootCid, libN
 	if dirOK && ev.FileName != "" {
 		{
 			rel := path.Join(dirRel, ev.FileName)
-			local := filepath.Join(localRoot, filepath.FromSlash(rel))
 			// 目录：整树删除（strm/附属全在树内），并清理台账
-			if st, err := os.Stat(local); err == nil && st.IsDir() {
-				if err := os.RemoveAll(local); err != nil {
-					log.Printf("[同步] 删除本地目录失败 %s: %v", rel, err)
-					return ""
-				}
-				h.DB.Where("rel_path = ? OR rel_path LIKE ?", rel, rel+"/%").Delete(&model.SyncedFile{})
-				log.Printf("[同步] 目录删除-执行成功: %s", rel)
-				return local
+			if removed, done := h.removeSyncedDir(localRoot, rel); done {
+				return removed
 			}
 			// 文件：strm（新旧两种命名，见 strmname.go）与附属实体
 			cands := []string{rel}

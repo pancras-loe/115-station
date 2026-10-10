@@ -84,7 +84,12 @@ func (s *stubIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
 	return old, true
 }
 
-func (s *stubIncrDeps) dirGone(fileID string) { s.goneDirs = append(s.goneDirs, fileID) }
+func (s *stubIncrDeps) dirGone(fileID string) string {
+	s.goneDirs = append(s.goneDirs, fileID)
+	abs := s.cachedAbs[fileID]
+	delete(s.cachedAbs, fileID)
+	return abs
+}
 
 func (s *stubIncrDeps) dirName(cid string) string { return s.names[cid] }
 func (s *stubIncrDeps) absPath(cid string) string { return s.abs[cid] }

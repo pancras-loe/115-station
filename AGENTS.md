@@ -139,6 +139,12 @@ cat docs/115-station-notes/INCR-SYNC-UPGRADE.md # 增量同步改造全过程
 > 钩子挂在 `pan115Ops` 的 `moveFiles` / `rename` / `renameBatch` / `deleteFiles` 上
 > （`open115.go`，就在 `markSuppressed` 旁边）。**新增任何会改动网盘目录结构的写操作，
 > 都要记得一起挂上** `forgetDirSubtree`。
+>
+> 它还是**网盘删目录时认位置的主要依据**（2026-10-10 起）：`delete_file` 事件的父目录靠不住，
+> 增量先按被删目录自己的 id 查缓存（`lookupDirAbsAnyAge`，不看保鲜期，名字对不上不用），
+> 查不到才退回按父目录 / 按名字找 —— 「Season 0」这种名字库里有几百个，按名字认不出。
+> 所以整理的 `ensurePath` / `mkdir` 与同步遍历（`walkCtl.panAbs`、快速模式的目录表）都顺手把目录记进去，
+> 只用缓存里已有的父目录位置，不为此多发 115 请求。
 
 ---
 

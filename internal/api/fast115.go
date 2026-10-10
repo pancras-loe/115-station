@@ -217,6 +217,9 @@ func list115SubtreeFast(cookie, rootCid, basePath string, videos, assets *[]remo
 		}
 	}
 
+	// 认出来的目录（含文件的那些）顺手记进路径缓存，删目录事件按目录 id 找位置用
+	rememberSubdirs(rootCid, basePath, res.cache, func(cid string) string { return dirs[cid].parentID })
+
 	if res.skipped > 0 {
 		vlog("[同步] ○ 快速模式：按整理工作区排除 %d 个文件", res.skipped)
 	}
@@ -374,7 +377,12 @@ func (h *Handler) collectSyncFiles(
 	}
 	progress("正在遍历 115 媒体库（已发现视频可在日志查看）…")
 	// 标准模式是全有全无的：任一目录列失败就直接返回错误，所以无错即完整
-	if err := walk115Dir(ops, cid, libName, videos, assets, f, skipCids); err != nil {
+	// 起点位置只查缓存：查不到就不记目录，不为它多发请求
+	ctl := &walkCtl{}
+	if abs, ok := lookupCachedAbs(cid); ok {
+		ctl.panAbs = abs
+	}
+	if err := walk115DirCtl(ops, cid, libName, videos, assets, f, skipCids, ctl); err != nil {
 		return "normal", false, err
 	}
 	return "normal", true, nil

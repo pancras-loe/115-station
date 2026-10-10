@@ -957,6 +957,7 @@ func (o *pan115Ops) mkdir(parent, name string) (string, error) {
 	}
 	if err == nil {
 		o.markCreated(cid)
+		rememberDirAt(parent, name, cid)
 	}
 	return cid, err
 }
@@ -970,12 +971,24 @@ func (o *pan115Ops) markCreated(cid string) {
 	}
 }
 
-// ensurePath 逐级创建目录路径
+// ensurePath 逐级创建目录路径。
+//
+// 建好 / 找到的目录顺手记进路径缓存（不发请求）：用户之后在网盘上删掉整理建的
+// 季目录时，删除事件只能靠这一条认出它是哪部剧的「Season 0」（2026-10-10 现场）
 func (o *pan115Ops) ensurePath(parent, dirPath string) (string, error) {
+	var (
+		cid string
+		err error
+	)
 	if o.open != nil {
-		return o.openEnsurePath(parent, dirPath)
+		cid, err = o.openEnsurePath(parent, dirPath)
+	} else {
+		cid, err = ensure115Path(o.cookie, parent, dirPath, o.markCreated)
 	}
-	return ensure115Path(o.cookie, parent, dirPath, o.markCreated)
+	if err == nil {
+		rememberDirAt(parent, dirPath, cid)
+	}
+	return cid, err
 }
 
 // openEnsurePath OpenAPI 版逐级建目录

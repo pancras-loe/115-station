@@ -11,6 +11,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // ==================== 115 同步引擎（webapi） ====================
@@ -253,6 +255,9 @@ type walkCtl struct {
 	tag      string        // 日志前缀，如 "[同步#12]"；空则用 "[同步]"
 	maxDepth int           // >0 时限制递归层数：1 = 只列目标目录本层，不下钻
 	abort    func() string // 非 nil 且返回非空时中止遍历，返回值即中止原因
+	// panAbs 遍历起点在网盘上的绝对路径。非空时把沿途列到的子目录记进路径缓存，
+	// 网盘上删目录时增量才能按目录 id 认出删的是哪一个（见 lookupDirAbsAnyAge）
+	panAbs string
 
 	// 观测计数，遍历结束后由调用方写进日志
 	dirs     int // 访问过的目录数
@@ -295,10 +300,11 @@ func walk115DirCtl(ops entryLister, cid, basePath string, videos, assets *[]remo
 	if ctl == nil {
 		ctl = &walkCtl{}
 	}
-	return walk115DirDepth(ops, cid, basePath, videos, assets, f, skipCids, ctl, 1)
+	return walk115DirDepth(ops, cid, basePath, strings.TrimSuffix(ctl.panAbs, "/"), videos, assets, f, skipCids, ctl, 1)
 }
 
-func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]remoteFile,
+// panAbs 是 cid 自己在网盘上的绝对路径，空 = 不记路径缓存
+func walk115DirDepth(ops entryLister, cid, basePath, panAbs string, videos, assets *[]remoteFile,
 	f *syncFilter, skipCids map[string]bool, ctl *walkCtl, depth int) error {
 	dirLabel := basePath
 	if dirLabel == "" {
@@ -324,6 +330,7 @@ func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]re
 		} else {
 			vlog("%s 同步%s", ctl.logTag(), dirLabel)
 		}
+		var seenDirs []model.PathCache
 		for _, d := range entries {
 			isDir := fmt.Sprint(d["f"]) == "0"
 			name := fmt.Sprint(d["n"])
@@ -333,6 +340,11 @@ func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]re
 					log.Printf("%s ○ 跳过整理工作区目录: %s", ctl.logTag(), path.Join(basePath, name))
 					continue
 				}
+				subAbs := ""
+				if panAbs != "" {
+					subAbs = panAbs + "/" + name
+					seenDirs = append(seenDirs, model.PathCache{FileID: subCid, ParentID: cid, Name: name, Path: subAbs})
+				}
 				// 深度上限：浅遍历只看目标目录这一层。事件带来的文件就在这一层，
 				// 往下钻等于把整棵子树重扫一遍（改造前的真实行为）
 				if ctl.maxDepth > 0 && depth >= ctl.maxDepth {
@@ -340,7 +352,7 @@ func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]re
 					continue
 				}
 				subPath := path.Join(basePath, name)
-				if err := walk115DirDepth(ops, subCid, subPath, videos, assets, f, skipCids, ctl, depth+1); err != nil {
+				if err := walk115DirDepth(ops, subCid, subPath, subAbs, videos, assets, f, skipCids, ctl, depth+1); err != nil {
 					return err
 				}
 			} else {
@@ -374,6 +386,7 @@ func walk115DirDepth(ops entryLister, cid, basePath string, videos, assets *[]re
 				}
 			}
 		}
+		rememberDirPaths(seenDirs)
 		if len(entries) == 0 || offset+len(entries) >= count {
 			break
 		}

@@ -37,8 +37,9 @@ type incrDeps interface {
 	// dirMoved 目录在网盘上改了名/换了位置：更新路径缓存，返回它【原来】的绝对路径。
 	// 旧路径只可能来自缓存（事件里的字段全是新位置），查不到就返回 false，不猜
 	dirMoved(fileID, newAbs string) (oldAbs string, ok bool)
-	// dirGone 目录在网盘上没了：清掉那棵子树的缓存
-	dirGone(fileID string)
+	// dirGone 目录在网盘上没了：清掉那棵子树的缓存，返回清之前缓存里记的位置（没记过返回 ""）。
+	// 删除事件的父目录 id 靠不住，这个位置是认出「删的是哪个目录」的主要依据
+	dirGone(fileID string) (lastAbs string)
 
 	// ---- 配置 ----
 	setting(key string) string
@@ -135,7 +136,11 @@ func (d *realIncrDeps) dirMoved(fileID, newAbs string) (string, bool) {
 	return old, true
 }
 
-func (d *realIncrDeps) dirGone(fileID string) { forgetDirSubtree(fileID) }
+func (d *realIncrDeps) dirGone(fileID string) string {
+	abs, _ := lookupDirAbsAnyAge(fileID)
+	forgetDirSubtree(fileID)
+	return abs
+}
 
 func (d *realIncrDeps) setting(key string) string { return d.h.getSettingValue(key) }
 

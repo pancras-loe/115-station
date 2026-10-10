@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -208,6 +209,84 @@ func lookupCachedAbs(cid string) (string, bool) {
 	return row.Path, true
 }
 
+// lookupDirAbsAnyAge 只查缓存拿目录绝对路径，**不看保鲜期**。
+//
+// 给目录删除事件用：115 的 delete_file 事件里父目录 id 靠不住（实测删了季目录，
+// 增量连媒体库内都没认出来），目录本身已经进了回收站、也查不到了，缓存里最后记下的
+// 位置是唯一线索。openStrm 同款：删除先按 file_id 查缓存，查不到才用 parent_id。
+// 陈旧的风险由调用方核对目录名兜住（改过名的目录名字对不上，不会按旧位置删）
+func lookupDirAbsAnyAge(cid string) (string, bool) {
+	if cid == "" || cid == "0" {
+		return "", false
+	}
+	pathCacheMu.RLock()
+	e, ok := pathCacheMem[cid]
+	pathCacheMu.RUnlock()
+	if ok {
+		return e.row.Path, true
+	}
+	if model.DB == nil {
+		return "", false
+	}
+	var row model.PathCache
+	if err := model.DB.Where("file_id = ?", cid).First(&row).Error; err != nil {
+		return "", false
+	}
+	return row.Path, true
+}
+
+// rememberDirAt 记下一个已知 cid 的目录：位置 = 父目录位置 + rel（可以是多级）。
+// 父目录位置只查缓存、不发请求，查不到就不记 —— 后果只是删掉它时退回按名字找
+func rememberDirAt(parentCid, rel, cid string) {
+	rel = strings.Trim(path.Clean("/"+strings.TrimSpace(rel)), "/")
+	if cid == "" || cid == "0" || rel == "" || rel == "." {
+		return
+	}
+	parentAbs := ""
+	if parentCid != "" && parentCid != "0" {
+		p, ok := lookupCachedAbs(parentCid)
+		if !ok {
+			return
+		}
+		parentAbs = strings.TrimSuffix(p, "/")
+	}
+	pid := ""
+	if !strings.Contains(rel, "/") {
+		pid = parentCid
+	}
+	rememberDirPaths([]model.PathCache{{FileID: cid, ParentID: pid, Name: path.Base(rel), Path: parentAbs + "/" + rel}})
+}
+
+// rememberSubdirs 把同步遍历时认出的目录（cid → 带 base 前缀的相对路径）记进路径缓存。
+// 遍历起点的位置同样只查缓存。目录删除事件靠它按 file_id 认出被删的是哪个目录：
+// 「Season 1」这种名字库里有几百个，只按名字是认不出来的
+func rememberSubdirs(rootCid, base string, rels map[string]string, parentOf func(cid string) string) {
+	if len(rels) == 0 {
+		return
+	}
+	rootAbs, ok := lookupCachedAbs(rootCid)
+	if !ok {
+		return
+	}
+	rootAbs = strings.TrimSuffix(rootAbs, "/")
+	rows := make([]model.PathCache, 0, len(rels))
+	for cid, rel := range rels {
+		if cid == rootCid || (base != "" && !strings.HasPrefix(rel, base+"/")) {
+			continue
+		}
+		sub := strings.Trim(strings.TrimPrefix(rel, base), "/")
+		if sub == "" {
+			continue
+		}
+		pid := ""
+		if parentOf != nil {
+			pid = parentOf(cid)
+		}
+		rows = append(rows, model.PathCache{FileID: cid, ParentID: pid, Name: path.Base(sub), Path: rootAbs + "/" + sub})
+	}
+	rememberDirPaths(rows)
+}
+
 func putMem(row model.PathCache) {
 	pathCacheMu.Lock()
 	if len(pathCacheMem) >= pathMemMax {
@@ -295,8 +374,10 @@ func forgetDirSubtree(cid string) {
 	if cid == "" || cid == "0" {
 		return
 	}
-	if row, ok := lookupCachedRow(cid); ok {
-		forgetPathsUnder(row.Path)
+	// 不看保鲜期：过了期的行照样会被 lookupDirAbsAnyAge 拿去用，失效时也得一起清
+	// 空路径交给 forgetPathsUnder 等于清空整表，挡掉
+	if abs, ok := lookupDirAbsAnyAge(cid); ok && strings.Trim(abs, "/") != "" {
+		forgetPathsUnder(abs)
 	}
 }
 
