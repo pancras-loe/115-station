@@ -35,10 +35,10 @@ export const navItems: NavItem[] = [
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
+  // 刮削是整理流水线的下一环，紧跟自动整理
+  { name: 'scrape', label: '影视刮削', icon: Clapperboard },
   { name: 'files', label: '网盘文件', icon: FolderTree },
   { name: 'local', label: '本地文件', icon: LayoutGrid },
-  // 刮削的产物落在本地媒体库，紧挨本地文件
-  { name: 'scrape', label: '影视刮削', icon: Clapperboard },
   // 任务中心看的是整理 / 同步 / 刮削这些媒体库任务的进度与记录，跟它们放在一组。
   // 图标与顶栏的任务弹层入口一致
   { name: 'tasks', label: '任务中心', icon: ListChecks },
