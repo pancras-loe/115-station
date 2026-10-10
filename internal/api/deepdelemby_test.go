@@ -99,6 +99,17 @@ func TestEmbyPathToLocal(t *testing.T) {
 	if got := embyPathToLocal("/media#/mnt/emby", "/somewhere/else"); got != "/somewhere/else" {
 		t.Fatalf("前缀不匹配应原样返回，得到 %q", got)
 	}
+	// 前半段是相对路径 = 本地根下的子目录：Emby 直接从库目录挂进去（2026-10-10 现场）
+	if got := embyPathToLocal("资源库#/Movies", "/Movies/电影/A/a.strm"); got != "/media/资源库/电影/A/a.strm" {
+		t.Fatalf("子目录映射结果不对: %q", got)
+	}
+	if got := mapLocalToEmbyPath("资源库#/Movies", "/media/资源库/电影/A/a.strm"); got != "/Movies/电影/A/a.strm" {
+		t.Fatalf("子目录反向映射结果不对: %q", got)
+	}
+	// 子目录之外的本地路径 Emby 看不到，原样返回
+	if got := mapLocalToEmbyPath("资源库#/Movies", "/media/别的库/a.strm"); got != "/media/别的库/a.strm" {
+		t.Fatalf("子目录外应原样返回，得到 %q", got)
+	}
 }
 
 // deepDelEmbyTestDB 内存库 + 一条 full 配置（localRoot）+ 台账行

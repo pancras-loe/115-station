@@ -138,7 +138,11 @@ const mapping = computed(() => data.value?.mapping)
 
 function goSettings() {
   emit('update:show', false)
-  router.push({ name: 'settings', query: { tab: 'emby', emby_root: mapping.value?.suggest || undefined } })
+  const m = mapping.value
+  router.push({
+    name: 'settings',
+    query: { tab: 'emby', emby_root: m?.suggest || undefined, emby_sub: (m?.suggest && m.suggest_sub) || undefined },
+  })
 }
 </script>
 
@@ -162,9 +166,13 @@ function goSettings() {
         </HAlert>
         <div v-if="mapping" class="map">
           <div class="map-row"><span class="k">本地媒体库目录</span><code>{{ mapping.local_root || '未配置' }}</code></div>
+          <div v-if="mapping.current_sub" class="map-row"><span class="k">当前本地子目录</span><code>{{ mapping.current_sub }}</code></div>
           <div class="map-row"><span class="k">当前 Emby 媒体库目录</span><code>{{ mapping.current || '未填' }}</code></div>
+          <div v-if="mapping.suggest && mapping.suggest_sub" class="map-row">
+            <span class="k">推算本地子目录</span><code class="hl">{{ mapping.suggest_sub }}</code>
+          </div>
           <div v-if="mapping.suggest" class="map-row">
-            <span class="k">推算应填</span><code class="hl">{{ mapping.suggest }}</code>
+            <span class="k">推算 Emby 媒体库目录</span><code class="hl">{{ mapping.suggest }}</code>
           </div>
           <ul v-if="mapping.evidence?.length" class="evidence">
             <li v-for="e in mapping.evidence" :key="e.location">
@@ -173,7 +181,7 @@ function goSettings() {
           </ul>
           <p v-if="mapping.error" class="note err">{{ mapping.error }}</p>
           <p v-else-if="!mapping.suggest" class="note">
-            推算不出来：Emby 媒体库的目录在本地媒体库根下找不到同名目录。请对照 Emby 媒体库的路径手动填写。
+            推算不出来：Emby 媒体库的目录在本地媒体库根下（含往下一层的库目录）找不到同名目录。请对照 Emby 媒体库的路径手动填写。
           </p>
           <div v-if="mapping.libraries?.length" class="libs">
             <div class="k">Emby 媒体库</div>

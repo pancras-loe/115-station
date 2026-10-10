@@ -280,69 +280,114 @@ type embyRootEvidence struct {
 	Local    string `json:"local"`
 }
 
-// suggestEmbyRoot 纯函数：按 Emby 媒体库的目录推算「本地媒体库根在 Emby 里叫什么」。
+// suggestEmbyRoot 纯函数：按 Emby 媒体库的目录推算映射两侧该填什么，返回 Emby 那一侧的根与本地这一侧的子目录。
 //
 // 做法是拿 Emby 目录的尾巴去本地根下找：Emby 的 /mnt/strm/剧集 → 本地 /media/strm/剧集 存在 →
 // Emby 根就是 /mnt/strm。尾巴取能对上的最长一段（本地若是 根/115/剧集，Emby 的 /data/115/剧集 推出 /data）。
 // 各个媒体库各推一个，取票数最多的（同票取对上段数多的）；别的硬盘上的库对不上本地任何目录，不投票。
-// 一个都没对上时退一步：Emby 目录名与本地根同名（媒体库直接挂的就是根）就认它。
-func suggestEmbyRoot(locations []string, localRoot string, isDir func(string) bool) (string, []embyRootEvidence) {
+//
+// 本地根下对不上时再往下找一层：subs 是本地根下的各个库目录（STRM 路径第一层是 115 媒体库目录名），
+// Emby 直接从库目录挂进去时（Emby /Movies/电影 ⇄ 本地 /Movies/资源库/电影）推出子目录「资源库」。
+// 根下对上了就不看子目录：两边都对得上时根下那个是现状，别替用户改。
+// 还没对上时退一步：Emby 目录名与本地根（或某个库目录）同名，认为媒体库直接挂的就是它。
+func suggestEmbyRoot(locations []string, localRoot string, subs []string, isDir func(string) bool) (string, string, []embyRootEvidence) {
 	localRoot = strings.TrimRight(filepath.ToSlash(localRoot), "/")
 	if localRoot == "" {
-		return "", nil
+		return "", "", nil
 	}
 	type cand struct {
+		root, sub    string
 		votes, depth int
 		ev           []embyRootEvidence
 	}
 	cands := map[string]*cand{}
 	var order []string
-	vote := func(root string, depth int, ev embyRootEvidence) {
-		c := cands[root]
+	vote := func(root, sub string, depth int, ev embyRootEvidence) {
+		key := root + "\x00" + sub
+		c := cands[key]
 		if c == nil {
-			c = &cand{}
-			cands[root] = c
-			order = append(order, root)
+			c = &cand{root: root, sub: sub}
+			cands[key] = c
+			order = append(order, key)
 		}
 		c.votes++
 		c.depth += depth
 		c.ev = append(c.ev, ev)
 	}
+	var locs []string
 	for _, raw := range locations {
-		loc := strings.TrimRight(strings.ReplaceAll(raw, "\\", "/"), "/")
-		segs := strings.Split(loc, "/")
-		for k := len(segs) - 1; k >= 1; k-- {
-			prefix := strings.Join(segs[:len(segs)-k], "/")
-			if strings.Trim(prefix, "/") == "" {
-				continue // Emby 根成了「/」：映射存不下这种值，也不太可能是真的
+		if loc := strings.TrimRight(strings.ReplaceAll(raw, "\\", "/"), "/"); loc != "" {
+			locs = append(locs, loc)
+		}
+	}
+	byTail := func(sub string) {
+		base := localRoot
+		if sub != "" {
+			base += "/" + sub
+		}
+		for _, loc := range locs {
+			segs := strings.Split(loc, "/")
+			for k := len(segs) - 1; k >= 1; k-- {
+				prefix := strings.Join(segs[:len(segs)-k], "/")
+				if strings.Trim(prefix, "/") == "" {
+					continue // Emby 根成了「/」：映射存不下这种值，也不太可能是真的
+				}
+				suffix := strings.Join(segs[len(segs)-k:], "/")
+				if local := base + "/" + suffix; isDir(local) {
+					vote(prefix, sub, k, embyRootEvidence{Location: loc, Local: local})
+					break
+				}
 			}
-			suffix := strings.Join(segs[len(segs)-k:], "/")
-			if local := localRoot + "/" + suffix; isDir(local) {
-				vote(prefix, k, embyRootEvidence{Location: loc, Local: local})
-				break
+		}
+	}
+	byTail("")
+	if len(cands) == 0 {
+		for _, sub := range subs {
+			if sub = embyLocalSub(sub); sub != "" {
+				byTail(sub)
 			}
 		}
 	}
 	if len(cands) == 0 {
-		base := path.Base(localRoot)
-		for _, raw := range locations {
-			loc := strings.TrimRight(strings.ReplaceAll(raw, "\\", "/"), "/")
-			if loc != "" && path.Base(loc) == base {
-				vote(loc, 0, embyRootEvidence{Location: loc, Local: localRoot})
+		for _, loc := range locs {
+			if path.Base(loc) == path.Base(localRoot) {
+				vote(loc, "", 0, embyRootEvidence{Location: loc, Local: localRoot})
+				continue
+			}
+			for _, sub := range subs {
+				if sub = embyLocalSub(sub); sub != "" && path.Base(loc) == path.Base(sub) {
+					vote(loc, sub, 0, embyRootEvidence{Location: loc, Local: localRoot + "/" + sub})
+					break
+				}
 			}
 		}
 	}
-	best := ""
-	for _, r := range order {
-		c := cands[r]
-		if b := cands[best]; best == "" || c.votes > b.votes || (c.votes == b.votes && c.depth > b.depth) {
-			best = r
+	var best *cand
+	for _, k := range order {
+		c := cands[k]
+		if best == nil || c.votes > best.votes || (c.votes == best.votes && c.depth > best.depth) {
+			best = c
 		}
 	}
-	if best == "" {
-		return "", nil
+	if best == nil {
+		return "", "", nil
 	}
-	return best, cands[best].ev
+	return best.root, best.sub, best.ev
+}
+
+// ledgerLibNames 台账里的库目录名（片目 key 的第一段，即 STRM 路径第一层），给推算往下找一层用
+func ledgerLibNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	for key := range scanLedgerTitlesCached() {
+		lib, _, _ := strings.Cut(key, "/")
+		if lib != "" && !seen[lib] {
+			seen[lib] = true
+			out = append(out, lib)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func embyReconIsDir(p string) bool {
@@ -353,9 +398,13 @@ func embyReconIsDir(p string) bool {
 // embyPathSuggestion 当前映射与推算结果（两个接口共用）
 func embyPathSuggestion(cfg embyRefreshCfg, rootSlash string) gin.H {
 	_, current := embyPathRoots(cfg.PathMapping)
+	currentSub := ""
+	if l, _, ok := strings.Cut(cfg.PathMapping, "#"); ok {
+		currentSub = embyLocalSub(l)
+	}
 	libs, err := embyVirtualFolders(cfg)
 	if err != nil {
-		return gin.H{"local_root": rootSlash, "current": current, "error": err.Error()}
+		return gin.H{"local_root": rootSlash, "current": current, "current_sub": currentSub, "error": err.Error()}
 	}
 	var locs []string
 	type libInfo struct {
@@ -378,12 +427,13 @@ func embyPathSuggestion(cfg embyRefreshCfg, rootSlash string) gin.H {
 		}
 		libOut = append(libOut, li)
 	}
-	suggest, ev := suggestEmbyRoot(locs, rootSlash, embyReconIsDir)
+	suggest, suggestSub, ev := suggestEmbyRoot(locs, rootSlash, ledgerLibNames(), embyReconIsDir)
 	if ev == nil {
 		ev = []embyRootEvidence{}
 	}
 	return gin.H{
-		"local_root": rootSlash, "current": current, "suggest": suggest, "evidence": ev,
+		"local_root": rootSlash, "current": current, "current_sub": currentSub,
+		"suggest": suggest, "suggest_sub": suggestSub, "evidence": ev,
 		"libraries": libOut, "covered": covered,
 	}
 }

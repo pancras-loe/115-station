@@ -34,27 +34,46 @@ const banner = ref<BannerState | null>(null)
 const testing = ref(false)
 const pathProbe = ref('')
 const embyMediaRoot = ref('')
+/** 映射本地这一侧：本地媒体库根下的子目录（Emby 直接从 115 库目录那一层挂进去时填库名），空 = 根本身 */
+const localSub = ref('')
+
+/** path_mapping 前半段只认相对路径（后端 embyLocalSub 同口径）；老配置写的是当时的本地根（绝对路径），当作空 */
+function subOf(raw: string): string {
+  const s = raw.trim().replace(/\\/g, '/')
+  if (!s || s.startsWith('/') || /^[A-Za-z]:/.test(s)) return ''
+  return s.replace(/^\.\//, '').replace(/\/+$/, '')
+}
 
 watch(
   () => model.value.path_mapping,
   (rule) => {
     const splitAt = rule.indexOf('#')
     embyMediaRoot.value = splitAt >= 0 ? rule.slice(splitAt + 1) : ''
+    localSub.value = splitAt >= 0 ? subOf(rule.slice(0, splitAt)) : ''
   },
   { immediate: true },
 )
+
+/** 映射本地这一侧的完整路径 */
+const localSide = computed(() => {
+  const root = media.model.value.local_path.trim().replace(/\/+$/, '')
+  const sub = subOf(localSub.value)
+  return sub ? `${root}/${sub}` : root
+})
 
 // ---- Emby 媒体库目录：按 Emby 媒体库的路径推算（/emby/path-suggest），只填进表单，保存由用户点 ----
 const detecting = ref(false)
 const detectNote = ref('')
 
-function applySuggest(root: string, how: string) {
-  if (root === embyMediaRoot.value.trim()) {
-    detectNote.value = `推算结果与当前一致：${root}`
+function applySuggest(root: string, sub: string, how: string) {
+  const desc = sub ? `本地子目录「${sub}」、Emby 媒体库目录 ${root}` : root
+  if (root === embyMediaRoot.value.trim() && sub === subOf(localSub.value)) {
+    detectNote.value = `推算结果与当前一致：${desc}`
     return
   }
   embyMediaRoot.value = root
-  detectNote.value = `${how}已填入 ${root}，确认无误后点「保存」`
+  localSub.value = sub
+  detectNote.value = `${how}已填入 ${desc}，确认无误后点「保存」`
 }
 
 async function detectEmbyRoot() {
@@ -64,10 +83,11 @@ async function detectEmbyRoot() {
     const d = await localApi.embyPathSuggest()
     if (!d.configured) detectNote.value = '先填好 Emby 服务器地址与 API 密钥并保存'
     else if (d.error) detectNote.value = d.error
-    else if (!d.suggest) detectNote.value = 'Emby 媒体库的目录在本地媒体库根下找不到同名目录，推算不出来，请对照 Emby 媒体库路径手动填写'
+    else if (!d.suggest)
+      detectNote.value = 'Emby 媒体库的目录在本地媒体库根下（含往下一层的库目录）找不到同名目录，推算不出来，请对照 Emby 媒体库路径手动填写'
     else {
       const ev = d.evidence?.[0]
-      applySuggest(d.suggest, ev ? `按 Emby「${ev.location}」⇄ 本地「${ev.local}」` : '')
+      applySuggest(d.suggest, d.suggest_sub || '', ev ? `按 Emby「${ev.location}」⇄ 本地「${ev.local}」` : '')
     }
   } catch (e) {
     toastError(e, '检测失败')
@@ -82,16 +102,17 @@ watch(
   (busy) => {
     const root = typeof route.query.emby_root === 'string' ? route.query.emby_root.trim() : ''
     if (busy || !root) return
-    applySuggest(root, '对账推算的值')
-    router.replace({ query: { ...route.query, emby_root: undefined } })
+    const sub = typeof route.query.emby_sub === 'string' ? route.query.emby_sub.trim() : ''
+    applySuggest(root, sub, '对账推算的值')
+    router.replace({ query: { ...route.query, emby_root: undefined, emby_sub: undefined } })
   },
   { immediate: true },
 )
 
+// 前半段存相对子目录而不是绝对路径：本地媒体库目录以后改了，映射跟着走，不用回来再改一遍
 function currentPathMapping(): string {
-  const localRoot = media.model.value.local_path.trim()
   const embyRoot = embyMediaRoot.value.trim()
-  return localRoot && embyRoot ? `${localRoot}#${embyRoot}` : ''
+  return embyRoot ? `${subOf(localSub.value)}#${embyRoot}` : ''
 }
 
 async function saveEmby() {
@@ -128,11 +149,9 @@ const pathResult = computed(() => {
   const input = pathProbe.value
   if (!input) return ''
   let out = input
-  const rule = currentPathMapping()
-  if (rule.includes('#')) {
-    const [src, dst] = rule.split('#')
-    if (src && input.startsWith(src)) out = dst + input.slice(src.length)
-  }
+  const src = localSide.value
+  const dst = embyMediaRoot.value.trim().replace(/\/+$/, '')
+  if (src && dst && (input === src || input.startsWith(src + '/'))) out = dst + input.slice(src.length)
   return model.value.style === 'windows' ? out.replace(/\//g, '\\') : out
 })
 
@@ -222,12 +241,16 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 
       <FieldRow
         label="本地路径映射"
-        tip="前段固定使用统一配置的本地媒体库根目录，后段填写该目录在 Emby 中的挂载路径。"
+        tip="本地这一侧默认是本地媒体库目录。Emby 若直接从 115 库目录那一层挂进去（STRM 路径第一层是 115 媒体库目录名），在子目录里填这个名字。Emby 那一侧填对应目录在 Emby 里的路径。"
       >
         <div class="path-pair">
           <label>
-            <span>本地媒体库目录</span>
-            <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
+            <span>本地媒体库目录 / 子目录（可选）</span>
+            <div class="local-side">
+              <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
+              <span class="sep">/</span>
+              <HInput v-model="localSub" placeholder="如 资源库，一般留空" />
+            </div>
           </label>
           <span class="path-arrow">→</span>
           <label>
@@ -342,6 +365,15 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
   font-size: 12px;
   color: var(--muted);
   word-break: break-all;
+}
+.local-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+.local-side .sep {
+  color: var(--c-text-3);
 }
 .path-arrow {
   padding-bottom: 8px;

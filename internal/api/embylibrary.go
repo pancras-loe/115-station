@@ -6,20 +6,43 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
 
-// embyPathRoots 返回统一的本地媒体库根与 Emby 挂载根。
-// path_mapping 的前半段是历史兼容字段；本地根始终以 full.local_path 为准，
-// 这样在统一入口修改本地目录后，不需要再去 Emby 卡片重复修改一次。
+// embyPathRoots 返回映射两侧的根：本地这一侧、Emby 那一侧。
+//
+// path_mapping 写作「本地#Emby」。本地这一侧以 full.local_path 为准，这样在统一入口修改本地目录后，
+// 不需要再去 Emby 卡片重复修改一次；前半段只认**相对**路径，表示本地媒体库根下的子目录
+// （embyLocalSub）。用途：STRM 路径第一层是 115 媒体库目录名（libName），Emby 若直接从这一层挂进去
+// （宿主机 /vol1/1000/资源库 → Emby /Movies，本站 /vol1/1000 → /Movies），Emby 的 /Movies 对应的是
+// 本地 /Movies/资源库，只换 Emby 那一侧写不出来（2026-10-10 现场）。p115strmhelper / qmediasync 的映射两侧都能填。
+// 老配置前半段是绝对路径（以前保存时写的是当时的本地根），照旧忽略。
 func embyPathRoots(pathMapping string) (string, string) {
 	localRoot := strings.TrimRight(strings.ReplaceAll(localMediaRoot(), "\\", "/"), "/")
 	parts := strings.SplitN(pathMapping, "#", 2)
 	if len(parts) != 2 {
 		return localRoot, ""
 	}
+	if sub := embyLocalSub(parts[0]); sub != "" && localRoot != "" {
+		localRoot += "/" + sub
+	}
 	return localRoot, strings.TrimRight(strings.ReplaceAll(parts[1], "\\", "/"), "/")
+}
+
+// embyLocalSub path_mapping 前半段 → 本地媒体库根下的子目录（/ 分隔、首尾无 /）。
+// 绝对路径（老配置）、空、带 .. 的一律返回空串，即映射本地根本身
+func embyLocalSub(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\\", "/"))
+	if s == "" || strings.HasPrefix(s, "/") || (len(s) >= 2 && s[1] == ':') {
+		return ""
+	}
+	s = path.Clean(s)
+	if s == "." || s == ".." || strings.HasPrefix(s, "../") {
+		return ""
+	}
+	return s
 }
 
 // embyPathToLocal Emby 路径 → 本地路径（mapToEmbyPath 的逆向）。

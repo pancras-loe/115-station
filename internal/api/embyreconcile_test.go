@@ -7,9 +7,9 @@ import (
 
 func TestSuggestEmbyRoot(t *testing.T) {
 	dirs := map[string]bool{
-		"/media/strm/115":      true,
-		"/media/strm/115/电影":   true,
-		"/media/strm/115/剧集":   true,
+		"/media/strm/115":     true,
+		"/media/strm/115/电影":  true,
+		"/media/strm/115/剧集":  true,
 		"/media/strm/115/纪录片": true,
 		"/media/strm/电影":      true, // 干扰：根下也有个同名目录，最长匹配要压过它
 	}
@@ -28,12 +28,64 @@ func TestSuggestEmbyRoot(t *testing.T) {
 		{"Emby 根不能是 /", []string{"/115"}, ""},
 	}
 	for _, c := range cases {
-		got, ev := suggestEmbyRoot(c.locs, "/media/strm", isDir)
-		if got != c.want {
-			t.Errorf("%s: got %q want %q (ev=%v)", c.name, got, c.want, ev)
+		got, sub, ev := suggestEmbyRoot(c.locs, "/media/strm", nil, isDir)
+		if got != c.want || sub != "" {
+			t.Errorf("%s: got %q/%q want %q (ev=%v)", c.name, got, sub, c.want, ev)
 		}
 		if got != "" && len(ev) == 0 {
 			t.Errorf("%s: 有建议却没给依据", c.name)
+		}
+	}
+}
+
+// Emby 直接从库目录挂进去：宿主机 /vol1/1000/资源库 → Emby /Movies，本站 /vol1/1000 → /Movies，
+// STRM 第一层是库名「资源库」。根下找不到，要往下找一层（2026-10-10 现场）
+func TestSuggestEmbyRootSubdir(t *testing.T) {
+	dirs := map[string]bool{
+		"/Movies/资源库":         true,
+		"/Movies/资源库/电影":      true,
+		"/Movies/资源库/电影/动画电影": true,
+		"/Movies/资源库/电视剧":     true,
+		"/Movies/资源库/电视剧/国漫":  true,
+		"/Movies/资源库/电视剧/国产剧": true,
+		"/Movies/别的库/电视剧/国产剧": true, // 只对上一个，票数压不过资源库
+		"/Movies/别的库/电视剧/纪录片": false,
+	}
+	isDir := func(p string) bool { return dirs[p] }
+	locs := []string{"/Movies/电影/动画电影", "/Movies/电视剧/国漫", "/Movies/电视剧/国产剧"}
+
+	root, sub, ev := suggestEmbyRoot(locs, "/Movies", []string{"别的库", "资源库"}, isDir)
+	if root != "/Movies" || sub != "资源库" || len(ev) != 3 {
+		t.Fatalf("got %q / %q ev=%v", root, sub, ev)
+	}
+
+	// 根下就对得上时不看子目录：那是现状，别替用户改
+	dirs["/Movies/电影/动画电影"] = true
+	if root, sub, _ = suggestEmbyRoot(locs, "/Movies", []string{"资源库"}, isDir); root != "/Movies" || sub != "" {
+		t.Errorf("根下对上了还推子目录: %q / %q", root, sub)
+	}
+
+	// 媒体库挂的就是库目录本身：按目录名兜底
+	if root, sub, _ = suggestEmbyRoot([]string{"/data/资源库"}, "/Movies", []string{"资源库"}, func(string) bool { return false }); root != "/data/资源库" || sub != "资源库" {
+		t.Errorf("按库目录名兜底: %q / %q", root, sub)
+	}
+}
+
+func TestEmbyLocalSub(t *testing.T) {
+	cases := map[string]string{
+		"":        "",
+		"/media":  "", // 老配置：前半段是当时的本地根，忽略
+		`D:\strm`: "",
+		"资源库":     "资源库",
+		"资源库/":    "资源库",
+		`a\b`:     "a/b",
+		"../x":    "",
+		"..":      "",
+		"./资源库":   "资源库",
+	}
+	for in, want := range cases {
+		if got := embyLocalSub(in); got != want {
+			t.Errorf("embyLocalSub(%q) = %q want %q", in, got, want)
 		}
 	}
 }
@@ -45,8 +97,8 @@ func TestReconcileEmby(t *testing.T) {
 		"115/电影/双版本 (2020)": {Key: "115/电影/双版本 (2020)", Title: "双版本", MediaType: "movie"},
 		"115/剧集/三体 (2023)":  {Key: "115/剧集/三体 (2023)", Title: "三体", MediaType: "tv"},
 		"115/剧集/拆开的剧":       {Key: "115/剧集/拆开的剧", Title: "拆开的剧", MediaType: "tv"},
-		"115/剧集/Emby没有":      {Key: "115/剧集/Emby没有", Title: "Emby没有", MediaType: "tv"},
-		"115/剧集/认成电影":        {Key: "115/剧集/认成电影", Title: "认成电影", MediaType: "tv"},
+		"115/剧集/Emby没有":     {Key: "115/剧集/Emby没有", Title: "Emby没有", MediaType: "tv"},
+		"115/剧集/认成电影":       {Key: "115/剧集/认成电影", Title: "认成电影", MediaType: "tv"},
 	}
 	items := []embyReconItem{
 		{Type: "Movie", Name: "阿凡达", Path: "/mnt/strm/115/电影/阿凡达 (2009)/阿凡达.strm"},
