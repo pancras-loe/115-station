@@ -50,8 +50,11 @@ func init() { jobExecutors[jobKindPerson] = execPersonJob }
 // ---- 配置 ----
 
 type personFillCfg struct {
-	Enabled bool   `json:"enabled"` // 定时开关；「立即运行」不看它
-	Cron    string `json:"cron"`
+	// AfterScrape 刮削任务结束后，把这次刮过的片目单独排一个补全任务（只看这几部，不动续扫断点）。
+	// 与定时开关互不影响：新入库的片当天就有中文名和头像，不用等夜里的定时任务扫到
+	AfterScrape bool   `json:"after_scrape"`
+	Enabled     bool   `json:"enabled"` // 定时开关；「立即运行」不看它
+	Cron        string `json:"cron"`
 	// Types 要补的人物：actor（含客串 GuestStar）/ director / writer
 	Types  []string `json:"types"`
 	Image  bool     `json:"image"`   // 补头像
@@ -812,21 +815,22 @@ type personJobResult struct {
 	Truncated bool           `json:"truncated,omitempty"`
 }
 
-func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+// newPersonRunner 校验配置、取 Emby 与 TMDB 客户端、装上记账里还没到期的人物
+func newPersonRunner(h *Handler) (*personRunner, error) {
 	cfg := h.loadPersonFillCfg()
 	if len(cfg.Types) == 0 {
-		return jobOutcome{}, errors.New("没有勾选要补的人物类型（演员 / 导演 / 编剧）")
+		return nil, errors.New("没有勾选要补的人物类型（演员 / 导演 / 编剧）")
 	}
 	if !cfg.Image && !cfg.ZhName && !cfg.ZhBio {
-		return jobOutcome{}, errors.New("头像、中文名、中文简介都没开，没有可做的")
+		return nil, errors.New("头像、中文名、中文简介都没开，没有可做的")
 	}
 	base, key, ok := h.embyServerInfo()
 	if !ok || key == "" {
-		return jobOutcome{}, errors.New("未配置 Emby 地址或 API 密钥（系统配置 → Emby）")
+		return nil, errors.New("未配置 Emby 地址或 API 密钥（系统配置 → Emby）")
 	}
 	tc, err := loadTmdbClient()
 	if err != nil {
-		return jobOutcome{}, err
+		return nil, err
 	}
 	r := &personRunner{
 		cfg: cfg, tc: tc, base: base, key: key,
@@ -837,6 +841,37 @@ func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	for _, m := range marks {
 		r.skip[m.PersonID] = true
 	}
+	return r, nil
+}
+
+// runTitle 处理一部片目里这一轮要补的人物；在停止请求或单次上限处停下
+func (r *personRunner) runTitle(t embyTitleItem) (stopped, capped bool) {
+	for _, p := range r.candidates(t) {
+		if personLane.stopRequested() || stopRequestedGlobal() {
+			return true, false
+		}
+		if r.handled >= r.cfg.MaxPerRun {
+			return false, true
+		}
+		r.done[p.ID] = true
+		r.handled++
+		personLane.setSub("人物", r.handled, r.cfg.MaxPerRun, p.Name)
+		res := r.handle(t, p)
+		r.results = append(r.results, res)
+		logPersonResult(res)
+	}
+	return false, false
+}
+
+func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
+	r, err := newPersonRunner(h)
+	if err != nil {
+		return jobOutcome{}, err
+	}
+	if p := decodeJobParams(job); p.Person != nil && len(p.Person.Targets) > 0 {
+		return execPersonTargets(r, job, p.Person.Targets)
+	}
+	cfg, base, key := r.cfg, r.base, r.key
 
 	// 片目总数：先问一次（Limit=1），续扫断点超出总数（库里删了片）就从头来
 	_, total, err := embyTitlesPage(base, key, 0, 1)
@@ -880,21 +915,9 @@ scan:
 				}
 				titles++
 				personLane.set("扫描片目", titles, total, t.Name)
-				for _, p := range r.candidates(t) {
-					if personLane.stopRequested() || stopRequestedGlobal() {
-						stopped, stopAt = true, idx
-						break scan
-					}
-					if r.handled >= cfg.MaxPerRun {
-						capped, stopAt = true, idx
-						break scan
-					}
-					r.done[p.ID] = true
-					r.handled++
-					personLane.setSub("人物", r.handled, cfg.MaxPerRun, p.Name)
-					res := r.handle(t, p)
-					r.results = append(r.results, res)
-					logPersonResult(res)
+				if s, c := r.runTitle(t); s || c {
+					stopped, capped, stopAt = s, c, idx
+					break scan
 				}
 			}
 		}
@@ -985,6 +1008,22 @@ func summarizePersonRun(results []personResult, titles int) personJobResult {
 }
 
 func personRunMessage(out personJobResult, total, stopAt int, stopped, capped, broken bool) string {
+	msg := personHandledMessage(out)
+	switch {
+	case stopped:
+		msg += fmt.Sprintf("；已按要求停止，下次从第 %d/%d 部片目接着补", stopAt+1, total)
+	case capped:
+		msg += fmt.Sprintf("；达到单次上限，下次从第 %d/%d 部片目接着补", stopAt+1, total)
+	case broken:
+		msg += fmt.Sprintf("；读取 Emby 片目中断，下次从第 %d/%d 部片目接着补", stopAt+1, total)
+	default:
+		msg += fmt.Sprintf("（已看完全部 %d 部片目）", total)
+	}
+	return msg
+}
+
+// personHandledMessage 「处理了多少人、补上什么、没补全的各几个」
+func personHandledMessage(out personJobResult) string {
 	var msg string
 	if out.Handled == 0 {
 		msg = fmt.Sprintf("看了 %d 部片目，没有要补的人物", out.Titles)
@@ -999,16 +1038,6 @@ func personRunMessage(out personJobResult, total, stopAt int, stopped, capped, b
 		if len(rest) > 0 {
 			msg += "；" + strings.Join(rest, "、")
 		}
-	}
-	switch {
-	case stopped:
-		msg += fmt.Sprintf("；已按要求停止，下次从第 %d/%d 部片目接着补", stopAt+1, total)
-	case capped:
-		msg += fmt.Sprintf("；达到单次上限，下次从第 %d/%d 部片目接着补", stopAt+1, total)
-	case broken:
-		msg += fmt.Sprintf("；读取 Emby 片目中断，下次从第 %d/%d 部片目接着补", stopAt+1, total)
-	default:
-		msg += fmt.Sprintf("（已看完全部 %d 部片目）", total)
 	}
 	return msg
 }
@@ -1132,8 +1161,8 @@ func (h *Handler) PersonFillSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})
 		return
 	}
-	log.Printf("[配置] 演职人员补全：定时 %v（%s），类型 %v，头像 %v / 中文名 %v / 简介 %v",
-		req.Enabled, req.Cron, req.Types, req.Image, req.ZhName, req.ZhBio)
+	log.Printf("[配置] 演职人员补全：刮削后 %v，定时 %v（%s），类型 %v，头像 %v / 中文名 %v / 简介 %v",
+		req.AfterScrape, req.Enabled, req.Cron, req.Types, req.Image, req.ZhName, req.ZhBio)
 	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 

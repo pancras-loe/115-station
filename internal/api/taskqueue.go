@@ -86,6 +86,8 @@ type jobParams struct {
 	StrictDup bool `json:"strict_dup,omitempty"`
 	// Subs 订阅检查：要看的订阅（subrun.go）
 	Subs *subJobParams `json:"subs,omitempty"`
+	// Person 刮削后补演职人员：只看这几部片目（embypeoplescrape.go）；没有就是全库续扫
+	Person *personJobParams `json:"person,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

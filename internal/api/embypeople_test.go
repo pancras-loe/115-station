@@ -287,6 +287,16 @@ func (f *fakePeopleServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			start = end
 		}
 		js(map[string]any{"TotalRecordCount": len(titles), "Items": titles[start:end]})
+	case path == "/Items" && r.URL.Query().Get("AnyProviderIdEquals") != "":
+		want := strings.TrimPrefix(r.URL.Query().Get("AnyProviderIdEquals"), "tmdb.")
+		typ := r.URL.Query().Get("IncludeItemTypes")
+		var items []map[string]any
+		for _, it := range f.titles() {
+			if it["Type"] == typ && providerID(it["ProviderIds"].(map[string]string), "Tmdb") == want {
+				items = append(items, it)
+			}
+		}
+		js(map[string]any{"TotalRecordCount": len(items), "Items": items})
 	case path == "/Items" && r.URL.Query().Get("ParentId") == "s1":
 		js(map[string]any{"TotalRecordCount": 2, "Items": []map[string]any{
 			{"Id": "e1", "People": []any{f.ref("w1", "Writer")}},
@@ -527,5 +537,73 @@ func TestPersonFillMaxPerRun(t *testing.T) {
 	}
 	if c := h.loadPersonFillCursor(); c != 0 {
 		t.Fatalf("看完一圈断点应归零: %d", c)
+	}
+}
+
+func TestPersonFillAfterScrape(t *testing.T) {
+	newTestDB(t, "person-after-scrape.db")
+	f := &fakePeopleServer{
+		persons: map[string]*fakePerson{
+			"p1": {Name: "Tom Hanks"}, "p2": {Name: "Robin Wright", Tmdb: "32"}, "p3": {Name: "Robert Zemeckis"},
+			"p4": {Name: "Nobody"}, "p5": {Name: "刘德华", Image: "x", Overview: "香港演员、歌手。"}, "w1": {Name: "Jane Doe"},
+			"p7": {Name: "汤唯", Tmdb: "70", Image: "x", Overview: "Tang Wei is an actress."},
+			"p8": {Name: "巩俐", Tmdb: "80", Image: "x", Overview: ""},
+		},
+		uploads: map[string]int{}, updates: map[string]int{}, tmdbHit: map[string]int{},
+	}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	model.DB.Create(&model.TmdbConfig{ApiKey: "k", ApiUrl: srv.URL, ImageApiUrl: srv.URL, Language: "zh-CN"})
+	dir := t.TempDir()
+	h := &Handler{DB: model.DB, Config: &config.Config{ConfigDir: dir, DataDir: dir}}
+	emby, _ := json.Marshal(map[string]string{"server_url": srv.URL, "api_key": "ek"})
+	_ = h.Config.SaveSetting("emby", string(emby))
+	h.savePersonFillCursor(1)
+
+	old := personAfterScrapeWaits
+	personAfterScrapeWaits = []time.Duration{0, 10 * time.Millisecond}
+	defer func() { personAfterScrapeWaits = old }()
+
+	// 开关关着：不排
+	if _, ok, err := enqueuePersonAfterScrape(h, []personTarget{{Kind: "movie", TmdbID: 14, Title: "色戒"}}); ok || err != nil {
+		t.Fatalf("开关关着不该排任务: ok=%v err=%v", ok, err)
+	}
+	cfg := defaultPersonFillCfg()
+	cfg.AfterScrape = true
+	b, _ := json.Marshal(cfg)
+	_ = h.Config.SaveSetting(personFillSetting, string(b))
+
+	// 两次刮削结束，任务还没开始：并成一个，片目取并集
+	j1, ok, err := enqueuePersonAfterScrape(h, []personTarget{{Kind: "movie", TmdbID: 14, Title: "色戒"}})
+	if !ok || err != nil {
+		t.Fatalf("应排任务: %v", err)
+	}
+	j2, _, _ := enqueuePersonAfterScrape(h, []personTarget{{Kind: "movie", TmdbID: 14}, {Kind: "tv", TmdbID: 999, Title: "没入库的剧"}})
+	if j1.ID != j2.ID {
+		t.Fatalf("排着的应合并: %d %d", j1.ID, j2.ID)
+	}
+	var job model.TaskJob
+	model.DB.First(&job, j1.ID)
+	if p := decodeJobParams(&job); p.Person == nil || len(p.Person.Targets) != 2 || !strings.Contains(job.Title, "等 2 部") {
+		t.Fatalf("合并后的参数不对: %s %s", job.Title, job.Params)
+	}
+
+	out, err := execPersonJob(h, &job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := out.Result.(personJobResult)
+	// 只看色戒：p7 补简介、p8 没简介、p5 已补全；阿甘正传里的人一个都不碰
+	if res.Titles != 1 || res.Handled != 2 || res.Bios != 1 {
+		t.Fatalf("只该处理色戒的人物: %+v", res)
+	}
+	if f.uploads["p1"]+f.updates["p1"] != 0 {
+		t.Fatal("没点名的片目不该处理")
+	}
+	if !strings.Contains(out.Message, "没入库的剧") || out.Idle || out.Partial {
+		t.Fatalf("Emby 里查不到的要在消息里说明、不算失败: %s idle=%v partial=%v", out.Message, out.Idle, out.Partial)
+	}
+	if c := h.loadPersonFillCursor(); c != 1 {
+		t.Fatalf("刮削后补全不该动续扫断点: %d", c)
 	}
 }

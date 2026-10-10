@@ -508,6 +508,8 @@ type fileScrapeResult struct {
 	Errors      []string       `json:"errors,omitempty"`
 	// FollowJob 刮完另建的 Emby 提前探测任务：刮削结束时它多半还在跑，任务中心据此标「探测中」（jobFollowsOf）
 	FollowJob uint `json:"follow_job,omitempty"`
+	// FollowJobs 其余跟着建的任务（刮削后补演职人员）
+	FollowJobs []uint `json:"follow_jobs,omitempty"`
 }
 
 // scrapeTarget 一个待刮片目：台账条目 + 整理时的识别结果（可无）
@@ -555,6 +557,9 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	// 整理 / 同步后的自动刮削（isAutoScrapeKey）不排：那些片目刚入库，入库确认那条入口会排，
 	// 这里再排一次就是同一批条目进两次队列（防重复探测，见 embyextract.go 文件头）
 	var extract []string
+	// 刮过的片目交给「刮削后补演职人员」（开关在演职人员补全页）。自动刮削只交这次真写了东西的：
+	// 什么都没写 Emby 那边就没变化，每轮整理都排一遍只是空转
+	var people []personTarget
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
 	o := lp.Scrape
 	localRoot := localMediaRoot()
@@ -654,6 +659,9 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 				extract = append(extract, embyPathOf(cfg, t.Dir.Local))
 			}
 		}
+		if t.TmdbID > 0 && !st.Gone && (len(st.Wrote) > 0 || !isAutoScrapeKey(job.DedupeKey)) {
+			people = append(people, personTarget{Kind: t.Kind, TmdbID: t.TmdbID, Title: t.Title})
+		}
 		reclaimed := scrapeCompensate(t, st.written, localRoot)
 		res.Reused += st.Reused
 		res.Placeholder += st.Placeholder
@@ -720,6 +728,14 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	} else if o.Probe && !isAutoScrapeKey(job.DedupeKey) && done > 0 {
 		if _, ok := loadEmbyRefreshCfg(); !ok {
 			msg += "；没有配置 Emby，跳过提前探测"
+		}
+	}
+	if len(people) > 0 {
+		if pj, ok, err := enqueuePersonAfterScrape(h, people); err != nil {
+			msg += "；演职人员补全任务没建成：" + err.Error()
+		} else if ok {
+			msg += fmt.Sprintf("；已排演职人员补全任务 #%d", pj.ID)
+			res.FollowJobs = append(res.FollowJobs, pj.ID)
 		}
 	}
 	if rep.n > 0 {

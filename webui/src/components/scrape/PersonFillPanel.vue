@@ -10,7 +10,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import { pluginsApi } from '@/api'
 import type { PersonFillConfig, PersonFillInfo, PersonType } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -21,6 +21,7 @@ const { message } = useFeedback()
 const router = useRouter()
 
 const DEFAULTS: PersonFillConfig = {
+  after_scrape: false,
   enabled: false,
   cron: '30 3 * * *',
   types: ['actor', 'director', 'writer'],
@@ -149,11 +150,18 @@ function openLastJob() {
       头像经本站的 TMDB 代理下载，Emby 连不上 TMDB 也能补。不发任何 115 请求。
     </p>
 
-    <FieldRow label="定时运行" tip="开启后按计划自动排进任务队列（单独一条人物队列，不挡整理与刮削）。「立即运行」不受此开关影响。">
-      <HSwitch v-model="form.enabled" aria-label="定时运行" />
+    <FieldRow
+      label="刮削后补全"
+      tip="每次刮削（整理后、同步后、本地文件页手动刮削）结束时，把这次刮过的片目单独排一个补全任务。任务会先等 Emby 读完新的 NFO（最多十来分钟），Emby 里还查不到的留给定时任务。只看这几部，不影响定时任务的续扫位置。"
+    >
+      <HSwitch v-model="form.after_scrape" aria-label="刮削后补全" />
     </FieldRow>
-    <FieldRow label="执行计划" :hint="info?.next_run ? `下次：${info.next_run}` : ''">
-      <CronField v-model="form.cron" placeholder="30 3 * * *" />
+    <FieldRow
+      label="定时运行"
+      wide
+      tip="开启后按计划把全库扫一遍（单独一条人物队列，不挡整理与刮削），每次从上次停下的片目接着补。「立即运行」不受此开关影响。"
+    >
+      <SchedulePicker v-model="form.cron" v-model:enabled="form.enabled" toggle placeholder="30 3 * * *" />
     </FieldRow>
     <FieldRow label="人物类型" tip="演员包括剧集的客串。剧集的导演、编剧挂在每一集上，勾选后会额外读取各集的人员表。">
       <div class="checks">

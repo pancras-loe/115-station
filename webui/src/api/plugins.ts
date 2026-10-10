@@ -54,6 +54,8 @@ export const coverPreviewUrl = (name: string) =>
 // ---- 演职人员补全 ----
 export type PersonType = 'actor' | 'director' | 'writer'
 export interface PersonFillConfig {
+  /** 刮削任务结束后补这次刮过的片目 */
+  after_scrape: boolean
   enabled: boolean
   cron: string
   types: PersonType[]
