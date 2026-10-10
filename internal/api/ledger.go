@@ -21,7 +21,10 @@ type ledgerTitleEntry struct {
 	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它
 	LibName string
 	Videos  int // 台账里的视频数（海报墙的卡片显示）
-	LastAt  time.Time
+	// LastAt 片目里最近一个视频首次入账的时间（海报墙「最近入库」、媒体信息补全的先后）。
+	// 取 CreatedAt 不取 UpdatedAt：全量同步对每个文件都 upsert 一遍、刷新 updated_at，
+	// 拿它排序的话手动全量一次，所有片目的「入库时间」都变成那次全量的时刻
+	LastAt time.Time
 }
 
 // 台账扫描缓存：刮削共享同一份结果（30 秒 TTL），
@@ -151,8 +154,8 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 			delete(undecided, key)
 		}
 		e.Videos++
-		if sf.UpdatedAt.After(e.LastAt) {
-			e.LastAt = sf.UpdatedAt
+		if sf.CreatedAt.After(e.LastAt) {
+			e.LastAt = sf.CreatedAt
 		}
 	}
 	return out
