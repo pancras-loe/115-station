@@ -397,14 +397,10 @@ func embyReconIsDir(p string) bool {
 
 // embyPathSuggestion 当前映射与推算结果（两个接口共用）
 func embyPathSuggestion(cfg embyRefreshCfg, rootSlash string) gin.H {
-	_, current := embyPathRoots(cfg.PathMapping)
-	currentSub := ""
-	if l, _, ok := strings.Cut(cfg.PathMapping, "#"); ok {
-		currentSub = embyLocalSub(l)
-	}
+	currentLocal, current := embyPathRoots(cfg.PathMapping)
 	libs, err := embyVirtualFolders(cfg)
 	if err != nil {
-		return gin.H{"local_root": rootSlash, "current": current, "current_sub": currentSub, "error": err.Error()}
+		return gin.H{"local_root": rootSlash, "current": current, "current_local": currentLocal, "error": err.Error()}
 	}
 	var locs []string
 	type libInfo struct {
@@ -431,9 +427,16 @@ func embyPathSuggestion(cfg embyRefreshCfg, rootSlash string) gin.H {
 	if ev == nil {
 		ev = []embyRootEvidence{}
 	}
+	suggestLocal := ""
+	if suggest != "" {
+		suggestLocal = rootSlash
+		if suggestSub != "" {
+			suggestLocal += "/" + suggestSub
+		}
+	}
 	return gin.H{
-		"local_root": rootSlash, "current": current, "current_sub": currentSub,
-		"suggest": suggest, "suggest_sub": suggestSub, "evidence": ev,
+		"local_root": rootSlash, "current": current, "current_local": currentLocal,
+		"suggest": suggest, "suggest_local": suggestLocal, "evidence": ev,
 		"libraries": libOut, "covered": covered,
 	}
 }

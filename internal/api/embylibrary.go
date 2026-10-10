@@ -9,33 +9,54 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"115-station/internal/model"
 )
 
 // embyPathRoots 返回映射两侧的根：本地这一侧、Emby 那一侧。
 //
-// path_mapping 写作「本地#Emby」。本地这一侧以 full.local_path 为准，这样在统一入口修改本地目录后，
-// 不需要再去 Emby 卡片重复修改一次；前半段只认**相对**路径，表示本地媒体库根下的子目录
-// （embyLocalSub）。用途：STRM 路径第一层是 115 媒体库目录名（libName），Emby 若直接从这一层挂进去
-// （宿主机 /vol1/1000/资源库 → Emby /Movies，本站 /vol1/1000 → /Movies），Emby 的 /Movies 对应的是
-// 本地 /Movies/资源库，只换 Emby 那一侧写不出来（2026-10-10 现场）。p115strmhelper / qmediasync 的映射两侧都能填。
-// 老配置前半段是绝对路径（以前保存时写的是当时的本地根），照旧忽略。
+// path_mapping 写作「本地#Emby」，两侧都由用户填（p115strmhelper / qmediasync 同款）。本地这一侧：
+//   - 空：跟随本地媒体库目录（full.local_path），两个容器挂同一个目录时就是它，改了本地目录不用回来再改；
+//   - 绝对路径：照用。Emby 直接从 115 库目录那一层挂进去时要填它（STRM 第一层是库名，本站 /vol1/1000 → /Movies、
+//     Emby /vol1/1000/资源库 → /Movies，Emby 的 /Movies 对应本地 /Movies/资源库，2026-10-10 现场）；
+//   - 相对路径：本地媒体库目录下的子目录（v26.10.10-6 那一版的存法，兼容）。
+//
+// 老版本保存时会把当时的本地根写进前半段、后端却一直忽略它，用户改过本地目录的话那个值早就过时了：
+// 启动时由 MigrateEmbyLocalSide 一次性清掉，别去掉那道迁移再让前半段生效。
 func embyPathRoots(pathMapping string) (string, string) {
 	localRoot := strings.TrimRight(strings.ReplaceAll(localMediaRoot(), "\\", "/"), "/")
 	parts := strings.SplitN(pathMapping, "#", 2)
 	if len(parts) != 2 {
 		return localRoot, ""
 	}
-	if sub := embyLocalSub(parts[0]); sub != "" && localRoot != "" {
+	if abs := embyLocalAbs(parts[0]); abs != "" {
+		localRoot = abs
+	} else if sub := embyLocalSub(parts[0]); sub != "" && localRoot != "" {
 		localRoot += "/" + sub
 	}
 	return localRoot, strings.TrimRight(strings.ReplaceAll(parts[1], "\\", "/"), "/")
 }
 
+// isAbsLocalPath / 开头或带盘符（D:/、D:\）
+func isAbsLocalPath(s string) bool {
+	return strings.HasPrefix(s, "/") || strings.HasPrefix(s, "\\") || (len(s) >= 2 && s[1] == ':')
+}
+
+// embyLocalAbs path_mapping 前半段是绝对路径时返回它（/ 分隔、去掉结尾 /），否则空串。
+// 只剩「/」的不认：映射成整个文件系统根没有意义，多半是填错
+func embyLocalAbs(s string) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\\", "/"))
+	if !isAbsLocalPath(s) {
+		return ""
+	}
+	return strings.TrimRight(s, "/")
+}
+
 // embyLocalSub path_mapping 前半段 → 本地媒体库根下的子目录（/ 分隔、首尾无 /）。
-// 绝对路径（老配置）、空、带 .. 的一律返回空串，即映射本地根本身
+// 绝对路径、空、带 .. 的一律返回空串
 func embyLocalSub(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\\", "/"))
-	if s == "" || strings.HasPrefix(s, "/") || (len(s) >= 2 && s[1] == ':') {
+	if s == "" || isAbsLocalPath(s) {
 		return ""
 	}
 	s = path.Clean(s)
@@ -43,6 +64,47 @@ func embyLocalSub(s string) string {
 		return ""
 	}
 	return s
+}
+
+// embyLocalSideMigrateKey 完成标记（Setting 表）
+const embyLocalSideMigrateKey = "migrate.emby_local_side.v1"
+
+// MigrateEmbyLocalSide 一次性清掉老配置 path_mapping 前半段的绝对路径（见 embyPathRoots）。
+// 老界面从不让用户填这一侧，清掉 = 跟随本地媒体库目录，和迁移前的实际行为完全一致。
+// 相对路径（-6 版的子目录）是用户填的，不动
+func (h *Handler) MigrateEmbyLocalSide() {
+	if h.DB == nil {
+		return
+	}
+	var done int64
+	h.DB.Model(&model.Setting{}).Where("key = ?", embyLocalSideMigrateKey).Count(&done)
+	if done > 0 {
+		return
+	}
+	if raw := h.getSettingValue("emby"); raw != "" {
+		var cfg map[string]any
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			log.Printf("[迁移] ✗ Emby 路径映射：配置解析失败，下次启动再试: %v", err)
+			return
+		}
+		pm, _ := cfg["path_mapping"].(string)
+		if l, e, ok := strings.Cut(pm, "#"); ok && isAbsLocalPath(strings.TrimSpace(l)) {
+			cfg["path_mapping"] = "#" + e
+			b, _ := json.Marshal(cfg)
+			// 和 SaveSetting 接口同一个去处（yaml，读取时它优先于数据库里的旧值）
+			if h.Config == nil {
+				return
+			}
+			if err := h.Config.SaveSetting("emby", string(b)); err != nil {
+				log.Printf("[迁移] ✗ Emby 路径映射：保存失败，下次启动再试: %v", err)
+				return
+			}
+			log.Printf("[迁移] ✓ Emby 路径映射本地一侧「%s」改为跟随本地媒体库目录（老版本自动写入、一直未生效）", l)
+		}
+	}
+	if err := h.DB.Create(&model.Setting{Key: embyLocalSideMigrateKey, Value: "1"}).Error; err != nil {
+		log.Printf("[迁移] ○ Emby 路径映射迁移完成标记写入失败（下次启动再跑一遍，结果不变）: %v", err)
+	}
 }
 
 // embyPathToLocal Emby 路径 → 本地路径（mapToEmbyPath 的逆向）。

@@ -90,6 +90,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	MigrateStrmNames(db)
 	// 存量 ISO 的直链补 .iso（一次性，strmiso.go）：改名迁移之后跑，台账已是新名
 	h.MigrateStrmISOExt()
+	// Emby 路径映射本地一侧开放填写之前，老配置里自动写入的旧值清掉（一次性，embylibrary.go）
+	h.MigrateEmbyLocalSide()
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
 

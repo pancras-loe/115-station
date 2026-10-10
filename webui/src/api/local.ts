@@ -388,12 +388,12 @@ export interface EmbyPathSuggest {
   local_root?: string
   /** 当前填的 Emby 媒体库目录 */
   current?: string
-  /** 当前映射本地这一侧：本地媒体库根下的子目录，空 = 根本身 */
-  current_sub?: string
+  /** 当前映射实际生效的本地这一侧（没填时就是本地媒体库目录） */
+  current_local?: string
   /** 推算出的 Emby 媒体库目录；空 = 推不出来 */
   suggest?: string
-  /** 推算出的本地子目录（Emby 直接从库目录挂进去时，如「资源库」） */
-  suggest_sub?: string
+  /** 推算出的本地这一侧（Emby 直接从库目录挂进去时多一层库名，如 /Movies/资源库） */
+  suggest_local?: string
   evidence?: { location: string; local: string }[]
   libraries?: { name: string; locations: string[]; under_root: boolean }[]
   covered?: number

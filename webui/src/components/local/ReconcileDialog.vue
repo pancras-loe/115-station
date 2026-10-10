@@ -141,7 +141,7 @@ function goSettings() {
   const m = mapping.value
   router.push({
     name: 'settings',
-    query: { tab: 'emby', emby_root: m?.suggest || undefined, emby_sub: (m?.suggest && m.suggest_sub) || undefined },
+    query: { tab: 'emby', emby_root: m?.suggest || undefined, emby_local: (m?.suggest && m.suggest_local) || undefined },
   })
 }
 </script>
@@ -166,10 +166,12 @@ function goSettings() {
         </HAlert>
         <div v-if="mapping" class="map">
           <div class="map-row"><span class="k">本地媒体库目录</span><code>{{ mapping.local_root || '未配置' }}</code></div>
-          <div v-if="mapping.current_sub" class="map-row"><span class="k">当前本地子目录</span><code>{{ mapping.current_sub }}</code></div>
+          <div v-if="mapping.current_local && mapping.current_local !== mapping.local_root" class="map-row">
+            <span class="k">当前映射本地路径</span><code>{{ mapping.current_local }}</code>
+          </div>
           <div class="map-row"><span class="k">当前 Emby 媒体库目录</span><code>{{ mapping.current || '未填' }}</code></div>
-          <div v-if="mapping.suggest && mapping.suggest_sub" class="map-row">
-            <span class="k">推算本地子目录</span><code class="hl">{{ mapping.suggest_sub }}</code>
+          <div v-if="mapping.suggest && mapping.suggest_local && mapping.suggest_local !== mapping.local_root" class="map-row">
+            <span class="k">推算本地路径</span><code class="hl">{{ mapping.suggest_local }}</code>
           </div>
           <div v-if="mapping.suggest" class="map-row">
             <span class="k">推算 Emby 媒体库目录</span><code class="hl">{{ mapping.suggest }}</code>

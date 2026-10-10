@@ -34,45 +34,53 @@ const banner = ref<BannerState | null>(null)
 const testing = ref(false)
 const pathProbe = ref('')
 const embyMediaRoot = ref('')
-/** 映射本地这一侧：本地媒体库根下的子目录（Emby 直接从 115 库目录那一层挂进去时填库名），空 = 根本身 */
-const localSub = ref('')
+/** 映射本地这一侧，空 = 跟随本地媒体库目录（后端 embyPathRoots 同口径） */
+const localPath = ref('')
 
-/** path_mapping 前半段只认相对路径（后端 embyLocalSub 同口径）；老配置写的是当时的本地根（绝对路径），当作空 */
-function subOf(raw: string): string {
-  const s = raw.trim().replace(/\\/g, '/')
-  if (!s || s.startsWith('/') || /^[A-Za-z]:/.test(s)) return ''
-  return s.replace(/^\.\//, '').replace(/\/+$/, '')
-}
+const norm = (p: string) => p.trim().replace(/\\/g, '/').replace(/(.)\/+$/, '$1')
+const isAbs = (p: string) => p.startsWith('/') || /^[A-Za-z]:/.test(p)
+const mediaRoot = computed(() => norm(media.model.value.local_path || ''))
 
 watch(
-  () => model.value.path_mapping,
-  (rule) => {
+  [() => model.value.path_mapping, mediaRoot],
+  ([rule, root]) => {
     const splitAt = rule.indexOf('#')
     embyMediaRoot.value = splitAt >= 0 ? rule.slice(splitAt + 1) : ''
-    localSub.value = splitAt >= 0 ? subOf(rule.slice(0, splitAt)) : ''
+    const l = splitAt >= 0 ? norm(rule.slice(0, splitAt)) : ''
+    // v26.10.10-6 存的是相对子目录：显示成完整路径，保存时按绝对路径写回
+    localPath.value = !l || isAbs(l) ? l : root ? `${root}/${l.replace(/^\.\//, '')}` : ''
   },
   { immediate: true },
 )
 
-/** 映射本地这一侧的完整路径 */
-const localSide = computed(() => {
-  const root = media.model.value.local_path.trim().replace(/\/+$/, '')
-  const sub = subOf(localSub.value)
-  return sub ? `${root}/${sub}` : root
+/** 实际生效的本地这一侧 */
+const localSide = computed(() => norm(localPath.value) || mediaRoot.value)
+
+/** 填了却不在本地媒体库目录下：本站的 STRM 都在那下面，填到外面一定对不上 */
+const localSideWarn = computed(() => {
+  const l = norm(localPath.value)
+  const root = mediaRoot.value
+  if (!l) return ''
+  if (!isAbs(l)) return '请填绝对路径（以 / 开头）'
+  if (root && l !== root && !l.startsWith(root + '/') && !root.startsWith(l + '/'))
+    return `不在本地媒体库目录 ${root} 下，本站生成的 STRM 都在那里面，这样填对不上`
+  return ''
 })
 
-// ---- Emby 媒体库目录：按 Emby 媒体库的路径推算（/emby/path-suggest），只填进表单，保存由用户点 ----
+// ---- 映射两侧：按 Emby 媒体库的路径推算（/emby/path-suggest），只填进表单，保存由用户点 ----
 const detecting = ref(false)
 const detectNote = ref('')
 
-function applySuggest(root: string, sub: string, how: string) {
-  const desc = sub ? `本地子目录「${sub}」、Emby 媒体库目录 ${root}` : root
-  if (root === embyMediaRoot.value.trim() && sub === subOf(localSub.value)) {
+function applySuggest(root: string, local: string, how: string) {
+  // 推算的本地一侧就是本地媒体库目录时留空（跟随），以后改了本地目录不用回来再改
+  const l = norm(local) === mediaRoot.value ? '' : norm(local)
+  const desc = l ? `本地 ${l} ⇄ Emby ${root}` : root
+  if (root === embyMediaRoot.value.trim() && l === norm(localPath.value)) {
     detectNote.value = `推算结果与当前一致：${desc}`
     return
   }
   embyMediaRoot.value = root
-  localSub.value = sub
+  localPath.value = l
   detectNote.value = `${how}已填入 ${desc}，确认无误后点「保存」`
 }
 
@@ -87,7 +95,7 @@ async function detectEmbyRoot() {
       detectNote.value = 'Emby 媒体库的目录在本地媒体库根下（含往下一层的库目录）找不到同名目录，推算不出来，请对照 Emby 媒体库路径手动填写'
     else {
       const ev = d.evidence?.[0]
-      applySuggest(d.suggest, d.suggest_sub || '', ev ? `按 Emby「${ev.location}」⇄ 本地「${ev.local}」` : '')
+      applySuggest(d.suggest, d.suggest_local || '', ev ? `按 Emby「${ev.location}」⇄ 本地「${ev.local}」` : '')
     }
   } catch (e) {
     toastError(e, '检测失败')
@@ -96,23 +104,24 @@ async function detectEmbyRoot() {
   }
 }
 
-// 从对账弹窗跳过来时带着推算值（?emby_root=）：等配置读完再填，否则会被读回来的旧值盖掉
+// 从对账弹窗跳过来时带着推算值（?emby_root= &emby_local=）：等配置读完再填，否则会被读回来的旧值盖掉
 watch(
   loading,
   (busy) => {
     const root = typeof route.query.emby_root === 'string' ? route.query.emby_root.trim() : ''
     if (busy || !root) return
-    const sub = typeof route.query.emby_sub === 'string' ? route.query.emby_sub.trim() : ''
-    applySuggest(root, sub, '对账推算的值')
-    router.replace({ query: { ...route.query, emby_root: undefined, emby_sub: undefined } })
+    const local = typeof route.query.emby_local === 'string' ? route.query.emby_local.trim() : ''
+    applySuggest(root, local, '对账推算的值')
+    router.replace({ query: { ...route.query, emby_root: undefined, emby_local: undefined } })
   },
   { immediate: true },
 )
 
-// 前半段存相对子目录而不是绝对路径：本地媒体库目录以后改了，映射跟着走，不用回来再改一遍
+// 本地一侧和本地媒体库目录一样时存空（跟随）：以后改了本地目录，映射跟着走
 function currentPathMapping(): string {
   const embyRoot = embyMediaRoot.value.trim()
-  return embyRoot ? `${subOf(localSub.value)}#${embyRoot}` : ''
+  const l = norm(localPath.value)
+  return embyRoot ? `${l === mediaRoot.value ? '' : l}#${embyRoot}` : ''
 }
 
 async function saveEmby() {
@@ -241,16 +250,12 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 
       <FieldRow
         label="本地路径映射"
-        tip="本地这一侧默认是本地媒体库目录。Emby 若直接从 115 库目录那一层挂进去（STRM 路径第一层是 115 媒体库目录名），在子目录里填这个名字。Emby 那一侧填对应目录在 Emby 里的路径。"
+        tip="左边是本站容器里的本地路径，右边是同一个目录在 Emby 里的路径。左边留空 = 本地媒体库目录，两个容器挂同一个目录时留空即可。"
       >
         <div class="path-pair">
           <label>
-            <span>本地媒体库目录 / 子目录（可选）</span>
-            <div class="local-side">
-              <HInput :model-value="media.model.value.local_path || '未配置'" readonly />
-              <span class="sep">/</span>
-              <HInput v-model="localSub" placeholder="如 资源库，一般留空" />
-            </div>
+            <span>本地路径（留空 = 本地媒体库目录）</span>
+            <HInput v-model="localPath" :placeholder="mediaRoot || '/media'" />
           </label>
           <span class="path-arrow">→</span>
           <label>
@@ -258,6 +263,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
             <HInput v-model="embyMediaRoot" placeholder="如 /media" />
           </label>
         </div>
+        <p v-if="localSideWarn" class="side-warn">{{ localSideWarn }}</p>
         <div class="detect">
           <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
           <span v-if="detectNote" class="detect-note">{{ detectNote }}</span>
@@ -366,14 +372,10 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
   color: var(--muted);
   word-break: break-all;
 }
-.local-side {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 6px;
-  align-items: center;
-}
-.local-side .sep {
-  color: var(--c-text-3);
+.side-warn {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--warning);
 }
 .path-arrow {
   padding-bottom: 8px;
