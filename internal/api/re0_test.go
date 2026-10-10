@@ -1,6 +1,9 @@
 package api
 
 import (
+	"115-station/internal/config"
+
+	"github.com/gin-gonic/gin"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -135,5 +138,42 @@ func TestParseTraceIP(t *testing.T) {
 		if (err == nil) != c.ok || got != c.want {
 			t.Errorf("parseTraceIP(%q) = %q, %v", c.body, got, err)
 		}
+	}
+}
+
+// 保存应用配置：掩码 = 没改动保持旧值，清空 = 真清除，其他 = 新值
+// （此前空串也当「没改」，界面上清空 Secret 保存后删不掉）
+func TestRe0SaveConfigSecret(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	notifyConfigSource = &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
+	reset := func() {
+		re0CfgMu.Lock()
+		re0CfgV, re0CfgAt = nil, time.Time{}
+		re0CfgMu.Unlock()
+	}
+	t.Cleanup(func() { notifyConfigSource = nil; reset() })
+	h := &Handler{}
+	save := func(secret string) string {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		body := `{"base_url":"https://re0.me","client_id":"app_x","client_secret":"` + secret + `"}`
+		c.Request = httptest.NewRequest(http.MethodPost, "/re0/config", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		h.Re0SaveConfig(c)
+		if w.Code != http.StatusOK {
+			t.Fatalf("保存失败: %d %s", w.Code, w.Body)
+		}
+		reset()
+		return loadRe0Cfg().ClientSecret
+	}
+
+	if got := save("sec1"); got != "sec1" {
+		t.Fatalf("新值应写入: %q", got)
+	}
+	if got := save(settingMask); got != "sec1" {
+		t.Fatalf("掩码回传应保持旧值: %q", got)
+	}
+	if got := save(""); got != "" {
+		t.Fatalf("清空应真清除: %q", got)
 	}
 }

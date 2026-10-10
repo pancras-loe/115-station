@@ -575,7 +575,9 @@ func (h *Handler) Re0SaveConfig(c *gin.Context) {
 	cfg := loadRe0Cfg()
 	cfg.BaseURL = re0NormalizeBase(req.BaseURL)
 	cfg.ClientID = strings.TrimSpace(req.ClientID)
-	if s := strings.TrimSpace(req.ClientSecret); s != "" && s != settingMask {
+	// 掩码原样回传 = 没改动，保持旧值；清空 = 真清除（与 unmaskSensitiveJSON 同口径）。
+	// 原来空串也当「没改」，界面上清空保存后 Secret 删不掉
+	if s := strings.TrimSpace(req.ClientSecret); s != settingMask {
 		cfg.ClientSecret = s
 	}
 	if err := saveRe0Cfg(cfg); err != nil {

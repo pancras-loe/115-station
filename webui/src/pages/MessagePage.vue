@@ -12,7 +12,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
-import { http } from '@/api'
+import { configApi, http } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
@@ -74,9 +74,25 @@ watch(
   { immediate: true },
 )
 
-const onebotCallback = computed(
-  () => `${location.origin}/onebot/event?token=${model.value.qq_onebot.event_token}`,
+// 后端对 event_token 回的是掩码，回调地址要拼真值，否则复制出去的是 token=••••（EmbyTab 同款）
+const onebotEventToken = ref('')
+watch(
+  () => model.value.qq_onebot.event_token,
+  async (t) => {
+    if (t !== configApi.SECRET_MASK) {
+      onebotEventToken.value = t
+      return
+    }
+    try {
+      const plain = await configApi.revealSecret('message', 'qq_onebot.event_token')
+      if (model.value.qq_onebot.event_token === t) onebotEventToken.value = plain
+    } catch {
+      onebotEventToken.value = ''
+    }
+  },
+  { immediate: true },
 )
+const onebotCallback = computed(() => `${location.origin}/onebot/event?token=${onebotEventToken.value}`)
 
 /** 页签标题带启用状态点，一眼看出开了哪几个通道 */
 const channels = computed(() => ({
@@ -235,7 +251,12 @@ const TABS = computed(() => [
           wide
           tip="OneBot「HTTP POST 上报」推事件到本服务时携带的鉴权 token。把下方回调地址填到 OneBot 的 HTTP POST 配置里。"
         >
-          <HInput v-model="model.qq_onebot.event_token" />
+          <SecretInput
+            v-model="model.qq_onebot.event_token"
+            name="onebot-event-token"
+            :reveal="{ key: 'message', field: 'qq_onebot.event_token' }"
+            placeholder="自定义一个 token"
+          />
           <CopyBox class="cb" :value="onebotCallback" />
         </FieldRow>
         <FieldRow label="状态">
