@@ -168,7 +168,7 @@ func notifyEmbyPaths(localPaths []string, kind embyRefreshKind, verifyLocal ...s
 
 // notifyEmbyPathsWith ingest=false：只刷新、不做入库回查。
 // 入库回查确认到的片目会交给自动提前探测（embyVerifyIngest → queueEmbyExtract，只看全局「轨道探测」），
-// 本地文件页手动刮削只是给已在库的片目补元数据，不是入库：走回查的话，用户在刮削弹窗里关掉的
+// 海报墙手动刮削只是给已在库的片目补元数据，不是入库：走回查的话，用户在刮削弹窗里关掉的
 // 「轨道探测」会被全局开关顶回来（2026-09-30 现场：剧集全选刮削、弹窗关了探测，照样探了一遍）
 func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool, verifyLocal ...string) {
 	notifyEmbyPathsAs(localPaths, kind, ingest, false, verifyLocal...)

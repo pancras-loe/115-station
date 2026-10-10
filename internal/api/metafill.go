@@ -20,7 +20,7 @@ import (
 // ==================== 媒体信息补全（影视刮削页，kind=metafill）====================
 //
 // 定时把本地媒体库里「没刮全」「Emby 里还缺媒体信息」的片目找出来，交给现成的两条队列去补：
-//   - 缺 NFO / 海报 / 背景图（本地文件页卡片的「未刮全」，同一套 grade 口径）→ 建一个刮削任务，
+//   - 缺 NFO / 海报 / 背景图（海报墙卡片的「未刮全」，同一套 grade 口径）→ 建一个刮削任务，
 //     只补缺失、不上传网盘（传不传照常由监控上传决定）、不顺带探测；
 //   - Emby 里缺媒体信息（视频 + 音轨不足两条，同 needsProbe）→ 建一个 Emby 提前探测任务，
 //     **按自动规则放行**：同一条目最多 2 次、间隔 24 小时，用完不再探（§6.16 禁止重复探测）。
@@ -167,7 +167,15 @@ type metaFillResult struct {
 
 func execMetaFillJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	cfg := h.loadMetaFillCfg()
+	// 刮削方式选了 Emby：补刮这一步不做（往目录里写 NFO 会盖掉 Emby 自己刮好的元数据），探测照常
+	embyScrapes := cfg.Scrape && !loadScrapeCfg().stationScrapes()
+	if embyScrapes {
+		cfg.Scrape = false
+	}
 	if !cfg.Scrape && !cfg.Probe {
+		if embyScrapes {
+			return jobOutcome{}, errors.New(errEmbyScrapes + "，补刮不做；探测又没开，没有可做的")
+		}
 		return jobOutcome{}, errors.New("补刮与探测都没开，没有可做的")
 	}
 	root := localMediaRoot()
@@ -186,6 +194,8 @@ func execMetaFillJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 	if cfg.Scrape {
 		msgs = append(msgs, h.metaFillScrape(job, cfg, titles, now, &res))
+	} else if embyScrapes {
+		msgs = append(msgs, errEmbyScrapes+"，跳过补刮")
 	}
 	if cfg.Probe {
 		scrapeLane.set("读取 Emby 媒体信息", 0, 0, "")
@@ -408,7 +418,8 @@ func (h *Handler) MetaFillGetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"config": cfg, "next_run": next, "marks": held, "retry_days": int(metaFillRetryAfter.Hours() / 24),
 		"last_job": lastJob, "emby": embyOK, "local_root": localMediaRoot() != "",
-		"limits": gin.H{"max_attempts": embyExtractMaxAttempts, "retry_hours": int(embyExtractRetryAfter.Hours())},
+		"provider": loadScrapeCfg().provider(),
+		"limits":   gin.H{"max_attempts": embyExtractMaxAttempts, "retry_hours": int(embyExtractRetryAfter.Hours())},
 	}})
 }
 

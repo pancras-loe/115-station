@@ -1,10 +1,15 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
+import { embyImageUrl } from '@/utils/media'
 
-/** 本地文件页（后端 internal/api/locallib.go / localscrape.go） */
+/** 海报墙（后端 internal/api/locallib.go / localscrape.go） */
 
-/** ok = 必需产物（各级 NFO、海报、背景图）都在；partial = 缺一部分；miss = 一样都没有 */
-export type LocalTitleStatus = 'ok' | 'partial' | 'miss'
+/**
+ * 本站刮削：ok = 必需产物（各级 NFO、海报、背景图）都在；partial = 缺一部分；miss = 一样都没有。
+ * Emby 刮削：ok = Emby 认出了条目且海报、背景图都有；partial = 缺一部分或认错了条目；miss = Emby 里没有；
+ * pending = Emby 快照还没读到（只有 Emby 刮削时出现，不进三档计数）
+ */
+export type LocalTitleStatus = 'ok' | 'partial' | 'miss' | 'pending'
 
 export interface LocalTitle {
   /** 台账片目 key（含库名前缀）：刮削提交的就是它 */
@@ -29,6 +34,10 @@ export interface LocalTitle {
   last_at: string
   /** 海报缩略图查询串，用 posterUrl() 拼 */
   poster?: string
+  /** 用 Emby 的海报（片目级条目 id）：后端已决定用不用它，有就优先 */
+  emby_poster?: string
+  /** Emby 刮削时：Emby 认成的 TMDB 编号与台账不一致 */
+  mismatch?: string
 }
 
 export interface LocalTitleStats {
@@ -47,6 +56,12 @@ export interface LocalEmbyStat {
   items: number
   /** 其中还缺媒体信息（没探测过）、且能探测的 */
   lack: number
+  /** 片目级条目（电影的 Movie、剧集的 Series）；空 = Emby 没把它认成影视条目 */
+  item_id?: string
+  tmdb?: string
+  imdb?: string
+  poster?: boolean
+  backdrop?: boolean
 }
 
 /** GET /local/titles/emby-stats：打开页面时向 Emby 拉一次快照（只打 Emby，零 115 请求） */
@@ -118,8 +133,10 @@ export const embyStats = (refresh = false) =>
  * <img> 带不了登录态：后端按 key 签了名，这条路由公开。
  * w = 需要的像素宽度（显示宽度 × 设备像素比），后端往上取档；不给就是最大档 400
  */
-export const posterUrl = (t: { poster?: string }, w?: number) =>
-  t.poster ? `/api/local/poster?${t.poster}${w ? `&w=${Math.ceil(w)}` : ''}` : ''
+export const posterUrl = (t: { poster?: string; emby_poster?: string }, w?: number) => {
+  if (t.emby_poster) return embyImageUrl(`Items/${t.emby_poster}/Images/Primary`, Math.ceil(w || 400))
+  return t.poster ? `/api/local/poster?${t.poster}${w ? `&w=${Math.ceil(w)}` : ''}` : ''
+}
 
 /** 本次刮削选项：只对这一次生效，不改已保存的刮削配置 */
 export interface ScrapeOptions {
@@ -194,6 +211,8 @@ export interface LocalTitleDetail extends LocalTitle {
   dir: string
   /** 背景图查询串，用 fanartUrl() 拼 */
   fanart?: string
+  /** 用 Emby 的背景图（片目级条目 id），有就优先 */
+  emby_backdrop?: string
   files: LocalFile[]
   seasons?: LocalSeason[]
   entries: LocalEntry[]
@@ -210,7 +229,22 @@ export interface LocalTitleDetail extends LocalTitle {
 
 export const titleDetail = (key: string) => http.get<LocalTitleDetail>('/local/titles/detail', { params: { key } })
 
-export const fanartUrl = (d: { fanart?: string }) => (d.fanart ? `/api/local/poster?${d.fanart}` : '')
+export const fanartUrl = (d: { fanart?: string; emby_backdrop?: string }) => {
+  if (d.emby_backdrop) return embyImageUrl(`Items/${d.emby_backdrop}/Images/Backdrop`, 960)
+  return d.fanart ? `/api/local/poster?${d.fanart}` : ''
+}
+
+export interface EmbyRefreshReply {
+  message: string
+  refreshed: number
+  failed: number
+  /** Emby 里没有对应影视条目的片目 */
+  missing?: string[]
+}
+
+/** 让 Emby 重新刮这些片目（刮削方式为 Emby 时代替「刮削」）；replace = 替换全部元数据与图片 */
+export const embyRefresh = (keys: string[], replace: boolean) =>
+  http.post<EmbyRefreshReply>('/local/titles/emby-refresh', { keys, replace })
 
 /**
  * 提前探测状态（按自动探测的规则说；手动能不能点看 manual_at）：done 已有媒体信息 / none 没探测过 /

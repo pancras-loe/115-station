@@ -24,7 +24,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
-// ==================== 本地文件页：本地媒体库的片目卡片 ====================
+// ==================== 海报墙：本地媒体库的片目卡片 ====================
 //
 // 一张卡片 = 台账里的一个片目（库名/<分类>/<标题目录>，ledger.go 的 scanLedgerTitles），
 // 状态与详情抽屉同一套口径（inspectLocalTitleDetail + grade）：片目级 / 季 / 每集的 NFO、海报、背景图
@@ -59,6 +59,11 @@ type localTitle struct {
 	LastAt  time.Time `json:"last_at"`
 	// Poster 海报缩略图的查询串（key / v / sig），前端拼成 /api/local/poster?…
 	Poster string `json:"poster,omitempty"`
+	// EmbyPoster 用 Emby 的海报（片目级条目 id，前端拼 /embyimg）：刮削方式为 Emby 时优先用它，
+	// 本站刮削时只在本地没有海报时补上 —— 不用本站刮削的用户本地一张图都没有
+	EmbyPoster string `json:"emby_poster,omitempty"`
+	// Mismatch 刮削方式为 Emby 时，Emby 认成的 TMDB 编号与台账不一致（填 Emby 那个编号）
+	Mismatch string `json:"mismatch,omitempty"`
 }
 
 // 卡片列表缓存：一次列表要把每个片目的目录（标题 / 季）全读一遍，上千部时每翻一页都重读太浪费。
@@ -258,6 +263,8 @@ type localTitleQuery struct {
 	Probe string
 	// Emby 片目 key → 媒体信息计数（localemby.go 的快照），挂到返回的卡片上
 	Emby map[string]localEmbyStat
+	// EmbyGrade 刮削方式为 Emby：状态改按 Emby 分级（gradeByEmby）。快照还没拉到时状态记 pending，不进三档计数
+	EmbyGrade bool
 }
 
 // filterLocalTitles 纯函数：筛选 + 排序 + 计数。
@@ -273,8 +280,18 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 			(t.TmdbID == 0 || strconv.Itoa(t.TmdbID) != kw) {
 			continue
 		}
-		if es, ok := q.Emby[t.Key]; ok {
+		es, inEmby := q.Emby[t.Key]
+		if inEmby {
 			t.Emby = &es
+		}
+		switch {
+		case q.EmbyGrade && q.Emby == nil:
+			t.Status, t.Lack, t.Soft = "pending", nil, nil
+		case q.EmbyGrade:
+			gradeByEmby(&t, t.Emby)
+		}
+		if inEmby && es.Poster && (q.EmbyGrade || !t.HasPoster) {
+			t.EmbyPoster = es.ItemID
 		}
 		typeOK := q.MediaType == "" || t.MediaType == q.MediaType
 		statusOK := q.Status == "" || t.Status == q.Status
@@ -299,6 +316,7 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 				st.OK++
 			case "partial":
 				st.Partial++
+			case "pending":
 			default:
 				st.Miss++
 			}
@@ -345,7 +363,7 @@ func (h *Handler) ListLocalTitles(c *gin.Context) {
 	all := h.localTitlesSnapshot(c.Query("refresh") == "1")
 	list, st := filterLocalTitles(all, localTitleQuery{
 		Keyword: c.Query("q"), MediaType: c.Query("type"), Status: c.Query("status"), Sort: c.Query("sort"),
-		Probe: c.Query("probe"), Emby: localEmbyStats(),
+		Probe: c.Query("probe"), Emby: localEmbyStats(), EmbyGrade: !loadScrapeCfg().stationScrapes(),
 	})
 	offset, _ := strconv.Atoi(c.Query("offset"))
 	limit, _ := strconv.Atoi(c.Query("limit"))

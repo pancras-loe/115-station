@@ -118,7 +118,7 @@ func TestMultiVersionArtForce(t *testing.T) {
 	}
 }
 
-// 本地文件页：多版本时目录级海报不算，要每个版本都有
+// 海报墙：多版本时目录级海报不算，要每个版本都有
 func TestPerVersionArtGrade(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "poster.jpg"), []byte("x"), 0o644)

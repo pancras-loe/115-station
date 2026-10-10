@@ -1,7 +1,7 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
 
-/** 网盘文件页（后端 internal/api/filebrowser.go / fileorganize.go / filelibrary.go）。刮削在本地文件页（local.ts） */
+/** 网盘文件页（后端 internal/api/filebrowser.go / fileorganize.go / filelibrary.go）。刮削在海报墙（local.ts） */
 
 /** 工作区根目录的角色 */
 export type WorkspaceRole = 'library' | 'pending' | 'share' | 'existing' | 'redundant'
@@ -26,7 +26,7 @@ export interface FileItem {
   title?: boolean
   /** 剧集片目里的视频：能「指定季集」；此时 title_key / title_rel 是所在片目的 */
   episode?: boolean
-  /** 片目在本地文件页的 key（?title=） */
+  /** 片目在海报墙的 key（?title=） */
   title_key?: string
   /** 片目的库内相对路径（整理记录 ?target_dir=） */
   title_rel?: string

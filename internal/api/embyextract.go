@@ -39,7 +39,7 @@ import (
 // 开关复用影视刮削的「轨道探测」（scrape.probe_streams / 刮削任务的 Probe）。入口分两类，规则不同：
 //   - 自动：入库确认之后（embyVerifyIngest 查到条目的那一刻），全局开关，整理 / 增量 / 全量进来的都算
 //     排的是所在片目这一轮新写出的集（embyfresh.go），不整部探；片目之上的目录不探，见 embyExtractTitleTargets
-//   - 手动：用户这一次明确要探 —— 片目详情点「提前探测」、本地文件页刮削勾了「轨道探测」、
+//   - 手动：用户这一次明确要探 —— 片目详情点「提前探测」、海报墙刮削勾了「轨道探测」、
 //     重新整理（带刮削且开着探测）。手动的一律建一个「Emby 提前探测」任务（kind=probe，
 //     单独一条探测队列，embyprobejob.go），任务中心看得到进度、能停、失败了能重试
 // 已经有媒体信息的条目一律不碰：每次探测都是一次 115 直链请求
@@ -762,7 +762,7 @@ func embyExtractSettle(id string, ok bool, errMsg string) {
 }
 
 // embyStream PlaybackInfo / Items 返回里的一条轨道。
-// 探测只看 Type；其余字段给本地文件页的片目详情显示（localdetail.go），同一次 /Items 请求顺带解出来
+// 探测只看 Type；其余字段给海报墙的片目详情显示（localdetail.go），同一次 /Items 请求顺带解出来
 type embyStream struct {
 	Type              string  `json:"Type"`
 	Codec             string  `json:"Codec"`
@@ -797,6 +797,10 @@ type embyExtractItem struct {
 	RunTimeTicks      int64             `json:"RunTimeTicks"`
 	MediaStreams      []embyStream      `json:"MediaStreams"`
 	MediaSources      []embyMediaSource `json:"MediaSources"`
+	// 下面三个只有海报墙的快照会要（localemby.go）：片目在 Emby 里有没有海报、认成了哪个 TMDB 条目
+	ProviderIds       map[string]string `json:"ProviderIds"`
+	ImageTags         map[string]string `json:"ImageTags"`
+	BackdropImageTags []string          `json:"BackdropImageTags"`
 }
 
 // embyMediaSource 条目的一个版本。同一片目目录里放两个 .strm（两个版本），Emby 会把它们合成

@@ -78,7 +78,7 @@ type jobParams struct {
 	Scheduled bool `json:"scheduled,omitempty"`
 	// Files 网盘文件页勾选的条目（整理所选 / 移动，filebrowser.go）
 	Files *fileJobParams `json:"files,omitempty"`
-	// Local 本地文件页勾选的片目（刮削，localscrape.go）
+	// Local 海报墙勾选的片目（刮削，localscrape.go）
 	Local *localScrapeParams `json:"local,omitempty"`
 	// Probe 手动 Emby 提前探测（embyprobejob.go）
 	Probe *probeJobParams `json:"probe,omitempty"`

@@ -101,6 +101,8 @@ export interface MetaFillInfo {
   retry_days?: number
   emby?: boolean
   local_root?: boolean
+  /** 刮削方式：emby 时补刮这一步不做 */
+  provider?: 'station' | 'emby'
   /** 自动探测的规则：同一视频最多几次、两次间隔几小时 */
   limits?: { max_attempts: number; retry_hours: number }
   last_job?: { id: number; status: string; message?: string; finished_at?: string } | null

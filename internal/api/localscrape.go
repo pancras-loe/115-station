@@ -18,10 +18,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// ==================== 本地文件页：刮削所选片目 ====================
+// ==================== 海报墙：刮削所选片目 ====================
 //
 // 刮削对象是台账里的片目（库名/<分类>/<标题目录>），产物写本地媒体库。手动刮削只有这一个入口（全库刮削已删）。
-// 原来挂在网盘文件页上（按 115 目录勾选、台账里没有的直接写网盘），2026-09 起挪到本地文件页：
+// 原来挂在网盘文件页上（按 115 目录勾选、台账里没有的直接写网盘），2026-09 起挪到海报墙：
 // 刮削只认本地已经有的片目，不再有「只写网盘」这条路。
 //
 // 选项默认取「影视刮削」页里保存的配置，前端可以只为这一次改。
@@ -100,6 +100,9 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 	}
 	keys := normalizeTitleKeys(req.Keys)
 	switch {
+	case !loadScrapeCfg().stationScrapes():
+		c.JSON(http.StatusConflict, gin.H{"error": errEmbyScrapes})
+		return
 	case len(keys) == 0:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "没有选择片目"})
 		return
@@ -216,7 +219,7 @@ func ledgerScrapeTitle(tc *TmdbClient, e *ledgerTitleEntry, localRoot, libCid st
 			return t, fmt.Errorf("按片名搜 TMDB 失败：%v", err)
 		}
 		if media == nil {
-			return t, errors.New("目录名里没有 TMDB 编号，按片名也找不到片名完全相等的条目：请到本地文件页指定 TMDB 条目刮削")
+			return t, errors.New("目录名里没有 TMDB 编号，按片名也找不到片名完全相等的条目：请到海报墙指定 TMDB 条目刮削")
 		}
 		t.TmdbID, t.Title, t.Year = media.TmdbID, media.Title, media.Year
 		if media.MediaType != "" {
@@ -548,7 +551,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	lp := p.Local
 	if lp == nil || len(lp.Keys) == 0 {
 		// 老版本网盘文件页入队的刮削任务（参数在 Files 里）：那条入口已经移除
-		return jobOutcome{}, errors.New("任务参数错误（网盘文件页的刮削已移到本地文件页，请在那里重新提交）")
+		return jobOutcome{}, errors.New("任务参数错误（网盘文件页的刮削已移到海报墙，请在那里重新提交）")
 	}
 	// 本地写了新的元数据要刷 Emby；整理交过来的刷新不论这次刮成什么样都要做（见 scrapeEmbyRefresh）
 	var wrote map[string]bool
@@ -561,6 +564,11 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	// 什么都没写 Emby 那边就没变化，每轮整理都排一遍只是空转
 	var people []personTarget
 	defer func() { scrapeEmbyRefresh(lp, wrote) }()
+	// 切到 Emby 刮削之前排下的、或之后从任务中心点「重试」的：一样都不写。
+	// 放在上面那个 defer 之后 —— 整理交过来的 Emby 刷新照样要刷
+	if !loadScrapeCfg().stationScrapes() {
+		return jobOutcome{Message: errEmbyScrapes + "，跳过", Idle: isAutoScrapeKey(job.DedupeKey)}, nil
+	}
 	o := lp.Scrape
 	localRoot := localMediaRoot()
 	if localRoot == "" {
@@ -906,7 +914,7 @@ const (
 	// scrapeOriginSync localScrapeParams.Origin：增量同步交过来的
 	scrapeOriginSync = "sync"
 	// syncScrapeMaxTitles 一轮增量最多交给刮削的片目数。网页端把一个大目录整体拖进媒体库时
-	// 一轮能冒出上百部，自动刮这么多没人盯着；超出的交给媒体信息补全或本地文件页
+	// 一轮能冒出上百部，自动刮这么多没人盯着；超出的交给媒体信息补全或海报墙
 	syncScrapeMaxTitles = 50
 )
 
@@ -940,7 +948,7 @@ func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bo
 		return false
 	}
 	cfg := loadScrapeCfg()
-	if !cfg.AutoAfterSync || !(cfg.WriteNFO || cfg.WriteImages) {
+	if !cfg.stationScrapes() || !cfg.AutoAfterSync || !(cfg.WriteNFO || cfg.WriteImages) {
 		return false
 	}
 	if cfg.LocalRoot == "" {
@@ -960,7 +968,7 @@ func enqueueSyncScrape(db *gorm.DB, rels []string, refresh string) (handedOff bo
 	}
 	if len(keys) > syncScrapeMaxTitles {
 		log.Printf("[影视刮削] ⚠ 本轮增量新增 %d 个片目，超过自动刮削上限 %d，只刮前 %d 个；"+
-			"其余请用「影视刮削 → 媒体信息」的媒体信息补全或本地文件页刮削", len(keys), syncScrapeMaxTitles, syncScrapeMaxTitles)
+			"其余请用「影视刮削 → 媒体信息」的媒体信息补全或海报墙刮削", len(keys), syncScrapeMaxTitles, syncScrapeMaxTitles)
 		keys = keys[:syncScrapeMaxTitles]
 	}
 	var r []string

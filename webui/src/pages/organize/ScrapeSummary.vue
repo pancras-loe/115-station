@@ -9,6 +9,7 @@ import { organizeApi, pluginsApi } from '@/api'
 import type { MetaFillInfo, PersonFillInfo } from '@/api/plugins'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import { SCRAPE_DEFAULTS, normalizeScrapeConfig } from '@/pages/scrape/scrapeConfig'
+import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 /**
  * 「自动整理 → 影视刮削」只读概览。刮削配置 2026-10-04 起搬到独立的「影视刮削」页，
@@ -20,9 +21,11 @@ const cfg = ref({ ...SCRAPE_DEFAULTS })
 const metaFill = ref<MetaFillInfo | null>(null)
 const personFill = ref<PersonFillInfo | null>(null)
 const loading = ref(true)
+const { embyScrapes, load: loadProvider } = useScrapeProvider()
 
 onMounted(async () => {
   // 三份配置互不依赖，哪份读失败就按默认值显示，别让一份拖住整页
+  void loadProvider(true)
   const [s, m, p] = await Promise.allSettled([
     organizeApi.getScrapeConfig(),
     pluginsApi.metaFillConfig(),
@@ -54,25 +57,37 @@ const groups = computed<Group[]>(() => {
   const c = cfg.value
   const mf = metaFill.value
   const pf = personFill.value
+  // 刮削方式为 Emby：本站一样都不刮，刮削那两组只写一句「不生效」，别让人以为整理后还会刮
+  const scrapeGroups: Group[] = embyScrapes.value
+    ? [
+        {
+          title: '刮削方式',
+          tab: 'scrape',
+          items: [{ label: 'Emby 刮削', on: true, text: '由 Emby 刮削', hint: '本站不写 NFO 与图片，刮削设置不生效' }],
+        },
+      ]
+    : [
+        {
+          title: '自动触发',
+          tab: 'scrape',
+          items: [
+            { label: '整理后自动刮削', ...onOff(c.auto_after_organize), hint: '只刮本轮新入库的片目' },
+            { label: '同步后自动刮削', ...onOff(c.auto_after_sync), hint: '增量同步新增的片目' },
+          ],
+        },
+        {
+          title: '刮削内容',
+          tab: 'scrape',
+          items: [
+            { label: 'NFO 元数据', on: c.write_nfo, text: c.write_nfo ? '生成' : '跳过' },
+            { label: '图片海报', on: c.write_images, text: c.write_images ? '生成' : '跳过' },
+            { label: '覆盖模式', on: c.force, text: c.force ? '强制覆盖' : '只补缺失' },
+            { label: '占位剧照', on: c.skip_shared_stills, text: c.skip_shared_stills ? '不写' : '照写' },
+          ],
+        },
+      ]
   return [
-    {
-      title: '自动触发',
-      tab: 'scrape',
-      items: [
-        { label: '整理后自动刮削', ...onOff(c.auto_after_organize), hint: '只刮本轮新入库的片目' },
-        { label: '同步后自动刮削', ...onOff(c.auto_after_sync), hint: '增量同步新增的片目' },
-      ],
-    },
-    {
-      title: '刮削内容',
-      tab: 'scrape',
-      items: [
-        { label: 'NFO 元数据', on: c.write_nfo, text: c.write_nfo ? '生成' : '跳过' },
-        { label: '图片海报', on: c.write_images, text: c.write_images ? '生成' : '跳过' },
-        { label: '覆盖模式', on: c.force, text: c.force ? '强制覆盖' : '只补缺失' },
-        { label: '占位剧照', on: c.skip_shared_stills, text: c.skip_shared_stills ? '不写' : '照写' },
-      ],
-    },
+    ...scrapeGroups,
     {
       title: '媒体信息与补全',
       tab: 'media',

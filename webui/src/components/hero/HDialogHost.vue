@@ -71,5 +71,7 @@ const icon = computed(() =>
   font-size: 13.5px;
   line-height: 1.7;
   color: color-mix(in oklab, var(--foreground) 80%, var(--muted));
+  /* 长说明用空行分段（\n\n），否则挤成一大坨 */
+  white-space: pre-line;
 }
 </style>

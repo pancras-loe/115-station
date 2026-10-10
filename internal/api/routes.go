@@ -300,13 +300,14 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 网盘文件页：浏览 115 目录，对勾选的条目刮削 / 整理（都入任务队列）
 		protected.GET("/files/115", h.ListFiles115)
-		// 本地文件页：本地媒体库的片目卡片 + 刮削（入任务队列，locallib.go / localscrape.go）
+		// 海报墙：本地媒体库的片目卡片 + 刮削（入任务队列，locallib.go / localscrape.go）
 		protected.GET("/local/titles", h.ListLocalTitles)
 		protected.POST("/local/scrape", h.ScrapeLocalTitles)
 		protected.GET("/local/titles/detail", h.LocalTitleDetail)
 		protected.GET("/local/titles/emby", h.LocalTitleEmby)
 		protected.GET("/local/titles/emby-stats", h.LocalEmbyStats)
 		protected.POST("/local/titles/probe", h.LocalTitleProbe)
+		protected.POST("/local/titles/emby-refresh", h.LocalTitlesEmbyRefresh)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)
 		protected.POST("/files/library/episodes/preview", h.PreviewFileEpisodes)
@@ -416,6 +417,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		// 影视刮削（原生 NFO + 海报到本地媒体库）
 		protected.GET("/scrape/config", h.ScrapeGetConfig)
 		protected.POST("/scrape/config", h.ScrapeSaveConfig)
+		protected.POST("/scrape/provider", h.SetScrapeProvider)
+		protected.GET("/scrape/emby-check", h.ScrapeEmbyCheck)
 		protected.GET("/scrape/status", h.ScrapeStatus)
 
 		// 影视转存 · 木咖（不太灵系影视库，搜索匿名/资源需 VIP token）

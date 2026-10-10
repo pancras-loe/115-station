@@ -3,7 +3,7 @@ import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } f
 
 /**
  * 侧边抽屉（替代 NDrawer）：Reka 的 Dialog 管焦点锁定、Esc、点遮罩关闭，外观是 HeroUI 的浮层 + 模糊遮罩。
- * 左侧：移动端导航；右侧：本地文件页的片目详情（手机上铺满全屏）。标题只给读屏器，界面上不显示。
+ * 左侧：移动端导航；右侧：海报墙的片目详情（手机上铺满全屏）。标题只给读屏器，界面上不显示。
  */
 withDefaults(defineProps<{ width?: string; title?: string; side?: 'left' | 'right' }>(), {
   width: '260px',

@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ChevronRight, HardDrive, Info, TriangleAlert, Upload } from '@lucide/vue'
+import HAlert from '@/components/hero/HAlert.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -9,6 +10,7 @@ import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import SaveBar from './SaveBar.vue'
 import { useScrapeConfig } from './scrapeConfig'
+import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 /**
  * 影视刮削配置。2026-10-04 从「自动整理」里拎出来成了独立页面的第一个页签；
@@ -18,6 +20,8 @@ import { useScrapeConfig } from './scrapeConfig'
 const media = useFullSetting()
 const monitor = useSetting('monitor', { enabled: false })
 const { cfg, saving, dirty, load, save } = useScrapeConfig()
+// 刮削方式为 Emby：整页置灰（inert：点不了、Tab 也进不去），后端同样不认这些设置
+const { embyScrapes } = useScrapeProvider()
 
 const ON_OFF = [
   { label: '开启', value: true },
@@ -33,7 +37,10 @@ onMounted(load)
 
 <template>
   <div class="stack">
-    <div class="grid">
+    <HAlert v-if="embyScrapes" status="accent">
+      当前由 Emby 刮削，以下设置不生效：本站不写 NFO 与图片，整理、同步后也不会自动刮削。要改回来，在页面顶部选「本站刮削」。
+    </HAlert>
+    <div class="grid" :class="{ off: embyScrapes }" :inert="embyScrapes">
       <!-- ==== 左：刮什么 ==== -->
       <SectionCard title="刮削内容" hint="按 TMDB 生成标准 NFO 与海报，写进本地媒体库的片目目录">
         <FieldRow
@@ -45,7 +52,7 @@ onMounted(load)
 
         <FieldRow
           label="同步后自动刮削"
-          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用本页「媒体信息」页签里的媒体信息补全。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「本地文件」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
+          tip="增量同步新生成 STRM 后（手机上传、网页端拖进媒体库等外部变更），刮削这些 STRM 所在的片目；整理入库的不经过这里。全量同步不触发，存量请用本页「媒体信息」页签里的媒体信息补全。目录名里有 TMDB 编号就按编号刮；没有时按目录名搜 TMDB，只认标题或原名完全相等的条目，认不准就跳过（任务详情里列出来，可在「海报墙」手动指定）。只认当前分类目录下的片目，一轮最多 50 部。"
           hint="增量同步新增的片目；没有 TMDB 编号时只认片名完全相等"
         >
           <HSegmented v-model="cfg.auto_after_sync" :options="ON_OFF" />
@@ -103,7 +110,7 @@ onMounted(load)
         <p class="note">
           <Info :size="14" />
           <span>
-            手动刮削在「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」页勾选片目后点「刮削」，只处理已入库的片目；弹窗里的选项默认取左边这几项，可以只为那一次改。
+            手动刮削在「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」页勾选片目后点「刮削」，只处理已入库的片目；弹窗里的选项默认取左边这几项，可以只为那一次改。
             未识别、整理失败的文件还在网盘里、本地没有 STRM，要先到「<RouterLink :to="{ name: 'tasks', query: { tab: 'records', status: 'problem' } }">整理记录</RouterLink>」重新整理，入库时会自动刮削。
           </span>
         </p>
@@ -127,7 +134,7 @@ onMounted(load)
             </ol>
             <p>不改的话 Emby 会自己再联网刮一遍、再下一遍图，最终以 Emby 的结果为准，本站刮的白刮，还多耗流量。</p>
             <p>
-              <b>想切回 Emby 自己刮削</b>：先关掉左边的「整理后自动刮削」与「同步后自动刮削」，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
+              <b>想切回 Emby 自己刮削</b>：在页面顶部的「刮削方式」选「Emby 刮削」，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
               本站已写好的 NFO 与海报不会浪费：Nfo 读取器保持勾选时 Emby 先读现成的，只联网补缺；
               媒体目录里的海报 Emby 本来就会读，不需要为此打开「保存媒体图片到媒体文件夹中」。
               那个开关管的是 Emby <b>新下载</b>的图片写到哪 —— 要让「监控上传」把 Emby 的刮削结果回传 115 才需要打开。
@@ -139,6 +146,7 @@ onMounted(load)
     </div>
 
     <SaveBar
+      v-if="!embyScrapes"
       :dirty="dirty"
       :saving="saving"
       note="进度见顶栏任务队列；逐个文件的去向见实时日志（搜「[影视刮削]」）"
@@ -152,6 +160,10 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.grid.off {
+  opacity: 0.5;
+  filter: grayscale(0.6);
 }
 .grid {
   display: grid;

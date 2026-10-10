@@ -16,8 +16,11 @@ import type { PersonFillConfig, PersonFillInfo, PersonType } from '@/api/plugins
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
 import { useQueueStore } from '@/stores/queue'
+import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 const { message } = useFeedback()
+// 刮削方式为 Emby：不会再有刮削任务，「刮削后补全」自然不生效，置灰说明
+const { embyScrapes } = useScrapeProvider()
 const router = useRouter()
 
 const DEFAULTS: PersonFillConfig = {
@@ -152,9 +155,10 @@ function openLastJob() {
 
     <FieldRow
       label="刮削后补全"
-      tip="每次刮削（整理后、同步后、本地文件页手动刮削）结束时，把这次刮过的片目单独排一个补全任务。任务会先等 Emby 读完新的 NFO（最多十来分钟），Emby 里还查不到的留给定时任务。只看这几部，不影响定时任务的续扫位置。"
+      :hint="embyScrapes ? '当前由 Emby 刮削，本站不刮削，这一项不生效；用定时运行补全' : undefined"
+      tip="每次刮削（整理后、同步后、海报墙手动刮削）结束时，把这次刮过的片目单独排一个补全任务。任务会先等 Emby 读完新的 NFO（最多十来分钟），Emby 里还查不到的留给定时任务。只看这几部，不影响定时任务的续扫位置。"
     >
-      <HSwitch v-model="form.after_scrape" aria-label="刮削后补全" />
+      <HSwitch v-model="form.after_scrape" :disabled="embyScrapes" aria-label="刮削后补全" />
     </FieldRow>
     <FieldRow
       label="定时运行"

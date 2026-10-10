@@ -20,7 +20,7 @@ type ledgerTitleEntry struct {
 	Category  string // 分类目录（库内相对路径，如 电影、电视剧/日番）
 	// LibName Key 的第一段库名；老台账不带库名的两段式路径为空。换算网盘相对路径时剥掉它
 	LibName string
-	Videos  int // 台账里的视频数（本地文件页的卡片显示）
+	Videos  int // 台账里的视频数（海报墙的卡片显示）
 	LastAt  time.Time
 }
 

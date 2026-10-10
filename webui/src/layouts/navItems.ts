@@ -38,7 +38,7 @@ export const navItems: NavItem[] = [
   // 刮削是整理流水线的下一环，紧跟自动整理
   { name: 'scrape', label: '影视刮削', icon: Clapperboard },
   { name: 'files', label: '网盘文件', icon: FolderTree },
-  { name: 'local', label: '本地文件', icon: LayoutGrid },
+  { name: 'local', label: '海报墙', icon: LayoutGrid },
   // 任务中心看的是整理 / 同步 / 刮削这些媒体库任务的进度与记录，跟它们放在一组。
   // 图标与顶栏的任务弹层入口一致
   { name: 'tasks', label: '任务中心', icon: ListChecks },

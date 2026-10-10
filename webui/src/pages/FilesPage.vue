@@ -42,7 +42,7 @@ import { useQueueStore } from '@/stores/queue'
  * 做不了任何事的行不能勾选（悬停说明原因），全选只选能处理的。
  * 媒体库里只有片目目录能动：整理 = 重新整理（一次一部），移动 = 移出媒体库；另有跳到本地详情 / 整理记录。
  * 剧集片目里的视频另能「指定季集」（识别错了个别集时用，可多选同一目录里的几集）。
- * 刮削在本地文件页（LocalFilesPage）。
+ * 刮削在海报墙（LocalFilesPage）。
  *
  * 115 只有 cid 没有父目录概念，面包屑就是一路点进来的栈；列目录与提交都带上它，
  * 后端优先用 Cookie 通道查真实祖先链，查不到（OpenAPI 独立模式）才用它定位。
@@ -436,7 +436,7 @@ onMounted(() => load())
         <span>
           媒体库里只有分类目录下的<b>片目目录</b>能操作：重新整理（按当前模板与分类规则重新规整）、移出媒体库，
           或跳到它的本地详情与整理记录；剧集片目里个别集认错了季集，勾上那几个视频「指定季集」。
-          刮削到「<RouterLink :to="{ name: 'local' }">本地文件</RouterLink>」。
+          刮削到「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」。
         </span>
       </p>
       <HAlert v-if="error" status="danger" class="tip">{{ error }}</HAlert>

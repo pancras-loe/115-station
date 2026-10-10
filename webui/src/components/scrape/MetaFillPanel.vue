@@ -15,6 +15,7 @@ import type { MetaFillConfig, MetaFillInfo } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
 import { useQueueStore } from '@/stores/queue'
+import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 const { message } = useFeedback()
 const router = useRouter()
@@ -45,7 +46,14 @@ async function load() {
 
 onMounted(load)
 
-const invalid = computed(() => (!form.value.scrape && !form.value.probe ? '补刮与探测至少开一项' : ''))
+// 刮削方式为 Emby：补刮不做（后端 execMetaFillJob 同样跳过），开关置灰但保留原值，切回本站刮削时照旧
+const { embyScrapes } = useScrapeProvider()
+const scrapeOn = computed(() => form.value.scrape && !embyScrapes.value)
+
+const invalid = computed(() => {
+  if (scrapeOn.value || form.value.probe) return ''
+  return embyScrapes.value ? '刮削方式为 Emby 时补刮不做，请打开探测' : '补刮与探测至少开一项'
+})
 
 /** 自动探测规则的说明：和入库后自动探测同一套记账 */
 const probeRule = computed(() => {
@@ -120,10 +128,11 @@ function openLastJob() {
       <HButton variant="secondary" size="sm" :loading="running" @click="run">立即运行</HButton>
     </template>
     <p class="lead">
-      定时检查本地媒体库：缺 NFO、海报、背景图的片目（本地文件页里「未刮全」的）交给刮削补上；
+      定时检查本地媒体库：缺 NFO、海报、背景图的片目（海报墙里「未刮全」的）交给刮削补上；
       Emby 里还没有媒体信息（轨道）的视频让 Emby 提前探测。扫描本身不发 115 请求，
       补刮与探测分别排进刮削队列、探测队列，进度在任务中心。
     </p>
+    <p v-if="embyScrapes" class="lead off-note">当前由 Emby 刮削：补刮不做（往目录里写 NFO 会盖掉 Emby 刮好的元数据），只做探测。</p>
 
     <FieldRow label="定时运行" wide tip="开启后按计划自动排进任务队列。「立即运行」不受此开关影响。">
       <SchedulePicker v-model="form.cron" v-model:enabled="form.enabled" toggle placeholder="0 4 * * *" />
@@ -133,10 +142,10 @@ function openLastJob() {
       label="补刮 NFO / 图片"
       tip="写哪些产物沿用「刮削」页签的配置，但一律只补缺失（不覆盖已有文件）、只写本地（传不传网盘由监控上传决定）。补刮过、缺的还是那几样的片目（TMDB 上没有、目录名认不出条目）一段时间内不再刮。"
     >
-      <HSwitch v-model="form.scrape" aria-label="补刮 NFO / 图片" />
+      <HSwitch v-model="form.scrape" :disabled="embyScrapes" aria-label="补刮 NFO / 图片" />
     </FieldRow>
     <FieldRow label="单次补刮" tip="一次最多交给刮削多少部片目，最近入库的优先，剩下的下次接着补。刮削只请求 TMDB，不发 115 请求。">
-      <HNumberInput v-model="form.max_titles" :min="1" :max="1000" :step="10" :disabled="!form.scrape" aria-label="单次补刮上限">
+      <HNumberInput v-model="form.max_titles" :min="1" :max="1000" :step="10" :disabled="!scrapeOn" aria-label="单次补刮上限">
         <template #suffix>部</template>
       </HNumberInput>
     </FieldRow>
@@ -187,6 +196,9 @@ function openLastJob() {
   font-size: 13px;
   line-height: 1.6;
   color: var(--muted);
+}
+.off-note {
+  color: var(--accent);
 }
 .stats {
   margin: 14px 0;

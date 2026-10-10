@@ -117,7 +117,7 @@
   @apply status-focused;
 }
 /* 未勾选的方框：HeroUI 的 secondary 变体只填一层 --default、不画边框，
-   放在同样是灰底的条上（本地文件的批量栏 = surface-secondary）两者只差一点亮度，方框整个隐形。
+   放在同样是灰底的条上（海报墙的批量栏 = surface-secondary）两者只差一点亮度，方框整个隐形。
    补一圈描边，底色改成输入框底色，亮暗三套配色下都看得清 */
 .checkbox--secondary:not([data-selected='true']):not([data-indeterminate='true']) .checkbox__control {
   background-color: var(--field-background);

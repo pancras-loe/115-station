@@ -87,7 +87,8 @@ func (h *Handler) newOrgSink(libCid string) *orgSink {
 		h: h, localRoot: localMediaRoot(), libCid: libCid,
 		domain: domain, format: format, keepExt: keepExt, skipExist: skipExist,
 		batchID:   time.Now().Format("20060102150405"),
-		scrapeOn:  sc.AutoAfterOrganize && (sc.WriteNFO || sc.WriteImages),
+		// 刮削方式选了 Emby 时整理不刮：flushScrape 不入队，Emby 刷新由 flushRefresh 当场做，入库确认与自动探测照常
+		scrapeOn:  sc.stationScrapes() && sc.AutoAfterOrganize && (sc.WriteNFO || sc.WriteImages),
 		scrapeCfg: sc,
 		jobs:      map[string]scrapeJob{},
 	}

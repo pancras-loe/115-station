@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ==================== 本地文件页：片目详情 ====================
+// ==================== 海报墙：片目详情 ====================
 //
 // 卡片墙只放要紧的（海报、片名、刮削状态），细节进详情抽屉，分两块：
 //   - 刮削文件（GET /local/titles/detail）：刮削会写的每一个产物在不在 —— 片目级的 NFO / 海报 / 背景图，
@@ -84,8 +84,10 @@ type localTitleDetail struct {
 	Seasons []localSeason      `json:"seasons,omitempty"`
 	Entries []localEntry       `json:"entries"`
 	Summary localDetailSummary `json:"summary"`
-	fanartV int64
-	posterV int64
+	// EmbyBackdrop 用 Emby 的背景图（片目级条目 id）：规则同卡片的 EmbyPoster
+	EmbyBackdrop string `json:"emby_backdrop,omitempty"`
+	fanartV      int64
+	posterV      int64
 }
 
 // localDirIndex 一个目录里的文件（小写名 → 信息），同一次详情里每个目录只读一遍。
@@ -438,6 +440,25 @@ func (h *Handler) LocalTitleDetail(c *gin.Context) {
 	}
 	if d.fanartV > 0 {
 		d.Fanart = h.localFanartQuery(e.Key, d.fanartV)
+	}
+	// Emby 那边的海报 / 背景图与分级：与卡片墙同一份快照、同一套规则（filterLocalTitles）
+	embyGrade := !loadScrapeCfg().stationScrapes()
+	stats := localEmbyStats()
+	st, inEmby := stats[e.Key]
+	if inEmby {
+		d.Emby = &st
+		if st.Poster && (embyGrade || !d.HasPoster) {
+			d.EmbyPoster = st.ItemID
+		}
+		if st.Backdrop && (embyGrade || d.Fanart == "") {
+			d.EmbyBackdrop = st.ItemID
+		}
+	}
+	switch {
+	case embyGrade && stats == nil:
+		d.Status, d.Lack, d.Soft = "pending", nil, nil
+	case embyGrade:
+		gradeByEmby(&d.localTitle, d.Emby)
 	}
 	c.JSON(http.StatusOK, d)
 }

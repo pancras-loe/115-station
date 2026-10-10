@@ -9,8 +9,8 @@ package api
 //   用户显式允许上传后，落盘产物才由「监控上传」回传 115 对应目录。
 // Emby 侧建议把元数据读取器设为仅 NFO（以本站数据为准），避免二次刮削覆盖。
 //
-// 两个入口（整理后自动刮削、本地文件页勾选）都是刮削队列里的 scrape 任务。
-// 「开始刮削」全库已于 2026-09-29 删除：手动刮削只在本地文件页按片目点名（开着 Emby 提前探测时
+// 两个入口（整理后自动刮削、海报墙勾选）都是刮削队列里的 scrape 任务。
+// 「开始刮削」全库已于 2026-09-29 删除：手动刮削只在海报墙按片目点名（开着 Emby 提前探测时
 // 一次全库就是成千上万次 115 直链请求）。执行器只有一个（localscrape.go 的 execScrapeJob），核心在 scrapecore.go。
 // 刮削队列不拿 taskMu（taskqueue.go），几百集的综艺刮半小时也不挡整理与同步。
 //
@@ -61,6 +61,11 @@ type scrapeCfg struct {
 	// SkipSharedStills 同一季里多集共用同一张剧照（综艺常见）时判为占位图，这些集不写 -thumb.jpg。
 	// Emby 没有集缩略图时用剧的背景图，观感和一墙同样的图差不多，但省下几百次下载。默认开
 	SkipSharedStills bool `json:"skip_shared_stills"`
+
+	// Provider 谁来刮削：空 / station = 本站写 NFO 与图片；emby = Emby 自己刮，本站一样都不写（scrapeprovider.go）。
+	// 只能经 POST /scrape/provider 改：「刮削」「媒体信息」两个页签各自整存整取这份配置，
+	// 让它们带着旧值保存就会把刚切过去的方式改回来，所以 ScrapeSaveConfig 不认这个字段
+	Provider string `json:"provider,omitempty"`
 }
 
 func loadScrapeCfg() scrapeCfg {
@@ -452,6 +457,7 @@ func (h *Handler) ScrapeSaveConfig(c *gin.Context) {
 	}
 	// 忽略旧客户端提交的独立根目录，统一使用媒体库位置配置。
 	req.LocalRoot = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
+	req.Provider = loadScrapeCfg().Provider // 刮削方式只认 /scrape/provider（见 scrapeCfg.Provider）
 	if err := saveScrapeCfg(req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -581,7 +587,7 @@ func scrapeEpisodeNo(name string) (season, episode int) {
 }
 
 // 季集号缓存（文件名 → 季 / 集 / 结束集）。parseFileName 一次几十微秒（一串正则），
-// 本地文件页每重建一次快照，每一集要解析两遍（详情行 + scrapeSeasonDirs），上万集的库在 NAS 上就是秒级。
+// 海报墙每重建一次快照，每一集要解析两遍（详情行 + scrapeSeasonDirs），上万集的库在 NAS 上就是秒级。
 // parseFileName 是纯函数，结果只跟名字有关，可以放心缓存；满了整张清掉重来
 var (
 	episodeSpanMu    sync.Mutex
@@ -724,7 +730,7 @@ func scrapeDirVideoRows(key string) []model.SyncedFile {
 	return out
 }
 
-// scrapeVideoRow 台账里一行 .strm 是不是要刮削的视频（本地文件页按片目分组时同一口径）
+// scrapeVideoRow 台账里一行 .strm 是不是要刮削的视频（海报墙按片目分组时同一口径）
 func scrapeVideoRow(sf model.SyncedFile) bool {
 	if sf.PickCode == "" {
 		return false

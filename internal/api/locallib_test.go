@@ -15,7 +15,7 @@ import (
 	"115-station/internal/model"
 )
 
-// 台账片目带出库名与视频数：本地文件页的卡片计数、上传时换算网盘相对路径都靠它
+// 台账片目带出库名与视频数：海报墙的卡片计数、上传时换算网盘相对路径都靠它
 func TestScanLedgerTitlesLibNameAndVideos(t *testing.T) {
 	ledgerTestDB(t, []model.CategoryRule{
 		{MediaType: "movie", Name: "电影"},

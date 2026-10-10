@@ -21,7 +21,7 @@ import (
 //
 // 前端 /files 页：逐级浏览 115 网盘，勾选文件 / 文件夹后「整理」或「移动」。
 // 两个动作都入任务队列（fileorganize.go / filelibrary.go），这里只管列目录与定位。
-// 刮削已挪到本地文件页（locallib.go / localscrape.go）：只刮本地媒体库里已有的片目。
+// 刮削已挪到海报墙（locallib.go / localscrape.go）：只刮本地媒体库里已有的片目。
 //
 // 形态参考 MoviePilot 的文件管理（对存储里任意条目发起手动整理），
 // 列目录走 pan115Ops（OpenAPI 优先、Cookie 回退，统一过 throttle115）。
@@ -60,7 +60,7 @@ type fileRowActions struct {
 	Title bool `json:"title,omitempty"`
 	// Episode 剧集片目里的视频：能「指定季集」（fileepisode.go），此时 TitleKey / TitleRel 是所在片目的
 	Episode bool `json:"episode,omitempty"`
-	// TitleKey 本地文件页的片目 key（库名/库内路径，与 cleanupMovedTitle 同口径）
+	// TitleKey 海报墙的片目 key（库名/库内路径，与 cleanupMovedTitle 同口径）
 	TitleKey string `json:"title_key,omitempty"`
 	// TitleRel 库内相对路径（整理记录的 target_dir 按它筛）
 	TitleRel string `json:"title_rel,omitempty"`

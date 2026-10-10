@@ -1,7 +1,7 @@
 import type { EmbyDetailItem, EmbyTrack, ProbeLimits, ProbeState } from '@/api/local'
 
 /**
- * 本地文件页片目详情：把 Emby 的轨道信息翻成人话（4K · HEVC · 杜比视界 / 中文 E-AC3 5.1 …），
+ * 海报墙片目详情：把 Emby 的轨道信息翻成人话（4K · HEVC · 杜比视界 / 中文 E-AC3 5.1 …），
  * 以及提前探测状态的文案。Emby 自己的 DisplayTitle 也能用，但中英混杂、不同版本写法不一，这里统一口径。
  */
 

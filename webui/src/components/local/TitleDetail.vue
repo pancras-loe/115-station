@@ -7,6 +7,8 @@ import {
   Image as ImageIcon,
   Images,
   Radar,
+  RefreshCw,
+  Replace,
   Search,
   Sparkles,
   Tv,
@@ -25,16 +27,27 @@ import type { LocalTitle, LocalTitleDetail, TitleEmby } from '@/api/local'
 import { toastError } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 import { relTime, fullTime } from '@/utils/time'
-import { STATUS_TEXT, STATUS_TONE, statusTitle } from '@/utils/localStatus'
+import { STATUS_TONE, statusText as statusWord, statusTitle } from '@/utils/localStatus'
 
 /**
- * 本地文件页的片目详情（右侧抽屉，手机上全屏）。卡片墙只放要紧的，细节都在这里：
+ * 海报墙的片目详情（右侧抽屉，手机上全屏）。卡片墙只放要紧的，细节都在这里：
  * 顶部是海报、片名与操作；下面两个页签 —— 刮削文件（本地，零 115 请求）、媒体信息（Emby）。
  * 打开时两边一起加载：Emby 那边只是一两次查询，顶部的概况也要用到它的数字。
+ *
+ * embyMode = 刮削方式为 Emby：本地刮削文件那一页没有意义，只留媒体信息；状态、海报、背景图看 Emby，
+ * 操作换成「刷新元数据 / 替换全部」（由页面统一处理，与卡片菜单、批量栏同一个入口）。
  */
-const props = defineProps<{ titleKey: string | null }>()
+const props = defineProps<{
+  titleKey: string | null
+  embyMode?: boolean
+  /** 页面那份 Emby 快照的时间：变了说明快照刚读到，状态与 Emby 海报要重读 */
+  snapshotAt?: string
+}>()
 const show = defineModel<boolean>('show', { required: true })
-const emit = defineEmits<{ scrape: [t: LocalTitle, preset: 'auto' | 'pick'] }>()
+const emit = defineEmits<{
+  scrape: [t: LocalTitle, preset: 'auto' | 'pick']
+  embyRefresh: [t: LocalTitle, replace: boolean]
+}>()
 
 const queue = useQueueStore()
 
@@ -43,7 +56,7 @@ const loading = ref(false)
 const error = ref('')
 const emby = ref<TitleEmby | null>(null)
 const embyLoading = ref(false)
-const tab = ref<'files' | 'emby'>('files')
+const tab = ref<'files' | 'emby'>(props.embyMode ? 'emby' : 'files')
 
 let seq = 0
 async function loadDetail() {
@@ -85,11 +98,18 @@ watch(
     if (prev && prev[1] === key && prev[0] && detail.value) return
     detail.value = null
     emby.value = null
-    tab.value = 'files'
+    tab.value = props.embyMode ? 'emby' : 'files'
     void loadDetail()
     void loadEmby()
   },
   { immediate: true },
+)
+watch(
+  () => [props.snapshotAt, props.embyMode] as const,
+  ([, mode]) => {
+    if (mode) tab.value = 'emby'
+    if (show.value && props.titleKey) void loadDetail()
+  },
 )
 
 // 刮削跑完：本地产物变了，重读；探测结果可能也更新了
@@ -104,7 +124,9 @@ onBeforeUnmount(offFinished)
 const d = computed(() => detail.value)
 const tv = computed(() => d.value?.media_type === 'tv')
 // 头部海报 108px 宽（手机 84px），按两倍要图就够，不必拿卡片墙最大档
-const posterSrc = computed(() => (d.value?.poster ? localApi.posterUrl(d.value, 108 * Math.max(2, window.devicePixelRatio || 1)) : ''))
+const posterSrc = computed(() =>
+  d.value?.poster || d.value?.emby_poster ? localApi.posterUrl(d.value, 108 * Math.max(2, window.devicePixelRatio || 1)) : '',
+)
 const fanartSrc = computed(() => (d.value ? localApi.fanartUrl(d.value) : ''))
 const posterBroken = ref(false)
 watch(posterSrc, () => (posterBroken.value = false))
@@ -125,7 +147,8 @@ const metaParts = computed(() => {
 const statusText = computed(() => {
   const x = d.value
   if (!x) return ''
-  return x.status === 'partial' && x.lack?.length ? `缺${x.lack.join('、')}` : STATUS_TEXT[x.status]
+  if (x.status === 'partial' && x.mismatch) return `Emby 认成了 TMDB ${x.mismatch}`
+  return x.status === 'partial' && x.lack?.length ? `缺${x.lack.join('、')}` : statusWord(x.status, props.embyMode)
 })
 
 const tmdbUrl = computed(() =>
@@ -151,7 +174,8 @@ const stats = computed<Stat[]>(() => {
   const x = d.value
   if (!x) return []
   const s = x.summary
-  const out: Stat[] = [
+  // Emby 刮削：本地 NFO / 图片数说明不了什么，改写 Emby 认出了什么、有没有图
+  const out: Stat[] = props.embyMode ? embyStats(x) : [
     { key: 'nfo', label: 'NFO 元数据', value: `${s.nfo_have}/${s.nfo_total}`, sub: s.nfo_have === s.nfo_total ? '齐全' : `缺 ${s.nfo_total - s.nfo_have} 个`, tone: tone(s.nfo_have, s.nfo_total), icon: FileText },
     { key: 'img', label: '图片', value: `${s.img_have}/${s.img_total}`, sub: x.has_poster ? '海报已有' : '缺海报', tone: x.has_poster ? (s.img_have === s.img_total ? 'success' : 'default') : 'danger', icon: ImageIcon },
   ]
@@ -187,6 +211,36 @@ const stats = computed<Stat[]>(() => {
   return out
 })
 
+function embyStats(x: LocalTitleDetail): Stat[] {
+  const e = x.emby
+  if (x.status === 'pending') {
+    return [{ key: 'emby', label: 'Emby 识别', value: '…', sub: '读取中', tone: 'default', icon: Sparkles }]
+  }
+  if (!e?.item_id) {
+    return [{ key: 'emby', label: 'Emby 识别', value: '—', sub: 'Emby 里没有', tone: 'danger', icon: Sparkles }]
+  }
+  const id = e.tmdb ? `TMDB ${e.tmdb}` : e.imdb ? `IMDb ${e.imdb}` : '未识别'
+  const imgs = [e.poster, e.backdrop].filter(Boolean).length
+  return [
+    {
+      key: 'emby',
+      label: 'Emby 识别',
+      value: id,
+      sub: x.mismatch ? `目录名是 ${x.tmdb_id}，对不上` : e.tmdb || e.imdb ? '已认出条目' : '没有编号',
+      tone: x.mismatch || !(e.tmdb || e.imdb) ? 'warning' : 'success',
+      icon: Sparkles,
+    },
+    {
+      key: 'img',
+      label: '图片',
+      value: `${imgs}/2`,
+      sub: imgs === 2 ? '海报、背景图都有' : !e.poster ? '缺海报' : '缺背景图',
+      tone: imgs === 2 ? 'success' : imgs === 0 ? 'danger' : 'warning',
+      icon: ImageIcon,
+    },
+  ]
+}
+
 const embyBadge = computed(() => {
   const e = emby.value
   if (!e?.found) return 0
@@ -194,15 +248,18 @@ const embyBadge = computed(() => {
 })
 
 const tabs = computed(() => [
-  { value: 'files' as const, label: '刮削文件' },
+  ...(props.embyMode ? [] : [{ value: 'files' as const, label: '刮削文件' }]),
   { value: 'emby' as const, label: '媒体信息', count: embyBadge.value, countTone: 'warning' as const },
 ])
 
 function scrape(preset: 'auto' | 'pick') {
   if (d.value) emit('scrape', d.value, preset)
 }
+function embyRefresh(replace: boolean) {
+  if (d.value) emit('embyRefresh', d.value, replace)
+}
 function onStat(key: string) {
-  tab.value = key === 'emby' ? 'emby' : 'files'
+  tab.value = key === 'emby' || props.embyMode ? 'emby' : 'files'
 }
 </script>
 
@@ -227,16 +284,28 @@ function onStat(key: string) {
               <h2 class="hero-title">{{ d.title }}</h2>
               <p class="hero-meta">{{ metaParts.join(' · ') }}</p>
               <div class="hero-chips">
-                <HChip :color="STATUS_TONE[d.status]" variant="primary" size="sm" :title="statusTitle(d)">{{ statusText }}</HChip>
+                <HChip :color="STATUS_TONE[d.status]" variant="primary" size="sm" :title="statusTitle(d, embyMode)">{{ statusText }}</HChip>
                 <a v-if="tmdbUrl" :href="tmdbUrl" target="_blank" rel="noopener noreferrer" class="tmdb">
                   TMDB {{ d.tmdb_id }}<ExternalLink :size="11" />
                 </a>
-                <span v-else class="no-id" title="目录名里没有 TMDB 编号：刮削时按片名识别，识别不出来可以改指定">
+                <span
+                  v-else
+                  class="no-id"
+                  :title="embyMode ? '目录名里没有 TMDB 编号：Emby 按片名识别' : '目录名里没有 TMDB 编号：刮削时按片名识别，识别不出来可以改指定'"
+                >
                   <Sparkles :size="12" />无 TMDB 编号
                 </span>
                 <span class="hero-time" :title="fullTime(d.last_at)">入库 {{ relTime(d.last_at) }}</span>
               </div>
-              <div class="hero-actions">
+              <div v-if="embyMode" class="hero-actions">
+                <HButton variant="primary" size="sm" :disabled="!d.emby?.item_id" @click="embyRefresh(false)">
+                  <RefreshCw :size="14" />刷新元数据
+                </HButton>
+                <HButton variant="secondary" size="sm" :disabled="!d.emby?.item_id" @click="embyRefresh(true)">
+                  <Replace :size="14" />替换全部元数据
+                </HButton>
+              </div>
+              <div v-else class="hero-actions">
                 <HButton variant="primary" size="sm" @click="scrape('auto')"><Images :size="14" />刮削</HButton>
                 <HButton variant="secondary" size="sm" @click="scrape('pick')"><Search :size="14" />改指定 TMDB 条目</HButton>
               </div>
@@ -257,7 +326,7 @@ function onStat(key: string) {
 
         <template v-if="d">
           <HAlert v-if="d.missing" status="warning">
-            本地找不到这个片目的目录（被手工删掉，或挂载还没就绪）。台账里还有它，刮削会跳过没有 STRM 的片目。
+            本地找不到这个片目的目录（被手工删掉，或挂载还没就绪）。台账里还有它{{ embyMode ? '' : '，刮削会跳过没有 STRM 的片目' }}。
           </HAlert>
 
           <div class="stats">
@@ -270,7 +339,7 @@ function onStat(key: string) {
 
           <HTabs v-model="tab" :items="tabs" variant="secondary" />
 
-          <DetailFiles v-if="tab === 'files'" :detail="d" />
+          <DetailFiles v-if="tab === 'files' && !embyMode" :detail="d" />
           <DetailEmby
             v-else
             :data="emby"

@@ -29,7 +29,40 @@ export interface ScrapeConfig {
   probe_streams: boolean
   /** 同一季多集共用的剧照判为占位图，不写集剧照（默认开） */
   skip_shared_stills: boolean
+  /** 谁来刮削（只读：保存刮削配置时后端不认它，切换走 setScrapeProvider） */
+  provider?: ScrapeProvider
 }
+
+/** station = 本站写 NFO 与图片；emby = Emby 自己刮，本站一样都不写（后端 scrapeprovider.go） */
+export type ScrapeProvider = 'station' | 'emby'
+
+export const setScrapeProvider = (provider: ScrapeProvider) =>
+  http.post<{ message?: string; provider: ScrapeProvider }>('/scrape/provider', { provider })
+
+/** 本地媒体库对应的一个 Emby 媒体库的元数据设置 */
+export interface EmbyLibCheck {
+  name: string
+  collection_type?: string
+  meta_fetchers: string[]
+  image_fetchers: string[]
+  /** 读到了 Movie / Series 的下载器设置；读不到时不对下载器下结论 */
+  known: boolean
+  nfo_reader: boolean
+  /** 用 Emby 刮削时的问题 */
+  emby_issues?: string[]
+  /** 用本站刮削时的问题 */
+  station_issues?: string[]
+}
+
+export interface EmbyCheck {
+  configured: boolean
+  error?: string
+  libraries?: EmbyLibCheck[]
+  /** Emby 里有媒体库，但一个都对不上本地媒体库（路径映射没配对） */
+  unmatched?: boolean
+}
+
+export const embyCheck = () => http.get<EmbyCheck>('/scrape/emby-check')
 
 /** 后端回的是 { cfg, status } 两层结构，不是扁平配置 —— 摊平取会全部读成 undefined */
 export const getScrapeConfig = () =>

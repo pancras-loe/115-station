@@ -72,7 +72,7 @@ const routes: RouteRecordRaw[] = [
         path: 'local',
         name: 'local',
         component: () => import('@/pages/LocalFilesPage.vue'),
-        meta: { title: '本地文件', desc: '本地媒体库的影片与剧集 / 手动刮削', icon: 'local' },
+        meta: { title: '海报墙', desc: '本地媒体库的影片与剧集 / 手动刮削', icon: 'local' },
       },
       {
         path: 'scrape',

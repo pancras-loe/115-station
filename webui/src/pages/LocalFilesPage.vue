@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, ScanSearch, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
+import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Replace, ScanSearch, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HCheckbox from '@/components/hero/HCheckbox.vue'
@@ -17,12 +17,13 @@ import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import { localApi } from '@/api'
 import type { LocalEmbyStats, LocalTitle, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
-import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusTitle } from '@/utils/localStatus'
-import { toastError } from '@/composables/useFeedback'
+import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
+import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useScrapeProvider } from '@/composables/scrapeProvider'
 import { useQueueStore } from '@/stores/queue'
 
 /**
- * 本地文件：本地媒体库里的片目卡片墙（一张卡片 = 台账里的一个片目），对所选片目刮削。
+ * 海报墙：本地媒体库里的片目卡片墙（一张卡片 = 台账里的一个片目），对所选片目刮削。
  *
  * 状态看片目级 / 季 / 每集的 NFO、海报、背景图齐不齐（后端 localdetail.go 的 grade，与详情抽屉同口径），
  * 角标直接写缺什么；只读本地，不发 115 请求。
@@ -37,10 +38,16 @@ import { useQueueStore } from '@/stores/queue'
  *
  * 版面：筛选栏与批量栏固定，只有海报墙在自己的容器里滚动（桌面 / 平板）。
  * 手机屏幕矮，固定区会吃掉半屏，退回整页滚动，勾选后批量栏浮在底栏上方。
+ *
+ * 刮削方式为 Emby（影视刮削页顶部的总开关，2026-10-10）：本地目录里多半没有 NFO 与图片，按本地判就是一墙「未刮削」、
+ * 一张海报都没有。这时状态与海报改看 Emby（后端 gradeByEmby，快照没读到之前是「读取中」），
+ * 刮削入口换成「让 Emby 刷新元数据」；本站刮削时 Emby 的海报也会补上本地没有的那几张。
  */
 const route = useRoute()
 const router = useRouter()
 const queue = useQueueStore()
+const { message, dialog } = useFeedback()
+const { embyScrapes, load: loadProvider } = useScrapeProvider()
 
 const PAGE = 60
 
@@ -135,8 +142,15 @@ const statusOptions = computed(() => [
   { label: `全部 ${stats.value.all}`, value: '' as const },
   { label: `已刮削 ${stats.value.ok}`, value: 'ok' as const },
   { label: `不完整 ${stats.value.partial}`, value: 'partial' as const },
-  { label: `未刮削 ${stats.value.miss}`, value: 'miss' as const },
+  { label: `${statusText('miss', embyScrapes.value)} ${stats.value.miss}`, value: 'miss' as const },
 ])
+/** Emby 刮削时状态来自 Emby 快照：没读到之前三档都是 0，筛选没意义，先不显示 */
+const showStatus = computed(() => !embyScrapes.value || !!emby.value?.ready)
+// 别处切了刮削方式（另开着影视刮削页）：口径变了，重读
+watch(embyScrapes, () => {
+  status.value = ''
+  void load(true)
+})
 const SORTS: { label: string; value: LocalTitleSort }[] = [
   { label: '最近入库', value: 'added_desc' },
   { label: '片名', value: 'title' },
@@ -367,15 +381,61 @@ function openScrape(list: LocalTitle[], preset: 'auto' | 'pick' = 'auto') {
   showScrape.value = true
 }
 
-const CARD_MENU = [
-  { key: 'detail', label: '查看详情', icon: Info },
-  { key: 'auto', label: '刮削', icon: Images },
-  { key: 'pick', label: '改指定 TMDB 条目', icon: Search },
-]
+const CARD_MENU = computed(() =>
+  embyScrapes.value
+    ? [
+        { key: 'detail', label: '查看详情', icon: Info },
+        { key: 'refresh', label: '刷新元数据', icon: RefreshCw },
+        { key: 'replace', label: '替换全部元数据', icon: Replace },
+      ]
+    : [
+        { key: 'detail', label: '查看详情', icon: Info },
+        { key: 'auto', label: '刮削', icon: Images },
+        { key: 'pick', label: '改指定 TMDB 条目', icon: Search },
+      ],
+)
 
 function onCardAction(t: LocalTitle, key: string) {
   if (key === 'detail') openDetail(t)
+  else if (key === 'refresh' || key === 'replace') void embyRefresh([t], key === 'replace')
   else openScrape([t], key as 'auto' | 'pick')
+}
+
+// ---- Emby 刮削时：让 Emby 刷新元数据（代替「刮削」）----
+
+const embyRefreshing = ref(false)
+let embyRefreshTimer: ReturnType<typeof setTimeout> | undefined
+async function embyRefresh(list: LocalTitle[], replace: boolean) {
+  if (!list.length || embyRefreshing.value) return
+  if (replace) {
+    const ok = await dialog.confirm({
+      title: `替换 ${list.length} 部的全部元数据？`,
+      content:
+        'Emby 会丢掉现有的元数据与图片，按 TMDB 重新刮一遍（在 Emby 里锁定的字段不动）。认错了条目时用。\n\n' +
+        '目录里还留着本站以前写的 NFO 时，Emby 仍会先读它；要彻底换掉，先删掉那些 NFO。',
+      actions: [
+        { label: '取消', value: false, variant: 'tertiary' },
+        { label: '替换全部', value: true, variant: 'danger' },
+      ],
+    })
+    if (!ok) return
+  }
+  embyRefreshing.value = true
+  try {
+    const r = await localApi.embyRefresh(
+      list.map((t) => t.key),
+      replace,
+    )
+    message.success(r.message)
+    if (list.length > 1) clearSelection()
+    // Emby 在后台刮，过一会儿重读一次快照（卡片原地刷新）；更慢的用户自己点刷新
+    clearTimeout(embyRefreshTimer)
+    embyRefreshTimer = setTimeout(() => void loadEmby(true), 20_000)
+  } catch (e) {
+    toastError(e, '刷新元数据失败')
+  } finally {
+    embyRefreshing.value = false
+  }
 }
 
 function onPosterError(e: Event) {
@@ -435,6 +495,7 @@ const posterSrc = (t: LocalTitle) => (posterW.value ? localApi.posterUrl(t, post
 
 let ro: ResizeObserver | undefined
 onMounted(async () => {
+  void loadProvider(true)
   void load()
   void loadEmby()
   await nextTick()
@@ -451,6 +512,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   embyAlive = false
   clearTimeout(embyTimer)
+  clearTimeout(embyRefreshTimer)
   offFinished()
   clearTimeout(kwTimer)
   window.removeEventListener('resize', measure)
@@ -477,7 +539,7 @@ onBeforeUnmount(() => {
             <HSearchField v-model="keyword" class="filter" placeholder="搜索片名 / 路径 / TMDB 编号" />
             <div class="segs">
               <HSegmented v-model="type" :options="typeOptions" size="sm" aria-label="类型" />
-              <HSegmented v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />
+              <HSegmented v-if="showStatus" v-model="status" :options="statusOptions" size="sm" aria-label="刮削状态" />
               <HButton
                 v-if="emby?.ready"
                 size="sm"
@@ -541,9 +603,14 @@ onBeforeUnmount(() => {
                     <Tv v-if="t.media_type === 'tv'" :size="28" />
                     <Clapperboard v-else :size="28" />
                   </div>
-                  <img v-if="t.poster && posterW" :src="posterSrc(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
-                  <span v-if="t.status !== 'ok'" class="badge" :class="`tone-${STATUS_TONE[t.status]}`" :title="statusTitle(t)">
-                    <span class="badge-dot" />{{ statusLabel(t) }}
+                  <img v-if="(t.poster || t.emby_poster) && posterW" :src="posterSrc(t)" :alt="t.title" loading="lazy" @error="onPosterError" />
+                  <span
+                    v-if="t.status !== 'ok' && t.status !== 'pending'"
+                    class="badge"
+                    :class="`tone-${STATUS_TONE[t.status]}`"
+                    :title="statusTitle(t, embyScrapes)"
+                  >
+                    <span class="badge-dot" />{{ statusLabel(t, embyScrapes) }}
                   </span>
                   <HChip v-if="probeLabel(t)" color="accent" variant="primary" size="sm" class="probe-badge" :title="probeTitle(t)">
                     {{ probeLabel(t) }}
@@ -565,7 +632,11 @@ onBeforeUnmount(() => {
                   <h3 class="name" :title="t.title">{{ t.title }}</h3>
                   <p class="meta">
                     <span class="meta-text">{{ metaLine(t) }}</span>
-                    <span v-if="!t.tmdb_id" class="no-id" title="目录名里没有 TMDB 编号：刮削时按片名识别">
+                    <span
+                      v-if="!t.tmdb_id"
+                      class="no-id"
+                      :title="embyScrapes ? '目录名里没有 TMDB 编号：Emby 按片名识别' : '目录名里没有 TMDB 编号：刮削时按片名识别'"
+                    >
                       <Sparkles :size="11" />无编号
                     </span>
                     <span class="list-only cat">{{ t.category }}</span>
@@ -575,8 +646,14 @@ onBeforeUnmount(() => {
                 <HChip v-if="probeLabel(t)" color="accent" size="sm" class="list-only row-status" :title="probeTitle(t)">
                   {{ probeLabel(t) }}
                 </HChip>
-                <HChip :color="STATUS_TONE[t.status]" size="sm" class="list-only row-status" :title="statusTitle(t)">
-                  {{ statusLabel(t) }}
+                <HChip
+                  v-if="t.status !== 'pending'"
+                  :color="STATUS_TONE[t.status]"
+                  size="sm"
+                  class="list-only row-status"
+                  :title="statusTitle(t, embyScrapes)"
+                >
+                  {{ statusLabel(t, embyScrapes) }}
                 </HChip>
                 <HDropdown :options="CARD_MENU" align="end" @select="(k) => onCardAction(t, k)">
                   <HButton variant="ghost" size="sm" icon-only :aria-label="`${t.title} 的操作`"><Ellipsis :size="16" /></HButton>
@@ -610,10 +687,20 @@ onBeforeUnmount(() => {
               </template>
             </span>
           </HCheckbox>
-          <span v-if="!selecting" class="sel-tip">点海报看详情，点左上角圆圈勾选后批量刮削</span>
+          <span v-if="!selecting" class="sel-tip">
+            点海报看详情，点左上角圆圈勾选后{{ embyScrapes ? '批量让 Emby 刷新元数据' : '批量刮削' }}
+          </span>
           <div v-if="selecting" class="batch-btns">
             <HButton variant="ghost" size="sm" @click="clearSelection">清空</HButton>
-            <HButton variant="primary" size="sm" @click="openScrape(selectedList)">
+            <template v-if="embyScrapes">
+              <HButton variant="secondary" size="sm" :disabled="embyRefreshing" @click="embyRefresh(selectedList, true)">
+                <Replace :size="14" />替换全部
+              </HButton>
+              <HButton variant="primary" size="sm" :loading="embyRefreshing" @click="embyRefresh(selectedList, false)">
+                <RefreshCw :size="14" />刷新元数据（{{ selected.size }}）
+              </HButton>
+            </template>
+            <HButton v-else variant="primary" size="sm" @click="openScrape(selectedList)">
               <Images :size="14" />批量刮削（{{ selected.size }}）
             </HButton>
           </div>
@@ -626,11 +713,21 @@ onBeforeUnmount(() => {
       <div v-if="selecting" class="float-bar">
         <span>已选 <b>{{ selected.size }}</b> 部</span>
         <HButton variant="ghost" size="sm" icon-only aria-label="清除勾选" @click="clearSelection"><X :size="16" /></HButton>
-        <HButton variant="primary" size="sm" @click="openScrape(selectedList)"><Images :size="14" />批量刮削</HButton>
+        <HButton v-if="embyScrapes" variant="primary" size="sm" :loading="embyRefreshing" @click="embyRefresh(selectedList, false)">
+          <RefreshCw :size="14" />刷新元数据
+        </HButton>
+        <HButton v-else variant="primary" size="sm" @click="openScrape(selectedList)"><Images :size="14" />批量刮削</HButton>
       </div>
     </Transition>
 
-    <TitleDetail v-model:show="showDetail" :title-key="detailKey" @scrape="(t, p) => openScrape([t], p)" />
+    <TitleDetail
+      v-model:show="showDetail"
+      :title-key="detailKey"
+      :emby-mode="embyScrapes"
+      :snapshot-at="emby?.ready ? emby.at : undefined"
+      @scrape="(t, p) => openScrape([t], p)"
+      @emby-refresh="(t, replace) => embyRefresh([t], replace)"
+    />
     <!-- 必须写在详情后面：两者 z-index 相同、按 Portal 落点先后叠放，从详情里点「刮削」弹窗要在上面 -->
     <ScrapeDialog v-model:show="showScrape" :targets="dialogTargets" :preset="dialogPreset" />
   </div>

@@ -272,7 +272,7 @@ const strmSub = computed(() => {
         <h2 class="row-title">最新入库</h2>
         <span class="row-hint">{{ fromEmby ? '来自 Emby' : '来自本地整理记录' }}</span>
         <RouterLink :to="{ name: 'local' }" class="row-more">
-          本地文件<ChevronRight :size="15" />
+          海报墙<ChevronRight :size="15" />
         </RouterLink>
       </header>
       <div v-if="loading" class="shelf">
