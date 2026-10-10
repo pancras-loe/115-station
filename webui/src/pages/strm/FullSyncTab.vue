@@ -11,7 +11,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import HTagsInput from '@/components/hero/HTagsInput.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import FullHelp from './FullHelp.vue'
 import { syncApi } from '@/api'
 import type { FullSyncMode, OrphanReport } from '@/api/sync'
@@ -162,17 +162,10 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
         <template v-if="cfg.detect_orphans">
           <FieldRow
             label="定时全量同步"
-            tip="按 cron 定期跑一次全量同步来刷新失效标记。生活事件有窗口，网页版批量删除、停机期间的删除增量同步都收不到，只有整库扫描才查得出来。"
+            wide
+            tip="定期跑一次全量同步来刷新失效标记。生活事件有窗口，网页版批量删除、停机期间的删除增量同步都收不到，只有整库扫描才查得出来。整库扫描请求量大，建议每天最多一次、放在夜间。定时同样只负责标记，删除仍然要你手动确认。"
           >
-            <HSwitch v-model="cfg.cron_enabled" aria-label="定时全量同步" />
-          </FieldRow>
-
-          <FieldRow
-            v-if="cfg.cron_enabled"
-            label="全量同步 Cron"
-            tip="标准 5 字段 cron（分 时 日 月 周）。整库扫描请求量大，建议每天最多一次、放在夜间。定时同样只负责标记，删除仍然要你手动确认。"
-          >
-            <CronField v-model="cfg.cron" placeholder="0 4 * * *" />
+            <SchedulePicker v-model="cfg.cron" v-model:enabled="cfg.cron_enabled" toggle placeholder="0 4 * * *" />
           </FieldRow>
         </template>
 

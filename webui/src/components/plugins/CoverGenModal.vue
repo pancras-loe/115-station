@@ -11,10 +11,9 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HPopconfirm from '@/components/hero/HPopconfirm.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
-import HSwitch from '@/components/hero/HSwitch.vue'
 import { ImageUp, RefreshCw } from '@lucide/vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import { pluginsApi } from '@/api'
 import type { CoverGenConfig } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -309,11 +308,8 @@ defineExpose({ loadCovers })
 </template>
 <template v-if="tab === 'run'">
         <div class="pane">
-          <FieldRow label="启用定时生成" tip="关闭后仍可在插件卡片上手动生成。">
-            <HSwitch v-model="form.enabled" />
-          </FieldRow>
-          <FieldRow label="执行计划" tip="例：0 0 * * * = 每天 0 点。到点重新生成全部封面并推送 Emby。">
-            <CronField v-model="form.cron" placeholder="0 0 * * *" />
+          <FieldRow label="定时生成" wide tip="到点重新生成全部封面并推送 Emby。关闭后仍可在插件卡片上手动生成。">
+            <SchedulePicker v-model="form.cron" v-model:enabled="form.enabled" toggle placeholder="0 0 * * *" />
           </FieldRow>
           <FieldRow label="海报选取策略">
             <HSelect v-model="form.strategy" :options="STRATEGIES" />

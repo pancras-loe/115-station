@@ -9,7 +9,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import { pluginsApi } from '@/api'
 import type { MetaFillConfig, MetaFillInfo } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -125,11 +125,8 @@ function openLastJob() {
       补刮与探测分别排进刮削队列、探测队列，进度在任务中心。
     </p>
 
-    <FieldRow label="定时运行" tip="开启后按计划自动排进任务队列。「立即运行」不受此开关影响。">
-      <HSwitch v-model="form.enabled" aria-label="定时运行" />
-    </FieldRow>
-    <FieldRow label="执行计划" :hint="info?.next_run ? `下次：${info.next_run}` : ''">
-      <CronField v-model="form.cron" placeholder="0 4 * * *" />
+    <FieldRow label="定时运行" wide tip="开启后按计划自动排进任务队列。「立即运行」不受此开关影响。">
+      <SchedulePicker v-model="form.cron" v-model:enabled="form.enabled" toggle placeholder="0 4 * * *" />
     </FieldRow>
 
     <FieldRow

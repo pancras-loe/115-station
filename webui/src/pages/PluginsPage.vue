@@ -4,12 +4,11 @@ import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
-import HSegmented from '@/components/hero/HSegmented.vue'
 import { heroTone } from '@/components/hero/tone'
 import { ArrowRight, CalendarCheck, Clapperboard, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import { pluginsApi } from '@/api'
@@ -170,15 +169,10 @@ const availableCount = plugins.filter((p) => !p.movedTo).length
     <HModal v-model:show="ckShow" title="115 每日签到" width="480px">
       <FieldRow
         label="自动签到"
-        tip="开启后每天自动签到领积分（连续签到有加成，积分可在 115 App 积分中心使用）。"
+        wide
+        tip="开启后按计划自动签到领积分（连续签到有加成，积分可在 115 App 积分中心使用）。失败自动重试 3 次，结果推送通知。"
       >
-        <HSegmented v-model="ckForm.enabled" :options="[{ label: '开启', value: true }, { label: '关闭', value: false }]" />
-      </FieldRow>
-      <FieldRow
-        label="执行计划"
-        tip="例：0 8 * * * = 每天 08:00；30 7 * * 1-5 = 工作日 07:30。失败自动重试 3 次，结果推送通知。"
-      >
-        <CronField v-model="ckForm.cron" placeholder="0 8 * * *" />
+        <SchedulePicker v-model="ckForm.cron" v-model:enabled="ckForm.enabled" toggle placeholder="0 8 * * *" />
       </FieldRow>
       <template #footer>
         <div class="foot-right">

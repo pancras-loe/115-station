@@ -10,7 +10,7 @@ import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import CronField from '@/components/ui/CronField.vue'
+import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import { configApi, organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
@@ -118,6 +118,24 @@ onMounted(async () => {
   } catch (e) {
     toastError(e, '定时配置读取失败')
   }
+})
+
+/**
+ * 这条 cron 留空就是「不定时整理」，没有单独的开关字段：界面上的开关由它推出来。
+ * 关掉时清空，记住关之前的计划，再打开还原；没有就用默认的白天每 10 分钟
+ */
+const CRON_SUGGEST = '*/10 8-23 * * *'
+let cronLast = ''
+const cronOn = computed({
+  get: () => cron.value.trim() !== '',
+  set: (on: boolean) => {
+    if (on) {
+      cron.value = cronLast || cronSaved.value.trim() || CRON_SUGGEST
+    } else {
+      cronLast = cron.value.trim()
+      cron.value = ''
+    }
+  },
 })
 
 async function saveCron(): Promise<boolean> {
@@ -264,7 +282,7 @@ const PIPELINE = ['识别', '二级分类', '洗版', '重命名', '搬入媒体
  * 所有触发都只入任务队列，排着就不会丢 —— 原文里「每分钟重试补上」「5 分钟冷却」已随改造删除
  */
 const TRIGGERS: { name: string; text: string }[] = [
-  { name: '定时', text: '上面的 cron 到点入队，扫待整理目录（顺带扫一次转存目录）；留空只是不定时跑，其余触发照常' },
+  { name: '定时', text: '上面的定时整理到点入队，扫待整理目录（顺带扫一次转存目录）；关掉只是不定时跑，其余触发照常' },
   { name: '手动', text: '下面的「开始整理」，扫的目录同上；排队时优先于后台任务' },
   { name: '机器人', text: '给企微 / TG 机器人发「整理」，和手动一样' },
   { name: '转存完成', text: '影视转存（含机器人找资源）的分享转存成功后入队' },
@@ -338,10 +356,11 @@ const TRIGGERS: { name: string; text: string }[] = [
         </FieldRow>
 
         <FieldRow
-          label="自动整理 Cron"
-          tip="标准 5 字段 cron（分 时 日 月 周）。它只负责「到点跑一遍」，留空不影响转存完成、离线下载、守望者这些即时触发。"
+          label="定时整理"
+          wide
+          tip="只负责「到点扫一遍待整理目录」。关掉不影响转存完成、离线下载、守望者这些即时触发。"
         >
-          <CronField v-model="cron" placeholder="*/10 8-23 * * *" />
+          <SchedulePicker v-model="cron" v-model:enabled="cronOn" toggle :placeholder="CRON_SUGGEST" />
         </FieldRow>
 
         <!-- 原生 details：展开收起不需要脚本，键盘和读屏也天然可用 -->
