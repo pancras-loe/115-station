@@ -639,6 +639,17 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 			// 2026-10-10 现场：网盘上删掉整理建的「剧名/Season 0」，事件的父目录定位不到媒体库内，
 			// 落进下面的「只按台账名字匹配」，而库里每部剧都有 Season 0，按名字认不出是哪一个，
 			// 静默跳过，本地 13 个 STRM 一直留着。名字核对是防缓存陈旧：改过名的对不上就不按它删
+			//
+			// 缓存里没有（升级前就在库里的老目录），事件的父目录也用不上：去回收站列表里找它原来的父目录。
+			// 只对目录做 —— 文件有台账按 file_id 精确删；整理自己删的目录前面已按抑制跳过，不会走到这里
+			if ev.FileCat == "0" && goneAbs == "" && scopeOf(ev.Cid) == "unknown" {
+				if pcid := d.recycledParent(ev.FileID, ev.FileName, ev.EventTime); pcid != "" {
+					if parent := d.absPath(pcid); parent != "" {
+						goneAbs = strings.TrimSuffix(parent, "/") + "/" + ev.FileName
+						lg.infof("○ 网盘删除了目录「%s」，事件没带可用的父目录，按回收站记录认出原位置：%s", ev.FileName, goneAbs)
+					}
+				}
+			}
 			if ev.FileCat == "0" && goneAbs != "" && path.Base(strings.TrimSuffix(goneAbs, "/")) == ev.FileName {
 				switch scopeOfAbs(goneAbs) {
 				case "excluded", "other":
@@ -679,7 +690,7 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					// 删文件静默就行（库外的删除天天有）；删目录要说一声，
 					// 否则用户删了库里的目录、本地 STRM 留着，日志里一个字都没有（2026-10-10 现场）
 					if ev.FileCat == "0" {
-						lg.infof("○ 网盘删除了目录「%s」，但认不出它在哪（事件没带可用的父目录，路径缓存里也没记过这个目录），本地没有处理。"+
+						lg.infof("○ 网盘删除了目录「%s」，但认不出它在哪（事件没带可用的父目录，路径缓存与回收站里都没认出这个目录），本地没有处理。"+
 							"若它在媒体库内，残留的 STRM 可由全量同步的失效 STRM 检测找出；"+
 							"全量同步同时会记下库里每个目录的位置，之后再删就认得出了", ev.FileName)
 					}

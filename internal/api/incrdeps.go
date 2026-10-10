@@ -40,6 +40,9 @@ type incrDeps interface {
 	// dirGone 目录在网盘上没了：清掉那棵子树的缓存，返回清之前缓存里记的位置（没记过返回 ""）。
 	// 删除事件的父目录 id 靠不住，这个位置是认出「删的是哪个目录」的主要依据
 	dirGone(fileID string) (lastAbs string)
+	// recycledParent 被删目录原来的父目录 id，从回收站列表里认（见 recyclebin115.go）。
+	// 缓存里没记过这个目录、事件的父目录又用不上时才调；认不准返回 ""
+	recycledParent(dirID, name string, at int64) string
 
 	// ---- 配置 ----
 	setting(key string) string
@@ -75,6 +78,10 @@ type realIncrDeps struct {
 	h      *Handler
 	cookie string
 	ops    *pan115Ops
+
+	// 回收站列表，一轮只读一次（recycledParent）
+	rbLoaded  bool
+	rbEntries []rbEntry
 }
 
 // newIncrDeps 组装生产依赖。cookie 与 ops 取不到时直接失败，

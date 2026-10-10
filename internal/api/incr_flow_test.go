@@ -30,6 +30,8 @@ type stubIncrDeps struct {
 	rel       map[string]string // cid → 相对媒体库根的路径
 	cachedAbs map[string]string // file_id → 目录当前的网盘绝对路径（模拟 PathCache）
 	goneDirs  []string          // 被判定为「已消失」的目录
+	rbParent  map[string]string // 目录名 → 回收站里记的原父目录 id
+	rbCalls   int
 	settings  map[string]string
 	walkErr   error // 非 nil 时所有目录遍历都失败
 
@@ -53,6 +55,7 @@ func newStubDeps() *stubIncrDeps {
 		abs:       map[string]string{},
 		rel:       map[string]string{},
 		cachedAbs: map[string]string{},
+		rbParent:  map[string]string{},
 		settings:  map[string]string{"org-basic": "{}", "share": "{}"},
 		saved:     map[string]string{},
 	}
@@ -91,6 +94,11 @@ func (s *stubIncrDeps) dirGone(fileID string) string {
 	return abs
 }
 
+func (s *stubIncrDeps) recycledParent(dirID, name string, at int64) string {
+	s.rbCalls++
+	return s.rbParent[name]
+}
+
 func (s *stubIncrDeps) dirName(cid string) string { return s.names[cid] }
 func (s *stubIncrDeps) absPath(cid string) string { return s.abs[cid] }
 
@@ -109,10 +117,10 @@ func (s *stubIncrDeps) walkDir(cid, basePath string, videos, assets *[]remoteFil
 	return s.walkErr
 }
 
-func (s *stubIncrDeps) invalidateDirCache()           {}
-func (s *stubIncrDeps) setting(key string) string     { return s.settings[key] }
-func (s *stubIncrDeps) saveSetting(key, val string)   { s.saved[key] = val }
-func (s *stubIncrDeps) notifyRefresh(base string)     { s.refreshed = append(s.refreshed, base) }
+func (s *stubIncrDeps) invalidateDirCache()         {}
+func (s *stubIncrDeps) setting(key string) string   { return s.settings[key] }
+func (s *stubIncrDeps) saveSetting(key, val string) { s.saved[key] = val }
+func (s *stubIncrDeps) notifyRefresh(base string)   { s.refreshed = append(s.refreshed, base) }
 func (s *stubIncrDeps) notifyDeleted(pan bool, paths ...string) {
 	s.deleted = append(s.deleted, paths...)
 	if pan {

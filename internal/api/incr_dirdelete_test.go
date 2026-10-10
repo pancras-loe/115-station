@@ -149,3 +149,78 @@ func TestRememberDirAt(t *testing.T) {
 		t.Fatal("父目录位置不在缓存里时不该记")
 	}
 }
+
+// 缓存里没有、事件父目录不可用：按回收站记的原父目录认出位置，只删这一部的 Season 0
+func TestIncrDirDeleteByRecycleBin(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "incr_dirdel_rb.db")
+	mkTree(t, p.LocalPath,
+		"媒体库/剧集/X/Season 0/特别篇.strm",
+		"媒体库/剧集/Y/Season 0/特别篇.strm",
+	)
+	d.rbParent["Season 0"] = "d1" // d1 = /影视/剧集/X
+	d.pages = [][]lifeEvent{{
+		{ID: "e-1", Type: evDelete, FileID: "s0", Cid: "0", FileName: "Season 0", FileCat: "0", Time: "100"},
+	}}
+
+	sum, err := h.executeIncrementalSyncWith(d, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Deleted != 1 || d.rbCalls != 1 {
+		t.Fatalf("应按回收站删掉 1 个目录，实得 Deleted=%d rbCalls=%d", sum.Deleted, d.rbCalls)
+	}
+	if got := ledgerPaths(t); len(got) != 1 || got[0] != "媒体库/剧集/Y/Season 0/特别篇.strm" {
+		t.Fatalf("只该清掉 X 的 Season 0，实得 %v", got)
+	}
+}
+
+// 缓存认得出时不读回收站
+func TestIncrDirDeleteCachedSkipsRecycleBin(t *testing.T) {
+	h, d, p := newIncrTestEnv(t, "incr_dirdel_rbskip.db")
+	mkTree(t, p.LocalPath, "媒体库/剧集/X/Season 0/特别篇.strm")
+	d.cachedAbs["s0"] = "/影视/剧集/X/Season 0"
+	d.pages = [][]lifeEvent{{
+		{ID: "e-1", Type: evDelete, FileID: "s0", Cid: "0", FileName: "Season 0", FileCat: "0", Time: "100"},
+	}}
+	if _, err := h.executeIncrementalSyncWith(d, p); err != nil {
+		t.Fatal(err)
+	}
+	if d.rbCalls != 0 {
+		t.Fatalf("缓存命中时不该读回收站，实读 %d 次", d.rbCalls)
+	}
+}
+
+// 2026-10-10 维护者实测的回收站返回
+func TestRecycledParentOf(t *testing.T) {
+	body := []byte(`{"count":"1","rb_pass":0,"data":[{"id":"3536586613675000833","file_name":"Season","type":"2","file_size":"0","dtime":"1791609977","status":"0","cid":"3536586394572948574","parent_name":"测试"}],"state":true,"error":""}`)
+	entries, err := parseRecycleBin(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const parent = "3536586394572948574"
+	cases := []struct {
+		name, id, file string
+		at             int64
+		want           string
+	}{
+		{"id 对上", "3536586613675000833", "Season", 0, parent},
+		{"名字 + 时间", "other", "Season", 1791609970, parent},
+		{"时间差太远", "other", "Season", 1791609977 - 3600, ""},
+		{"名字不同", "other", "Season 1", 1791609977, ""},
+	}
+	for _, c := range cases {
+		if got := recycledParentOf(entries, c.id, c.file, c.at); got != c.want {
+			t.Errorf("%s：期望 %q，实得 %q", c.name, c.want, got)
+		}
+	}
+	// 两部剧的同名目录前后脚删：认不准
+	two := append(entries, rbEntry{id: "x", name: "Season", typ: "2", cid: "other-parent", dtime: 1791609980})
+	if got := recycledParentOf(two, "nope", "Season", 1791609977); got != "" {
+		t.Fatalf("父目录不止一个时应认不准，实得 %q", got)
+	}
+	// 同名文件（type=1）不算
+	file := []rbEntry{{id: "f", name: "Season", typ: "1", cid: "p", dtime: 100}}
+	if got := recycledParentOf(file, "", "Season", 100); got != "" {
+		t.Fatalf("文件条目不该认，实得 %q", got)
+	}
+}
