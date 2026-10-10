@@ -358,6 +358,15 @@ func (h *Handler) collectSyncFiles(
 	if progress == nil {
 		progress = func(string) {}
 	}
+	// 遍历起点的位置先备好：下面两种模式都靠它把沿途目录记进路径缓存，
+	// 网盘上删目录时增量才认得出删的是哪个（「Season 0」按名字认不出）。
+	// 缓存过了 7 天保鲜期（关着增量、只跑全量的部署）时查不到，整轮就一个目录都不记，
+	// 所以这里允许为它发一次祖先链请求，一轮全量至多一次
+	if _, ok := lookupCachedAbs(cid); !ok && strings.TrimSpace(cookie) != "" {
+		if _, err := resolveDirAbs(cookie, cid); err != nil {
+			vlog("[同步] ○ 取媒体库根的网盘位置失败（%v），本轮不记录目录位置", err)
+		}
+	}
 	if mode == "fast" {
 		if ok, reason := h.fastSyncAvailable(); !ok {
 			log.Printf("[同步] ○ 已选快速模式但不可用（%s），改用标准模式", reason)
@@ -377,7 +386,7 @@ func (h *Handler) collectSyncFiles(
 	}
 	progress("正在遍历 115 媒体库（已发现视频可在日志查看）…")
 	// 标准模式是全有全无的：任一目录列失败就直接返回错误，所以无错即完整
-	// 起点位置只查缓存：查不到就不记目录，不为它多发请求
+	// 起点位置已在开头备好；仍查不到就不记目录
 	ctl := &walkCtl{}
 	if abs, ok := lookupCachedAbs(cid); ok {
 		ctl.panAbs = abs

@@ -680,7 +680,8 @@ func (h *Handler) executeIncrementalSyncWith(d incrDeps, p incrParams) (sum *inc
 					// 否则用户删了库里的目录、本地 STRM 留着，日志里一个字都没有（2026-10-10 现场）
 					if ev.FileCat == "0" {
 						lg.infof("○ 网盘删除了目录「%s」，但认不出它在哪（事件没带可用的父目录，路径缓存里也没记过这个目录），本地没有处理。"+
-							"若它在媒体库内，残留的 STRM 可由全量同步的失效 STRM 检测找出", ev.FileName)
+							"若它在媒体库内，残留的 STRM 可由全量同步的失效 STRM 检测找出；"+
+							"全量同步同时会记下库里每个目录的位置，之后再删就认得出了", ev.FileName)
 					}
 				}
 			}
