@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
@@ -11,7 +11,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
-import { configApi } from '@/api'
+import { configApi, localApi } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
@@ -19,9 +19,10 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
 const router = useRouter()
+const route = useRoute()
 const media = useFullSetting()
 
-const { model, saving, save, reset } = useSetting('emby', {
+const { model, loading, saving, save, reset } = useSetting('emby', {
   server_url: '',
   api_key: '',
   path_mapping: '',
@@ -39,6 +40,50 @@ watch(
   (rule) => {
     const splitAt = rule.indexOf('#')
     embyMediaRoot.value = splitAt >= 0 ? rule.slice(splitAt + 1) : ''
+  },
+  { immediate: true },
+)
+
+// ---- Emby 媒体库目录：按 Emby 媒体库的路径推算（/emby/path-suggest），只填进表单，保存由用户点 ----
+const detecting = ref(false)
+const detectNote = ref('')
+
+function applySuggest(root: string, how: string) {
+  if (root === embyMediaRoot.value.trim()) {
+    detectNote.value = `推算结果与当前一致：${root}`
+    return
+  }
+  embyMediaRoot.value = root
+  detectNote.value = `${how}已填入 ${root}，确认无误后点「保存」`
+}
+
+async function detectEmbyRoot() {
+  detecting.value = true
+  detectNote.value = ''
+  try {
+    const d = await localApi.embyPathSuggest()
+    if (!d.configured) detectNote.value = '先填好 Emby 服务器地址与 API 密钥并保存'
+    else if (d.error) detectNote.value = d.error
+    else if (!d.suggest) detectNote.value = 'Emby 媒体库的目录在本地媒体库根下找不到同名目录，推算不出来，请对照 Emby 媒体库路径手动填写'
+    else {
+      const ev = d.evidence?.[0]
+      applySuggest(d.suggest, ev ? `按 Emby「${ev.location}」⇄ 本地「${ev.local}」` : '')
+    }
+  } catch (e) {
+    toastError(e, '检测失败')
+  } finally {
+    detecting.value = false
+  }
+}
+
+// 从对账弹窗跳过来时带着推算值（?emby_root=）：等配置读完再填，否则会被读回来的旧值盖掉
+watch(
+  loading,
+  (busy) => {
+    const root = typeof route.query.emby_root === 'string' ? route.query.emby_root.trim() : ''
+    if (busy || !root) return
+    applySuggest(root, '对账推算的值')
+    router.replace({ query: { ...route.query, emby_root: undefined } })
   },
   { immediate: true },
 )
@@ -190,6 +235,10 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
             <HInput v-model="embyMediaRoot" placeholder="如 /media" />
           </label>
         </div>
+        <div class="detect">
+          <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
+          <span v-if="detectNote" class="detect-note">{{ detectNote }}</span>
+        </div>
         <HButton variant="ghost" class="text-btn location-link" @click="router.push({ name: 'accounts' })">
           前往「账号与媒体库」修改本地目录
         </HButton>
@@ -281,6 +330,18 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
   margin-bottom: 5px;
   font-size: 12px;
   color: var(--c-text-3);
+}
+.detect {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.detect-note {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
 }
 .path-arrow {
   padding-bottom: 8px;

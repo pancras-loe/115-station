@@ -345,3 +345,65 @@ export interface ProbeReply {
 
 export const probeTitle = (key: string, confirm = false) =>
   http.post<ProbeReply>('/local/titles/probe', { key, confirm })
+
+/** Emby 与本地片目对账（GET /local/titles/reconcile）：只打 Emby，零 115 请求 */
+export interface ReconEntry {
+  name: string
+  year?: number
+  /** Emby 里的路径 */
+  path?: string
+  /** 换算到本地的路径 */
+  local?: string
+  /** 对上的台账片目 */
+  key?: string
+  /** split：这个片目在 Emby 里有几个条目 */
+  count?: number
+}
+export interface ReconBucket {
+  count: number
+  items: ReconEntry[]
+}
+export interface ReconDir {
+  dir: string
+  count: number
+  samples: string[]
+}
+/** Emby − 台账 = outside + stale + uncategorized + unledgered + type_mismatch + split_extra − missing */
+export interface ReconSide {
+  emby: number
+  ledger: number
+  matched: number
+  outside: ReconBucket
+  stale: ReconBucket
+  uncategorized: ReconBucket
+  uncategorized_dirs: ReconDir[] | null
+  unledgered: ReconBucket
+  type_mismatch: ReconBucket
+  split: ReconBucket
+  split_extra: number
+  missing: ReconBucket
+}
+export interface EmbyPathSuggest {
+  configured: boolean
+  local_root?: string
+  /** 当前填的 Emby 媒体库目录 */
+  current?: string
+  /** 推算出的 Emby 媒体库目录；空 = 推不出来 */
+  suggest?: string
+  evidence?: { location: string; local: string }[]
+  libraries?: { name: string; locations: string[]; under_root: boolean }[]
+  covered?: number
+  error?: string
+}
+export interface ReconcileResult {
+  configured: boolean
+  local_root?: string
+  result?: { mapping_ok: boolean; scanned: number; movie: ReconSide; tv: ReconSide }
+  /** 映射对不上时才有 */
+  mapping?: EmbyPathSuggest
+}
+
+// 全服务器的 Movie + Series 只读路径，几千条几秒；给足余量，别让大库撞上默认 60 秒
+export const reconcile = () => http.get<ReconcileResult>('/local/titles/reconcile', { timeoutMs: 180_000 })
+
+export const embyPathSuggest = () => http.get<EmbyPathSuggest>('/emby/path-suggest')

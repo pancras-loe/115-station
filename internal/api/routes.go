@@ -306,6 +306,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/local/titles/detail", h.LocalTitleDetail)
 		protected.GET("/local/titles/emby", h.LocalTitleEmby)
 		protected.GET("/local/titles/emby-stats", h.LocalEmbyStats)
+		protected.GET("/local/titles/reconcile", h.LocalTitlesReconcile)
 		protected.POST("/local/titles/probe", h.LocalTitleProbe)
 		protected.POST("/local/titles/emby-refresh", h.LocalTitlesEmbyRefresh)
 		protected.POST("/files/organize", h.OrganizeFiles)
@@ -419,6 +420,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/scrape/config", h.ScrapeSaveConfig)
 		protected.POST("/scrape/provider", h.SetScrapeProvider)
 		protected.GET("/scrape/emby-check", h.ScrapeEmbyCheck)
+		protected.GET("/emby/path-suggest", h.EmbyPathSuggest)
 		protected.GET("/scrape/status", h.ScrapeStatus)
 
 		// 影视转存 · 木咖（不太灵系影视库，搜索匿名/资源需 VIP token）

@@ -7,6 +7,7 @@ import {
   Cpu,
   Database,
   FileVideo,
+  GitCompareArrows,
   MemoryStick,
   RefreshCw,
   SlidersHorizontal,
@@ -25,6 +26,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import WeeklyChart from '@/components/ui/WeeklyChart.vue'
 import PosterImage from '@/components/PosterImage.vue'
 import CalibrateModal from '@/components/dashboard/CalibrateModal.vue'
+import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
 import HeroBanner, { type HeroSlide } from '@/components/dashboard/HeroBanner.vue'
 import { bytes, num, percent } from '@/utils/format'
 import { embyImageUrl, posterUrl } from '@/utils/media'
@@ -34,6 +36,8 @@ const data = ref<Dashboard | null>(null)
 const loading = ref(true)
 const refreshing = ref(false)
 const calibrating = ref(false)
+/** 与海报墙对账：这里的数量读 Emby，海报墙数台账片目，对不上时逐项说明 */
+const reconciling = ref(false)
 
 async function load(manual = false, force = false) {
   if (force) refreshing.value = true
@@ -203,6 +207,10 @@ const strmSub = computed(() => {
         <HButton size="sm" variant="tertiary" :loading="refreshing" aria-label="刷新" @click="load(true, true)">
           <template #icon><RefreshCw /></template>
           <span class="btn-text">刷新</span>
+        </HButton>
+        <HButton v-if="fromEmby" size="sm" variant="tertiary" aria-label="与海报墙对账" @click="reconciling = true">
+          <template #icon><GitCompareArrows /></template>
+          <span class="btn-text">对账</span>
         </HButton>
         <HButton size="sm" variant="tertiary" aria-label="校准台账" @click="calibrating = true">
           <template #icon><SlidersHorizontal /></template>
@@ -383,6 +391,7 @@ const strmSub = computed(() => {
     </SectionCard>
 
     <CalibrateModal v-model:show="calibrating" @done="load(true, true)" />
+    <ReconcileDialog v-model:show="reconciling" />
   </div>
 </template>
 

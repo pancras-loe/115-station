@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, Clapperboard, Ellipsis, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Replace, ScanSearch, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
+import { Check, Clapperboard, Ellipsis, GitCompareArrows, Grid3x3, Images, Info, LayoutGrid, List, RefreshCw, Replace, ScanSearch, Search, Sparkles, Square, Tv, X } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HCheckbox from '@/components/hero/HCheckbox.vue'
@@ -15,6 +15,7 @@ import HSpinner from '@/components/hero/HSpinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
+import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
 import { localApi } from '@/api'
 import type { LocalEmbyStats, LocalTitle, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleStatus } from '@/api/local'
 import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
@@ -63,6 +64,8 @@ const total = ref(0)
 const stats = ref<LocalTitleStats>({ all: 0, ok: 0, partial: 0, miss: 0, movie: 0, tv: 0, probe_lack: 0 })
 const configured = ref(true)
 const missing = ref(0)
+/** Emby 与海报墙对账弹窗：总览的数量（Emby）和这里对不上时，逐个说明差在哪 */
+const showReconcile = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
 const loaded = ref(false)
@@ -557,6 +560,17 @@ onBeforeUnmount(() => {
             <div class="view-sort">
               <HSegmented v-model="view" :options="VIEWS" size="sm" aria-label="显示方案" />
               <HSelect v-model="sort" :options="SORTS" aria-label="排序" class="sort" />
+              <HButton
+                v-if="emby?.configured"
+                variant="ghost"
+                size="sm"
+                icon-only
+                aria-label="与 Emby 对账"
+                title="与 Emby 对账：总览的电影 / 剧集数和这里对不上时，看差在哪"
+                @click="showReconcile = true"
+              >
+                <GitCompareArrows :size="15" />
+              </HButton>
               <HButton variant="ghost" size="sm" icon-only :loading="loading" aria-label="刷新" title="刷新" @click="refreshAll">
                 <RefreshCw :size="15" />
               </HButton>
@@ -564,7 +578,10 @@ onBeforeUnmount(() => {
           </div>
 
           <HAlert v-if="emby?.ready && emby.scanned && !emby.titles" status="warning" class="tip">
-            Emby 里读到 {{ emby.scanned }} 个影视条目，但一个都对不上本地片目，卡片上看不到媒体信息：检查 Emby 设置里的路径映射。
+            Emby 里读到 {{ emby.scanned }} 个影视条目，但一个都对不上本地片目，卡片上看不到媒体信息：多半是 Emby 设置里的路径映射不对。
+            <template #actions>
+              <HButton size="sm" variant="primary" @click="showReconcile = true">检查路径映射</HButton>
+            </template>
           </HAlert>
           <HAlert v-if="missing" status="warning" class="tip">
             有 {{ missing }} 个片目台账里有、本地却找不到目录（被手工删掉，或挂载还没就绪）。
@@ -730,6 +747,7 @@ onBeforeUnmount(() => {
     />
     <!-- 必须写在详情后面：两者 z-index 相同、按 Portal 落点先后叠放，从详情里点「刮削」弹窗要在上面 -->
     <ScrapeDialog v-model:show="showScrape" :targets="dialogTargets" :preset="dialogPreset" />
+    <ReconcileDialog v-model:show="showReconcile" />
   </div>
 </template>
 
