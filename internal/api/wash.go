@@ -53,6 +53,17 @@ type washStrategy struct {
 	OldVersionTarget string     `yaml:"old_version_target"` // 旧版去向 redundant/existing/delete（115 回收站）
 	// Prefer 画质偏好（2026-10-23，「简单设置」）：写了它就不看 priority_level，见 washprefer.go
 	Prefer *washPrefer `yaml:"prefer"`
+
+	// force 「强制覆盖」（forceWashStrategy）：不比画质，库里同一部电影 / 同一集的版本全部让位
+	force bool
+}
+
+// forceWashStrategy 「强制覆盖」提交的内容用的策略（机器人「强制覆盖 <链接>」，DownloadLink.Force）：
+// 用户已经点名要新的，所以不看配置的洗版策略（skip / coexist / 分不出高下都不管），
+// 旧版一律进 115 回收站（可还原）。只在这批内容自己身上生效，库里别的片照常按配置洗。
+// 同一份文件（sha1 相同）已经在目标目录里的仍按已存在处理：内容一模一样，换了等于白删一份
+func forceWashStrategy() *washStrategy {
+	return &washStrategy{Mode: "replace", OldVersionTarget: "delete", force: true}
 }
 
 // loadWashStrategies 从 UI 保存的 YAML（ScrapeRule.wash_config）解析全部策略。
@@ -507,10 +518,13 @@ type washPlan struct {
 // 整目录（一次几十上百集）走 processDir 里的批量路径，不要用这个入口。
 //
 // why 是没换的理由（washNotBetter 时），整理记录上用
-func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName string, newSize int64, newSha1, targetDir, landing string, onLog func(string)) (decision, why string) {
+func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName string, newSize int64, newSha1, targetDir, landing string, force bool, onLog func(string)) (decision, why string) {
 	sc := newWashScanner(ops, cfg).inLib(libName)
 	sameFiles := sc.sameFile(newSha1)
 	st := matchWashStrategy(media.MediaType, classifyMediaFor(cfg, media))
+	if force {
+		st = forceWashStrategy()
+	}
 	if st == nil {
 		return washNoStrategy(newName, sameFiles, onLog).decision, ""
 	}
@@ -660,6 +674,25 @@ func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *wa
 		} else {
 			return plan // 无法确定集数时不能把整季当旧版。
 		}
+	}
+	if st.force {
+		// 强制覆盖：同一集（电影是这个标题目录里）的版本全部让位，字幕跟着走
+		if len(cands) == 0 {
+			return plan // 目录里只有海报/NFO
+		}
+		var stems []string
+		for _, c := range cands {
+			stem := ledgerName(c)
+			if classifyFile(stem) == FileTypeVideo {
+				stem = baseName(stem)
+			}
+			stems = append(stems, stem)
+		}
+		victims := append(append([]model.SyncedFile(nil), cands...), followingSubtitles(libFiles, stems)...)
+		onLog(fmt.Sprintf("⚡ 《%s》强制覆盖：%s 顶掉库内 %d 个版本（%s 等），不看洗版策略",
+			media.Title, shortLogName(newName), len(cands), shortLogName(ledgerName(cands[0]))))
+		plan.decision, plan.victims, plan.oldName = washReplaced, victims, ledgerName(cands[0])
+		return plan
 	}
 	// scope=group：按分辨率分组，组内各留一个最优。新分辨率没有同组文件 → 共存入库
 	if st.Scope == "group" {

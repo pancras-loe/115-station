@@ -190,16 +190,22 @@ func (h *Handler) ShareReceive(c *gin.Context) {
 // 解析分享码 → shareList 列根目录 → shareReceive 转存全部顶层条目；organize=true 时转存后触发整理+增量。
 // source 是提交来源（web / 机器人 / 影巢…），只用于链接台账留痕
 func (h *Handler) shareReceiveCore(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
-	return h.shareReceiveOpt(shareURL, code, target, source, organize, false)
+	return h.shareReceiveOpt(shareURL, code, target, source, organize, false, false)
+}
+
+// shareReceiveForce 「强制覆盖」转存（机器人「强制覆盖 <链接>」）：同 shareReceiveManual，
+// 另在来源链接上打标记，整理这批内容时不看洗版策略、库里原有的版本进 115 回收站
+func (h *Handler) shareReceiveForce(shareURL, code, source string) (msg string, success, fail int, err error) {
+	return h.shareReceiveOpt(shareURL, code, "", source, true, true, true)
 }
 
 // shareReceiveManual 用户自己贴的链接（链接转存页、机器人里贴链接）：转存成功后按开关打上「整理完分享到 RE0 / 癫影」的标记。
 // 从资源站选的不走这里：发回原站没意义，把一个站付费解锁的链接搬到另一个站多半违反站规（shareout.go）
 func (h *Handler) shareReceiveManual(shareURL, code, target, source string, organize bool) (msg string, success, fail int, err error) {
-	return h.shareReceiveOpt(shareURL, code, target, source, organize, true)
+	return h.shareReceiveOpt(shareURL, code, target, source, organize, true, false)
 }
 
-func (h *Handler) shareReceiveOpt(shareURL, code, target, source string, organize, manual bool) (msg string, success, fail int, err error) {
+func (h *Handler) shareReceiveOpt(shareURL, code, target, source string, organize, manual, force bool) (msg string, success, fail int, err error) {
 	shareCode := extractShareCode(shareURL)
 	if shareCode == "" {
 		return "", 0, 0, fmt.Errorf("无法从链接解析分享码")
@@ -257,9 +263,13 @@ func (h *Handler) shareReceiveOpt(shareURL, code, target, source string, organiz
 			names = append(names, it.Name)
 		}
 	}
-	linkID := dlLinkRecord(h, shareURL, "share", shareTitle, source, names)
+	linkID := dlLinkRecordOpt(h, shareURL, "share", shareTitle, source, names, force)
 	if manual {
 		h.shareOutMark(linkID, code)
+	}
+	if force && linkID == 0 {
+		// 认不出来源就没法强制：整理会照洗版策略走，得让用户知道
+		msg += "（⚠ 来源链接登记失败，这次整理会按洗版策略处理）"
 	}
 
 	// 转存成功且开启自动整理 → 触发「整理+增量」

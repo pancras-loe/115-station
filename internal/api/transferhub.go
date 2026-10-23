@@ -930,7 +930,7 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 	switch rl.Action {
 	case "transfer":
 		// 直接贴的链接（req.Source 为空）才可能分享出去；从资源站选的不分享（shareout.go）
-		msg, ok, fail, err := h.shareReceiveOpt(rl.URL, rl.Code, target, label, true, req.Source == "")
+		msg, ok, fail, err := h.shareReceiveOpt(rl.URL, rl.Code, target, label, true, req.Source == "", false)
 		if rl.Unlocked {
 			if err != nil {
 				// 积分已经花了：把链接交回去，用户还能自己转存

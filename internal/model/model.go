@@ -250,6 +250,10 @@ type DownloadLink struct {
 	// ShareOuts 发布结果，列表接口按需填（不是表字段）
 	ShareOuts []ShareOut `json:"share_outs,omitempty" gorm:"-"`
 
+	// Force 「强制覆盖」提交的（机器人「强制覆盖 <链接>」）：整理这批内容时不看洗版策略，
+	// 库里同一部电影 / 同一集原有的版本一律进 115 回收站（api/wash.go 的 forceWashStrategy）
+	Force bool `json:"force,omitempty"`
+
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

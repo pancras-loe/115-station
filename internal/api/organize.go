@@ -120,6 +120,25 @@ type orgCtx struct {
 	// probes 读取媒体信息的会话（mediaprobe.go）：同一部的散文件兄弟集共用，同版本只读一集
 	probes    *probeSession
 	probesFor string
+
+	// top 正在处理的顶层条目名（processEntry 第 0 层设置）：容器目录里的子目录、
+	// 同前缀的兄弟散文件要靠它认来源链接（分享转存只记了顶层条目名）
+	top string
+	// forceSaid 「强制覆盖」的提示已经为哪个条目打过（兄弟散文件逐集判，一部只打一行）
+	forceSaid string
+}
+
+// forceFor 这个条目是不是「强制覆盖」提交的链接转存进来的（DownloadLink.Force）。
+// 是的话洗版换成 forceWashStrategy：不看配置的策略，库里原有的版本进 115 回收站
+func (c *orgCtx) forceFor(fid string, names ...string) bool {
+	if !dlLinkForced(model.DB, fid, append(names, c.top)...) {
+		return false
+	}
+	if c.top == "" || c.forceSaid != c.top {
+		c.forceSaid = c.top
+		c.onLog("⚡ " + shortLogName(names[0]) + " 来自「强制覆盖」提交的链接：不看洗版策略，库里原有的版本进 115 回收站")
+	}
+	return true
 }
 
 // probeSessionFor 这一部影视的读取会话（没开读取媒体信息时为 nil，nil 会话什么都不做）
@@ -1857,6 +1876,10 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 	if ctx.handled[entry.Fid] {
 		return results // 已随同前缀的散文件一起入库
 	}
+	if depth == 0 {
+		ctx.top = entry.Name
+		defer func() { ctx.top = "" }()
+	}
 	if ref, ok := ctx.held[entry.Fid]; ok {
 		if ctx.cfg.ManualConfirm || ref.sticky() {
 			onLog(fmt.Sprintf("⏸ %s - 等待人工确认（整理记录 → 待确认），本轮跳过", entry.Name))
@@ -2278,6 +2301,9 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 增量同步每 30 秒来一次全被挡回去（现场日志：转存后 2 分半还没开始整理）
 	sc := newWashScanner(ops, cfg).inLib(ctx.libName())
 	st := matchWashStrategy(media.MediaType, category)
+	if ctx.forceFor(dir.Fid, dir.Name, dir.Parent) {
+		st = forceWashStrategy()
+	}
 	var accepted []remoteFile
 	planOf := map[string]*washPlan{} // fid → 让旧版让位的计划（撞名停下 / 移走的不执行）
 	var rejectFids []string          // 判为已存在的视频 + 跟着它命名的字幕
@@ -3005,7 +3031,8 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	force := ctx.forceFor(f.Fid, f.Name)
+	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -3293,7 +3320,8 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	force := ctx.forceFor(f.Fid, f.Name)
+	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)
