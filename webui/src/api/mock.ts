@@ -6,6 +6,8 @@
  */
 import type { Dashboard } from '@/types/dashboard'
 import type { OrganizeRecord, OrganizeRecordFile } from '@/api/organize'
+import type { CatSimpleForm, CatSimpleRule, CatTryMedia, CatTryResult, SchemeView } from '@/api/library'
+import { CAT_TEMPLATES, splitTokens } from '@/pages/organize/catSimple'
 
 const TITLES: [string, string, string][] = [
   ['沙丘 2', '2024', '科幻电影'],
@@ -550,6 +552,75 @@ const acctName = (id: number) => mockAccts.find((a) => a.id === id)?.name ?? `�
 
 /** 4K 库挂在附加账号「小王的家」上，账号页签能看到「挂了几个库」 */
 const MOCK_LIB_ACCT: Record<string, number> = { '300': 1 }
+
+// ---- 二级分类方案（catschemeapi.go / catsimple.go 的假实现）：存在内存里，简单模式与 YAML 同一份 ----
+type MockScheme = { id: number; name: string; simple: CatSimpleForm }
+const mockSchemes: MockScheme[] = [
+  { id: 1, name: '默认分类', simple: CAT_TEMPLATES.find((t) => t.key === 'default')!.build() },
+]
+let mockSchemeSeq = 2
+const mockSchemeViews = (): SchemeView[] =>
+  mockSchemes.map((s) => ({
+    id: s.id, name: s.name, movie: s.simple.movie.length + 1, tv: s.simple.tv.length + 1,
+    used_by: s.id === 1 ? mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self').map((l) => l.name) : [],
+  }))
+/** 照后端生成的形态拼 YAML：每类一段，条件按原样逗号串写，「其余」放最后不带条件 */
+function mockSchemeYaml(f: CatSimpleForm): string {
+  const keys: (keyof CatSimpleRule)[] = ['genre_ids', 'origin_country', 'original_language', 'production_countries', 'release_year', 'custom_regex', 'ext']
+  const block = (media: 'movie' | 'tv') => {
+    const out = [`${media}:`]
+    for (const r of f[media]) {
+      out.push(`  ${r.name}:`)
+      for (const k of keys) if (r[k]) out.push(`    ${k}: '${r[k]}'`)
+    }
+    out.push(`  ${f.fallback[media]}:`)
+    return out.join('\n')
+  }
+  return `${block('movie')}\n${block('tv')}\n`
+}
+/** 「试一试」用的假影片：/tmdb/search 假结果里的三部按编号认，其余编号轮着挑下面几部 */
+const MOCK_TRY_BY_ID: Record<number, CatTryMedia> = {
+  693134: { title: '沙丘 2', year: '2024', media_type: 'movie', genre_ids: [878, 12], original_language: 'en', origin_country: ['US'], production_countries: ['US', 'CA'] },
+  438631: { title: '沙丘', year: '2021', media_type: 'movie', genre_ids: [878, 12], original_language: 'en', origin_country: ['US'], production_countries: ['US', 'CA'] },
+  90228: { title: '沙丘：预言', year: '2024', media_type: 'tv', genre_ids: [10765, 18], original_language: 'en', origin_country: ['US'], production_countries: ['US'] },
+}
+const MOCK_TRY_MEDIA: CatTryMedia[] = [
+  { title: '流浪地球 2', year: '2023', media_type: 'movie', genre_ids: [878, 28], original_language: 'zh', origin_country: ['CN'], production_countries: ['CN'] },
+  { title: '铃芽之旅', year: '2022', media_type: 'movie', genre_ids: [16, 12], original_language: 'ja', origin_country: ['JP'], production_countries: ['JP'] },
+  { title: '奥本海默', year: '2023', media_type: 'movie', genre_ids: [18, 36], original_language: 'en', origin_country: ['US'], production_countries: ['US', 'GB'] },
+  { title: '三体', year: '2023', media_type: 'tv', genre_ids: [18, 10765], original_language: 'zh', origin_country: ['CN'], production_countries: ['CN'] },
+  { title: '最后生还者', year: '2023', media_type: 'tv', genre_ids: [18, 10759], original_language: 'en', origin_country: ['US'], production_countries: ['US'] },
+  { title: '奔跑吧', year: '2014', media_type: 'tv', genre_ids: [10764], original_language: 'zh', origin_country: ['CN'], production_countries: ['CN'] },
+]
+/** 规则按顺序找第一条符合的（与后端 matchCategory 同口径的简化版：逗号命中任一、! 排除、年份区间） */
+function mockCatTry(f: CatSimpleForm, m: CatTryMedia): CatTryResult {
+  const hitList = (cond: string, have: string[]): string => {
+    const toks = splitTokens(cond)
+    if (!toks.length) return ''
+    const neg = toks.filter((t) => t.startsWith('!')).map((t) => t.slice(1).toLowerCase())
+    const pos = toks.filter((t) => !t.startsWith('!')).map((t) => t.toLowerCase())
+    const hv = have.map((h) => h.toLowerCase())
+    if (neg.some((n) => hv.includes(n))) return `排除了 ${neg.join('、')}`
+    if (pos.length && !pos.some((p) => hv.includes(p))) return `不是 ${pos.join('、')}`
+    return ''
+  }
+  const skips: CatTryResult['skips'] = []
+  const list = f[m.media_type]
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i]
+    const why =
+      hitList(r.genre_ids, m.genre_ids.map(String)) ||
+      hitList(r.origin_country, m.origin_country ?? []) ||
+      hitList(r.original_language, [m.original_language]) ||
+      hitList(r.production_countries, m.production_countries ?? []) ||
+      (r.release_year && !(([a, b = a]) => +m.year >= +a && +m.year <= +b)(r.release_year.split('-')) ? `年份不在 ${r.release_year}` : '')
+    if (!why) return { dest: `${m.media_type === 'tv' ? '剧集' : '电影'}/${r.name}`, index: i, skips }
+    skips.push({ index: i, name: r.name, reason: why })
+  }
+  return { dest: `${m.media_type === 'tv' ? '剧集' : '电影'}/${f.fallback[m.media_type]}`, index: -1, skips }
+}
+const mockBody = <T>(init?: RequestInit) => JSON.parse(String(init?.body ?? '{}')) as T
+
 const mockMediaLibsView = () => ({
   media_root: '/media',
   libs: mockLibs.map((l, i) => {
@@ -565,7 +636,7 @@ const mockMediaLibsView = () => ({
       emby: { covered: true, partial: false, unmapped: false },
     }
   }),
-  schemes: [{ id: 1, name: '默认分类', used_by: mockLibs.filter((l) => mockOpts[l.cid]?.mode !== 'self').map((l) => l.name), movie: 6, tv: 5 }],
+  schemes: mockSchemeViews(),
   accounts: mockAccts.filter((a) => a.logged_in).map((a) => ({ id: a.id, name: a.name, main: a.main })),
   notice: [],
   emby_configured: true,
@@ -633,6 +704,24 @@ const PATTERN_ROUTES: [RegExp, (m: RegExpMatchArray, q: URLSearchParams, init?: 
     if (a.status === 'invalid') return { valid: false, message: 'Cookie 已失效，请重新扫码' }
     return { valid: true, channel: 'Cookie', username: a.user_name, capacity: '2.10 TB / 6.00 TB' }
   }],
+  [/^\/category\/schemes\/(\d+)$/, (m, _q, init) => {
+    const i = mockSchemes.findIndex((s) => s.id === Number(m[1]))
+    if (i < 0) return { __status: 404, error: '分类方案不存在' }
+    const s = mockSchemes[i]
+    if (init?.method === 'DELETE') {
+      if (s.id === 1) return { __status: 409, error: '还有媒体库在用这套方案' }
+      mockSchemes.splice(i, 1)
+      return { schemes: mockSchemeViews() }
+    }
+    if (init?.method === 'PUT') {
+      const b = mockBody<{ name?: string; simple?: CatSimpleForm }>(init)
+      if (b.name) s.name = b.name
+      if (b.simple) s.simple = b.simple
+      return { message: '已保存', schemes: mockSchemeViews() }
+    }
+    const empty = !s.simple.movie.length && !s.simple.tv.length
+    return { id: s.id, name: s.name, yaml: mockSchemeYaml(s.simple), simple: s.simple, simple_why: [], comments: false, empty }
+  }],
   [/^\/storage\/115\/accounts\/(\d+)$/, (m, _q, init) => {
     const i = mockAccts.findIndex((x) => x.id === Number(m[1]))
     if (i < 0) return { __status: 404, error: '账号不存在' }
@@ -655,6 +744,24 @@ const ROUTES: Record<string, Route> = {
     return { data: mockAccts }
   },
   '/media-libs': mockMediaLibsView,
+  '/category/schemes': (_q: URLSearchParams, init?: RequestInit) => {
+    const b = mockBody<{ name: string; copy_from: number }>(init)
+    const from = mockSchemes.find((s) => s.id === b.copy_from)
+    const s: MockScheme = {
+      id: mockSchemeSeq++, name: b.name || '新方案',
+      simple: from ? structuredClone(from.simple) : CAT_TEMPLATES[0].build(),
+    }
+    mockSchemes.push(s)
+    return { id: s.id, schemes: mockSchemeViews() }
+  },
+  '/category/schemes/preview': (_q: URLSearchParams, init?: RequestInit) => {
+    const b = mockBody<{ simple?: CatSimpleForm; tmdb_id?: number; media_type?: 'movie' | 'tv' }>(init)
+    if (!b.simple) return { yaml: '' }
+    if (!b.tmdb_id) return { yaml: mockSchemeYaml(b.simple) }
+    const pool = MOCK_TRY_MEDIA.filter((x) => !b.media_type || x.media_type === b.media_type)
+    const media = MOCK_TRY_BY_ID[b.tmdb_id] ?? pool[b.tmdb_id % pool.length] ?? MOCK_TRY_MEDIA[0]
+    return { yaml: mockSchemeYaml(b.simple), media, try: mockCatTry(b.simple, media) }
+  },
   '/auth/wallpapers': { items: MOCK_WALLS },
   '/media-libs/batch': (_q: URLSearchParams, init?: RequestInit) => {
     const { libs } = JSON.parse(String(init?.body ?? '{}')) as {

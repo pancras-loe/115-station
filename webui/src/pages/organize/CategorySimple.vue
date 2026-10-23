@@ -19,9 +19,10 @@ import MediaTypeChip from '@/components/MediaTypeChip.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import CategoryRuleDialog from './CategoryRuleDialog.vue'
 import CategoryRuleRow from './CategoryRuleRow.vue'
 import CategoryTry from './CategoryTry.vue'
-import { CAT_TEMPLATES, emptyRule, formKey, lintRules, type CatTemplate, type Media } from './catSimple'
+import { CAT_TEMPLATES, emptyRule, formKey, lintRules, type CatTemplate, type Media, type RuleLint } from './catSimple'
 
 const props = defineProps<{ schemeId: number; detail: SchemeDetail }>()
 const emit = defineEmits<{ saved: []; dirty: [boolean] }>()
@@ -42,7 +43,7 @@ watch(
   () => props.detail,
   (d) => {
     form.value = clone(d.simple ?? defaultTpl.build())
-    editing.value = null
+    dlgShow.value = false
   },
 )
 
@@ -53,7 +54,32 @@ const keyOf = (r: CatSimpleRule) => {
   if (!keys.has(r)) keys.set(r, ++keySeq)
   return keys.get(r)!
 }
-const editing = ref<CatSimpleRule | null>(null)
+// 编辑弹窗：改的是草稿，点「完成」才放回清单；新建的取消了就不留下（CategoryRuleDialog.vue）
+const dlgShow = ref(false)
+const dlg = ref<{ media: Media; index: number; creating: boolean; rule: CatSimpleRule }>({
+  media: 'movie', index: 0, creating: false, rule: emptyRule(),
+})
+function openEdit(m: Media, i: number) {
+  dlg.value = { media: m, index: i, creating: false, rule: form.value[m][i] }
+  dlgShow.value = true
+}
+/** 把草稿放回清单里那个位置再检查：重名要和别的条目比 */
+function lintDraft(draft: CatSimpleRule): RuleLint {
+  const { media, index, creating } = dlg.value
+  const list = [...form.value[media]]
+  list.splice(index, creating ? 0 : 1, draft)
+  return lintRules(list, form.value.fallback[media]).rules[index]
+}
+function onDone(r: CatSimpleRule) {
+  const { media, index, creating, rule } = dlg.value
+  const list = form.value[media]
+  if (creating) list.push(r)
+  else {
+    // 按对象身份找回原来那条，序号只作兜底
+    const at = list.indexOf(rule)
+    list[at < 0 ? index : at] = r
+  }
+}
 
 const columns = computed(() =>
   (['movie', 'tv'] as Media[]).map((m) => {
@@ -70,16 +96,12 @@ function move(m: Media, i: number, d: number) {
   ;[list[i], list[j]] = [list[j], list[i]]
 }
 function remove(m: Media, i: number) {
-  const [r] = form.value[m].splice(i, 1)
-  if (editing.value === r) editing.value = null
+  form.value[m].splice(i, 1)
 }
 function add(m: Media) {
-  const r = emptyRule(m === 'movie' ? '电影/新分类' : '剧集/新分类')
-  form.value[m].push(r)
-  editing.value = r
-}
-function toggleEdit(r: CatSimpleRule) {
-  editing.value = editing.value === r ? null : r
+  const list = form.value[m]
+  dlg.value = { media: m, index: list.length, creating: true, rule: emptyRule(m === 'movie' ? '电影/新分类' : '剧集/新分类') }
+  dlgShow.value = true
 }
 
 // ---- 模板 ----
@@ -95,7 +117,6 @@ async function applyTemplate(t: CatTemplate) {
   })
   if (!ok) return
   form.value = t.build()
-  editing.value = null
 }
 
 // ---- 试一试命中哪一条 ----
@@ -181,7 +202,6 @@ async function confirmDirChanges(changes: CatDirChange[]) {
 
 function discard() {
   form.value = clone(props.detail.simple ?? defaultTpl.build())
-  editing.value = null
 }
 </script>
 
@@ -226,17 +246,16 @@ function discard() {
             <CategoryRuleRow
               v-for="(r, i) in c.list"
               :key="keyOf(r)"
-              v-model:rule="c.list[i]"
+              :rule="r"
               :media="c.media"
               :index="i"
               :total="c.list.length"
-              :editing="editing === r"
               :lint="c.lint.rules[i]"
               :hit="hitOf(c.media, i)"
               @up="move(c.media, i, -1)"
               @down="move(c.media, i, 1)"
               @remove="remove(c.media, i)"
-              @toggle="toggleEdit(r)"
+              @edit="openEdit(c.media, i)"
             />
             <li class="fb" :class="{ hit: fbHit(c.media) }">
               <div class="fb-head">
@@ -275,6 +294,16 @@ function discard() {
         改了目录名、原来的分类里已经有片的，保存前会再确认一次。
       </span>
     </FormActions>
+
+    <CategoryRuleDialog
+      v-model:show="dlgShow"
+      :media="dlg.media"
+      :index="dlg.index"
+      :creating="dlg.creating"
+      :rule="dlg.rule"
+      :lint-of="lintDraft"
+      @done="onDone"
+    />
   </div>
 </template>
 
