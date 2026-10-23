@@ -261,9 +261,66 @@ export const updateMediaLib = (id: number, req: MediaLibReq) => http.put<MediaLi
 export const deleteMediaLib = (id: number) => http.del<MediaLibsView>(`/media-libs/${id}`)
 export const dismissMediaLibNotice = () => http.post<{ ok: boolean }>('/media-libs/notice/dismiss', {})
 
-export const getScheme = (id: number) => http.get<{ id: number; name: string; yaml: string }>(`/category/schemes/${id}`)
+/** 二级分类简单模式的一条分类（后端 catsimple.go；条件值是原样的逗号串） */
+export interface CatSimpleRule {
+  name: string
+  genre_ids: string
+  origin_country: string
+  original_language: string
+  production_countries: string
+  release_year: string
+  custom_regex: string
+  ext: string
+}
+export interface CatSimpleForm {
+  movie: CatSimpleRule[]
+  tv: CatSimpleRule[]
+  /** 「其余都放这里」：固定在每个媒体类型最后 */
+  fallback: { movie: string; tv: string }
+}
+export interface SchemeDetail {
+  id: number
+  name: string
+  yaml: string
+  /** 简单模式的表单；认不回来时为 null，原因在 simple_why */
+  simple: CatSimpleForm | null
+  simple_why: string[]
+  /** 存着的 YAML 里有注释（简单模式保存会去掉） */
+  comments: boolean
+  /** 还没有任何分类规则 */
+  empty: boolean
+}
+/** 删掉 / 改了名的分类，原来那个目录里已经有片（保存时 409 带回来） */
+export interface CatDirChange {
+  media_type: 'movie' | 'tv'
+  name: string
+  titles: number
+}
+export interface CatTryResult {
+  dest: string
+  /** 命中第几条（0 起），-1 = 进了「其余都放这里」 */
+  index: number
+  skips: { index: number; name: string; reason: string }[]
+}
+export interface CatTryMedia {
+  title: string
+  year: string
+  media_type: 'movie' | 'tv'
+  genre_ids: number[]
+  original_language: string
+  origin_country: string[] | null
+  production_countries: string[] | null
+}
+
+export const getScheme = (id: number) => http.get<SchemeDetail>(`/category/schemes/${id}`)
+/** 纯计算：给 simple 返回生成的 YAML；带 tmdb_id 时按这份（未保存的）规则算这部片进哪个目录 */
+export const previewScheme = (body: { simple?: CatSimpleForm; yaml?: string; tmdb_id?: number; media_type?: string }) =>
+  http.post<{ yaml?: string; try?: CatTryResult; media?: CatTryMedia }>('/category/schemes/preview', body)
 export const createScheme = (name: string, copyFrom: number) =>
   http.post<{ id: number; schemes: SchemeView[] }>('/category/schemes', { name, copy_from: copyFrom })
-export const updateScheme = (id: number, body: { name?: string; yaml?: string }) =>
+export const updateScheme = (
+  id: number,
+  body: { name?: string; yaml?: string; simple?: CatSimpleForm; confirm_cat_change?: boolean },
+) =>
   http.put<{ message: string; schemes: SchemeView[] }>(`/category/schemes/${id}`, body)
 export const deleteScheme = (id: number) => http.del<{ schemes: SchemeView[] }>(`/category/schemes/${id}`)

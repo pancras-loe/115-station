@@ -19,7 +19,9 @@ import (
 // 放进哪个库由转存文件夹决定），库卡片上选用哪一套；被库用着的不能删。
 // 老的单份接口（GET/POST /scrape/categories）读写第一套，留给还没换掉的调用方。
 
-// GetScheme GET /category/schemes/:id → {id, name, yaml}
+// GetScheme GET /category/schemes/:id → {id, name, yaml, simple, simple_why, comments, empty}
+//
+// simple 是简单模式的表单（catsimple.go），认不回来时为 null、simple_why 说原因
 func (h *Handler) GetScheme(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	s, ok := schemeByID(uint(id))
@@ -27,7 +29,11 @@ func (h *Handler) GetScheme(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "这套分类方案不存在（可能已经删除）"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"id": s.ID, "name": s.Name, "yaml": s.Config})
+	resp := gin.H{"id": s.ID, "name": s.Name, "yaml": s.Config}
+	for k, v := range h.catSimpleView(s) {
+		resp[k] = v
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // checkSchemeName 方案名能不能用（exclude = 改名时的自己）
@@ -119,7 +125,10 @@ func (h *Handler) CreateScheme(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"id": s.ID, "schemes": h.mediaLibsNow().Schemes})
 }
 
-// UpdateScheme PUT /category/schemes/:id {name?, yaml?}
+// UpdateScheme PUT /category/schemes/:id {name?, yaml?, simple?, confirm_cat_change?}
+//
+// simple（简单模式的表单）给出时由它生成 YAML，yaml 不看。删掉 / 改名的分类原来那个目录里已经有片时
+// 返回 409 + cat_changes，用户确认后带 confirm_cat_change 重发（已入库的不会跟着搬）
 func (h *Handler) UpdateScheme(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	s, ok := schemeByID(uint(id))
@@ -128,12 +137,30 @@ func (h *Handler) UpdateScheme(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Name *string `json:"name"`
-		Yaml *string `json:"yaml"`
+		Name             *string        `json:"name"`
+		Yaml             *string        `json:"yaml"`
+		Simple           *catSimpleForm `json:"simple"`
+		ConfirmCatChange bool           `json:"confirm_cat_change"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
+	}
+	if req.Simple != nil {
+		if err := req.Simple.validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		src := req.Simple.yaml()
+		req.Yaml = &src
+	}
+	if req.Yaml != nil && !req.ConfirmCatChange {
+		if _, rows, err := schemeYAMLRows(*req.Yaml); err == nil {
+			if changes := h.catDirChangesNow(s.ID, rows); len(changes) > 0 {
+				c.JSON(http.StatusConflict, gin.H{"error": "有分类改了名或删掉了，原来的目录里已经有片", "cat_changes": changes})
+				return
+			}
+		}
 	}
 	tx := h.DB.Begin()
 	msg := "已保存"

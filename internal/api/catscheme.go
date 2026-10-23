@@ -181,11 +181,15 @@ func renderCategoryYAML(rows []model.CategoryRule) string {
 	if len(root.Content) == 0 {
 		return ""
 	}
-	out, err := yaml.Marshal(root)
-	if err != nil {
+	// 两格缩进：和默认模板、用户手写的一样（简单模式保存的 YAML 也走这里，专家模式里看着不突兀）
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
 		return ""
 	}
-	return string(out)
+	_ = enc.Close()
+	return buf.String()
 }
 
 // schemeName 给日志 / 界面看的方案名（0 = 不分类）

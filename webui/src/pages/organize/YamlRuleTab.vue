@@ -23,8 +23,9 @@ const props = defineProps<{
   hint?: string
   note: string
   load: () => Promise<{ config?: string; default_config?: string }>
-  /** confirmLibChange：用户已确认「换了库的分类，已入库的留在原库」（只有二级分类用，后端 409 时才带） */
-  persist: (yaml: string, opts?: { confirmLibChange?: boolean }) => Promise<unknown>
+  /** confirmLibChange：用户已确认「换了库的分类，已入库的留在原库」；confirmCatChange：已确认「改名 / 删掉的分类里
+      已有片，留在原目录」。都只有二级分类用，后端 409 时才带 */
+  persist: (yaml: string, opts?: { confirmLibChange?: boolean; confirmCatChange?: boolean }) => Promise<unknown>
   /** 库里没有配置时填入编辑器的起始模板。洗版不传：后端首次部署就播种了真实
       配置，这里再兜底显示一份默认策略只会让「清空=不洗版」看着像还在生效 */
   fallback?: string
@@ -66,7 +67,9 @@ async function save() {
     message.success('保存成功')
   } catch (e) {
     const changes = e instanceof ApiError && e.status === 409 ? (e.data.lib_changes as LibChange[] | undefined) : undefined
+    const dirs = e instanceof ApiError && e.status === 409 ? (e.data.cat_changes as CatDirChange[] | undefined) : undefined
     if (changes?.length) await confirmLibChange(changes)
+    else if (dirs?.length) await confirmCatChange(dirs)
     else toastError(e, '保存失败：请检查 YAML 缩进与格式')
   } finally {
     saving.value = false
@@ -99,6 +102,34 @@ async function confirmLibChange(changes: LibChange[]) {
   if (!ok) return
   try {
     await props.persist(yaml.value, { confirmLibChange: true })
+    message.success('保存成功')
+  } catch (e) {
+    toastError(e, '保存失败')
+  }
+}
+
+/** 后端说「有分类改了名或删掉了，原目录里已有片」（catsimpleapi.go 的 catDirChanges） */
+interface CatDirChange {
+  media_type: 'movie' | 'tv'
+  name: string
+  titles: number
+}
+
+async function confirmCatChange(changes: CatDirChange[]) {
+  const ok = await dialog.confirm({
+    title: '有分类改了名或删掉了',
+    content:
+      changes.map((c) => `${c.media_type === 'tv' ? '剧集' : '电影'}「${c.name}」：里面已经有 ${c.titles} 部`).join('\n') +
+      '\n\n已经入库的片留在原来的目录里，不会自动搬；之后新来的按新规则放，同一类片可能分在两个目录里。' +
+      '想把已有的也挪过去，保存后到「网盘文件」对这些片目点「整理」。',
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '保存', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  try {
+    await props.persist(yaml.value, { confirmCatChange: true })
     message.success('保存成功')
   } catch (e) {
     toastError(e, '保存失败')

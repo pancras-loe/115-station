@@ -364,6 +364,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/media-libs/notice/dismiss", h.DismissMediaLibNotice)
 		protected.GET("/category/schemes/:id", h.GetScheme)
 		protected.POST("/category/schemes", h.CreateScheme)
+		protected.POST("/category/schemes/preview", h.PreviewScheme)
 		protected.PUT("/category/schemes/:id", h.UpdateScheme)
 		protected.DELETE("/category/schemes/:id", h.DeleteScheme)
 		protected.GET("/libraries", h.GetLibraries)
