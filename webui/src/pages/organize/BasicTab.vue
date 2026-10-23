@@ -14,7 +14,6 @@ import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import Cid115Input from '@/components/Cid115Input.vue'
 import { configApi, organizeApi } from '@/api'
 import { useSetting } from '@/composables/useSetting'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import { INCR_DEFAULTS, loadIncrCfg, patchIncrCfg } from '@/composables/incrSetting'
 import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -49,7 +48,7 @@ async function checkTmdb(): Promise<boolean> {
 onMounted(() => { void checkTmdb() })
 
 /** 本页只用得上两个目录，但 org-basic 是整对象存的，默认值得带全——见 orgBasic.ts */
-const { model, saving: orgSaving, save, load, dirty: settingDirty, changed } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
+const { model, saving: orgSaving, save, load, dirty: settingDirty } = useSetting('org-basic', ORG_BASIC_DEFAULTS)
 
 /** 转存/待整理文件夹改成每个媒体库各设一个（V2，「账号与媒体库 → 媒体库」），这一页不再有 */
 const saving = computed(() => orgSaving.value)
@@ -335,44 +334,36 @@ const TRIGGERS: { name: string; text: string }[] = [
           </div>
         </FieldRow>
 
-        <AdvancedSection
-          id="org-holds"
-          :changed="changed('no_twin_hold', 'dup_auto_hours', 'dup_auto_action')"
-          hint="同名分不清、同集多份时怎么办，默认停下问你"
+        <FieldRow
+          label="同名待确认"
+          tip="TMDB 上片名完全相同的不止一部（比如《凡人修仙传》2020 年的动画和 2025 年的真人剧），名字里又没有能区分的年份时，整理不再按 TMDB 排第一的去猜，停在「整理记录 → 待确认」等你确认是哪一部。和「人工确认」开关无关，关着人工确认也会停。在这种记录上改指定不会写进识别记忆：名字里没有年份，记下来另一部的内容就会被永远认错。"
         >
-          <FieldRow
-            label="同名待确认"
-            :changed="changed('no_twin_hold')"
-            tip="TMDB 上片名完全相同的不止一部（比如《凡人修仙传》2020 年的动画和 2025 年的真人剧），名字里又没有能区分的年份时，整理不再按 TMDB 排第一的去猜，停在「整理记录 → 待确认」等你确认是哪一部。和「人工确认」开关无关，关着人工确认也会停。在这种记录上改指定不会写进识别记忆：名字里没有年份，记下来另一部的内容就会被永远认错。"
-          >
-            <div class="switch-row">
-              <HSwitch v-model="twinHold" />
-              <span class="switch-hint">
-                {{ twinHold ? '同名分不出是哪一部时停下等你确认' : '同名时取 TMDB 排第一的（可能认错）' }}
-              </span>
-            </div>
-          </FieldRow>
+          <div class="switch-row">
+            <HSwitch v-model="twinHold" />
+            <span class="switch-hint">
+              {{ twinHold ? '同名分不出是哪一部时停下等你确认' : '同名时取 TMDB 排第一的（可能认错）' }}
+            </span>
+          </div>
+        </FieldRow>
 
-          <FieldRow
-            label="同集多份"
-            :changed="changed('dup_auto_hours', 'dup_auto_action')"
-            tip="同一次整理里几份不同的文件（比如同一集的粤语、英语两份）按命名规则会改成同一个名字时，不替你挑，停在「整理记录 → 待确认」等你选：留哪一份、都留（名字后加 #A #B）、都不要（移冗余）。通知里也能选：TG 点按钮，企业微信回复「多份 编号 选择」。这里设等多久没人选就自动处理，0 是一直等。"
-          >
-            <div class="dup-row">
-              <HNumberInput v-model="dupHours" :min="0" :max="720" class="dup-hours">
-                <template #suffix>小时</template>
-              </HNumberInput>
-              <HSelect
-                v-if="model.dup_auto_hours > 0"
-                v-model="model.dup_auto_action"
-                :options="DUP_ACTIONS"
-                class="dup-action"
-                aria-label="超时后怎么处理"
-              />
-              <span v-else class="switch-hint">一直等你选</span>
-            </div>
-          </FieldRow>
-        </AdvancedSection>
+        <FieldRow
+          label="同集多份"
+          tip="同一次整理里几份不同的文件（比如同一集的粤语、英语两份）按命名规则会改成同一个名字时，不替你挑，停在「整理记录 → 待确认」等你选：留哪一份、都留（名字后加 #A #B）、都不要（移冗余）。通知里也能选：TG 点按钮，企业微信回复「多份 编号 选择」。这里设等多久没人选就自动处理，0 是一直等。"
+        >
+          <div class="dup-row">
+            <HNumberInput v-model="dupHours" :min="0" :max="720" class="dup-hours">
+              <template #suffix>小时</template>
+            </HNumberInput>
+            <HSelect
+              v-if="model.dup_auto_hours > 0"
+              v-model="model.dup_auto_action"
+              :options="DUP_ACTIONS"
+              class="dup-action"
+              aria-label="超时后怎么处理"
+            />
+            <span v-else class="switch-hint">一直等你选</span>
+          </div>
+        </FieldRow>
 
         <FieldRow
           label="定时整理"

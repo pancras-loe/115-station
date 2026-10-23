@@ -10,7 +10,6 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import { configApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -38,11 +37,6 @@ const loading = ref(true)
 const loadError = ref(false)
 const fingerprint = computed(() => JSON.stringify(model.value))
 const verifiedSaved = computed(() => verified.value === fingerprint.value && saved.value === fingerprint.value)
-/** 两个域名只在国内网络需要换反代时才动，收进高级设置；改过的要标出来 */
-const urlChanged = computed(() => ({
-  api: model.value.api_url.trim() !== DEFAULTS.api_url,
-  image: model.value.image_url.trim() !== DEFAULTS.image_url,
-}))
 const busy = computed(() => loading.value || saving.value || testing.value)
 watch(fingerprint, () => {
   banner.value = null
@@ -159,19 +153,13 @@ onMounted(load)
       <HSegmented v-model="model.language" :options="[{ label: '中文', value: 'zh-CN' }, { label: '英文', value: 'en-US' }]" />
     </FieldRow>
 
-    <AdvancedSection
-      id="tmdb-urls"
-      :changed="Number(urlChanged.api) + Number(urlChanged.image)"
-      hint="连不上 TMDB 时换成反代地址"
-    >
-      <FieldRow label="API 域名" :changed="urlChanged.api" tip="TMDB API 地址，国内网络可换反代加速。">
-        <HInput v-model="model.api_url" placeholder="https://api.tmdb.org" />
-      </FieldRow>
+    <FieldRow label="API 域名" tip="TMDB API 地址，国内网络可换反代加速。">
+      <HInput v-model="model.api_url" placeholder="https://api.tmdb.org" />
+    </FieldRow>
 
-      <FieldRow label="图片域名" :changed="urlChanged.image" tip="TMDB 海报图片域名，可换反代加速。">
-        <HInput v-model="model.image_url" placeholder="https://image.tmdb.org" />
-      </FieldRow>
-    </AdvancedSection>
+    <FieldRow label="图片域名" tip="TMDB 海报图片域名，可换反代加速。">
+      <HInput v-model="model.image_url" placeholder="https://image.tmdb.org" />
+    </FieldRow>
     </fieldset>
     <FormActions>
       <HButton variant="primary" :loading="busy" :disabled="busy || loadError" @click="saveAndTest">保存并测试</HButton>

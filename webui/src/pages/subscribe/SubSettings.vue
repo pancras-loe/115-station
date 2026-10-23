@@ -9,7 +9,6 @@ import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SubCondFields from '@/components/subscribe/SubCondFields.vue'
 import SubPriorityFields from '@/components/subscribe/SubPriorityFields.vue'
@@ -43,22 +42,6 @@ const subdir = computed({
     if (cfg.value) cfg.value.subdir = v
   },
 })
-
-/**
- * 一轮的节奏与上限收进高级设置：默认值是按 115 风控与资源站实测调过的，新用户不用动。
- * 默认值与后端 subscribe.go 的 defaultSubscribeCfg 一致，改那边要改这里
- */
-const PACE_DEFAULTS = {
-  max_subs_per_round: 10,
-  max_eps_per_sub: 50,
-  max_res_per_sub: 50,
-  try_cooldown_sec: 5,
-  max_snap_dirs: 30,
-  share_preview_max: 8,
-} as const
-type PaceKey = keyof typeof PACE_DEFAULTS
-const paceChanged = (k: PaceKey) => !!cfg.value && cfg.value[k] !== PACE_DEFAULTS[k]
-const paceChangedCount = computed(() => (Object.keys(PACE_DEFAULTS) as PaceKey[]).filter(paceChanged).length)
 
 // 改成自定义、还没有规则时给两条常见的起步（4K、1080p），用户在上面改
 function setPrioMode(v: subscribeApi.PrioMode | '') {
@@ -126,26 +109,24 @@ async function save() {
       <FieldRow label="补老集没找到时隔" hint="只缺播出 3 天以上的集时用这个间隔，固定不放慢；约两周还没找到会标成「长期找不到」并通知一次">
         <div class="unit"><HNumberInput v-model="cfg.gap_interval_hours" :min="1" :max="72" aria-label="小时" /><span>小时</span></div>
       </FieldRow>
-      <AdvancedSection id="sub-pace" :changed="paceChangedCount" hint="一轮查几个、补几集、试几条，默认按风控调过">
-        <FieldRow label="一轮最多检查" :changed="paceChanged('max_subs_per_round')" hint="到期的订阅超过这个数时，剩下的下一分钟接着查">
-          <div class="unit"><HNumberInput v-model="cfg.max_subs_per_round" :min="1" :max="50" aria-label="订阅数" /><span>个订阅</span></div>
-        </FieldRow>
-        <FieldRow label="每个订阅一轮最多补" :changed="paceChanged('max_eps_per_sub')" hint="按集数算：一条分享常常只有一集，补到这么多集就停，剩下的下一轮（约 30 分钟后）接着找">
-          <div class="unit"><HNumberInput v-model="cfg.max_eps_per_sub" :min="1" :max="500" aria-label="集数" /><span>集</span></div>
-        </FieldRow>
-        <FieldRow label="一轮最多试" :changed="paceChanged('max_res_per_sub')" hint="搜到的资源从头试到尾，没用上的接着试下一条；这个上限只防一次搜出几百条，平时碰不到">
-          <div class="unit"><HNumberInput v-model="cfg.max_res_per_sub" :min="1" :max="200" aria-label="资源数" /><span>条资源</span></div>
-        </FieldRow>
-        <FieldRow label="资源之间歇" :changed="paceChanged('try_cooldown_sec')" hint="试完一条再试下一条前等一会儿（±30% 随机），叠在 115 请求节流之上，免得连着列分享、转存被风控；0 = 不歇">
-          <div class="unit"><HNumberInput v-model="cfg.try_cooldown_sec" :min="0" :max="120" aria-label="秒" /><span>秒</span></div>
-        </FieldRow>
-        <FieldRow label="列分享最多进" :changed="paceChanged('max_snap_dirs')" hint="按集挑选要把分享逐个目录列一遍，每个目录一次 115 请求（走节流）">
-          <div class="unit"><HNumberInput v-model="cfg.max_snap_dirs" :min="1" :max="200" aria-label="目录数" /><span>个目录</span></div>
-        </FieldRow>
-        <FieldRow label="先看几条分享的文件" :changed="paceChanged('share_preview_max')" hint="很多整季包标题只写「剧名 4K」，看不出有几集。先列排在前面的几条 115 分享，按文件实际能补几集重排，整季包一次转完，不用一条条转单集；转存时直接用列出的结果，不会再列一次。0 = 不预看，只按标题排">
-          <div class="unit"><HNumberInput v-model="cfg.share_preview_max" :min="0" :max="30" aria-label="条数" /><span>条分享</span></div>
-        </FieldRow>
-      </AdvancedSection>
+      <FieldRow label="一轮最多检查" hint="到期的订阅超过这个数时，剩下的下一分钟接着查">
+        <div class="unit"><HNumberInput v-model="cfg.max_subs_per_round" :min="1" :max="50" aria-label="订阅数" /><span>个订阅</span></div>
+      </FieldRow>
+      <FieldRow label="每个订阅一轮最多补" hint="按集数算：一条分享常常只有一集，补到这么多集就停，剩下的下一轮（约 30 分钟后）接着找">
+        <div class="unit"><HNumberInput v-model="cfg.max_eps_per_sub" :min="1" :max="500" aria-label="集数" /><span>集</span></div>
+      </FieldRow>
+      <FieldRow label="一轮最多试" hint="搜到的资源从头试到尾，没用上的接着试下一条；这个上限只防一次搜出几百条，平时碰不到">
+        <div class="unit"><HNumberInput v-model="cfg.max_res_per_sub" :min="1" :max="200" aria-label="资源数" /><span>条资源</span></div>
+      </FieldRow>
+      <FieldRow label="资源之间歇" hint="试完一条再试下一条前等一会儿（±30% 随机），叠在 115 请求节流之上，免得连着列分享、转存被风控；0 = 不歇">
+        <div class="unit"><HNumberInput v-model="cfg.try_cooldown_sec" :min="0" :max="120" aria-label="秒" /><span>秒</span></div>
+      </FieldRow>
+      <FieldRow label="列分享最多进" hint="按集挑选要把分享逐个目录列一遍，每个目录一次 115 请求（走节流）">
+        <div class="unit"><HNumberInput v-model="cfg.max_snap_dirs" :min="1" :max="200" aria-label="目录数" /><span>个目录</span></div>
+      </FieldRow>
+      <FieldRow label="先看几条分享的文件" hint="很多整季包标题只写「剧名 4K」，看不出有几集。先列排在前面的几条 115 分享，按文件实际能补几集重排，整季包一次转完，不用一条条转单集；转存时直接用列出的结果，不会再列一次。0 = 不预看，只按标题排">
+        <div class="unit"><HNumberInput v-model="cfg.share_preview_max" :min="0" :max="30" aria-label="条数" /><span>条分享</span></div>
+      </FieldRow>
       <FieldRow
         v-if="libsV2 ? stagingItems.length > 1 : stagingItems.length"
         label="默认转存到"

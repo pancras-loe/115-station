@@ -1,16 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ChevronRight, HardDrive, Info, TriangleAlert, Upload } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import AdvancedSection from '@/components/ui/AdvancedSection.vue'
 import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import SaveBar from './SaveBar.vue'
-import { SCRAPE_DEFAULTS, useScrapeConfig } from './scrapeConfig'
+import { useScrapeConfig } from './scrapeConfig'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
 
 /**
@@ -23,10 +22,6 @@ const monitor = useSetting('monitor', { enabled: false })
 const { cfg, saving, dirty, load, save } = useScrapeConfig()
 // 刮削方式为 Emby：整页置灰（inert：点不了、Tab 也进不去），后端同样不认这些设置
 const { embyScrapes } = useScrapeProvider()
-
-/** 收进高级设置的两项，和默认值不同的要标出来 */
-const forceChanged = computed(() => cfg.value.force !== SCRAPE_DEFAULTS.force)
-const stillsChanged = computed(() => cfg.value.skip_shared_stills !== SCRAPE_DEFAULTS.skip_shared_stills)
 
 const MAKE_SKIP = [
   { label: '生成', value: true },
@@ -63,24 +58,17 @@ onMounted(load)
           <HSegmented v-model="cfg.write_images" :options="MAKE_SKIP" />
         </FieldRow>
 
-        <AdvancedSection
-          id="scrape-more"
-          :changed="Number(forceChanged) + Number(stillsChanged)"
-          hint="覆盖模式与占位剧照"
-        >
-          <FieldRow label="覆盖模式" :changed="forceChanged" tip="只补缺失 = 已有的文件不动；强制覆盖 = 按 TMDB 重新生成一遍。">
-            <HSegmented v-model="cfg.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
-          </FieldRow>
+        <FieldRow label="覆盖模式" tip="只补缺失 = 已有的文件不动；强制覆盖 = 按 TMDB 重新生成一遍。">
+          <HSegmented v-model="cfg.force" :options="[{ label: '只补缺失', value: false }, { label: '强制覆盖', value: true }]" />
+        </FieldRow>
 
-          <FieldRow
-            label="占位剧照"
-            :changed="stillsChanged"
-            tip="综艺常见同一季几十集挂同一张剧照。同一季里 3 集以上共用一张（或内容完全相同）时判为占位图，这些集不写集剧照，Emby 会改用剧的背景图。只在同一季内比较，别的季用过同一张图不算。"
-            hint="同一季 3 集以上共用的剧照不写"
-          >
-            <HSegmented v-model="cfg.skip_shared_stills" :options="[{ label: '不写', value: true }, { label: '照写', value: false }]" />
-          </FieldRow>
-        </AdvancedSection>
+        <FieldRow
+          label="占位剧照"
+          tip="综艺常见同一季几十集挂同一张剧照。同一季里 3 集以上共用一张（或内容完全相同）时判为占位图，这些集不写集剧照，Emby 会改用剧的背景图。只在同一季内比较，别的季用过同一张图不算。"
+          hint="同一季 3 集以上共用的剧照不写"
+        >
+          <HSegmented v-model="cfg.skip_shared_stills" :options="[{ label: '不写', value: true }, { label: '照写', value: false }]" />
+        </FieldRow>
       </SectionCard>
 
       <!-- ==== 右：写到哪、要注意什么 ==== -->

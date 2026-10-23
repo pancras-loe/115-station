@@ -116,8 +116,6 @@ const subNotifyVer = 2
 // subNotifyAdded 每个版本新增的通知类型，默认开启
 var subNotifyAdded = map[int]string{1: "ingested", 2: "created"}
 
-// 一轮节奏那六项（max_subs_per_round … share_preview_max）前端 SubSettings.vue 的 PACE_DEFAULTS 抄了一份，
-// 用来标「已改动」，改默认值时两边一起改
 func defaultSubscribeCfg() subscribeCfg {
 	return subscribeCfg{
 		Enabled:          true,

@@ -14,8 +14,6 @@ defineProps<{
   wide?: boolean
   /** 标签在上、控件在下（同手机布局）：放进半宽卡片时用，168px 的标签列太占地方 */
   stacked?: boolean
-  /** 和默认值不一样：标签旁打个小标记，排查时一眼看出自己动过什么 */
-  changed?: boolean | number
 }>()
 </script>
 
@@ -25,7 +23,6 @@ defineProps<{
       <span v-if="required" class="req">*</span>
       <span>{{ label }}</span>
       <HHelpTip v-if="tip" :text="tip" />
-      <span v-if="changed" class="changed" title="非默认值（与默认值不同，不代表没保存）" aria-label="非默认值" />
     </div>
     <div class="row-control field-row-control" :class="{ wide }">
       <slot />
@@ -56,13 +53,6 @@ defineProps<{
   font-weight: 500;
   color: color-mix(in oklab, var(--foreground) 80%, var(--muted));
   line-height: 1.4;
-}
-.changed {
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: var(--accent);
 }
 .req {
   color: var(--danger);

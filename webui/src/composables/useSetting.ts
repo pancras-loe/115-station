@@ -83,17 +83,7 @@ export function useSetting<T extends object>(
     }
   }
 
-  /**
-   * 几个字段里有几个和默认值不一样。给「高级设置」折叠用：收起来的项改过的话要说出来，
-   * 否则用户排查问题时看不到自己动过什么。默认值以这里传进来的 defaults 为准（与后端兜底一致）
-   */
-  const baseline = JSON.stringify(norm({ ...defaults }))
-  function changed(...fields: (keyof T)[]): number {
-    const base = JSON.parse(baseline) as T
-    return fields.filter((f) => JSON.stringify(model.value[f]) !== JSON.stringify(base[f])).length
-  }
-
   onMounted(load)
 
-  return { model, loading, saving, dirty, saved, load, save, reset, changed }
+  return { model, loading, saving, dirty, saved, load, save, reset }
 }
