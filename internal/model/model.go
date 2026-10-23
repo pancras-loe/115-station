@@ -753,10 +753,34 @@ func InitDefaultCategories(db *gorm.DB) error {
 	return db.Create(&defaults).Error
 }
 
+// WashYAMLHeader 「简单设置」生成的 YAML 顶上的说明，默认策略同样带着
+const WashYAMLHeader = `# 洗版策略：库里已经有这部片（剧集是这一集）时又来了一份，怎么办。
+# 这份是「简单设置」生成的；在专家模式里改成简单设置表示不了的写法（按分类分开、priority_level 分档）后，只能在专家模式里改。
+# mode：replace 换成更好的 / coexist 两份都留 / skip 不要新的；old_version_target：旧版去向 redundant 冗余 / delete 115 回收站
+# prefer：画质偏好，依次比 不要的 → 分辨率 → 杜比视界（优先要时）→ 片源 → HDR → 视频编码 → 偏好发布组 → 体积
+#   max_pix: 1080p                    最高 1080p（4K 当作不要）；不写 = 越高越好
+#   dv: prefer / any / avoid          杜比视界：优先要 / 无所谓 / 不要
+#   size: small / large               画质一样时留体积小 / 大的；不写 = 不看体积
+#   avoid: [hdtv, cam, dvdrip, le720] 不要的资源：HDTV / 枪版 / DVDRip / 720p 及以下
+#   avoid_words: [...]                文件名里有这些词的也不要
+#   teams: [...]                      画质一样时偏好的发布组
+`
+
 // DefaultWashYAML 默认洗版策略（首次部署播种进 ScrapeRule.wash_config）。
 // 引擎只认库里存的这份 YAML：用户改过就按用户的，清空就是不洗版——
-// 代码里不再留任何隐式兜底，否则「我明明清空了还在洗」无从解释
-const DefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace替换 / max_size最大 / min_size最小
+// 代码里不再留任何隐式兜底，否则「我明明清空了还在洗」无从解释。
+// 2026-10-23 起是「简单设置」那一套（prefer），原来分档那份留作 LegacyDefaultWashYAML 给迁移认
+const DefaultWashYAML = WashYAMLHeader + `洗版策略:
+  mode: replace
+  old_version_target: redundant
+  prefer:
+    dv: any
+    avoid: [hdtv, cam]
+`
+
+// LegacyDefaultWashYAML 2026-10-23 之前播种的默认策略。它会让 4K WEB-DL 输给 1080p 蓝光、
+// 带 DV 的 4K 输给 1080p（没命中任何一条 = 最差），没改过它的部署启动时换成新默认（MigrateWashSimple）
+const LegacyDefaultWashYAML = `# 洗版模式：coexist共存 / skip跳过 / replace替换 / max_size最大 / min_size最小
 # scope：all=全局只留一个最优 / group=按分辨率分组各留一个（如1080p/2160p各一）
 # old_version_target：旧版去向 redundant冗余 / existing已存在 / delete移入115回收站（默认冗余）
 # replace：新版更好才替换，全部打平不换。不配 priority_level 时按默认画质比（分辨率 → 片源 → HDR → 视频编码）；

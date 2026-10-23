@@ -268,6 +268,9 @@ func qualityUnder(name string, r *washRule) washQuality {
 func washTier(name string, rules []washRule) int { return washTierOf(washFile{Name: name}, rules) }
 
 func washTierOf(f washFile, rules []washRule) int {
+	if p := preferOf(rules); p != nil {
+		return p.tier(f.Name)
+	}
 	for i, r := range rules {
 		if ruleMatchFile(f, r) {
 			return i
@@ -283,6 +286,9 @@ func washCompare(a, b string, rules []washRule) (cmp int, why string) {
 }
 
 func washCompareFiles(fa, fb washFile, rules []washRule) (cmp int, why string) {
+	if p := preferOf(rules); p != nil {
+		return p.compare(fa, fb)
+	}
 	a, b := fa.Name, fb.Name
 	ta, tb := washTierOf(fa, rules), washTierOf(fb, rules)
 	tierText := func(t int) string {

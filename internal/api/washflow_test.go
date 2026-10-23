@@ -19,8 +19,9 @@ func TestDefaultWashConfigSeeded(t *testing.T) {
 	}
 	resetWashCache()
 	sts := washStrategyCache()
-	if len(sts) != 2 {
-		t.Fatalf("默认策略应解析出 2 条（电影/剧集），得到 %d 条", len(sts))
+	// 2026-10-23 起默认是「简单设置」：一条不限类型的策略，用画质偏好（prefer）
+	if len(sts) != 1 || sts[0].Prefer == nil {
+		t.Fatalf("默认策略应解析出 1 条带 prefer 的，得到 %+v", sts)
 	}
 	if st := matchWashStrategy("movie", "外语电影"); st == nil || len(st.PriorityLevel) == 0 {
 		t.Fatalf("电影策略没命中或优先级为空: %+v", st)

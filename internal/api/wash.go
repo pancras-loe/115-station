@@ -38,6 +38,9 @@ type washRule struct {
 	// ResourceSize 是命中条件（"<30G"、"5G-30G"，逗号分隔任一），SizePrefer 是命中同一条时先比体积（small / large）
 	ResourceSize string `yaml:"resource_size" json:"resource_size"`
 	SizePrefer   string `yaml:"size_prefer" json:"size_prefer"`
+	// prefer 这组规则是由画质偏好（washStrategy.Prefer）编出来的：比较一律走偏好（washCompareFiles 开头），
+	// 编出来的规则只给按档位判的地方用（订阅「命中前 N 条」、找资源「洗版首选」），见 washprefer.go
+	prefer *washPrefer
 }
 
 // washStrategy 一条完整洗版策略（UI 的 YAML 编辑器格式，与 CMS 对齐）
@@ -48,6 +51,8 @@ type washStrategy struct {
 	Category         string     `yaml:"category"`           // 匹配二级分类名，逗号分隔（空=所有）
 	PriorityLevel    []washRule `yaml:"priority_level"`     // 优先级规则（上面的优先）
 	OldVersionTarget string     `yaml:"old_version_target"` // 旧版去向 redundant/existing/delete（115 回收站）
+	// Prefer 画质偏好（2026-10-23，「简单设置」）：写了它就不看 priority_level，见 washprefer.go
+	Prefer *washPrefer `yaml:"prefer"`
 }
 
 // loadWashStrategies 从 UI 保存的 YAML（ScrapeRule.wash_config）解析全部策略。
@@ -56,27 +61,76 @@ type washStrategy struct {
 func loadWashStrategies() []washStrategy {
 	var rule model.ScrapeRule
 	model.DB.Where("type = ?", "wash_config").First(&rule)
-	if strings.TrimSpace(rule.Config) == "" {
+	list, err := parseWashYAML(rule.Config)
+	if err != nil {
 		return nil
+	}
+	out := make([]washStrategy, 0, len(list))
+	for _, n := range list {
+		out = append(out, normalizeWashStrategy(n.st))
+	}
+	return out
+}
+
+// namedWashStrategy YAML 里的一条策略（键名只是标签，留着给体检与简单设置用）
+type namedWashStrategy struct {
+	key string
+	st  washStrategy
+}
+
+// parseWashYAML 按文本顺序解析全部策略，原样返回（不做 normalizeWashStrategy）。空文本 = 没有策略
+func parseWashYAML(src string) ([]namedWashStrategy, error) {
+	if strings.TrimSpace(src) == "" {
+		return nil, nil
 	}
 	var m map[string]washStrategy
-	if err := yaml.Unmarshal([]byte(rule.Config), &m); err != nil {
-		return nil
+	if err := yaml.Unmarshal([]byte(src), &m); err != nil {
+		return nil, err
 	}
 	// YAML map 无序，按文本出现顺序排序保证"从上到下依次匹配"
-	order := parseYAMLKeyOrder(rule.Config)
-	sorted := make([]washStrategy, 0, len(m))
+	order := parseYAMLKeyOrder(src)
+	sorted := make([]namedWashStrategy, 0, len(m))
 	for _, key := range order {
 		if st, ok := m[key]; ok {
-			sorted = append(sorted, st)
+			sorted = append(sorted, namedWashStrategy{key, st})
 		}
 	}
 	for k, st := range m {
 		if _, done := indexOfKey(order, k); !done {
-			sorted = append(sorted, st)
+			sorted = append(sorted, namedWashStrategy{k, st})
 		}
 	}
-	return sorted
+	return sorted, nil
+}
+
+// normalizeWashStrategy 引擎实际按什么跑：
+//   - 写了 prefer：priority_level 换成偏好编出来的两档（washPrefer.tiers），比较走偏好；
+//   - max_size / min_size 两个 mode 从来没实现过（有规则时按 replace，没规则时干脆不洗），现在照名字的意思做：
+//     按 replace，第一条规则没写 size_prefer 时补上 large / small；没写规则就补一条只比体积的空规则（匹配所有版本）
+func normalizeWashStrategy(st washStrategy) washStrategy {
+	switch st.Mode {
+	case "max_size", "min_size":
+		want := "large"
+		if st.Mode == "min_size" {
+			want = "small"
+		}
+		st.Mode = "replace"
+		switch {
+		case st.Prefer != nil:
+		case len(st.PriorityLevel) == 0:
+			st.PriorityLevel = []washRule{{SizePrefer: want}}
+		case strings.TrimSpace(st.PriorityLevel[0].SizePrefer) == "":
+			rules := append([]washRule(nil), st.PriorityLevel...)
+			rules[0].SizePrefer = want
+			st.PriorityLevel = rules
+		}
+	}
+	if st.Prefer != nil {
+		p := st.Prefer.normalized()
+		st.Prefer = &p
+		st.PriorityLevel = p.tiers()
+	}
+	return st
 }
 
 // parseYAMLKeyOrder 提取 YAML 顶层键的出现顺序（yaml.v3 不保留 map 顺序）
@@ -429,6 +483,7 @@ type washPlan struct {
 	newName   string
 	targetDir string
 	sameAt    string // washSameFile 时库内那一份的台账路径
+	why       string // washNotBetter 时为什么没换（给整理记录看，washExistsMsgWhy）
 	// landing 新版视频将要落成的库内相对路径（含分类前缀与最终文件名）。让位时据此判断旧版 STRM 的
 	// 集 NFO / 剧照还用不用得上：同名的话新版落盘后照样配对，删了要等刮削补回来；不同名就是孤儿。
 	// 为空 = 不知道新版叫什么，旧版的配套文件一律删
@@ -450,22 +505,24 @@ type washPlan struct {
 // libName 是目标媒体库的目录名（台账前缀），与落盘同源（orgCtx.libName）。
 //
 // 整目录（一次几十上百集）走 processDir 里的批量路径，不要用这个入口。
-func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName string, newSize int64, newSha1, targetDir, landing string, onLog func(string)) string {
+//
+// why 是没换的理由（washNotBetter 时），整理记录上用
+func tryWashReplace(ops *pan115Ops, cfg *OrgConfig, libName string, media *TmdbMedia, newName string, newSize int64, newSha1, targetDir, landing string, onLog func(string)) (decision, why string) {
 	sc := newWashScanner(ops, cfg).inLib(libName)
 	sameFiles := sc.sameFile(newSha1)
 	st := matchWashStrategy(media.MediaType, classifyMediaFor(cfg, media))
 	if st == nil {
-		return washNoStrategy(newName, sameFiles, onLog).decision
+		return washNoStrategy(newName, sameFiles, onLog).decision, ""
 	}
 	plan := decideWash(media, washFile{Name: newName, Size: newSize}, newSha1, targetDir, st, sc.libFiles(targetDir), sameFiles, onLog)
 	plan.landing = []string{landing}
 	if plan.decision != washReplaced {
-		return plan.decision
+		return plan.decision, plan.why
 	}
 	if err := applyWashPlans(ops, cfg, media, st, []*washPlan{&plan}, onLog, notifyEmbyDeleted); err != nil {
-		return washFailed
+		return washFailed, ""
 	}
-	return washReplaced
+	return washReplaced, ""
 }
 
 // 只注入写操作，测试可以验证实际搬移集合及失败时的台账保留，不接触真实网盘。
@@ -499,6 +556,15 @@ func washExistsMsg(decision string) string {
 		return "库内已有同一份文件（sha1 相同）"
 	}
 	return "库内已有更优版本"
+}
+
+// washExistsMsgWhy 同 washExistsMsg，策略比出来的带上为什么没换（「新来的不如库里的（分辨率：1080p < 2160p）」）。
+// 原来只有一句「库内已有更优版本」，用户看不出是哪一项输了
+func washExistsMsgWhy(decision, why string) string {
+	if decision == washNotBetter && why != "" {
+		return "没换：" + why
+	}
+	return washExistsMsg(decision)
 }
 
 // washNoStrategy 未配置洗版策略时的兜底：同一份文件已经在库里就按已存在处理。
@@ -619,7 +685,7 @@ func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *wa
 	// skip：库里已有（同集/同组任意版本）就不再收新的
 	if mode == "skip" {
 		onLog(fmt.Sprintf("○ 洗版判定: skip 模式，库内已有，%s 按已存在处理", truncateStr(newName, 60)))
-		plan.decision = washNotBetter
+		plan.decision, plan.why = washNotBetter, "策略是「不要新的」"
 		return plan
 	}
 
@@ -637,6 +703,10 @@ func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *wa
 		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（%s），按已存在处理",
 			media.Title, shortLogName(newName), shortLogName(oldName), why))
 		plan.decision = washNotBetter
+		plan.why = "新来的不如库里的（" + why + "）"
+		if c == 0 {
+			plan.why = "两份分不出高下（" + why + "）"
+		}
 		return plan
 	} else {
 		onLog(fmt.Sprintf("✦ 《%s》洗版判定：新版 %s 优于库内 %s（%s）",

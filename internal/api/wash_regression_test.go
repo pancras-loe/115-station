@@ -34,7 +34,7 @@ func TestWashSavePreservesUserChoice(t *testing.T) {
 	if err := model.InitDefaultWashConfig(model.DB); err != nil {
 		t.Fatal(err)
 	}
-	if len(washStrategyCache()) != 2 {
+	if len(washStrategyCache()) != 1 {
 		t.Fatal("首次部署未启用默认策略")
 	}
 	h := &Handler{DB: model.DB}

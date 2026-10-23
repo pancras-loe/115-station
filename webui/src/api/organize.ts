@@ -15,8 +15,72 @@ export const getCategories = () => http.get<{ config?: string }>('/scrape/catego
 export const saveCategories = (yaml: string, opts?: { confirmLibChange?: boolean }) =>
   http.post('/scrape/categories', { yaml, ...(opts?.confirmLibChange ? { confirm_lib_change: true } : {}) })
 
-export const getWash = () => http.get<{ config?: string }>('/scrape/wash')
+/** 洗版画质偏好（YAML 策略的 prefer；「简单设置」的 ②–⑤），与后端 washPrefer 一致 */
+export interface WashPrefer {
+  /** '' 越高越好 / '1080p' 最高 1080p（更高的当作不要） */
+  max_pix: '' | '1080p'
+  dv: 'prefer' | 'any' | 'avoid'
+  /** '' 不看体积 */
+  size: '' | 'small' | 'large'
+  /** hdtv / cam / dvdrip / le720 */
+  avoid: string[]
+  avoid_words: string[]
+  teams: string[]
+}
+/** 简单设置：存的时候后端生成 YAML，读的时候从 YAML 认回来（认不回来 = null，只能在专家模式里改） */
+export interface WashSimpleForm {
+  mode: 'replace' | 'coexist' | 'skip'
+  /** coexist 时每个分辨率各留一份 */
+  group: boolean
+  target: 'redundant' | 'delete'
+  /** 剧集单独设置 */
+  split: boolean
+  movie: WashPrefer
+  tv: WashPrefer
+}
+export const getWash = () =>
+  http.get<{ config?: string; default_config?: string; simple: WashSimpleForm | null; default_simple: WashSimpleForm }>(
+    '/scrape/wash',
+  )
 export const saveWash = (yaml: string) => http.post('/scrape/wash', { yaml })
+export const saveWashSimple = (form: WashSimpleForm) => http.post<{ config: string }>('/scrape/wash/simple', { form })
+
+export interface WashLadderItem {
+  name: string
+  labels: string[]
+  rank: number
+  tie: boolean
+  /** 偏好：0 最高分辨率 / 1 其余 / -1 不要；分档规则：命中第几条，-1 没命中 */
+  tier: number
+  avoid: string
+  prefer: boolean
+}
+export interface WashVerdict {
+  kind: 'good' | 'keep' | 'both' | 'info'
+  head: string
+  text: string
+}
+export interface WashLintItem {
+  strategy: string
+  level: 'warn' | 'info'
+  text: string
+}
+export interface WashPreviewFile {
+  name: string
+  size_gb: number
+}
+/** 纯计算：草稿二选一（form 或 yaml），不读台账、不碰网盘 */
+export const previewWash = (body: {
+  form?: WashSimpleForm
+  yaml?: string
+  media_type: 'movie' | 'tv'
+  old?: WashPreviewFile
+  new?: WashPreviewFile
+}) =>
+  http.post<{ strategy: string; ladder: WashLadderItem[]; lint: WashLintItem[]; verdict: WashVerdict | null }>(
+    '/scrape/wash/preview',
+    body,
+  )
 
 // ---- 影视刮削 ----
 export interface ScrapeConfig {

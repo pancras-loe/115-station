@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Info } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
@@ -30,9 +30,13 @@ const props = defineProps<{
   fallback?: string
 }>()
 
+/** change：编辑器里的草稿（洗版的排序预览 / 试一试跟着它实时算，WashTab） */
+const emit = defineEmits<{ change: [string] }>()
+
 const { message, dialog } = useFeedback()
 
 const yaml = ref('')
+watch(yaml, (v) => emit('change', v))
 const defaultTemplate = ref(props.fallback || '')
 const loading = ref(true)
 const saving = ref(false)

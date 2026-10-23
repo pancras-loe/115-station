@@ -329,6 +329,8 @@ export interface WashStrategyView {
   fields: Record<string, Cond>
   levels: WashLevelView[]
   hasLevelKey: boolean
+  /** prefer 下的各项（画质偏好，简单设置那一套）；没写 prefer 为 null */
+  prefer: Record<string, Cond> | null
 }
 
 export function parseWash(src: string): WashStrategyView[] {
@@ -337,17 +339,34 @@ export function parseWash(src: string): WashStrategyView[] {
   let st: WashStrategyView | null = null
   let inLevels = false
   let levelIndent = -1
+  let preferIndent = -1
 
   for (const e of entries) {
     if (e.indent === 0 && !e.dash) {
-      st = { name: e.key, line: e.line, endLine: e.line, fields: {}, levels: [], hasLevelKey: false }
+      st = { name: e.key, line: e.line, endLine: e.line, fields: {}, levels: [], hasLevelKey: false, prefer: null }
       list.push(st)
       inLevels = false
       levelIndent = -1
+      preferIndent = -1
       continue
     }
     if (!st) continue
     st.endLine = e.line
+
+    if (preferIndent >= 0) {
+      if (e.indent > preferIndent && !e.dash) {
+        st.prefer![e.key] = { key: e.key, value: e.value, line: e.line }
+        continue
+      }
+      preferIndent = -1
+    }
+    if (!e.dash && e.key === 'prefer') {
+      st.prefer = {}
+      st.fields.prefer = { key: e.key, value: e.value, line: e.line }
+      preferIndent = e.indent
+      inLevels = false
+      continue
+    }
 
     if (e.dash) {
       st.levels.push({ line: e.line, conds: e.key ? [{ key: e.key, value: e.value, line: e.line }] : [] })
@@ -366,7 +385,8 @@ export function parseWash(src: string): WashStrategyView[] {
   return list
 }
 
-const WASH_TOP_KEYS = ['mode', 'scope', 'media_type', 'category', 'priority_level', 'old_version_target']
+const WASH_TOP_KEYS = ['mode', 'scope', 'media_type', 'category', 'priority_level', 'old_version_target', 'prefer']
+const WASH_PREFER_KEYS = ['max_pix', 'dv', 'size', 'avoid', 'avoid_words', 'teams']
 const WASH_MODE_VALUES = ['coexist', 'skip', 'replace', 'max_size', 'min_size']
 
 export function lintWash(src: string): RuleIssue[] {
@@ -410,7 +430,7 @@ export function lintWash(src: string): RuleIssue[] {
     if (modeCond && !WASH_MODE_VALUES.includes(mode)) {
       issues.push({ line: modeCond.line, level: 'error', text: `mode 只能是 ${WASH_MODE_VALUES.join(' / ')}` })
     } else if (mode === 'max_size' || mode === 'min_size') {
-      issues.push({ line: modeCond?.line ?? st.line, level: 'info', text: `${mode} 目前按 replace 处理，体积比较尚未实现` })
+      issues.push({ line: modeCond?.line ?? st.line, level: 'info', text: `${mode} 按 replace 处理，画质命中同一条时留体积${mode === 'max_size' ? '大' : '小'}的` })
     }
 
     const scope = st.fields.scope
@@ -430,7 +450,23 @@ export function lintWash(src: string): RuleIssue[] {
       }
     }
 
-    if (!st.levels.length && mode !== 'coexist' && mode !== 'skip') {
+    if (st.prefer) {
+      for (const c of Object.values(st.prefer)) {
+        const v = unquote(c.value)
+        if (!WASH_PREFER_KEYS.includes(c.key)) {
+          issues.push({ line: c.line, level: 'warn', text: `「${c.key}」不是 prefer 的字段（可用：${WASH_PREFER_KEYS.join(' / ')}）` })
+        } else if (c.key === 'dv' && v && !['prefer', 'any', 'avoid'].includes(v)) {
+          issues.push({ line: c.line, level: 'warn', text: 'dv 只认 prefer / any / avoid，其他值按 any' })
+        } else if (c.key === 'size' && v && !['small', 'large', 'any'].includes(v)) {
+          issues.push({ line: c.line, level: 'warn', text: 'size 只认 small / large，其他值不看体积' })
+        } else if (c.key === 'max_pix' && v && !['1080p', '1080'].includes(v.toLowerCase())) {
+          issues.push({ line: c.line, level: 'warn', text: 'max_pix 只认 1080p，不写 = 越高越好' })
+        }
+      }
+      if (st.levels.length) {
+        issues.push({ line: st.levels[0].line, level: 'warn', text: '写了 prefer，priority_level 不再生效' })
+      }
+    } else if (!st.levels.length && mode !== 'coexist' && mode !== 'skip') {
       issues.push({ line: st.line, level: 'info', text: mode === 'replace' ? '没有 priority_level：按默认画质比（分辨率 → 片源 → HDR → 视频编码），新版更好才替换' : '没有 priority_level：此模式跳过洗版' })
     }
     for (let i = 0; i < st.levels.length; i++) {
@@ -591,8 +627,17 @@ const MODE_LABEL: Record<string, string> = {
   coexist: '共存',
   skip: '跳过',
   replace: '替换',
-  max_size: '替换（体积未实现）',
-  min_size: '替换（体积未实现）',
+  max_size: '替换（留大的）',
+  min_size: '替换（留小的）',
+}
+
+const PREFER_LABEL: Record<string, string> = {
+  max_pix: '分辨率封顶',
+  dv: '杜比视界',
+  size: '体积',
+  avoid: '不要',
+  avoid_words: '不要的关键词',
+  teams: '偏好发布组',
 }
 
 export function outlineWash(src: string): OutlineGroup[] {
@@ -609,7 +654,18 @@ export function outlineWash(src: string): OutlineGroup[] {
       `旧版去 ${target === 'delete' ? '115 回收站' : target === 'existing' ? '已存在' : '冗余'}`,
     ]
     if (category) bits.push(`限分类 ${category}`)
-    if (mode === 'replace' && !st.levels.length) bits.push('无优先级，按默认画质比')
+    if (st.prefer) bits.push('画质偏好')
+    else if (mode === 'replace' && !st.levels.length) bits.push('无优先级，按默认画质比')
+    if (st.prefer) {
+      return {
+        title: st.name,
+        subtitle: bits.join(' · '),
+        line: st.line,
+        items: Object.values(st.prefer)
+          .filter(c => c.value.trim())
+          .map(c => ({ line: c.line, label: PREFER_LABEL[c.key] ?? c.key, tags: [], chips: [unquote(c.value)] })),
+      }
+    }
     return {
       title: st.name,
       subtitle: bits.join(' · '),

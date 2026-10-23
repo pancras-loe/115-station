@@ -32,6 +32,23 @@ import { WASH_FIELDS, WASH_MODES, WASH_RULES, WASH_STRATEGY_FIELDS } from './cat
       </p>
     </section>
 
+    <section class="block">
+      <h3 class="block-title">画质偏好（prefer）</h3>
+      <pre class="sample">洗版策略:
+  mode: replace
+  prefer:
+    max_pix: 1080p        # 最高 1080p（4K 当作不要）；不写 = 越高越好
+    dv: any               # prefer 优先要 / any 无所谓 / avoid 不要
+    size: small           # 画质一样时留小的；large 留大的；不写不看体积
+    avoid: [hdtv, cam]    # 不要：hdtv / cam（枪版）/ dvdrip / le720（720p 及以下）
+    avoid_words: [60fps]  # 文件名里有这些词的也不要
+    teams: [WiKi]         # 画质一样时偏好的发布组</pre>
+      <p class="note">
+        这就是「简单设置」生成的写法。没有分档：依次比 不要的 → 分辨率 → 杜比视界（只在 prefer 时）→ 片源 → HDR → 视频编码 → 偏好发布组 → 体积，
+        前面分出高下就停。不要的排在最后，库里没有这部片时照样入库。写了 prefer 时 priority_level 不生效。
+      </p>
+    </section>
+
     <RefTable title="洗版模式（mode）" :items="WASH_MODES" mono />
     <RefTable title="策略字段" :items="WASH_STRATEGY_FIELDS" mono />
     <RefTable title="优先级字段（priority_level 每一项）" :items="WASH_FIELDS" mono />

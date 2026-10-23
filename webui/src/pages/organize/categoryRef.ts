@@ -227,8 +227,8 @@ export const WASH_MODES: [string, string][] = [
   ['coexist', '共存，两个版本都留着，新版照常入库'],
   ['skip', '跳过，库内已有就不再收新的'],
   ['replace', '新版更好才替换，全部打平不换（怎么比见下面「匹配规则」）'],
-  ['max_size', '按 replace 处理；要按体积挑，在优先级里写 size_prefer'],
-  ['min_size', '按 replace 处理；要按体积挑，在优先级里写 size_prefer'],
+  ['max_size', '按 replace 处理，命中同一条时留体积大的（第一条规则自动补 size_prefer: large）'],
+  ['min_size', '按 replace 处理，命中同一条时留体积小的（第一条规则自动补 size_prefer: small）'],
 ]
 
 export const WASH_STRATEGY_FIELDS: [string, string][] = [
@@ -236,7 +236,8 @@ export const WASH_STRATEGY_FIELDS: [string, string][] = [
   ['scope', 'all = 同一影片（剧集同一集）跨分辨率比较；group = 只比较同分辨率'],
   ['media_type', 'movie / tv，留空匹配所有'],
   ['category', '限定二级分类名，逗号分隔，留空匹配所有'],
-  ['priority_level', '可选，高级设置；不填就按默认画质比（分辨率 → 片源 → HDR → 视频编码）'],
+  ['prefer', '画质偏好（简单设置那一套）：max_pix / dv / size / avoid / avoid_words / teams；写了它 priority_level 不生效'],
+  ['priority_level', '可选，分档规则；不填就按默认画质比（分辨率 → 片源 → HDR → 视频编码）。一条都没命中算最差'],
   ['old_version_target', '旧版去向：redundant 冗余目录 / existing 已存在目录 / delete 115 回收站'],
 ]
 

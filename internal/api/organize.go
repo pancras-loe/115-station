@@ -2283,6 +2283,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	var rejectFids []string          // 判为已存在的视频 + 跟着它命名的字幕
 	var rejectFiles []orgRecordFile  // 同一批的整理记录快照
 	rejectVideos, sameFileVideos := 0, 0
+	firstWhy := "" // 第一份判输的为什么没换（整理记录上带一句）
 	excluded := map[string]bool{}
 	take := func(f remoteFile) {
 		excluded[f.Fid] = true
@@ -2321,6 +2322,8 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		rejectVideos++
 		if plan.decision == washSameFile {
 			sameFileVideos++
+		} else if firstWhy == "" {
+			firstWhy = plan.why
 		}
 		take(vf)
 		for _, af := range files {
@@ -2329,7 +2332,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			}
 		}
 		results = append(results, OrganizeResult{FileName: vf.Name, Status: "exists", Title: media.Title,
-			Year: media.Year, MediaType: media.MediaType, Message: washExistsMsg(plan.decision)})
+			Year: media.Year, MediaType: media.MediaType, Message: washExistsMsgWhy(plan.decision, plan.why)})
 	}
 	// 同一次整理里几份不同的文件改出同一个名字（同一集的粤语 / 英语两份）：不替用户挑，
 	// 停下来让用户选；sha1 相同的多余副本直接移冗余（orgdup.go）。必须在任何改名 / 搬移之前：
@@ -2466,6 +2469,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		reason := "库内已有更优版本"
 		switch {
+		case sameFileVideos == 0 && firstWhy != "":
+			reason = washExistsMsgWhy(washNotBetter, firstWhy)
+			if rejectVideos > 1 {
+				reason += " 等"
+			}
 		case sameFileVideos == rejectVideos:
 			reason = washExistsMsg(washSameFile)
 		case sameFileVideos > 0:
@@ -2997,7 +3005,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
@@ -3008,7 +3016,7 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 			return fail("移到已存在失败: " + err.Error())
 		}
 		attachments := moveSiblingAttachments(ops, cfg.Pending, baseName(f.Name), "", holdingCid, false, onLog)
-		msg := washExistsMsg(decision) + "，已移到 已存在/" + holdingDir
+		msg := washExistsMsgWhy(decision, why) + "，已移到 已存在/" + holdingDir
 		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
 		// 文件已经离开转存/待整理目录，必须带回快照交给调用方登记，
 		// 否则记录页里查不到它去了哪（此前这里返回 nil，整批兄弟集的「已存在」无迹可寻）
@@ -3285,7 +3293,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	switch decision := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
+	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)
@@ -3298,7 +3306,7 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 			return fail("failed", "move", result.Message)
 		}
 		appendSelf(moveSiblingAttachments(ops, cfg.Pending, oldBase, "", holdingCid, false, onLog))
-		msg := washExistsMsg(decision) + "，已移到 已存在/" + holdingDir
+		msg := washExistsMsgWhy(decision, why) + "，已移到 已存在/" + holdingDir
 		result.Status, result.Message = "exists", msg
 		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
 		ctx.sink.note(&model.OrganizeRecord{

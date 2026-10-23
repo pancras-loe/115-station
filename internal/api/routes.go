@@ -94,6 +94,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 待整理目录并进转存目录（一次性、幂等，stagingdir.go）：loadOrgConfig 只认 share.folder，
 	// 要赶在下面的调度器 / 守望者起来之前
 	h.MigrateStagingDir()
+	// 没改过的老默认洗版策略换成「简单设置」（一次性，washapi.go）
+	h.MigrateWashSimple()
 	// 订阅资源条件的画质几项迁成资源优先级（一次性，subpriority.go）
 	h.MigrateSubPriority()
 	// 本地媒体根固定为 MEDIA_ROOT（默认 /media）：换了根就改写记录里的旧绝对路径（幂等，mediaroot.go）
@@ -329,6 +331,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		protected.GET("/scrape/wash", h.ListWashRules)
 		protected.POST("/scrape/wash", h.SaveWashRules)
+		protected.POST("/scrape/wash/simple", h.SaveWashSimple)
+		protected.POST("/scrape/wash/preview", h.PreviewWash)
 
 		// 整理流水线（识别 → 搬移 → STRM → 刮削 → 刷 Emby 一条龙）
 		protected.POST("/organize/pipeline", h.RunOrganizePipeline)
@@ -1456,42 +1460,6 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 		}
 	}
 	return rows, nil
-}
-
-// ==================== 洗版策略 ====================
-
-func (h *Handler) ListWashRules(c *gin.Context) {
-	// 从 ScrapeRule 表读取已保存的 YAML
-	var rule model.ScrapeRule
-	h.DB.Where("type = ?", "wash_config").First(&rule)
-	c.JSON(http.StatusOK, gin.H{"config": rule.Config, "default_config": model.DefaultWashYAML})
-}
-
-// SaveWashRules 保存洗版策略（支持 YAML 字符串，对齐 CMS）
-func (h *Handler) SaveWashRules(c *gin.Context) {
-	var req struct {
-		Yaml string `json:"yaml"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
-		return
-	}
-	var strategies map[string]washStrategy
-	if err := yaml.Unmarshal([]byte(req.Yaml), &strategies); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "洗版策略格式错误: " + err.Error()})
-		return
-	}
-	var rule model.ScrapeRule
-	h.DB.Where("type = ?", "wash_config").First(&rule)
-	rule.Type = "wash_config"
-	rule.Enabled = true
-	rule.Config = req.Yaml
-	if err := h.DB.Save(&rule).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存洗版策略失败"})
-		return
-	}
-	resetWashCache() // 不失效的话点完保存最多一分钟内还在按旧策略判
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
 // ==================== 302 代理（占位） ====================

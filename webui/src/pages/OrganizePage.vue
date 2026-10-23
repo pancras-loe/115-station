@@ -8,9 +8,8 @@ import RecognizeTab from './organize/RecognizeTab.vue'
 import AiTab from './organize/AiTab.vue'
 import RenameTab from './organize/RenameTab.vue'
 import OrganizeOverview from './organize/OrganizeOverview.vue'
-import YamlRuleTab from './organize/YamlRuleTab.vue'
+import WashTab from './organize/WashTab.vue'
 import SchemesTab from './organize/SchemesTab.vue'
-import { organizeApi } from '@/api'
 import { useTabQuery } from '@/composables/useTabQuery'
 
 const tab = useTabQuery('basic')
@@ -49,16 +48,7 @@ const tabs = computed(() => [
       <AiTab v-else-if="tab === 'ai'" />
       <RenameTab v-else-if="tab === 'rename'" />
       <SchemesTab v-else-if="tab === 'category'" key="category" />
-      <YamlRuleTab
-        v-else-if="tab === 'wash'"
-        key="wash"
-        kind="wash"
-        title="洗版策略"
-        hint="同一影视多版本时的取舍规则"
-        note="按优先级字段决定保留哪个版本。mode 决定共存 / 跳过 / 替换，scope 决定是全局只留一个还是按分辨率分组各留一个；字段含义见右上角「规则说明」。"
-        :load="organizeApi.getWash"
-        :persist="organizeApi.saveWash"
-      />
+      <WashTab v-else-if="tab === 'wash'" key="wash" />
     </div>
   </div>
 </template>
