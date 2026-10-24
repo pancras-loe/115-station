@@ -154,6 +154,7 @@ type tmdbDetail struct {
 	OriginCountry       []string
 	ProductionCountries []string       // 制片国家代码（二级分类的 production_countries 用）
 	Names               []string       // 别名 + 各语言译名
+	EnTitle             string         // 英文译名（重命名的 {en_title}，见 rename.go 的 enTitleOf）
 	Seasons             map[int]string // 季号 → 该季首播日期（仅剧集）
 	SeasonEps           map[int]int    // 季号 → 该季集数（仅剧集；全剧连续编号换算用，见 absepisode.go）
 	SeasonNames         map[int]string // 季号 → 季名（仅剧集；重命名的 {season_name}）
@@ -203,7 +204,9 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 		} `json:"alternative_titles"`
 		Translations struct {
 			Translations []struct {
-				Data struct {
+				Lang    string `json:"iso_639_1"`
+				Country string `json:"iso_3166_1"`
+				Data    struct {
 					Title string `json:"title"`
 					Name  string `json:"name"`
 				} `json:"data"`
@@ -228,6 +231,18 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 	}
 	for _, t := range raw.Translations.Translations {
 		d.Names = append(d.Names, t.Data.Title, t.Data.Name)
+		// 英文译名：en-US 优先，其次随便哪个英语地区的。原名就是英文的条目，
+		// 英文翻译的 title / name 多半是空的（TMDB 不在翻译里重复原名）
+		if t.Lang != "en" {
+			continue
+		}
+		name := strings.TrimSpace(t.Data.Title)
+		if name == "" {
+			name = strings.TrimSpace(t.Data.Name)
+		}
+		if name != "" && (d.EnTitle == "" || t.Country == "US") {
+			d.EnTitle = name
+		}
 	}
 	for _, s := range raw.Seasons {
 		d.Seasons[s.SeasonNumber] = s.AirDate

@@ -58,6 +58,50 @@ func TestApplyTemplateCollapsesSpaces(t *testing.T) {
 	}
 }
 
+// {en_title} 优先取英文译名；没有时原名是拉丁字母才用原名，否则留空、整块不输出。
+// 现场：凡人修仙传原名就是中文，改出来「凡人修仙传.凡人修仙传.S01E197」（2026-10-24）
+func TestApplyTemplateEnTitle(t *testing.T) {
+	old := enTitleLookup
+	defer func() { enTitleLookup = old }()
+	en := map[int]string{106449: "A Record of a Mortal's Journey to Immortality"}
+	enTitleLookup = func(kind string, id int) string { return en[id] }
+
+	tpl := defaultRenameConfig().TVFile
+	for _, c := range []struct {
+		media *TmdbMedia
+		want  string
+	}{
+		{&TmdbMedia{TmdbID: 106449, Title: "凡人修仙传", OriginalTitle: "凡人修仙传", MediaType: "tv"},
+			"凡人修仙传.A Record of a Mortal's Journey to Immortality.S01E197.mkv"},
+		// 没有英文译名、原名不是拉丁字母：留空
+		{&TmdbMedia{TmdbID: 1, Title: "孤独的美食家", OriginalTitle: "孤独のグルメ", MediaType: "tv"}, "孤独的美食家.S01E197.mkv"},
+		// 没有英文译名、原名是拉丁字母（原名就是英文的条目，英文翻译是空的）：用原名
+		{&TmdbMedia{TmdbID: 2, Title: "绝命毒师", OriginalTitle: "Breaking Bad", MediaType: "tv"}, "绝命毒师.Breaking Bad.S01E197.mkv"},
+		{&TmdbMedia{TmdbID: 3, Title: "天使爱美丽", OriginalTitle: "Le Fabuleux Destin d'Amélie Poulain", MediaType: "tv"},
+			"天使爱美丽.Le Fabuleux Destin d'Amélie Poulain.S01E197.mkv"},
+	} {
+		ctx := buildRenameContext(c.media, &ParsedName{Season: 1, Episode: 197, IsTV: true}, "x.mkv")
+		if got := ctx.ApplyTemplate(tpl); got != c.want {
+			t.Errorf("%s：得到 %q，预期 %q", c.media.Title, got, c.want)
+		}
+	}
+}
+
+func TestEnTitleOf(t *testing.T) {
+	for _, c := range []struct{ en, orig, want string }{
+		{"", "凡人修仙传", ""},
+		{"", "호프", ""},
+		{"Hope", "호프", "Hope"},
+		{"", "Iron Man", "Iron Man"},
+		{"", "2046", ""}, // 没有字母
+		{"凡人修仙传", "凡人修仙传", ""}, // 英文翻译里填的不是英文，不用
+	} {
+		if got := enTitleOf(c.en, c.orig); got != c.want {
+			t.Errorf("enTitleOf(%q, %q) = %q，预期 %q", c.en, c.orig, got, c.want)
+		}
+	}
+}
+
 // TMDB 标题里的非法字符在代入模板前洗掉：「:」进文件名 Windows / SMB 不认，
 // 「/」不洗会把片目拆成两层；模板自己写的 / 分层照旧
 func TestApplyTemplateSanitizesTmdbValues(t *testing.T) {

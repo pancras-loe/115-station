@@ -6,7 +6,7 @@ package api
 //   {original_name}     原文件名
 //   {ext}               扩展名（含.）
 //   {title}             TMDB 中文标题
-//   {en_title}          TMDB 英文标题
+//   {en_title}          TMDB 英文译名；没有时原名是拉丁字母才用原名，否则为空（enTitleOf）
 //   {first_letter}      标题拼音首字母（大写）
 //   {year}              年份
 //   {tmdb_id}           TMDB ID
@@ -38,6 +38,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"115-station/internal/model"
 )
@@ -53,6 +54,8 @@ type RenameContext struct {
 	SeasonYear   string
 	EpisodeName  string
 	CustomRegex  string
+	// EnTitle {en_title} 的值，模板用到时由 fillEnTitle 填（enTitleOf 的规则）
+	EnTitle string
 }
 
 // buildRenameContext 构建重命名上下文
@@ -81,6 +84,9 @@ func (ctx *RenameContext) ApplyTemplate(template string) string {
 	}
 	if strings.Contains(template, "{season_name") || strings.Contains(template, "{season_year") {
 		ctx.fillSeasonInfo()
+	}
+	if strings.Contains(template, "{en_title") {
+		ctx.fillEnTitle()
 	}
 	replacements := ctx.allReplacements()
 	addExpressionReplacements(template, replacements)
@@ -228,7 +234,7 @@ func (ctx *RenameContext) allReplacements() map[string]string {
 		// 此前只有部分调用方洗了 Title，en_title 一直原样进文件名
 		// （2026-09-28「Scooby-Doo 2: Monsters Unleashed」）。只洗变量值，模板自己的 / 分层不受影响
 		"{title}":        sanitizeName(ctx.Media.Title),
-		"{en_title}":     sanitizeName(ctx.Media.OriginalTitle),
+		"{en_title}":     sanitizeName(ctx.EnTitle),
 		"{year}":         ctx.Media.Year,
 		"{tmdb_id}":      fmt.Sprintf("%d", ctx.Media.TmdbID),
 		"{first_letter}": titleFirstLetter(ctx.Media.Title),
@@ -294,6 +300,75 @@ func (ctx *RenameContext) fillEpisodeName() {
 		name = strings.TrimSpace(string(r[:episodeNameMaxRunes]))
 	}
 	ctx.EpisodeName = name
+}
+
+// enTitleLookup 取 TMDB 英文译名，取不到返回空。包级变量是给测试换假数据用的
+var enTitleLookup = tmdbEnTitle
+
+// fillEnTitle 按 enTitleOf 填 {en_title}
+func (ctx *RenameContext) fillEnTitle() {
+	m := ctx.Media
+	if ctx.EnTitle != "" || m == nil {
+		return
+	}
+	en := ""
+	if m.TmdbID > 0 && (m.MediaType == "movie" || m.MediaType == "tv") {
+		en = enTitleLookup(m.MediaType, m.TmdbID)
+	}
+	ctx.EnTitle = enTitleOf(en, m.OriginalTitle)
+}
+
+// enTitleOf {en_title} 的取值：TMDB 英文译名优先；没有时原名是拉丁字母写的才用原名，否则留空。
+// 原来直接用原名（original_title / original_name），国产、日韩的片子原名就是中文 / 日文 / 韩文，
+// 改出来「凡人修仙传.凡人修仙传.S01E197」（2026-10-24）。留空时模板里 <.{en_title…}> 整块不输出
+func enTitleOf(en, original string) string {
+	if en = strings.TrimSpace(en); en != "" && isLatinTitle(en) {
+		return en
+	}
+	if original = strings.TrimSpace(original); isLatinTitle(original) {
+		return original
+	}
+	return ""
+}
+
+// isLatinTitle 名字里的字母全是拉丁字母（带重音的 Amélie 也算），数字与标点不管；一个字母都没有的不算
+func isLatinTitle(s string) bool {
+	letters := 0
+	for _, r := range s {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		if !unicode.Is(unicode.Latin, r) {
+			return false
+		}
+		letters++
+	}
+	return letters > 0
+}
+
+// tmdbEnTitle 英文译名取自详情（识别校验时多半已缓存 30 分钟）。失败按没有译名处理，记一会儿免得每集撞一次超时
+func tmdbEnTitle(kind string, id int) string {
+	if model.DB == nil {
+		return ""
+	}
+	key := fmt.Sprintf("%s:%d", kind, id)
+	if episodeNameRecentlyFailed(key) {
+		return ""
+	}
+	tc, err := loadTmdbClient()
+	if err != nil {
+		return ""
+	}
+	d, err := tc.detailOf(kind, id)
+	if err != nil {
+		episodeNameMarkFailed(key)
+		log.Printf("[重命名] ✗ 取 TMDB 英文译名失败 %s=%d: %v（{en_title} 退回原名）", kind, id, err)
+		return ""
+	}
+	if d == nil {
+		return ""
+	}
+	return d.EnTitle
 }
 
 // seasonInfoLookup 取某一季的 TMDB 季名与首播日期，取不到返回空。包级变量是给测试换假数据用的
