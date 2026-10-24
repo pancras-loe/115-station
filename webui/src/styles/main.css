@@ -269,6 +269,11 @@ html.has-wall .alert {
 html.has-wall .tabs__list-container {
   background-color: color-mix(in oklab, var(--default) 88%, transparent);
 }
+/* 下划线页签（HTabs variant=secondary）在 HeroUI 里是直角、没有底色，补上的底色于是露出四个直角；
+   上面两个角跟着圆，下面贴着下划线保持直的 */
+html.has-wall .tabs--secondary > .tabs__list-container {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
 html.has-wall .alert.alert--default {
   background: var(--wall-card);
 }
