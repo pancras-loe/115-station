@@ -228,10 +228,15 @@ func TestTitleLevel(t *testing.T) {
 		{"up", "Upgrade", titleNone}, // 太短的英文不算包含
 		{"爱", "爱情公寓", titleNone},     // 单个汉字不算包含
 		{"流浪地球", "星际穿越", titleNone},
+		// 去掉冠词与撇号：发布组写的英文名常吃掉它们
+		{"A Record Of Mortals Journey To Immortality", "A Record of a Mortal's Journey to Immortality", titleExact},
+		{"Lord of Rings", "The Lord of the Rings", titleExact},
+		{"Thing", "The Thing", titleLoose}, // 去掉冠词只剩一个词的不升成相等，照旧只算包含
+		{"Mortals Journey", "凡人修仙传", titleNone},
 	}
 	for _, c := range cases {
-		if got := titleLevel(titleKey(c.q), c.name); got != c.want {
-			t.Errorf("titleLevel(%q, %q) = %d, want %d", c.q, c.name, got, c.want)
+		if got := titleLevelOf(c.q, c.name); got != c.want {
+			t.Errorf("titleLevelOf(%q, %q) = %d, want %d", c.q, c.name, got, c.want)
 		}
 	}
 }

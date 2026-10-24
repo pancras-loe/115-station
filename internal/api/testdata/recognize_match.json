@@ -110,9 +110,22 @@
       "name": "Hope.2026.1080p.WEB-DL.AMZN.SDR.AVC.DDP 5.1-Ftang.mkv",
       "want": "movie/1058424",
       "note": "zh-CN 搜索里罗泓轸《希望》标题是中文、原名是韩文，第一关只对上 2025 年的同名短片；同年且译名 Hope 相等的那条优先"
+    },
+    {
+      "name": "A.Record.Of.Mortals.Journey.To.Immortality.S01E197.2020.2160p.Bilibili.WEB-DL.HDR.H265.AAC.mp4",
+      "want": "tv/106449",
+      "note": "英文译名是 A Record of a Mortal's Journey to Immortality：文件名吃掉了冠词 a 与撇号，去掉冠词后与译名相等"
     }
   ],
   "search": {
+    "tv|A Record Of Mortals Journey To Immortality|2020": [
+      {
+        "id": 106449,
+        "name": "凡人修仙传",
+        "original_name": "凡人修仙传",
+        "first_air_date": "2020-07-25"
+      }
+    ],
     "movie|Blade Runner 2049|": [
       {
         "id": 335984,
@@ -386,6 +399,21 @@
     ]
   },
   "detail": {
+    "tv/106449": {
+      "id": 106449,
+      "name": "凡人修仙传",
+      "original_name": "凡人修仙传",
+      "first_air_date": "2020-07-25",
+      "translations": {
+        "translations": [
+          {
+            "data": {
+              "name": "A Record of a Mortal's Journey to Immortality"
+            }
+          }
+        ]
+      }
+    },
     "tv/126308": {
       "id": 126308,
       "name": "幕府将军",

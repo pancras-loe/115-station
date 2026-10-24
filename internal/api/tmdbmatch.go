@@ -260,6 +260,63 @@ func titleKey(s string) string {
 	return b.String()
 }
 
+// titleKeyBare titleKey 再宽一点：去掉英文冠词 a / an / the 与撇号。
+// 发布组写英文名常把冠词和所有格吃掉：TMDB 上是「A Record of a Mortal's Journey to Immortality」，
+// 文件名是「A.Record.Of.Mortals.Journey.To.Immortality」，逐字比只差一个 a，包含关系也不成立
+// （2026-10-24 现场：凡人修仙传 S01E197 没认出，移进冗余）。
+// 去掉冗词后太短（不到两个词）的返回空串：「The Thing」与「Thing」这种只剩一个词的不放宽
+func titleKeyBare(s string) string {
+	var words []string
+	var b strings.Builder
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		w := b.String()
+		b.Reset()
+		if w != "a" && w != "an" && w != "the" {
+			words = append(words, w)
+		}
+	}
+	for _, r := range s {
+		if r >= 0xFF01 && r <= 0xFF5E {
+			r -= 0xFEE0
+		}
+		switch {
+		case r == '\'' || r == '’' || r == '‘' || r == '`':
+			// 所有格 / 缩写：Mortal's → mortals，不拆成两个词
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if r > unicode.MaxASCII {
+				return "" // 只管英文名，中日韩文字没有冠词
+			}
+			b.WriteRune(unicode.ToLower(r))
+		default:
+			flush()
+		}
+	}
+	flush()
+	if len(words) < 2 {
+		return ""
+	}
+	return strings.Join(words, "")
+}
+
+// titleLevelOf 查询原文与一组候选名的比对等级：titleLevel 之外，去掉冠词与撇号后相等也算相等
+func titleLevelOf(query string, names ...string) int {
+	l := titleLevel(titleKey(query), names...)
+	if l == titleExact {
+		return l
+	}
+	if qb := titleKeyBare(query); qb != "" {
+		for _, n := range names {
+			if titleKeyBare(n) == qb {
+				return titleExact
+			}
+		}
+	}
+	return l
+}
+
 // 片名比对等级
 const (
 	titleNone  = 0
@@ -357,7 +414,6 @@ const chooseHowExact = "片名相等"
 // （调用方会缓存「没有」并据此把文件移进冗余）
 // 第四个返回值是通过的是哪一关（日志与 AI 打分用）
 func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDetail, string, error) {
-	qk := titleKey(p.query)
 	var detailErr error
 	detail := func(id int) *tmdbDetail {
 		d, err := tc.detailOf(p.kind, id)
@@ -370,7 +426,7 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 	scored := make([]scoredCand, 0, len(cands))
 	for _, c := range cands {
 		cy := c.year()
-		s := scoredCand{c: c, level: titleLevel(qk, c.Title, c.Original)}
+		s := scoredCand{c: c, level: titleLevelOf(p.query, c.Title, c.Original)}
 		if p.seasonYearMode() {
 			// 剧不可能在开播之前就播到第 N 季
 			if cy != "" && absYearDiff(cy, p.year) > 1 && cy > p.year {
@@ -443,7 +499,7 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 				if s.level == titleExact || s.c.year() != p.year {
 					continue
 				}
-				if d := detail(s.c.ID); d != nil && titleLevel(qk, d.Names...) == titleExact {
+				if d := detail(s.c.ID); d != nil && titleLevelOf(p.query, d.Names...) == titleExact {
 					s.score += 3
 					return finish(s, "片名相等的年份不符，取别名相等且同年的")
 				}
@@ -478,7 +534,7 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 			break
 		}
 		d := detail(s.c.ID)
-		if d == nil || titleLevel(qk, d.Names...) != titleExact {
+		if d == nil || titleLevelOf(p.query, d.Names...) != titleExact {
 			continue
 		}
 		s.score += 3

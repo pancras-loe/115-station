@@ -1990,6 +1990,11 @@ func processEntry(ctx *orgCtx, guards *orgGuards, entry dirEntry, depth int, suc
 		return results
 	}
 	if len(subFiles) == 0 {
+		if subWrapperLanding(entry.Cid) || subWrapperLanding(entry.Fid) {
+			// 订阅刚转存进来、115 还没把文件落进去（subhold.go）：删了文件会光着落到转存目录根上
+			onLog(fmt.Sprintf("○ %s/ - 订阅刚转存进来，文件还没到，下轮再看", entry.Name))
+			return results
+		}
 		// 空目录（离线/转存产生的空壳）直接删：不处理会导致守望者
 		// 反复"整理后转存目录仍有内容"且无任何日志可查
 		ctx.pruner.mark(entry.Fid, entry.Name)
