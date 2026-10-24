@@ -205,6 +205,20 @@ func (c subPickCtx) offlineRipe(k epKey) bool {
 	return air.IsZero() || !air.Add(c.OfflineWait).After(c.Now)
 }
 
+// onlyFresh 缺的全是刚播出的新集（播出日起 subFreshWindow 内）：在追更，不是补老集
+func (c subPickCtx) onlyFresh() bool {
+	if len(c.Missing) == 0 {
+		return false
+	}
+	for _, k := range c.Missing {
+		air := c.MissingAir[k]
+		if air.IsZero() || !air.Add(subFreshWindow).After(c.Now) {
+			return false
+		}
+	}
+	return true
+}
+
 func (c subPickCtx) skip(reason string) {
 	if c.Skipped != nil {
 		c.Skipped[reason]++
@@ -369,6 +383,13 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				// 付费的额外要求：画质命中洗版规则、确认能覆盖缺集、看得出合不合资源条件（§5.4）
 				if !c.Prio.paidOK(it.Title) {
 					c.skip("要花积分、标题看不出画质")
+					continue
+				}
+				// 追新集时标题要写到这一集（「更新至197」「E197」「177-197」）：2026-10-24 现场，197 集当天还没上线，
+				// 订阅拿着 177-196、1-184 这些老资源挨个预览、解锁，一条都不可能有。标题只写「全集」、没写集号的也不算。
+				// 补老集不受这条限制（老合集标题常不写范围，交给文件预览核对）
+				if !movie && c.onlyFresh() && (cand.Cov.EpLo == 0 || cand.Covers == 0) {
+					c.skip("要花积分、追的是新集，标题里没写到")
 					continue
 				}
 				capMax, capLeft := c.paidCap(it.Source)

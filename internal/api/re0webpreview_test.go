@@ -83,3 +83,37 @@ func TestPlanSubCandidatesPreviewLater(t *testing.T) {
 		t.Fatalf("跳过原因 = %v", skipped)
 	}
 }
+
+// 追新集（缺的全是刚播出的）：要花积分的标题得写到这一集，老资源不预览、不解锁；补老集照常预览
+func TestPlanSubCandidatesFreshNeedsTitle(t *testing.T) {
+	now := time.Date(2026, 10, 24, 5, 0, 0, 0, time.Local)
+	sub := &model.Subscription{ID: 1, MediaType: "tv"}
+	paid := func(title, ref string) ResourceItem {
+		return ResourceItem{Source: "re0", Kind: "share115", Action: "unlock", Title: title, Ref: ref, Relevant: true, Points: pts(8)}
+	}
+	items := []ResourceItem{
+		paid("剧 1集-184集合集 2K", "old"),
+		paid("剧 全集 4K", "all"),
+		paid("剧 4K WEB-DL", "bare"),
+		paid("剧 更新至197集 4K", "new"),
+	}
+	previewed := map[string]bool{}
+	preview := func(it ResourceItem) ([]epKey, string, error) {
+		previewed[it.Ref] = true
+		return epKeys("S01E197"), "", nil
+	}
+	ctx := func(air time.Time) subPickCtx {
+		return subPickCtx{Prio: prioAny, Sub: sub, Missing: epKeys("S01E197"), Now: now, Re0Max: 20, Re0Left: -1,
+			Re0Preview: preview, MissingAir: map[epKey]time.Time{{S: 1, E: 197}: air}, Skipped: map[string]int{}}
+	}
+	cands, _ := planSubCandidates(items, ctx(time.Date(2026, 10, 24, 0, 0, 0, 0, time.Local)))
+	if len(cands) != 1 || cands[0].Item.Ref != "new" || len(previewed) != 1 {
+		t.Fatalf("追新集：候选 %+v 预览了 %v", cands, previewed)
+	}
+	// 同一集播出很久了（补老集）：标题没写范围的照常预览
+	previewed = map[string]bool{}
+	cands, _ = planSubCandidates(items, ctx(time.Date(2026, 9, 1, 0, 0, 0, 0, time.Local)))
+	if !previewed["bare"] || !previewed["all"] || len(cands) != 3 {
+		t.Fatalf("补老集：候选 %d 预览了 %v", len(cands), previewed)
+	}
+}
