@@ -7,7 +7,6 @@ import {
   FolderTree,
   LayoutGrid,
   Clapperboard,
-  ArrowDownUp,
   Download,
   Settings,
   MessageSquare,
@@ -44,7 +43,6 @@ export const navItems: NavItem[] = [
   { name: 'tasks', label: '任务中心', icon: ListChecks },
 
   { name: 'media-transfer', label: '影视转存', icon: Download, group: '传输' },
-  { name: 'upload-download', label: '监控上传', icon: ArrowDownUp },
 
   { name: 'settings', label: '系统配置', icon: Settings, group: '系统' },
   { name: 'message', label: '消息配置', icon: MessageSquare },

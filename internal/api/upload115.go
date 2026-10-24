@@ -1,6 +1,6 @@
 package api
 
-// ==================== 115 文件上传 + 监控上传引擎 ====================
+// ==================== 115 文件上传 ====================
 //
 // 上传双通道（与同步一致：OpenAPI 优先，Cookie 回退）：
 //  · OpenAPI：POST {open}/open/upload/init（fileid=全量SHA1, preid=前128KB
@@ -9,8 +9,8 @@ package api
 //  · Cookie：SheltonZhu/115driver 库（OpenList 同款）——ECDH 加密的
 //    uplb.115.com/4.0/initupload.php，秒传 + OSS 直传 + 结果校验全内置
 //
-// 监控上传（CMS media_moni 同款）：定期扫描本地媒体目录中 Emby 新生成的
-// 图片，按目录结构对应上传到 115 剧集目录（本地 strm 结构与网盘一致）。
+// 监控上传（CMS media_moni 同款）的引擎在 libupload.go：按库开关、按库所在账号上传；
+// 这里留着上传协议本身与它用到的指纹、文件名判定。
 
 import (
 	"bytes"
@@ -26,13 +26,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/SheltonZhu/115driver/pkg/crypto/ec115"
@@ -98,21 +96,10 @@ func openOSSTokenFromMap(raw map[string]any) openOSSCredential {
 	}
 }
 
-// upload115File 上传文件内容到 115 指定目录（秒传或 OSS 直传）。
-// 双通道：OpenAPI 已授权走官方开放接口；否则回退 Cookie 通道
-// （115driver 库，OpenList/CMS 同款，扫码登录即可上传）。
-func (h *Handler) upload115File(cookie string, pid int64, filename string, data []byte) error {
-	// 上传是 115 风控敏感操作，必须由用户显式开启。扫描入口也会提前判断，
-	// 这里再守一次是为了覆盖“扫描过程中关闭开关”和未来新增调用点。
-	if !h.monitorUploadConfig().Enabled {
-		return fmt.Errorf("上传到 115 未启用")
-	}
-	return h.upload115FileConsented(cookie, pid, filename, data)
-}
-
-// upload115FileConsented 不看总开关的上传：只给「用户这一次明确勾选了上传」的入口用
-// （网盘文件页的手动刮削，filescrape.go）。总开关管的是后台引擎会不会自己往网盘写，
-// 用户在确认框里亲手勾上的那一次不受它约束；新增调用点前想清楚是不是真有这份授权
+// upload115FileConsented 上传文件内容到 115 指定目录（秒传或 OSS 直传），主号用。
+// 双通道：OpenAPI 已授权走官方开放接口；否则回退 Cookie 通道（115driver 库，OpenList/CMS 同款）。
+// 它本身不看任何开关：调用方要有授权 —— 监控上传看库的上传开关（libupload.go），
+// 海报墙刮削是用户这一次亲手勾了「上传到网盘」；按账号上传走 uploadAs
 func (h *Handler) upload115FileConsented(cookie string, pid int64, filename string, data []byte) error {
 	if oc := h.getOpen115(); oc != nil && oc.authorized() {
 		return h.upload115FileOpen(oc, pid, filename, data)
@@ -438,10 +425,10 @@ func ossPutOpen(tk openOSSCredential, init openUploadInit, sha string, data []by
 	return nil
 }
 
-// ==================== 监控上传引擎 ====================
+// ==================== 监控上传用到的配置与指纹 ====================
 
-// monitorUploadCfg 是所有本地元数据回传 115 的统一授权配置。
-// Enabled 缺省为 false：旧配置即使已经填过 dir，升级后也不会静默恢复上传。
+// monitorUploadCfg 原来全局的「允许上传到 115」（setting monitor）。2026-10-24 起换成每个库的开关
+// （model.Library.Upload，libupload.go），这里只剩启动迁移读 Enabled、换媒体根时改 dir（mediaroot.go）
 type monitorUploadCfg struct {
 	Enabled bool   `json:"enabled"`
 	Dir     string `json:"dir"`
@@ -453,14 +440,6 @@ func parseMonitorUploadCfg(raw string) monitorUploadCfg {
 	_ = json.Unmarshal([]byte(raw), &cfg)
 	cfg.Dir = strings.TrimSpace(cfg.Dir)
 	cfg.Target = strings.TrimSpace(cfg.Target)
-	return cfg
-}
-
-func (h *Handler) monitorUploadConfig() monitorUploadCfg {
-	cfg := parseMonitorUploadCfg(h.getSettingValue("monitor"))
-	// 监控上传与同步、整理、刮削共用唯一的本地媒体库根目录。
-	// 历史 monitor.dir 只保留反序列化兼容，不再参与运行时路径选择。
-	cfg.Dir = strings.TrimRight(strings.TrimSpace(localMediaRoot()), "/")
 	return cfg
 }
 
@@ -519,136 +498,6 @@ func markUploadedStamp(db *gorm.DB, path string, st fileStamp) {
 	}).Create(&model.UploadMark{Path: path, ModTime: st.modTime.UnixNano(), Size: st.size})
 }
 
-// StartMonitorUploader 启动监控上传：定期扫描监控目录中新生成的图片，
-// 按本地目录结构对应上传到 115 媒体库（本地 strm 树与网盘一致）
-func StartMonitorUploader(h *Handler) {
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				monitorOnce(h)
-			case <-stopCh:
-				return
-			}
-		}
-	}()
-	log.Println("[监控上传] 引擎已启动（默认禁止；开启后每分钟扫描一次监控目录）")
-}
-
-// monitorOnce 单轮扫描上传
-// monitorRunning 触发轮与分钟 ticker 轮防重叠（同时走两轮会重复上传）
-var monitorRunning atomic.Bool
-
-func monitorOnce(h *Handler) {
-	cfg := h.monitorUploadConfig()
-	if !cfg.Enabled || cfg.Dir == "" {
-		return
-	}
-	if !monitorRunning.CompareAndSwap(false, true) {
-		return // 上一轮还没跑完，跳过本轮
-	}
-	defer monitorRunning.Store(false)
-	// 本地路径固定跟随统一媒体库位置；上传目标固定为全量同步的媒体库。
-	// target 字段已废弃忽略——监控的是本地媒体树，目标自然是云端媒体库。
-	_ = cfg.Target
-
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		return
-	}
-
-	// 目标库根：本地媒体树第一层是库名（云端库根目录名，如「俱乐部」），
-	// 按它找对应的 115 媒体库再拼云端路径（panDirOfLocal），否则出现 /俱乐部/俱乐部/... 查不到目录。
-	// 几个媒体库各对各的（libroots.go）；老配置残留的 target 只有它一个库
-	var roots []libRoot
-	if cfg.Target != "" {
-		roots = []libRoot{{Cid: cfg.Target, Abs: absPathOf(cookie, cfg.Target)}}
-		if info, err := get115DirInfo(cookie, cfg.Target); err == nil {
-			roots[0].Name = info.n
-		}
-	} else if roots, err = h.resolveConfiguredLibRoots(cookie); err != nil {
-		vlog("[上传] ○ 认不出媒体库位置，本轮跳过: %v", err)
-		return
-	}
-	if len(roots) == 0 || roots[0].Abs == "" {
-		return
-	}
-	acctLibs := loadAcctLibs() // 附加账号的库：本站不往它的网盘上传（acctlibs.go）
-
-	// 扫描监控目录：Emby 刮削产物（标准图片命名 + NFO），只处理最近 24h 内的新文件
-	var imgs []string
-	cutoff := time.Now().Add(-24 * time.Hour)
-	filepath.WalkDir(cfg.Dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		name := strings.ToLower(d.Name())
-		ext := strings.ToLower(filepath.Ext(p))
-		isImg := (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp") &&
-			isStandardMediaImageName(name)
-		isNfo := strings.HasSuffix(name, ".nfo")
-		if !isImg && !isNfo {
-			return nil
-		}
-		if info, err := d.Info(); err == nil && info.ModTime().After(cutoff) {
-			st := fileStamp{modTime: info.ModTime(), size: info.Size()}
-			if uploadStampDone(h.DB, p, st) {
-				return nil // 已上传且未变化（DB 持久，重启不重复）
-			}
-			imgs = append(imgs, p)
-		}
-		return nil
-	})
-	if len(imgs) == 0 {
-		return
-	}
-	// 无跳过时也要归零（skippedAnnounceSummary 需要非 nil map）
-	skippedMeta := 0
-	skipDirs := map[string]bool{}
-	_ = skipDirs
-
-	for _, img := range imgs {
-		rel, err := filepath.Rel(cfg.Dir, img)
-		if err != nil {
-			continue
-		}
-		// 定位 115 目标目录：本地第一层库名对应的媒体库 + 库内相对目录（files/getid 查询）
-		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
-		if targetAbs == "" || acctLibNamed(acctLibs, firstRelSeg(rel)) {
-			// 附加账号的库（acctlibs.go）或认不出目标：不传。空路径交给 files/getid 会落到网盘根
-			skippedMeta++
-			continue
-		}
-		cid, ok := cloudPathCid(cookie, targetAbs)
-		if !ok {
-			// 115 无对应目录（多为播放器自建的 <集名>.mkv/ 本地元数据目录）：
-			// 每目录只记一条，同目录后续文件静默跳过——逐文件逐轮刷屏无意义
-			metaSkipAnnounce(targetAbs)
-			skippedMeta++
-			skipDirs[targetAbs] = true
-			continue
-		}
-		metaMissClear(img)
-		data, err := os.ReadFile(img)
-		if err != nil {
-			continue
-		}
-		if err := h.upload115File(cookie, parseI64(cid), filepath.Base(img), data); err != nil {
-			log.Printf("[上传] ✗ 上传失败 %s: %v", rel, err)
-			continue
-		}
-		if st, ok := stampOfPath(img); ok {
-			markUploadedStamp(h.DB, img, st)
-		}
-		log.Printf("[上传] ✓ 上传成功: %s → %s", rel, targetAbs)
-	}
-
-	skippedAnnounceSummary(skippedMeta, skipDirs)
-	log.Printf("[上传] 发现 %d 个新刮削文件（图片+NFO）", len(imgs))
-}
-
 // metadataUploadNames 元数据回传监听的固定名图片（Emby 写入媒体目录的标准名）。
 // NFO 不在这张表里：本站与 Emby 写的影片/集级 NFO 都跟视频同名，名字是变的，
 // 判定见 isMetadataUploadFile
@@ -658,146 +507,11 @@ var metadataUploadNames = map[string]bool{
 	"clearlogo.png": true, "landscape.jpg": true, // 刮削产物（scrape.go）
 }
 
-// isMetadataUploadFile 兜底引擎要回传的元数据文件。
-// 与监控目录引擎（上面那条 isImg/isNfo 判定）保持同一口径：固定名图片 + 任意 .nfo。
-// 此前这里只认 movie/tvshow/season.nfo 三个固定名，与视频同名的影片 NFO
-// 和逐集 NFO 一个都传不上去
+// isMetadataUploadFile 固定名图片 + 任意 .nfo（深度删除认附属文件用；监控上传认的是 isMonitorUploadFile）
 func isMetadataUploadFile(name string) bool {
 	n := strings.ToLower(name)
 	return metadataUploadNames[n] || strings.HasSuffix(n, ".nfo")
 }
-
-// StartMetadataUploader 元数据回传引擎：每 5 分钟扫描本地媒体树，
-// 把 Emby 写入的 poster/nfo/fanart 上传到 115 对应目录（按相对路径
-// 用 files/getid 定位）。与「监控上传」（Emby 图片目录→115）互补：
-// 这里针对的是媒体卷内、随剧集目录存放的元数据文件
-func StartMetadataUploader(h *Handler) {
-	// 是否允许上传和目录配置运行时读取，保存开关后无需重启服务。
-	// 配了监控目录时由分钟级引擎处理；未配目录才由本引擎扫描统一媒体库根目录。
-	go func() {
-		for {
-			select {
-			case <-stopCh:
-				return
-			case <-time.After(5 * time.Minute):
-			}
-			h.uploadMetadataOnce()
-		}
-	}()
-	log.Println("[元数据回传] 兜底引擎已启动（默认禁止；开启且未配置监控目录时每 5 分钟扫描）")
-}
-
-// uploadMetadataOnce 单轮回传
-var metadataRunning atomic.Bool
-
-func (h *Handler) uploadMetadataOnce() {
-	mc := h.monitorUploadConfig()
-	if !mc.Enabled || mc.Dir != "" {
-		return // 禁止上传，或已由监控目录引擎负责
-	}
-	if !metadataRunning.CompareAndSwap(false, true) {
-		return
-	}
-	defer metadataRunning.Store(false)
-	local := mediaRoot() // mediaroot.go
-	fullCfg := h.loadFullSyncCfg()
-	if fullCfg.Cid == "" && len(effectiveLibraries(h.getSettingValue)) == 0 {
-		return // 未配置媒体库，无法定位云端目录
-	}
-	cookie, err := h.get115Cookie()
-	if err != nil {
-		return
-	}
-
-	// 各媒体库的根目录与库名（云端目录定位用）。
-	// 本地路径第一层是库名（STRM 结构特性），按它找对应的库再拼云端绝对路径（panDirOfLocal），
-	// 否则出现 /俱乐部/俱乐部/... 查不到目录（全部跳过）
-	roots, err := h.resolveConfiguredLibRoots(cookie)
-	if err != nil {
-		vlog("[元数据回传] ○ 认不出媒体库位置，本轮跳过: %v", err)
-		return
-	}
-	if len(roots) == 0 || roots[0].Abs == "" {
-		return
-	}
-	acctLibs := loadAcctLibs() // 附加账号的库：本站不往它的网盘上传（acctlibs.go）
-
-	// 扫描媒体树里的元数据文件（跳过已上传标记；用台账判定是否已在云端）
-	var files []string
-	filepath.WalkDir(local, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if !isMetadataUploadFile(d.Name()) {
-			// 旧命名留下的每集 nfo（xxx.mkv.nfo）也要回传（新命名的 xxx.nfo 上面已认）
-			if !strings.HasSuffix(strings.ToLower(d.Name()), ".mkv.nfo") &&
-				!strings.HasSuffix(strings.ToLower(d.Name()), ".mp4.nfo") {
-				return nil
-			}
-		}
-		if st, ok := stampOf(d); ok {
-			// 已上传且内容未变（指纹一致）才跳过；Emby 重新刮削覆盖后会重传
-			if uploadStampDone(h.DB, p, st) {
-				return nil
-			}
-		}
-		files = append(files, p)
-		return nil
-	})
-	if len(files) == 0 {
-		return
-	}
-	log.Printf("[元数据回传] 发现 %d 个待上传文件", len(files))
-
-	ok, fail := 0, 0
-	for _, f := range files {
-		rel, err := filepath.Rel(local, f)
-		if err != nil {
-			continue
-		}
-		// 本地第一层库名对应的媒体库 + 库内相对目录
-		targetAbs := panDirOfLocal(roots, filepath.ToSlash(filepath.Dir(rel)))
-		if targetAbs == "" || acctLibNamed(acctLibs, firstRelSeg(rel)) {
-			continue // 附加账号的库（acctlibs.go）或认不出目标：不传，空路径交给 files/getid 会落到网盘根
-		}
-		cid, found := cloudPathCid(cookie, targetAbs)
-		if !found {
-			// 同一文件连续多轮查不到云端目录就停止重试（防每 5 分钟刷屏）
-			if n := metaMissIncr(f); n <= 2 {
-				log.Printf("[元数据回传] ○ 云端目录不存在，跳过 %s（%s）", rel, targetAbs)
-			} else if n == 3 {
-				log.Printf("[元数据回传] ○ %s 连续 3 轮未找到云端目录，本会话内不再重试（如目录确实存在请反馈日志）", rel)
-			}
-			continue
-		}
-		metaMissClear(f)
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		if err := h.upload115File(cookie, parseI64(cid), filepath.Base(f), data); err != nil {
-			fail++
-			log.Printf("[元数据回传] ✗ 失败 %s: %v", rel, err)
-			continue
-		}
-		if st, ok := stampOfPath(f); ok {
-			markUploadedStamp(h.DB, f, st)
-		}
-		ok++
-		log.Printf("[元数据回传] ✓ %s → %s", rel, targetAbs)
-	}
-	if ok+fail > 0 {
-		log.Printf("[元数据回传] 本轮完成: 成功 %d，失败 %d", ok, fail)
-	}
-}
-
-// metaMissCount 云端目录连续未命中计数（会话级；达到上限后不再重试防刷屏）。
-// 监控引擎（1 分钟轮）与元数据回传引擎（5 分钟轮）两个 goroutine 并发访问，
-// 必须持锁——此前裸 map 并发写是进程级 panic（直接宕服务）
-var (
-	metaMissCount = map[string]int{}
-	metaMissMu    sync.Mutex
-)
 
 // skippedAnnounceSummary 一轮结束的跳过汇总（防逐文件逐轮刷屏）
 func skippedAnnounceSummary(skipped int, dirs map[string]bool) {
@@ -827,21 +541,6 @@ func metaSkipAnnounce(dir string) {
 	}
 	metaSkipAnnounced[dir] = true
 	log.Printf("[上传] ○ 目录在 115 上不存在，跳过该目录的元数据回传：%s", truncateStr(dir, 120))
-}
-
-// metaMissIncr 计数 +1 并返回新值（持锁）
-func metaMissIncr(key string) int {
-	metaMissMu.Lock()
-	defer metaMissMu.Unlock()
-	metaMissCount[key]++
-	return metaMissCount[key]
-}
-
-// metaMissClear 命中后清零（持锁）
-func metaMissClear(key string) {
-	metaMissMu.Lock()
-	delete(metaMissCount, key)
-	metaMissMu.Unlock()
 }
 
 // isStandardMediaImageName Emby/Jellyfin 标准媒体图片命名

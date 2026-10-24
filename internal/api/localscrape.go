@@ -25,8 +25,8 @@ import (
 // 刮削只认本地已经有的片目，不再有「只写网盘」这条路。
 //
 // 选项默认取「影视刮削」页里保存的配置，前端可以只为这一次改。
-// 「上传到网盘」只管这一次：勾了就当场把这次写出的文件传进网盘对应目录（upload115FileConsented，
-// 不看监控上传总开关）；没勾就只写本地，传不传交给监控上传 —— 它开着会照常把新文件传上去。
+// 「上传到网盘」只管这一次：勾了就当场把这次写出的文件传进片目所在库的网盘目录（uploadAs，用那个库的账号，
+// 不看库的上传开关）；没勾就只写本地，传不传交给监控上传 —— 库开着「上传到 115」会照常把新文件传上去。
 
 //
 // 整理后自动刮削也走这里的执行器（execScrapeJob），参数里多带整理当时识别到的条目（Hints）。
@@ -284,14 +284,14 @@ type cloudMetaOps interface {
 }
 
 // panCloudMetaOps 真实实现：列目录 / 删除走 pan115Ops（节流、事件抑制、缓存失效都在里面），
-// 上传走不看总开关的那条（用户这一次勾了上传）
+// 上传不看库的上传开关（用户这一次勾了上传），按 ops 的账号传（uploadAs）
 type panCloudMetaOps struct {
 	*pan115Ops
 	h *Handler
 }
 
 func (o panCloudMetaOps) upload(cid, name string, data []byte) error {
-	return o.h.upload115FileConsented(o.cookie, parseI64(cid), name, data)
+	return o.h.uploadAs(o.acct, o.cookie, parseI64(cid), name, data)
 }
 
 // fileScrapeStat 本次刮削的产物计数
@@ -601,18 +601,28 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	// 只有这一次要上传才需要 115：不上传的刮削零 115 请求，没配账号也能刮
 	var cloud cloudMetaOps
 	var libRoots []libRoot // 上传时按片目的库名找网盘媒体库（libroots.go）
-	if o.Upload {
-		ops, err := h.newPan115Ops()
+	// 每个账号一份写网盘的通道：片目在哪个账号的库里就用哪个账号的（V2 起各账号的库都能写）
+	acctCloud := map[uint]cloudMetaOps{}
+	cloudOf := func(acct uint) (cloudMetaOps, error) {
+		if c, ok := acctCloud[acct]; ok {
+			return c, nil
+		}
+		ops, err := h.opsFor(acct)
 		if err != nil {
-			return jobOutcome{}, err
+			return nil, err
 		}
 		// 覆盖模式会删网盘上的旧元数据：登记抑制，别让增量同步回头把本地刚写的那份也删掉
 		ops.suppress = true
-		cloud = panCloudMetaOps{pan115Ops: ops, h: h}
-		cookie, _ := h.get115Cookie()
-		if h.loadFullSyncCfg().Cid == "" {
-			return jobOutcome{}, errors.New("没有配置网盘媒体库目录，无法上传")
+		c := panCloudMetaOps{pan115Ops: ops, h: h}
+		acctCloud[acct] = c
+		return c, nil
+	}
+	if o.Upload {
+		var err error
+		if cloud, err = cloudOf(acctMain); err != nil {
+			return jobOutcome{}, err
 		}
+		cookie, _ := h.get115Cookie()
 		if libRoots, err = h.resolveConfiguredLibRoots(cookie); err != nil {
 			return jobOutcome{}, fmt.Errorf("认不出网盘媒体库的位置，无法上传：%w", err)
 		}
@@ -661,11 +671,13 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 				problems = append(problems, fmt.Sprintf("%s：认不出它在哪个网盘媒体库（库目录「%s」），没有刮削", name, e.LibName))
 				continue
 			}
-			if root.Account != acctMain {
-				problems = append(problems, fmt.Sprintf("%s：在附加账号的库里，本站不往它的网盘上传（取消勾选「上传到网盘」再刮）", name))
+			c, err := cloudOf(root.Account)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("%s：所在库的 115 账号用不了，没有刮削（%v）", name, err))
 				continue
 			}
-			libCid = root.Cid
+			w.ops = c
+			libCid = rawLibCid(root)
 		}
 		t, err := ledgerScrapeTitle(tc, &e, localRoot, libCid, pick, lp.strict())
 		if err != nil {
@@ -730,11 +742,10 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 	// Emby 刷新在开头的 defer 里（scrapeEmbyRefresh）
 	if len(w.localDirs) > 0 && !o.Upload {
-		// 这一次没勾上传：交给监控上传（它看自己的开关）
+		// 这一次没勾上传：交给监控上传（它看各库自己的上传开关）
 		go func() {
 			time.Sleep(2 * time.Second) // 等最后写入落盘
 			monitorOnce(h)
-			h.uploadMetadataOnce()
 		}()
 	}
 

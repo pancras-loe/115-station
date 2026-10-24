@@ -127,16 +127,6 @@ func acctLibRoots(list []acctLibEntry) []libRoot {
 	return out
 }
 
-// acctLibNamed 本地第一层是不是附加账号的库（元数据回传、海报墙上传据此跳过：这些库的网盘本站不写）
-func acctLibNamed(list []acctLibEntry, name string) bool {
-	for _, e := range list {
-		if e.Local == name {
-			return true
-		}
-	}
-	return false
-}
-
 // ---- 直链与台账里的账号段 ----
 
 // encodePlayID 直链里的播放标识：主号就是 pickcode，附加账号是 {账号}~{pickcode}

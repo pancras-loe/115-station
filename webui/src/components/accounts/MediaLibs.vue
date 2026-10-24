@@ -18,6 +18,7 @@ import {
   FolderTree,
   HardDrive,
   ImageDown,
+  Upload,
   LayoutGrid,
   List,
   Pencil,
@@ -240,6 +241,9 @@ function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
             </li>
             <li><FolderTree :size="12" /><span>{{ l.scheme_id ? l.scheme_name : '不分类' }}</span></li>
             <li><ImageDown :size="12" /><span>{{ SCRAPE_TEXT[l.scrape] || l.scrape }}</span></li>
+            <li :class="{ ok: l.upload }" :title="l.upload ? '本地新产生的 NFO / 图片回传 115' : '只写本地，不往网盘写'">
+              <Upload :size="12" /><span>{{ l.upload ? '回传 115' : '不回传' }}</span>
+            </li>
             <li v-if="embyBrief(l)" :class="{ warn: embyBrief(l)!.warn, ok: !embyBrief(l)!.warn }" :title="embyBrief(l)!.tip">
               <Tv :size="12" /><span>{{ embyBrief(l)!.text }}</span>
             </li>
@@ -286,6 +290,11 @@ function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
             <dd>{{ l.scheme_id ? l.scheme_name : '不分类（片目直接放在库目录下）' }}</dd>
             <dt><ImageDown :size="13" />刮削</dt>
             <dd>{{ SCRAPE_TEXT[l.scrape] || l.scrape }}</dd>
+            <dt><Upload :size="13" />上传</dt>
+            <dd>
+              <span v-if="l.upload">本地新产生的 NFO / 图片回传 115</span>
+              <span v-else class="muted">不回传：只写本地</span>
+            </dd>
             <template v-if="l.emby">
               <dt><Tv :size="13" />Emby</dt>
               <dd>

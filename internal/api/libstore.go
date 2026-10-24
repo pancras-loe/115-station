@@ -328,10 +328,13 @@ func (h *Handler) MigrateLibrariesV2() {
 		},
 	})
 	added := 0
+	// 原来的全局「允许上传到 115」只管主号的库（附加账号的库一律不传），换算成每库开关时同口径
+	legacyUpload := parseMonitorUploadCfg(h.getSettingValue("monitor")).Enabled
 	for _, l := range libs {
 		if haveKey[fmt.Sprintf("%d:%s", l.Account, l.Cid)] {
 			continue // 上次迁了一半：已经迁过的不重复
 		}
+		l.Upload = legacyUpload && l.Account == acctMain
 		if err := h.DB.Create(&l).Error; err != nil {
 			log.Printf("[媒体库] ✗ 迁移媒体库「%s」失败，下次启动再试: %v", l.Name, err)
 			return

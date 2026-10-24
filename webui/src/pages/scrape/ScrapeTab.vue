@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { ChevronRight, HardDrive, Info, TriangleAlert, Upload } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import { useSetting } from '@/composables/useSetting'
+import { libraryApi } from '@/api'
+import type { MediaLib } from '@/api/library'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import SaveBar from './SaveBar.vue'
 import { useScrapeConfig } from './scrapeConfig'
@@ -18,7 +19,16 @@ import { useScrapeProvider } from '@/composables/scrapeProvider'
  * 自动整理那边留一个只读概览（organize/ScrapeSummary.vue），要改跳到这里。
  */
 const media = useFullSetting()
-const monitor = useSetting('monitor', { enabled: false })
+// 上传开关在每个库上（库弹窗「上传到 115」），这里只报开着的是哪几个
+const libs = ref<MediaLib[]>([])
+const uploadLibs = computed(() => libs.value.filter((l) => l.upload).map((l) => l.name))
+async function loadLibs() {
+  try {
+    libs.value = (await libraryApi.getMediaLibs()).libs
+  } catch {
+    libs.value = []
+  }
+}
 const { cfg, saving, dirty, load, save } = useScrapeConfig()
 // 刮削方式为 Emby：整页置灰（inert：点不了、Tab 也进不去），后端同样不认这些设置
 const { embyScrapes } = useScrapeProvider()
@@ -28,7 +38,10 @@ const MAKE_SKIP = [
   { label: '跳过', value: false },
 ]
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadLibs()
+})
 </script>
 
 <template>
@@ -88,11 +101,11 @@ onMounted(load)
             <span class="fact-icon"><Upload :size="15" /></span>
             <div class="fact-body">
               <div class="fact-label">上传到 115</div>
-              <div class="fact-value" :class="{ 'is-on': monitor.model.value.enabled }">
-                {{ monitor.model.value.enabled ? '已允许（由「监控上传」回传）' : '不上传（默认）' }}
+              <div class="fact-value" :class="{ 'is-on': uploadLibs.length }">
+                {{ uploadLibs.length ? `回传：${uploadLibs.join('、')}` : '都不上传（默认）' }}
               </div>
             </div>
-            <RouterLink :to="{ name: 'upload-download' }" class="fact-link">上传开关<ChevronRight :size="13" /></RouterLink>
+            <RouterLink :to="{ name: 'accounts', query: { tab: 'library' } }" class="fact-link">按库设置<ChevronRight :size="13" /></RouterLink>
           </div>
         </div>
 
@@ -126,7 +139,7 @@ onMounted(load)
               <b>想切回 Emby 自己刮削</b>：在页面顶部的「刮削方式」选「Emby 刮削」，再在 Emby 里勾回元数据下载器与图像获取器（TheMovieDb 等）。
               本站已写好的 NFO 与海报不会浪费：Nfo 读取器保持勾选时 Emby 先读现成的，只联网补缺；
               媒体目录里的海报 Emby 本来就会读，不需要为此打开「保存媒体图片到媒体文件夹中」。
-              那个开关管的是 Emby <b>新下载</b>的图片写到哪 —— 要让「监控上传」把 Emby 的刮削结果回传 115 才需要打开。
+              那个开关管的是 Emby <b>新下载</b>的图片写到哪 —— 要让媒体库的「上传到 115」把 Emby 的刮削结果回传 115 才需要打开。
               想让 Emby 完全按自己的重刮，对媒体库「刷新元数据」并选「替换所有元数据 / 图像」。
             </p>
           </div>

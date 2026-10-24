@@ -41,6 +41,7 @@ type mediaLibView struct {
 	SchemeName  string `json:"scheme_name"`
 	Depth       int    `json:"depth"`
 	Scrape      string `json:"scrape"`
+	Upload      bool   `json:"upload"` // 本地新产生的 NFO / 图片回传 115（libupload.go）
 	// LocalLocked 台账里已经有这个库的内容：本地目录不能再改（改了旧 STRM 没人管、Emby 条目全换）
 	LocalLocked bool         `json:"local_locked"`
 	LastSync    *libSyncStat `json:"last_sync,omitempty"`
@@ -130,7 +131,7 @@ func (h *Handler) mediaLibsNow() mediaLibsView {
 	for _, l := range libs {
 		mv := mediaLibView{ID: l.ID, Name: l.Name, Account: l.Account, AccountName: acctName[l.Account], Cid: l.Cid, Path: l.Path,
 			Local: l.Local, LocalAbs: root + "/" + normLibLocal(l.Local), StagingCid: l.StagingCid, StagingPath: l.StagingPath,
-			SchemeID: l.SchemeID, SchemeName: schemeName(l.SchemeID), Depth: l.Depth, Scrape: l.Scrape,
+			SchemeID: l.SchemeID, SchemeName: schemeName(l.SchemeID), Depth: l.Depth, Scrape: l.Scrape, Upload: l.Upload,
 			LocalLocked: ledgerHasLib(l.Local), Organize: l.StagingCid != ""}
 		if mv.AccountName == "" {
 			mv.AccountName = fmt.Sprintf("已删除的账号 %d", l.Account)
@@ -198,6 +199,8 @@ type mediaLibReq struct {
 	SchemeID    uint   `json:"scheme_id"`
 	Depth       int    `json:"depth"`
 	Scrape      string `json:"scrape"`
+	// Upload 不带 = 不改（批量添加与老页面不发这个字段，别把开着的关掉）
+	Upload *bool `json:"upload"`
 }
 
 // applyTo 把请求写进一个库（新建时 l 是零值）
@@ -209,6 +212,9 @@ func (r mediaLibReq) applyTo(l *model.Library) {
 		l.StagingPath = ""
 	}
 	l.SchemeID, l.Depth, l.Scrape = r.SchemeID, r.Depth, strings.TrimSpace(r.Scrape)
+	if r.Upload != nil {
+		l.Upload = *r.Upload
+	}
 	if l.SchemeID != 0 {
 		l.Depth = 0 // 有分类方案时片目层级按方案认
 	}

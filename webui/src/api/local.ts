@@ -176,7 +176,7 @@ export interface ScrapeOptions {
   write_nfo: boolean
   write_images: boolean
   force: boolean
-  /** 这一次直接传进网盘；不勾时交给监控上传 */
+  /** 这一次直接传进网盘；不勾时看库的「上传到 115」开关（监控上传） */
   upload: boolean
   /** 刮完让 Emby 给还没有媒体信息的视频提前探测（每个一次 115 直链请求；与入库后的自动探测共用记账） */
   probe: boolean

@@ -611,7 +611,10 @@ type Library struct {
 	// Depth 不分类时片目在库下第几层（1–3，0 按 1）。整理进来的就是 1；只同步的库是用户自己的目录结构，要声明
 	Depth int `json:"depth" gorm:"default:0"`
 	// Scrape 刮不刮：auto / manual / off
-	Scrape    string    `json:"scrape" gorm:"size:16"`
+	Scrape string `json:"scrape" gorm:"size:16"`
+	// Upload 把本地新产生的 NFO / 图片回传这个库的 115 目录（2026-10-24 起每库一个开关，取代全局的 monitor.enabled）。
+	// 上传是 115 风控敏感操作，新建的库默认关
+	Upload    bool      `json:"upload" gorm:"default:false"`
 	Sort      int       `json:"sort" gorm:"default:0"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

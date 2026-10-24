@@ -186,6 +186,17 @@ func markLibRoles(roots []libRoot, opts libOpts) {
 	}
 }
 
+// rawLibCid 库根在 115 上的目录 cid：别的账号的库 Cid 存的是 a{账号}:{cid}（acctLibKey）
+func rawLibCid(r libRoot) string {
+	if r.Account == acctMain {
+		return r.Cid
+	}
+	if _, cid, ok := strings.Cut(r.Cid, ":"); ok {
+		return cid
+	}
+	return r.Cid
+}
+
 // panDirOfLocal 本地相对目录（第一段是库名）→ 网盘绝对路径。
 // 第一段对上哪个库就用哪个库；都对不上（监控目录不是本地媒体根、老台账不带库名）退回主库、整段照用，
 // 与只有一个库时的老行为一致。按整段比库名：原来按字符串前缀剥，「影视2/…」会被当成「影视」剥成「2/…」

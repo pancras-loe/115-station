@@ -631,7 +631,7 @@ const mockMediaLibsView = () => ({
       local: l.name, local_abs: `/media/${l.name}`,
       staging_cid: self ? '' : `s${l.cid}`, staging_path: self ? '' : `/转存/${l.name}`,
       scheme_id: self ? 0 : 1, scheme_name: self ? '' : '默认分类', depth: mockOpts[l.cid]?.depth ?? 1,
-      scrape: mockScrapeOf(l.cid), local_locked: true, organize: !self,
+      scrape: mockScrapeOf(l.cid), upload: i === 0, local_locked: true, organize: !self,
       last_sync: { at: Math.floor(Date.now() / 1000) - 3600 * (i + 1), ok: true, mode: 'fast', seconds: 42, videos: 800, created: 3, failed: 0, assets: 12, orphans: i === 1 ? 4 : 0, complete: true },
       emby: { covered: true, partial: false, unmapped: false },
     }

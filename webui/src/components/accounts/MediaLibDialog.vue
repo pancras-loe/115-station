@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 新建 / 修改一个媒体库（MULTI-ACCOUNT-V2-PLAN.md §10.1）：
- * 名称 → 115 网盘目录（连同账号）→ 本地目录（媒体根下）→ 转存/待整理文件夹 → 分类方案 → 刮削。
+ * 名称 → 115 网盘目录（连同账号）→ 本地目录（媒体根下）→ 转存/待整理文件夹 → 分类方案 → 刮削 → 上传到 115。
  * 存一次只动这一个库，校验在后端（libapiv2.go，整组互不包含）。
  */
 import { computed, ref, watch } from 'vue'
@@ -30,7 +30,7 @@ const dirInput = ref<InstanceType<typeof Cid115Input> | null>(null)
 const stagingInput = ref<InstanceType<typeof Cid115Input> | null>(null)
 
 function blank(): MediaLibReq {
-  return { name: '', account: 0, cid: '', path: '', local: '', staging_cid: '', staging_path: '', scheme_id: 0, depth: 1, scrape: 'manual' }
+  return { name: '', account: 0, cid: '', path: '', local: '', staging_cid: '', staging_path: '', scheme_id: 0, depth: 1, scrape: 'manual', upload: false }
 }
 
 watch(show, (v) => {
@@ -48,6 +48,7 @@ watch(show, (v) => {
         scheme_id: l.scheme_id,
         depth: l.depth || 1,
         scrape: l.scrape || 'manual',
+        upload: !!l.upload,
       }
     : { ...blank(), scheme_id: props.view.schemes[0]?.id ?? 0 }
   dir.value = { cid: form.value.cid, path: form.value.path || form.value.cid }
@@ -67,6 +68,10 @@ const SCRAPE_OPTS = [
   { label: '自动刮新片', value: 'auto' },
   { label: '只手动刮', value: 'manual' },
   { label: '不刮', value: 'off' },
+]
+const UPLOAD_OPTS = [
+  { label: '回传', value: true },
+  { label: '不传（推荐）', value: false },
 ]
 const DEPTH_OPTS = [
   { label: '库 / 片目', value: 1 },
@@ -191,6 +196,14 @@ async function submit() {
 
       <FieldRow label="刮削" tip="自动刮新片：整理进来、同步进来的新片都刮；只手动刮：在海报墙勾选后刮；不刮：交给 Emby。">
         <HSegmented :model-value="form.scrape" :options="SCRAPE_OPTS" size="sm" @update:model-value="(v) => (form.scrape = v as LibScrape)" />
+      </FieldRow>
+
+      <FieldRow
+        label="上传到 115"
+        tip="监控这个库的本地目录，本站或 Emby 新写的 NFO 与标准命名的图片（poster / fanart / seasonXX-poster 等）按相对路径传进这个库的 115 目录，用的是这个库所在账号。上传是 115 风控敏感操作，默认不传。"
+        :hint="form.upload ? '每分钟扫一次本地目录，最近 24 小时新产生的文件才传' : '只写本地，不往网盘写'"
+      >
+        <HSegmented :model-value="form.upload" :options="UPLOAD_OPTS" size="sm" @update:model-value="(v) => (form.upload = v as boolean)" />
       </FieldRow>
     </div>
     <template #footer>

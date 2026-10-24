@@ -205,6 +205,8 @@ export interface MediaLib {
   /** 只同步、不分类的库：片目在第几层 */
   depth: number
   scrape: LibScrape
+  /** 本地新产生的 NFO / 图片回传这个库的 115 目录（监控上传，每库一个开关） */
+  upload: boolean
   /** 台账里已经有这个库的内容：本地目录不能再改 */
   local_locked: boolean
   last_sync?: LibSyncStat
@@ -251,6 +253,8 @@ export interface MediaLibReq {
   scheme_id: number
   depth: number
   scrape: LibScrape
+  /** 不带 = 不改 */
+  upload?: boolean
 }
 
 export const getMediaLibs = () => http.get<MediaLibsView>('/media-libs')

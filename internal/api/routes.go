@@ -107,6 +107,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	h.FreezeLibLocalNames()
 	// 老配置换算成媒体库表（一次性、幂等，libstore.go）：要在本地名定下来之后
 	h.MigrateLibrariesV2()
+	// 全局上传开关换成每个库的开关（一次性，libupload.go）：要在媒体库表建好之后
+	h.MigrateLibUpload()
 	MigrateAcctLedgerIDs(db)
 	// 重试刷出来的重复「临时失败」记录（orgstrm.go dropRetryLeftovers），存量这里收一遍，幂等
 	sweepRetryLeftovers(db)
@@ -138,10 +140,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 媒体卷宽松权限（存量补 chmod，异步）
 	h.RelaxedMediaPerms()
 
-	// 元数据回传（本地媒体树的 poster/nfo → 115 对应目录）
-	StartMetadataUploader(h)
-
-	// 启动监控上传引擎（Emby 生成图片回传 115）
+	// 启动监控上传引擎（开着上传的库：本地新产生的 NFO / 图片回传 115，libupload.go）
 	StartMonitorUploader(h)
 
 	// 认证（账号由环境变量 AUTH_USER/AUTH_PASSWORD 提供或启动时自动生成，

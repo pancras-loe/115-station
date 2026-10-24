@@ -7,7 +7,7 @@ import HSegmented from '@/components/hero/HSegmented.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import TmdbPicker from '@/components/files/TmdbPicker.vue'
-import { configApi, localApi, organizeApi } from '@/api'
+import { libraryApi, localApi, organizeApi } from '@/api'
 import type { LocalTitle, ScrapeOptions } from '@/api/local'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -17,8 +17,8 @@ import { useQueueStore } from '@/stores/queue'
  * 刮削本地媒体库里所选的片目。选项默认取「影视刮削」页里保存的配置，
  * 在这里改的只对这一次生效，不回写配置。
  *
- * 「上传到网盘」默认关：不勾时只写本地，回不回传网盘照常由「监控上传」决定；
- * 勾了就这一次当场传进网盘对应目录（不看监控上传开关）。
+ * 「上传到网盘」默认关：不勾时只写本地，回不回传网盘照常看片目所在库的「上传到 115」开关；
+ * 勾了就这一次当场传进网盘对应目录（不看库的开关）。
  *
  * preset：卡片菜单的「改指定 TMDB」直接把弹窗开在对应的选项上（连带打开强制覆盖）。
  */
@@ -45,7 +45,8 @@ const DEFAULT_OPTS: ScrapeOptions = {
 const opts = ref<ScrapeOptions>({ ...DEFAULT_OPTS })
 /** 已保存的配置（对照显示「与已保存不同」） */
 const saved = ref<ScrapeOptions>({ ...opts.value })
-const monitorOn = ref(false)
+/** 开着「上传到 115」的库名（监控上传会随后自动传这些库里的新文件） */
+const uploadLibs = ref<string[]>([])
 const loading = ref(false)
 const submitting = ref(false)
 const mode = ref<'auto' | 'pick'>('auto')
@@ -63,7 +64,7 @@ watch(show, async (v) => {
   try {
     const [sc, mon] = await Promise.all([
       organizeApi.getScrapeConfig(),
-      configApi.getSetting<{ enabled: boolean }>('monitor', { enabled: false }),
+      libraryApi.getMediaLibs().catch(() => null),
     ])
     const c = sc.cfg ?? {}
     // 这两项后端缺省视为开启
@@ -75,7 +76,7 @@ watch(show, async (v) => {
       probe: !!c.probe_streams,
       skip_shared_stills: c.skip_shared_stills !== false,
     }
-    monitorOn.value = !!mon.enabled
+    uploadLibs.value = (mon?.libs ?? []).filter((l) => l.upload).map((l) => l.name)
   } catch {
     saved.value = { ...DEFAULT_OPTS }
   } finally {
@@ -96,8 +97,10 @@ const canSubmit = computed(
 
 const uploadHint = computed(() =>
   opts.value.upload
-    ? '这一次生成的文件写入本地后，直接传进网盘里对应的片目目录（不看监控上传开关）。'
-    : `只写本地媒体库；回不回传网盘由「监控上传」决定（当前${monitorOn.value ? '已开启，会随后自动上传' : '未开启，不会上传'}）。`,
+    ? '这一次生成的文件写入本地后，直接传进片目所在库的网盘目录（用那个库的账号，不看库的上传开关）。'
+    : uploadLibs.value.length
+      ? `只写本地媒体库；开着「上传到 115」的库（${uploadLibs.value.join('、')}）随后会自动回传，其余的不传。`
+      : '只写本地媒体库；没有库开着「上传到 115」，不会回传网盘。',
 )
 
 const totalVideos = computed(() => props.targets.reduce((n, t) => n + (t.videos || 0), 0))
