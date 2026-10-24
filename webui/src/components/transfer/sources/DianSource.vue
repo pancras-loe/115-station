@@ -6,6 +6,7 @@ import HSwitch from '@/components/hero/HSwitch.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import ShareOutRow from './ShareOutRow.vue'
+import AutoUnlockRows from './AutoUnlockRows.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import { resourcesApi } from '@/api'
 import type { Re0BrowserState, Re0Checkin, Re0OpState } from '@/api/resources'
@@ -238,6 +239,8 @@ onBeforeUnmount(stopOpPoll)
   <FormActions>
     <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
   </FormActions>
+
+  <AutoUnlockRows site="dian" />
 </template>
 
 <style scoped>

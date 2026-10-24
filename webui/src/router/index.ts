@@ -30,14 +30,14 @@ const routes: RouteRecordRaw[] = [
       },
       {
         // 资源订阅 2026-10-08 并进影视转存的「订阅」页签。旧地址可能被收藏：
-        // /subscriptions?sub=3 → 订阅页签并打开详情，?tab=settings → 设置里的订阅小节
+        // /subscriptions?sub=3 → 订阅页签并打开详情，?tab=settings → 订阅设置页签
         path: 'subscriptions',
         name: 'subscriptions',
         redirect: (to) => ({
           name: 'media-transfer',
           query:
             to.query.tab === 'settings'
-              ? { tab: 'settings', sec: 'check' }
+              ? { tab: 'subset' }
               : { tab: 'subs', ...(to.query.sub ? { sub: to.query.sub } : {}) },
         }),
       },

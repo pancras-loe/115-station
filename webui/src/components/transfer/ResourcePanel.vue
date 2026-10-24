@@ -199,7 +199,7 @@ function sourceHint(s: TransferSource): string {
 function onSourceClick(s: TransferSource) {
   const st = perSource.value[s.key]
   if (st?.status === 'unavailable' || st?.status === 'off') {
-    router.push({ query: { tab: 'settings', sec: s.key } })
+    router.push({ query: { tab: 'sources', sec: s.key } })
     return
   }
   if (st?.status === 'error') {

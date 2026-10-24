@@ -7,6 +7,7 @@ import HAlert from '@/components/hero/HAlert.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import ShareOutRow from './ShareOutRow.vue'
+import AutoUnlockRows from './AutoUnlockRows.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import LoginBadge from '@/components/transfer/LoginBadge.vue'
 import { resourcesApi } from '@/api'
@@ -458,6 +459,8 @@ onBeforeUnmount(() => {
   <FormActions>
     <HButton variant="primary" :loading="saving" @click="save">保存配置</HButton>
   </FormActions>
+
+  <AutoUnlockRows site="re0" />
 </template>
 
 <style scoped>

@@ -420,6 +420,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/subscriptions/:id/attempts/:aid/retry", h.RetrySubAttempt)
 		protected.GET("/subscribe/config", h.SubscribeGetConfig)
 		protected.POST("/subscribe/config", h.SubscribeSaveConfig)
+		protected.POST("/subscribe/config/unlock", h.SubscribeSaveUnlock)
 
 		// 影视转存：按影片聚合各资源站（transferhub.go）。下面四个站点只剩配置 / 登录接口，
 		// 搜索与提交统一走这里

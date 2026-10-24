@@ -12,16 +12,18 @@ import MukakuSource from '@/components/transfer/sources/MukakuSource.vue'
 import Re0Source from '@/components/transfer/sources/Re0Source.vue'
 import DianSource from '@/components/transfer/sources/DianSource.vue'
 import FolderSettings from './FolderSettings.vue'
-import SubSettings from '@/pages/subscribe/SubSettings.vue'
+import SubSettings, { type SubSettingsSec as SubSec } from '@/pages/subscribe/SubSettings.vue'
 import { transferApi } from '@/api'
 import type { SourceKey, XferTargets } from '@/api/transfer'
 import { useTransferSources } from '@/composables/transferSources'
 
 /**
- * 影视转存的全部设置：默认转存库、各资源来源、订阅。原来来源设置是五张卡片竖着排、
- * 订阅设置又是五张，要找一项得滚很久；现在左边列小节、右边一次只显示一张（?sec=）。
- * 手机上小节列表变成顶上一排横滑。
+ * 发现与订阅的设置，分两个页签共用这一个布局（part）：「资源来源」= 默认转存库 + 各资源来源，
+ * 「订阅设置」= 订阅的几个小节。原来两组合在一个「设置」页签里；来源设置是五张卡片竖着排、
+ * 订阅设置又是五张，要找一项得滚很久，现在左边列小节、右边一次只显示一张（?sec=）。
+ * 手机上小节列表变成顶上一排横滑。订阅的自动解锁积分在 RE0 / 癫影的来源设置里（AutoUnlockRows）。
  */
+const props = defineProps<{ part: 'sources' | 'subs' }>()
 const route = useRoute()
 const router = useRouter()
 const { state, reload, setEnabled } = useTransferSources()
@@ -38,7 +40,6 @@ onMounted(async () => {
 })
 const showFolder = computed(() => (targets.value?.libs.length ?? 0) > 1)
 
-type SubSec = 'check' | 'cond' | 'offline' | 'unlock' | 'notify'
 
 const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
   { key: 'gy', title: '观影', hint: '按影片读站内磁力与网盘资源' },
@@ -49,11 +50,12 @@ const SOURCES: { key: SourceKey; title: string; hint: string }[] = [
   { key: 'dian', title: '癫影', hint: 'm.dian115.com，账号密码网页登录，解锁花站内积分' },
 ]
 const SUB_SECS: { key: SubSec; title: string }[] = [
-  { key: 'check', title: '检查' },
-  { key: 'cond', title: '资源优先级' },
-  { key: 'offline', title: '离线下载' },
-  { key: 'unlock', title: '自动解锁' },
+  { key: 'check', title: '检查计划' },
+  { key: 'cond', title: '资源筛选' },
+  { key: 'wash', title: '洗版' },
+  { key: 'offline', title: '转存与离线' },
   { key: 'notify', title: '通知' },
+  { key: 'limits', title: '节流与限额' },
 ]
 
 const byKey = computed(() => Object.fromEntries((state.value?.sources ?? []).map((s) => [s.key, s])))
@@ -66,20 +68,26 @@ function srcTone(key: SourceKey): Tone | undefined {
   return s.reason ? 'warn' : 'ok'
 }
 
-const GROUPS = computed<{ label: string; icon: Component; items: { key: string; title: string; tone?: Tone }[] }[]>(() => [
-  ...(showFolder.value
-    ? [{ label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '默认转存库', tone: (targets.value?.default ? 'ok' : 'warn') as Tone }] }]
-    : []),
-  { label: '资源来源', icon: Globe, items: SOURCES.map((s) => ({ key: s.key as string, title: s.title, tone: srcTone(s.key) })) },
-  { label: '订阅', icon: BellRing, items: SUB_SECS.map((s) => ({ key: s.key as string, title: s.title, tone: undefined as Tone | undefined })) },
-])
+type Group = { label: string; icon: Component; items: { key: string; title: string; tone?: Tone }[] }
+const GROUPS = computed<Group[]>(() =>
+  props.part === 'subs'
+    ? [{ label: '订阅', icon: BellRing, items: SUB_SECS.map((s) => ({ key: s.key as string, title: s.title })) }]
+    : [
+        ...(showFolder.value
+          ? [{ label: '转存', icon: FolderInput, items: [{ key: 'folder', title: '默认转存库', tone: (targets.value?.default ? 'ok' : 'warn') as Tone }] }]
+          : []),
+        { label: '资源来源', icon: Globe, items: SOURCES.map((s) => ({ key: s.key as string, title: s.title, tone: srcTone(s.key) })) },
+      ],
+)
+const allKeys = computed(() => GROUPS.value.flatMap((g) => g.items.map((it) => it.key)))
 
-// 没写 ?sec= 时打开第一个小节；收藏的 ?sec=folder 在没有默认转存库可选时落到第一个来源
-const firstSec = computed(() => (showFolder.value ? 'folder' : SOURCES[0].key))
+// 没写 ?sec= 时打开第一个小节；收藏的 ?sec=folder 在没有默认转存库可选时落到第一个来源，
+// 不属于本页签的小节（别的页签留下的 ?sec=）同样落到第一个
+const firstSec = computed(() => (props.part === 'subs' ? SUB_SECS[0].key : showFolder.value ? 'folder' : SOURCES[0].key))
 const sec = computed({
   get: () => {
     const q = route.query.sec as string | undefined
-    if (!q || (q === 'folder' && !showFolder.value)) return firstSec.value
+    if (!q || !allKeys.value.includes(q)) return firstSec.value
     return q
   },
   set: (v: string) => void router.replace({ query: { ...route.query, sec: v === firstSec.value ? undefined : v } }),
@@ -136,7 +144,7 @@ const subSec = computed(() => SUB_SECS.find((s) => s.key === sec.value)?.key)
       </SectionCard>
 
       <!-- 订阅设置整存整取：保持挂载，小节之间切换不丢没保存的改动 -->
-      <SubSettings v-show="!!subSec" :section="subSec ?? 'check'" />
+      <SubSettings v-if="part === 'subs'" :section="subSec ?? 'check'" @go="(k) => (sec = k)" />
     </div>
   </div>
 </template>

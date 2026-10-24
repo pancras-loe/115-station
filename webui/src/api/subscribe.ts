@@ -257,6 +257,9 @@ export const seasons = (tmdbId: number) =>
   http.get<{ data: TmdbSeason[]; status?: string; ended?: boolean }>('/subscriptions/seasons', { params: { tmdb_id: tmdbId } })
 export const getConfig = () => http.get<{ data: SubscribeConfig; re0_spent_today: number; dian_spent_today?: number }>('/subscribe/config')
 export const saveConfig = (c: SubscribeConfig) => http.post<{ data: SubscribeConfig; message?: string }>('/subscribe/config', c)
+/** 只改一个站的自动解锁积分（来源设置里用，不整份覆盖订阅设置） */
+export const saveUnlock = (b: { site: 're0' | 'dian'; unlock_max: number; daily_budget: number }) =>
+  http.post<{ data: SubscribeConfig; message?: string }>('/subscribe/config/unlock', b)
 
 /** 订阅转回表单（编辑时用） */
 export function toForm(s: Subscription): SubForm {

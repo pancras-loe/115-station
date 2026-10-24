@@ -18,7 +18,7 @@ const model = computed({
   <label v-if="show" class="subdir-pick">
     <span class="lbl">转存到</span>
     <HSelect v-model="model" :options="options" placeholder="选转存到哪个库" aria-label="转存到" />
-    <RouterLink v-if="needPick && !current" class="hint" :to="{ name: 'media-transfer', query: { tab: 'settings', sec: 'folder' } }">
+    <RouterLink v-if="needPick && !current" class="hint" :to="{ name: 'media-transfer', query: { tab: 'sources', sec: 'folder' } }">
       设个默认就不用每次选
     </RouterLink>
   </label>

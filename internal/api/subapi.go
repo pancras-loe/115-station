@@ -596,3 +596,35 @@ func (h *Handler) SubscribeSaveConfig(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"data": cfg, "message": "已保存"})
 }
+
+// SubscribeSaveUnlock POST /subscribe/config/unlock：只改一个站的自动解锁上限与每日预算。
+// 这两项显示在 RE0 / 癫影的来源设置里，和订阅设置不在一个页签；订阅配置整存整取，
+// 来源卡片要是也整份提交，会把另一个页签刚存的订阅设置冲掉，所以单开一个只动这两项的接口。
+func (h *Handler) SubscribeSaveUnlock(c *gin.Context) {
+	var req struct {
+		Site        string `json:"site"`
+		UnlockMax   int    `json:"unlock_max"`
+		DailyBudget int    `json:"daily_budget"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	cfg := loadSubscribeCfg()
+	switch req.Site {
+	case "re0":
+		cfg.Re0UnlockMax, cfg.Re0DailyBudget = req.UnlockMax, req.DailyBudget
+	case "dian":
+		cfg.DianUnlockMax, cfg.DianDailyBudget = req.UnlockMax, req.DailyBudget
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "不认识的站点"})
+		return
+	}
+	cfg = normalizeSubscribeCfg(cfg)
+	b, _ := json.Marshal(cfg)
+	if err := h.Config.SaveSetting("subscribe", string(b)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": cfg, "message": "已保存"})
+}
