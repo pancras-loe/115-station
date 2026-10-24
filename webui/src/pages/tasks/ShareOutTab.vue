@@ -173,7 +173,7 @@ defineExpose({ reload: load })
 <template>
   <SectionCard
     title="分享记录"
-    hint="贴链接转存的 115 分享，整理认出是哪一部之后发到 RE0 / 癫影的结果，一站一行。开关在「影视转存 → 设置」的 RE0 / 癫影里"
+    hint="贴链接转存的 115 分享，整理认出是哪一部之后发到 RE0 / 癫影的结果，一站一行。开关在「发现与订阅 → 设置」的 RE0 / 癫影里"
   >
     <template #extra>
       <HButton v-if="rows.length" size="sm" variant="ghost" :loading="clearing" @click="clearAll">

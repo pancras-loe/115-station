@@ -132,7 +132,7 @@ func planSetup(in setupInputs) []setupStep {
 	if in.Organized > 0 {
 		s.Detail = "已经整理入库过"
 	} else {
-		s.Detail = "在「影视转存」找一部片转存，或往转存目录丢一部，整理会自动接手"
+		s.Detail = "在「发现与订阅」找一部片转存，或往转存目录丢一部，整理会自动接手"
 	}
 	steps = append(steps, s)
 	return steps

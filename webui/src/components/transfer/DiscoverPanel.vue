@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ArrowLeft } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
@@ -9,12 +10,16 @@ import type { DiscoverFilter, DiscoverList, DiscoverOpt, TmdbCandidate } from '@
 import type { OwnedInfo } from '@/api/transfer'
 
 /**
- * 找资源页没在搜东西时的趋势 / 热门榜单（TMDB）。点一部和搜索结果里点一部是同一回事：
+ * 发现首页「查看全部」/「按条件筛选」点进来的整页海报墙（TMDB 榜单，能翻页）。点一部和搜索结果里点一部是同一回事：
  * 条目自带 TMDB 编号，直接进找资源。榜单清单由后端给（tmdbdiscover.go），这里不写死。
  * 下面一行按 电影 / 剧集 + 地区 + 题材 筛选（list=filter），选项同样由后端给；
  * 动了任何一项就换成筛选结果，点上面的榜单回到榜单。
  */
-const emit = defineEmits<{ pick: [TmdbCandidate] }>()
+const props = defineProps<{
+  /** 打开时先看哪个榜单；filter = 直接进按条件筛选 */
+  initial?: string
+}>()
+const emit = defineEmits<{ pick: [TmdbCandidate]; back: [] }>()
 
 const LS_KEY = 'transfer.discover.list'
 const lists = ref<DiscoverList[]>([])
@@ -115,19 +120,31 @@ onMounted(async () => {
     hint.value = e instanceof Error ? e.message : '榜单读取失败'
     return
   }
+  if (props.initial === 'filter') {
+    current.value = lists.value[0]?.key ?? ''
+    setFilter({})
+    return
+  }
   let saved = ''
   try {
     saved = localStorage.getItem(LS_KEY) ?? ''
   } catch {
     // 同上
   }
-  const first = lists.value.find((l) => l.key === saved)?.key ?? lists.value[0]?.key
+  const want = props.initial || saved
+  const first = lists.value.find((l) => l.key === want)?.key ?? lists.value[0]?.key
   if (first) switchTo(first)
 })
 </script>
 
 <template>
   <div class="discover">
+    <div class="head">
+      <HButton variant="ghost" size="sm" @click="emit('back')">
+        <template #icon><ArrowLeft :size="15" /></template>
+        返回发现
+      </HButton>
+    </div>
     <HSegmented
       v-if="lists.length"
       :model-value="filtering ? '' : current"
@@ -173,6 +190,11 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  margin-bottom: -6px;
 }
 .filters {
   display: flex;

@@ -7,6 +7,8 @@ export interface TmdbCandidate {
   year?: string
   media_type: 'movie' | 'tv'
   poster?: string
+  /** 背景图（TMDB backdrop_path）：发现页横幅与选定影片的头图用 */
+  backdrop?: string
   overview?: string
   vote?: number
   /** 原名：影视转存用它判断资源标题是不是这部片 */

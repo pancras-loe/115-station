@@ -69,13 +69,13 @@ func re0BrowserBlocked(reason string) string {
 	if st.State == "error" && time.Since(time.Unix(st.UpdatedAt, 0)) < re0AutoRetryGap {
 		// 刚失败过：被动入口（打开来源列表、定时签到）别一失败就重下，断网时会一直重试刷日志。
 		// 界面上的「下载浏览器」按钮不受这个限制
-		return "浏览器下载失败：" + st.Error + "（可在「影视转存 → 设置 → RE0」重新下载）"
+		return "浏览器下载失败：" + st.Error + "（可在「发现与订阅 → 设置 → RE0」重新下载）"
 	}
 	ensureCloak(reason)
 	if st.State == "error" && st.Error != "" {
 		return "浏览器下载失败：" + st.Error + "（已重新开始下载）"
 	}
-	return "浏览器还没下载，已开始下载（约 210MB），可在「影视转存 → 设置 → RE0」看进度"
+	return "浏览器还没下载，已开始下载（约 210MB），可在「发现与订阅 → 设置 → RE0」看进度"
 }
 
 // ==================== 浏览器进程 ====================

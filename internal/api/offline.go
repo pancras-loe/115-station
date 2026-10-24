@@ -52,7 +52,7 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 		return http.StatusBadRequest, "不支持的链接类型（仅支持磁力/ed2k/HTTP/FTP）", 0, ""
 	}
 	if linkType == "share" {
-		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「影视转存」页的输入框里提交（或把链接发给机器人自动转存）", 0, ""
+		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「发现与订阅」页的输入框里提交（或把链接发给机器人自动转存）", 0, ""
 	}
 
 	// 目标目录：参数优先，否则按默认转存库（V2）/ 共用的转存目录（老口径），xfertarget.go

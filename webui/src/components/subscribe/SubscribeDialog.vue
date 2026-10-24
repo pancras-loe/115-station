@@ -309,7 +309,7 @@ async function submit() {
         <ChevronDown :size="14" :class="{ open: advanced }" />高级：来源、资源优先级、中字与大小、关键词、离线
       </button>
       <div v-if="advanced" class="adv">
-        <FieldRow label="来源" hint="不选 = 跟随「影视转存 → 设置」里开着的来源">
+        <FieldRow label="来源" hint="不选 = 跟随「发现与订阅 → 设置」里开着的来源">
           <HMultiSelect v-model="form.sources" :options="sourceOptions" placeholder="全部开着的来源" />
         </FieldRow>
         <SubPriorityFields v-model:mode="prioMode" v-model:rules="prioRules" v-model:limit="form.rank_limit" inherit />

@@ -77,7 +77,7 @@ func sourceLibOf(cfg *OrgConfig) (cid string, ok bool, err error) {
 		return "", true, fmt.Errorf("转存子目录「%s」绑定的媒体库（cid=%s）已改成自己整理，本站不往里整理：到「账号与媒体库 → 媒体库」改绑或解绑", s.Name, s.Lib)
 	}
 	if !recordLibOK(cfg, s.Lib) || s.Lib == "" {
-		return "", true, fmt.Errorf("转存子目录「%s」绑定的媒体库（cid=%s）已不在媒体库配置里：到「影视转存 → 设置 → 转存目录」改绑，或把库加回附加媒体库", s.Name, s.Lib)
+		return "", true, fmt.Errorf("转存子目录「%s」绑定的媒体库（cid=%s）已不在媒体库配置里：到「发现与订阅 → 设置 → 转存目录」改绑，或把库加回附加媒体库", s.Name, s.Lib)
 	}
 	return s.Lib, true, nil
 }

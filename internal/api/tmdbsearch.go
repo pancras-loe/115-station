@@ -90,13 +90,15 @@ func tmdbQueryVariants(q string) []string {
 
 // manualCand 一条候选（字段名与前端 TmdbCandidate 对齐）
 type manualCand struct {
-	ID        int     `json:"id"`
-	MediaType string  `json:"media_type"`
-	Title     string  `json:"title"`
-	Year      string  `json:"year"`
-	Poster    string  `json:"poster"`
-	Vote      float64 `json:"vote,omitempty"`
-	Overview  string  `json:"overview,omitempty"`
+	ID        int    `json:"id"`
+	MediaType string `json:"media_type"`
+	Title     string `json:"title"`
+	Year      string `json:"year"`
+	Poster    string `json:"poster"`
+	// Backdrop 背景图：找资源页的横幅与选定影片的头图用，没有就空
+	Backdrop string  `json:"backdrop,omitempty"`
+	Vote     float64 `json:"vote,omitempty"`
+	Overview string  `json:"overview,omitempty"`
 	// Original 原名：影视转存按它判断资源标题是不是这部片（英文资源名多用原名）
 	Original   string `json:"original_title,omitempty"`
 	popularity float64
@@ -114,6 +116,7 @@ type tmdbRawItem struct {
 	ReleaseDate   string  `json:"release_date"`
 	FirstAirDate  string  `json:"first_air_date"`
 	PosterPath    string  `json:"poster_path"`
+	BackdropPath  string  `json:"backdrop_path"`
 	VoteAverage   float64 `json:"vote_average"`
 	Overview      string  `json:"overview"`
 	Popularity    float64 `json:"popularity"`
@@ -134,7 +137,7 @@ func (r tmdbRawItem) cand(kind string) manualCand {
 		year = date[:4]
 	}
 	return manualCand{
-		ID: r.ID, MediaType: kind, Title: title, Year: year, Poster: r.PosterPath,
+		ID: r.ID, MediaType: kind, Title: title, Year: year, Poster: r.PosterPath, Backdrop: r.BackdropPath,
 		Vote: r.VoteAverage, Overview: r.Overview, Original: orig, popularity: r.Popularity,
 		minor: r.PosterPath == "" || slices.ContainsFunc(r.GenreIDs, func(g int) bool { return slices.Contains(tmdbMinorGenres, g) }),
 	}

@@ -92,7 +92,7 @@ const routes: RouteRecordRaw[] = [
         path: 'media-transfer',
         name: 'media-transfer',
         component: () => import('@/pages/MediaTransferPage.vue'),
-        meta: { title: '影视转存', desc: '按影片找资源 / 订阅追更 / 链接转存与离线下载', icon: 'download' },
+        meta: { title: '发现与订阅', desc: '逛榜单找资源 / 订阅追更 / 链接转存与离线下载', icon: 'download' },
       },
       {
         path: 'settings',

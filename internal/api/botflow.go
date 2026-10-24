@@ -615,7 +615,7 @@ func (f *botFlow) render() botView {
 	return v
 }
 
-// botOwned 选片列表上标出已经整理进库的（只查本地台账，和网页「影视转存」的已入库角标同口径）
+// botOwned 选片列表上标出已经整理进库的（只查本地台账，和网页「发现与订阅」的已入库角标同口径）
 func botOwned(db *gorm.DB, movies []wecomTmdbHit) map[string]bool {
 	out := map[string]bool{}
 	if db == nil {

@@ -799,7 +799,7 @@ func gyAutoLogin(cfg *gyCfg) error {
 	if err := gyLoginOnce(client, cfg.BaseURL, cfg.Username, cfg.Password, ""); err != nil {
 		var ce *errGyCaptcha
 		if errors.As(err, &ce) {
-			return fmt.Errorf("观影要求验证码（%s），请到「影视转存 → 设置 → 观影」手动登录一次", ce.msg)
+			return fmt.Errorf("观影要求验证码（%s），请到「发现与订阅 → 设置 → 观影」手动登录一次", ce.msg)
 		}
 		return err
 	}

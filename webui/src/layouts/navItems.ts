@@ -7,7 +7,7 @@ import {
   FolderTree,
   LayoutGrid,
   Clapperboard,
-  Download,
+  Compass,
   Settings,
   MessageSquare,
   Blocks,
@@ -32,6 +32,9 @@ export const navItems: NavItem[] = [
   { name: 'dashboard', label: '总览面板', icon: LayoutDashboard, group: '概览' },
 
   { name: 'accounts', label: '账号与媒体库', icon: UserRoundCog, group: '媒体库' },
+  // 找片 / 订阅是媒体库的入口（找到 → 转存 → 整理 → STRM → 刮削），2026-10-24 从单独的「传输」组并进来。
+  // 名字照 MoviePilot / Jellyseerr 的「发现」「订阅」：原来叫「影视转存」，说的是动作，用户要找的是片
+  { name: 'media-transfer', label: '发现与订阅', icon: Compass },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
   { name: 'organize', label: '自动整理', icon: Wand2 },
   // 刮削是整理流水线的下一环，紧跟自动整理
@@ -41,8 +44,6 @@ export const navItems: NavItem[] = [
   // 任务中心看的是整理 / 同步 / 刮削这些媒体库任务的进度与记录，跟它们放在一组。
   // 图标与顶栏的任务弹层入口一致
   { name: 'tasks', label: '任务中心', icon: ListChecks },
-
-  { name: 'media-transfer', label: '影视转存', icon: Download, group: '传输' },
 
   { name: 'settings', label: '系统配置', icon: Settings, group: '系统' },
   { name: 'message', label: '消息配置', icon: MessageSquare },

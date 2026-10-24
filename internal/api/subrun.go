@@ -292,7 +292,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 		r.target, r.libs = l.StagingCid, libs
 	}
 	if r.target == "" {
-		return nil, errors.New("未配置转存目录（影视转存 → 设置 → 转存目录）")
+		return nil, errors.New("未配置转存目录（账号与媒体库 → 媒体库，给库设转存文件夹）")
 	}
 	r.subs = stagingLibMap(loadStagingLibs())
 	ops, err := h.newPan115Ops()
@@ -933,7 +933,7 @@ func (r *subRunner) recordOverLimit(sub *model.Subscription, over []subCand, tri
 	}
 	for _, src := range order {
 		label := botSourceLabel(src)
-		r.notify("💰 订阅："+label+"上有资源需要积分", fmt.Sprintf("订阅《%s》在%s有 %d 条资源需要手动解锁（去「影视转存 → 找资源」）：\n%s",
+		r.notify("💰 订阅："+label+"上有资源需要积分", fmt.Sprintf("订阅《%s》在%s有 %d 条资源需要手动解锁（去「发现与订阅 → 找资源」）：\n%s",
 			sub.Title, label, len(lines[src]), strings.Join(lines[src], "\n")), sub, true)
 	}
 }

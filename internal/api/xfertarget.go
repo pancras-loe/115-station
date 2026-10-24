@@ -30,7 +30,7 @@ import (
 const xferTargetKey = "transfer_target"
 
 // errXferNeedLib 多个库、没设默认、这次也没选
-var errXferNeedLib = errors.New("有多个媒体库，没设默认转存库：选一个转存到哪个库（可以在「影视转存 → 设置 → 转存目录」设默认，以后就不用每次选）")
+var errXferNeedLib = errors.New("有多个媒体库，没设默认转存库：选一个转存到哪个库（可以在「发现与订阅 → 设置 → 转存目录」设默认，以后就不用每次选）")
 
 // xferLibValue 「转存到」里一个库的值
 func xferLibValue(id uint) string { return fmt.Sprintf("lib:%d", id) }
