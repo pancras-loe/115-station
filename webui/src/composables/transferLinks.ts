@@ -6,7 +6,7 @@ import { ref } from 'vue'
  * 「链接：… 访问码：…」写在一段话里，所以按链接形态抓，不按行切。
  */
 
-export type LinkKind = 'share' | 'magnet' | 'ed2k' | 'http'
+export type LinkKind = 'share' | 'ali' | 'magnet' | 'ed2k' | 'http'
 
 export interface ParsedLink {
   kind: LinkKind
@@ -17,6 +17,8 @@ export interface ParsedLink {
 
 const RE_SHARE =
   /(?:https?:\/\/)?(?:www\.)?(?:115\.com|115cdn\.com|anxia\.com)\/s\/[a-z0-9_-]+(?:\?[^\s#<>"'，。；;）)]*)?(?:#[a-z0-9]*)?/gi
+// 阿里云盘分享：秒传进 115（扩展功能「阿里云盘秒传」，后端 ali2115.go）
+const RE_ALI = /(?:https?:\/\/)?(?:www\.)?(?:alipan|aliyundrive)\.com\/s\/[a-z0-9]{8,}(?:\/folder\/[a-z0-9]+)?(?:\?pwd=[a-z0-9]{4})?/gi
 const RE_MAGNET = /magnet:\?xt=urn:btih:[a-z0-9]{16,}[^\s"'<>]*/gi
 // ed2k 以「|/」收尾，文件名里可能有空格：懒惰匹配到「|/」后面跟空白或结尾
 const RE_ED2K = /ed2k:\/\/\|file\|.+?\|\/(?=\s|$)/gim
@@ -38,6 +40,12 @@ export function parseLinks(text: string, codeInput = ''): ParsedLink[] {
     // 文本里的「提取码」和输入框只在只有一个分享时才分得清是谁的
     if (!code && shares.length === 1) code = codeInput.trim() || text.match(RE_CODE_IN_TEXT)?.[1] || ''
     add({ kind: 'share', url, code })
+  }
+  const alis = text.match(RE_ALI) ?? []
+  for (const url of alis) {
+    let code = url.match(/[?&]pwd=([a-z0-9]{4})/i)?.[1] ?? ''
+    if (!code && alis.length === 1 && !shares.length) code = codeInput.trim() || text.match(RE_CODE_IN_TEXT)?.[1] || ''
+    add({ kind: 'ali', url, code })
   }
   for (const url of text.match(RE_MAGNET) ?? []) add({ kind: 'magnet', url })
   for (const url of text.match(RE_ED2K) ?? []) add({ kind: 'ed2k', url: url.trim() })

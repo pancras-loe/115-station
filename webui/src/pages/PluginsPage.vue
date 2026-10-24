@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { ref, type Component } from 'vue'
+import { useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, Images, Play, Settings2 } from '@lucide/vue'
+import { CalendarCheck, CloudUpload, Images, Play, Settings2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
+import AliTransferModal from '@/components/plugins/AliTransferModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message } = useFeedback()
+const router = useRouter()
 
 /** 每张插件卡的「立即运行」结果，展示在卡片内 */
 const results = ref<Record<string, BannerState | null>>({})
@@ -78,6 +81,9 @@ async function cgRun() {
   }
 }
 
+// ============ 阿里云盘秒传 ============
+const aliShow = ref(false)
+
 // ============ 插件清单 ============
 interface Plugin {
   key: string
@@ -110,6 +116,16 @@ const plugins: Plugin[] = [
     runLabel: '立即生成',
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
+  },
+  {
+    key: 'ali2115',
+    name: '阿里云盘秒传',
+    icon: CloudUpload,
+    desc: '贴阿里云盘分享，按 SHA1 秒传进 115 转存文件夹并自动整理入库，文件内容不经过本站。115 上没有的文件秒传不了。',
+    available: true,
+    runLabel: '去贴链接',
+    onConfig: () => (aliShow.value = true),
+    onRun: () => router.push({ name: 'media-transfer', query: { tab: 'link' } }),
   },
 ]
 
@@ -163,6 +179,7 @@ const availableCount = plugins.filter((p) => p.available).length
     </HModal>
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
+    <AliTransferModal v-model:show="aliShow" />
   </SectionCard>
 </template>
 

@@ -967,6 +967,13 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		}
 		return resSubmitResult{Message: "已提交 115 离线下载，完成后自动整理入库"}, nil
 
+	case "ali":
+		job, err := h.submitAli2115(rl.URL, rl.Code, target, label)
+		if err != nil {
+			return resSubmitResult{}, err
+		}
+		return resSubmitResult{Message: fmt.Sprintf("阿里云盘分享已排进秒传队列（任务 #%d），秒传完自动整理入库", job.ID)}, nil
+
 	case "open":
 		if rl.Unlocked {
 			return resSubmitResult{Message: "已解锁，不是 115 分享，请手动打开", OpenURL: rl.URL, Code: rl.Code}, nil
@@ -1025,6 +1032,10 @@ type resLink struct {
 // 并由订阅自己核过上限与预算之后才带上 —— 这个函数不替调用方做积分判断
 func (h *Handler) resolveResourceLink(req resSubmitReq) (resLink, error) {
 	link, code := strings.TrimSpace(req.URL), strings.TrimSpace(req.Code)
+	// 用户自己贴的阿里云盘分享：秒传进 115（ali2115.go）。只认直接贴的，资源站搜到的照旧不收（resNormalize）
+	if req.Source == "" && isAliShareLink(link) {
+		return resLink{Action: "ali", URL: link, Code: code}, nil
+	}
 	if link != "" && removedCloudResource("", link) {
 		return resLink{}, fmt.Errorf("本站不支持该网盘的链接")
 	}

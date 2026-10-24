@@ -375,6 +375,10 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 // wecomHandleLink 企微消息里的下载链接分流：
 // 115 分享链接 → shareReceiveCore 转存（自动整理）；磁力/ed2k/http → 115 离线下载
 func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
+	if isAliShareLink(link) {
+		h.botAli2115(link, reply)
+		return
+	}
 	if classifyLink(link) == "share" {
 		shareURL, code := splitShareLink(link)
 		organize := true // 机器人触发的转存默认走「整理+增量」闭环

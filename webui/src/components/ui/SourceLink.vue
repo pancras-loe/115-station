@@ -16,6 +16,7 @@ const KIND_LABEL: Record<string, string> = {
   http: 'HTTP',
   ftp: 'FTP',
   share: '115 分享',
+  ali: '阿里云盘秒传',
 }
 
 /** 后端没给 kind（老记录）时按链接前缀兜底判一次 */

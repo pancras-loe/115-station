@@ -133,7 +133,9 @@ func (h *Handler) upload115FileCookie(cookie string, pid int64, filename string,
 
 	// 上传属写操作，纳入全局节流（复用 proapi 域名的间隔锚点）
 	throttle115(driver115.ApiUploadInfo)
-	init, err := rapidUploadInit115(client, getAppVerCached(), fileSize, filename, dirID, preID, fileID, bytes.NewReader(data))
+	rd := bytes.NewReader(data)
+	init, err := rapidUploadInit115(client, getAppVerCached(), fileSize, filename, dirID, preID, fileID,
+		func(spec string) (string, error) { return client.UploadDigestRange(rd, spec) })
 	throttle115Done(driver115.ApiUploadInfo)
 	if err != nil {
 		return fmt.Errorf("upload init 失败: %w", err)
@@ -149,8 +151,10 @@ func (h *Handler) upload115FileCookie(cookie string, pid int64, filename string,
 }
 
 // rapidUploadInit115 Cookie 通道 upload init（115driver RapidUpload 同款
-// 流程：ECDH 加密表单 + k_ec 令牌 + status 7 二次认证重试，可注入 appVer）
-func rapidUploadInit115(client *driver115.Pan115Client, appVer string, fileSize int64, fileName, dirID, preID, fileID string, r io.ReadSeeker) (*driver115.UploadInitResp, error) {
+// 流程：ECDH 加密表单 + k_ec 令牌 + status 7 二次认证重试，可注入 appVer）。
+// digest 按 sign_check（"起-止"，含两端）算那一段的 SHA1（大写）：本地数据直接读，
+// 阿里云盘秒传（ali2115.go）按 HTTP Range 读源文件那一段
+func rapidUploadInit115(client *driver115.Pan115Client, appVer string, fileSize int64, fileName, dirID, preID, fileID string, digest func(spec string) (string, error)) (*driver115.UploadInitResp, error) {
 	ecdh, err := ec115.NewEcdhCipher()
 	if err != nil {
 		return nil, err
@@ -213,8 +217,14 @@ func rapidUploadInit115(client *driver115.Pan115Client, appVer string, fileSize 
 			return nil, err
 		}
 		if result.Status == 7 {
+			if signKey != "" {
+				// 已经复验过一次还要：再算一遍也一样，别在这里死循环
+				return nil, fmt.Errorf("二次认证没通过（sign_check=%s）", result.SignCheck)
+			}
 			signKey = result.SignKey
-			signVal, _ = client.UploadDigestRange(r, result.SignCheck)
+			if signVal, err = digest(result.SignCheck); err != nil {
+				return nil, fmt.Errorf("二次认证读取文件片段失败: %w", err)
+			}
 		} else {
 			retry = false
 		}
@@ -222,6 +232,31 @@ func rapidUploadInit115(client *driver115.Pan115Client, appVer string, fileSize 
 	// 库的 RapidUpload 同款：SHA1 回填（UploadByOSS 上传后按它校验结果）
 	result.SHA1 = fileID
 	return result, nil
+}
+
+// rapidUpload115ByHash 只按 SHA1 + 体积秒传，手上没有文件内容（阿里云盘秒传，ali2115.go）。
+// hit=false 是 115 上没有这份文件（init 回 status 1 要真传）：不传，交给调用方记成未命中。
+// 只走 Cookie 通道：OpenAPI 授权的只是主号，别的账号的库也要能秒传
+func (h *Handler) rapidUpload115ByHash(cookie, dirID, name string, size int64, sha1Hex string, digest func(spec string) (string, error)) (hit bool, err error) {
+	client := driver115.New(driver115.UA(h.get115UA()))
+	cr := &driver115.Credential{}
+	if err := cr.FromCookie(cookie); err != nil {
+		return false, fmt.Errorf("Cookie 格式异常: %w", err)
+	}
+	client.ImportCredential(cr)
+	throttle115(driver115.ApiUploadInfo)
+	init, err := rapidUploadInit115(client, getAppVerCached(), size, name, dirID, "", strings.ToUpper(sha1Hex), digest)
+	throttle115Done(driver115.ApiUploadInfo)
+	if err != nil {
+		return false, err
+	}
+	switch init.Status {
+	case 2:
+		return true, nil
+	case 1:
+		return false, nil
+	}
+	return false, fmt.Errorf("115 返回了意外的状态 %d", init.Status)
 }
 
 // uploadToken115 115driver GenerateToken 同款算法，appVer 可注入最新版本

@@ -41,12 +41,13 @@ const parsed = computed(() => parseLinks(text.value, code.value))
 /** 只有一个分享、链接里和文本里都没写提取码时才要单独填 */
 const needCode = computed(() => {
   // 不带输入框里的值再认一遍：否则填了一个字母框就消失了
-  const shares = parseLinks(text.value).filter((l) => l.kind === 'share')
+  const shares = parseLinks(text.value).filter((l) => l.kind === 'share' || l.kind === 'ali')
   return shares.length === 1 && !shares[0].code
 })
 
 const KIND_LABEL: Record<ParsedLink['kind'], string> = {
   share: '115 分享',
+  ali: '阿里云盘',
   magnet: '磁力',
   ed2k: 'ed2k',
   http: 'HTTP',
@@ -60,7 +61,7 @@ const summary = computed(() => {
 async function submit() {
   const list = parsed.value
   if (!list.length) {
-    message.warning(text.value.trim() ? '没认出能提交的链接：支持 115 分享、磁力、ed2k、HTTP' : '请粘贴链接')
+    message.warning(text.value.trim() ? '没认出能提交的链接：支持 115 分享、阿里云盘分享、磁力、ed2k、HTTP' : '请粘贴链接')
     return
   }
   if (list.some((l) => l.kind === 'http')) {
@@ -103,7 +104,7 @@ async function submit() {
 
 <template>
   <div class="stack">
-    <SectionCard title="提交链接" hint="115 分享转存，磁力 / ed2k / HTTP 提交 115 离线下载">
+    <SectionCard title="提交链接" hint="115 分享转存，阿里云盘分享秒传，磁力 / ed2k / HTTP 提交 115 离线下载">
       <template #extra>
         <button type="button" class="folder" @click="router.push({ name: 'accounts', query: { tab: 'library' } })">
           <template v-if="folderPath">存到 <b>{{ folderPath }}</b></template>
@@ -114,13 +115,13 @@ async function submit() {
       <FieldRow
         label="链接"
         wide
-        tip="可以一次粘贴多个：ed2k 一行一个，115 分享可以整段粘贴官方分享文案（带「访问码」那种）。提交后一个一个处理，完成后自动整理入库。"
+        tip="可以一次粘贴多个：ed2k 一行一个，115 分享可以整段粘贴官方分享文案（带「访问码」那种）。阿里云盘分享要先在「扩展功能 → 阿里云盘秒传」登录并开启，秒传在后台任务里跑。提交后一个一个处理，完成后自动整理入库。"
       >
         <HInput
           v-model="text"
           :rows="5"
           mono
-          placeholder="粘贴 115 分享 / 磁力 / ed2k 链接，可以一次多个"
+          placeholder="粘贴 115 分享 / 阿里云盘分享 / 磁力 / ed2k 链接，可以一次多个"
           :input-attrs="{ 'aria-label': '链接', autocomplete: 'off', spellcheck: 'false' }"
         />
       </FieldRow>

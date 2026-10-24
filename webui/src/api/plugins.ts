@@ -130,3 +130,27 @@ export const metaFillConfig = () => http.get<{ data?: MetaFillInfo }>('/metafill
 export const saveMetaFill = (body: MetaFillConfig) => http.post('/metafill/config', body)
 export const runMetaFill = () => http.post<{ message?: string; job_id?: number }>('/metafill/run')
 export const resetMetaFill = () => http.post<{ message?: string }>('/metafill/reset')
+
+// ---- 阿里云盘秒传进 115（ali2115.go） ----
+export interface Ali2115Config {
+  enabled: boolean
+  /** 默认用哪个阿里云盘账号，0 = 第一个 */
+  source: number
+  /** 只传视频与字幕 */
+  media_only: boolean
+}
+export interface AliAccount {
+  id: number
+  name: string
+  nick: string
+  last_err?: string
+  last_ok?: string
+}
+export const ali2115Config = () => http.get<{ config: Ali2115Config; accounts: AliAccount[] }>('/ali2115/config')
+export const saveAli2115 = (body: Ali2115Config) => http.post<{ message?: string }>('/ali2115/config', body)
+export const aliAddToken = (token: string) => http.post<{ message: string; id: number }>('/ali2115/accounts', { token })
+export const aliDeleteAccount = (id: number) => http.del<{ message: string }>(`/ali2115/accounts/${id}`)
+export const aliTestAccount = (id: number) => http.post<{ message: string }>(`/ali2115/accounts/${id}/test`)
+export const aliQRCode = () => http.post<{ t: string; ck: string; image: string }>('/ali2115/qrcode')
+export const aliQRCheck = (t: string, ck: string) =>
+  http.post<{ status: string; message?: string; id?: number }>('/ali2115/qrcode/check', { t, ck })

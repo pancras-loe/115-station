@@ -471,6 +471,14 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/share/receive", h.ShareReceive)
 
 		// 115 每日签到（定时窗口随机执行 + 手动签到）
+		// 阿里云盘分享秒传进 115（扩展功能，ali2115.go）
+		protected.GET("/ali2115/config", h.Ali2115Config)
+		protected.POST("/ali2115/config", h.Ali2115SaveConfig)
+		protected.POST("/ali2115/accounts", h.Ali2115AddToken)
+		protected.DELETE("/ali2115/accounts/:id", h.Ali2115DeleteAccount)
+		protected.POST("/ali2115/accounts/:id/test", h.Ali2115TestAccount)
+		protected.POST("/ali2115/qrcode", h.Ali2115QRCode)
+		protected.POST("/ali2115/qrcode/check", h.Ali2115QRCheck)
 		protected.GET("/115checkin/config", h.Checkin115GetConfig)
 		protected.POST("/115checkin/config", h.Checkin115SaveConfig)
 		protected.POST("/115checkin/run", h.Checkin115Run)

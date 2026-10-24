@@ -92,6 +92,8 @@ type jobParams struct {
 	LibName string `json:"lib_name,omitempty"`
 	// Adopt 接管已有 STRM 的预演参数（adopt.go）
 	Adopt *adoptJobParams `json:"adopt,omitempty"`
+	// Ali 阿里云盘分享秒传进 115（ali2115.go）
+	Ali *aliJobParams `json:"ali,omitempty"`
 	// RebaseFrom 批量改写 STRM 地址：只改这些旧地址的，空 = 全部（strmrebase.go）
 	RebaseFrom []string `json:"rebase_from,omitempty"`
 }
@@ -165,6 +167,9 @@ func jobStoppable(job *model.TaskJob) bool {
 	case jobKindSubscribe:
 		// 逐个订阅，手上这个处理完就停
 		return true
+	case jobKindAli2115:
+		// 逐个文件秒传，手上这个传完就停（临时文件照样收拾）
+		return true
 	case "orgpick":
 		// 网盘文件页勾选的一批：整理逐个条目，两个之间能停
 		if f := decodeJobParams(job).Files; f != nil {
@@ -225,6 +230,7 @@ var jobWakes = map[*jobLane]chan struct{}{
 	probeLane:  make(chan struct{}, 1),
 	personLane: make(chan struct{}, 1),
 	subLane:    make(chan struct{}, 1),
+	xferLane:   make(chan struct{}, 1),
 }
 
 // jobKindScrape 走刮削队列的任务类型
@@ -242,6 +248,8 @@ func laneOfKind(kind string) *jobLane {
 		return personLane
 	case jobKindSubscribe:
 		return subLane
+	case jobKindAli2115:
+		return xferLane
 	}
 	return mainLane
 }
@@ -257,8 +265,10 @@ func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
 		return db.Where("kind = ?", jobKindPerson)
 	case subLane:
 		return db.Where("kind = ?", jobKindSubscribe)
+	case xferLane:
+		return db.Where("kind = ?", jobKindAli2115)
 	}
-	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindMetaFill, jobKindProbe, jobKindPerson, jobKindSubscribe})
+	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindMetaFill, jobKindProbe, jobKindPerson, jobKindSubscribe, jobKindAli2115})
 }
 
 func wakeJobWorker() {
@@ -380,6 +390,7 @@ func StartTaskWorker(h *Handler) {
 	go h.taskWorkerLoop(probeLane)
 	go h.taskWorkerLoop(personLane)
 	go h.taskWorkerLoop(subLane)
+	go h.taskWorkerLoop(xferLane)
 	if n := len(queuedJobs(h.DB)); n > 0 {
 		log.Printf("[队列] ○ 启动时有 %d 个排队中的任务，稍后依次执行", n)
 	}

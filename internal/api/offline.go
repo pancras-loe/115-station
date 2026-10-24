@@ -51,6 +51,10 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 	if linkType == "" {
 		return http.StatusBadRequest, "不支持的链接类型（仅支持磁力/ed2k/HTTP/FTP）", 0, ""
 	}
+	if isAliShareLink(rawURL) {
+		// 原来会被当成普通 HTTP 交给 115 离线，115 只会下到一个网页
+		return http.StatusBadRequest, "阿里云盘分享不能离线下载，请在「发现与订阅 → 链接转存」里提交（开启「扩展功能 → 阿里云盘秒传」后秒传进 115）", 0, ""
+	}
 	if linkType == "share" {
 		return http.StatusBadRequest, "115 分享链接不支持离线下载，请在「发现与订阅」页的输入框里提交（或把链接发给机器人自动转存）", 0, ""
 	}

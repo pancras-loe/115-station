@@ -281,6 +281,24 @@ type ShareOut struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// PanSource 别的网盘的账号，只当「搬进 115」的来源用（2026-10-24，api/ali2115.go）：
+// 不挂载、不生成 STRM、不播放。不放进 Storage —— 那张表很多地方默认只有 115 账号。
+// 一种网盘可以登记好几个账号
+type PanSource struct {
+	ID   uint   `json:"id" gorm:"primaryKey"`
+	Kind string `json:"kind" gorm:"index;size:16"` // ali（以后 guangya / p123）
+	Name string `json:"name" gorm:"size:64"`       // 界面上的名字，默认取网盘昵称
+	// Token 阿里云盘的 refresh token：每次刷新都会轮换，刷完必须写回，否则下次用旧的被拒
+	Token     string     `json:"-" gorm:"size:1024"`
+	UserID    string     `json:"user_id" gorm:"size:64"`
+	DriveID   string     `json:"drive_id" gorm:"size:64"` // 存分享用的盘（资源盘，没有才是默认盘）
+	Nick      string     `json:"nick" gorm:"size:64"`
+	LastErr   string     `json:"last_err" gorm:"size:255"`
+	LastOK    *time.Time `json:"last_ok"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
 // EmbyExtractMark 请 Emby 提前探测媒体信息的记账（按 Emby 条目 id，见 api/embyextract.go）。
 // 每次探测都经 302 取一次 115 直链，所以同一个条目的尝试次数与间隔必须有硬上限，
 // 且重启后仍然有效 —— 失败 / 超时的条目绝不能每次入库确认、每次刮削都再探一遍。成功即删行
@@ -699,6 +717,7 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&TmdbTVProgress{},
 		&Library{},
 		&CategoryScheme{},
+		&PanSource{},
 	); err != nil {
 		return nil, err
 	}
