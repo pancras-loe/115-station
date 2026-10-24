@@ -284,6 +284,7 @@ async function save() {
             { label: '补上了缺集', value: 'ingested' },
             { label: '订阅完成', value: 'done' },
             { label: '长期找不到', value: 'stalled' },
+            { label: '有资源要积分（没自动解锁）', value: 'paid' },
           ]"
           placeholder="都不推"
         />

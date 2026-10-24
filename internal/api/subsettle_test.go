@@ -100,8 +100,8 @@ func TestLoadSubscribeCfgNotifyMigrate(t *testing.T) {
 		model.DB.Create(&model.Setting{Key: "subscribe", Value: v})
 	}
 	save(`{"notify":"submit,done"}`)
-	if c := loadSubscribeCfg(); c.Notify != "submit,done,ingested,created" || c.NotifyVer != subNotifyVer {
-		t.Fatalf("老配置应补上 ingested 与 created: %+v", c)
+	if c := loadSubscribeCfg(); c.Notify != "submit,done,ingested,created,paid" || c.NotifyVer != subNotifyVer {
+		t.Fatalf("老配置应补上 ingested、created 与 paid: %+v", c)
 	}
 	save(`{"notify":""}`)
 	if c := loadSubscribeCfg(); c.Notify != "" {
@@ -109,10 +109,10 @@ func TestLoadSubscribeCfgNotifyMigrate(t *testing.T) {
 	}
 	// 版本 1 时保存过：关掉的 ingested 不补回来，版本 2 新加的 created 补上
 	save(`{"notify":"submit","notify_ver":1}`)
-	if c := loadSubscribeCfg(); c.Notify != "submit,created" {
+	if c := loadSubscribeCfg(); c.Notify != "submit,created,paid" {
 		t.Fatalf("只补保存之后新加的类型: %q", c.Notify)
 	}
-	save(`{"notify":"submit","notify_ver":2}`)
+	save(`{"notify":"submit","notify_ver":3}`)
 	if c := loadSubscribeCfg(); c.Notify != "submit" {
 		t.Fatalf("当前版本保存时关掉的不补回来: %q", c.Notify)
 	}

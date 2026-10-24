@@ -82,7 +82,7 @@ type subscribeCfg struct {
 	DianUnlockMax   int    `json:"dian_unlock_max"`
 	DianDailyBudget int    `json:"dian_daily_budget"`
 	ExcludeDefault  string `json:"exclude_default"` // 内置排除词，订阅自己的 Exclude 叠加在上面
-	Notify          string `json:"notify"`          // 推哪几类通知：created,submit,ingested,done,stalled
+	Notify          string `json:"notify"`          // 推哪几类通知：created,submit,ingested,done,stalled,paid
 	// NotifyVer 通知类型清单的版本：新增类型时加一，老配置读出来时把新类型补进 Notify。
 	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
 	NotifyVer int `json:"notify_ver"`
@@ -110,11 +110,12 @@ type subscribeCfg struct {
 	Subdir string `json:"subdir"`
 }
 
-// subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集），2 = 加了 created（新订阅）
-const subNotifyVer = 2
+// subNotifyVer 当前通知类型清单的版本。1 = 加了 ingested（补上了缺集），2 = 加了 created（新订阅），
+// 3 = 加了 paid（有资源要花积分、没自动解锁；原来总是推，没开自动解锁的用户嫌多，做成可关）
+const subNotifyVer = 3
 
 // subNotifyAdded 每个版本新增的通知类型，默认开启
-var subNotifyAdded = map[int]string{1: "ingested", 2: "created"}
+var subNotifyAdded = map[int]string{1: "ingested", 2: "created", 3: "paid"}
 
 func defaultSubscribeCfg() subscribeCfg {
 	return subscribeCfg{
@@ -130,7 +131,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		MaxSnapDirs:      30,
 		SharePreviewMax:  8,
 		ExcludeDefault:   "CAM,TS,TC,HDTC,枪版,抢先版",
-		Notify:           "created,submit,ingested,done,stalled",
+		Notify:           "created,submit,ingested,done,stalled,paid",
 		NotifyVer:        subNotifyVer,
 
 		OfflineMode:      subOfflinePack,

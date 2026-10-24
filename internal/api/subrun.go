@@ -933,8 +933,9 @@ func (r *subRunner) recordOverLimit(sub *model.Subscription, over []subCand, tri
 	}
 	for _, src := range order {
 		label := botSourceLabel(src)
-		r.notify("💰 订阅："+label+"上有资源需要积分", fmt.Sprintf("订阅《%s》在%s有 %d 条资源需要手动解锁（去「发现与订阅 → 找资源」）：\n%s",
-			sub.Title, label, len(lines[src]), strings.Join(lines[src], "\n")), sub, true)
+		// 记账照记（同一条不再提示），推不推看通知类型 paid
+		r.notifyKind("paid", "💰 订阅："+label+"上有资源需要积分", fmt.Sprintf("订阅《%s》在%s有 %d 条资源需要手动解锁（去「发现与订阅 → 找资源」）：\n%s",
+			sub.Title, label, len(lines[src]), strings.Join(lines[src], "\n")), sub)
 	}
 }
 
