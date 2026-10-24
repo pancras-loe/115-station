@@ -65,3 +65,21 @@ func TestPlanSubCandidatesRe0WebPreview(t *testing.T) {
 		t.Fatalf("跳过原因 = %v", skipped)
 	}
 }
+
+// 这一轮预览额度用完（errSubPreviewLater）：要花积分的同样跳过，不退回按标题判（标题写「全集」也不行）
+func TestPlanSubCandidatesPreviewLater(t *testing.T) {
+	sub := &model.Subscription{ID: 1, MediaType: "tv"}
+	items := []ResourceItem{
+		{Source: "re0", Kind: "share115", Action: "unlock", Title: "剧 全集 4K", Ref: "x", Relevant: true, Points: pts(8), Rank: 0},
+	}
+	preview := func(ResourceItem) ([]epKey, string, error) { return nil, "", errSubPreviewLater }
+	skipped := map[string]int{}
+	cands, over := planSubCandidates(items, subPickCtx{Prio: prioAny, Sub: sub, Missing: epKeys("S01E04"), Now: time.Now(), Re0Max: 20, Re0Left: -1,
+		Re0Preview: preview, Skipped: skipped})
+	if len(cands) != 0 || len(over) != 0 {
+		t.Fatalf("额度用完不该付费：候选 %d over %d", len(cands), len(over))
+	}
+	if skipped["要花积分、这一轮文件预览次数用完，下一轮再看"] != 1 {
+		t.Fatalf("跳过原因 = %v", skipped)
+	}
+}

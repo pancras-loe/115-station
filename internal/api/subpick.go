@@ -49,11 +49,16 @@ func (c resCoverage) covers(k epKey) bool {
 
 var (
 	reCovEpRange   = regexp.MustCompile(`(?i)(?:^|[^a-z])(?:EP?)(\d{1,4})\s*[-~～至到]\s*(?:EP?)?(\d{1,4})(?:[^\d]|$)`)
-	reCovEpRangeCn = regexp.MustCompile(`第?\s*(\d{1,4})\s*[-~～至到]\s*(\d{1,4})\s*集`)
-	reCovEpTo      = regexp.MustCompile(`(?:更新至|更至|更新到|连载至|更新)\s*第?\s*(\d{1,4})\s*集`)
-	reCovEpAll     = regexp.MustCompile(`全\s*(\d{1,4})\s*集`)
-	reCovEpOne     = regexp.MustCompile(`(?i)S\d{1,2}\s*EP?(\d{1,4})(?:[^\d\-~]|$)|第\s*(\d{1,4})\s*集`)
-	reCovOngoing   = regexp.MustCompile(`连载|更新中|更新至|更至|持续更新|更新到|未完结`)
+	reCovEpRangeCn = regexp.MustCompile(`第?\s*(\d{1,4})\s*集?\s*(?:[-~～至到]|--)\s*第?\s*(\d{1,4})\s*集`)
+	// 「1--184全集」：范围后面直接跟全集 / 合集，不写「集」
+	reCovEpRangeAll = regexp.MustCompile(`(\d{1,4})\s*[-~～]{1,2}\s*(\d{1,4})\s*(?:全集|合集)`)
+	// 「174最新全集」「184集已更新」：全集只到这一集。2026-10-24 现场：只认「全集」当成包含所有集，
+	// 缺 190 多集时把 1-174 的合集当成能补，花积分解锁了。前面不许挨着字母数字（S01全集 不算）
+	reCovEpUpTo  = regexp.MustCompile(`(?:^|[^\dA-Za-z])(\d{1,4})\s*集?\s*(?:最新|已更新|已更|全集|合集)`)
+	reCovEpTo    = regexp.MustCompile(`(?:更新至|更至|更新到|连载至|更新)\s*第?\s*(\d{1,4})\s*集`)
+	reCovEpAll   = regexp.MustCompile(`全\s*(\d{1,4})\s*集`)
+	reCovEpOne   = regexp.MustCompile(`(?i)S\d{1,2}\s*EP?(\d{1,4})(?:[^\d\-~]|$)|第\s*(\d{1,4})\s*集`)
+	reCovOngoing = regexp.MustCompile(`连载|更新中|更新至|更至|持续更新|更新到|未完结`)
 )
 
 // resCoverageOf 标题 → 估计范围。季用 resSeasonOf 同一套（S01 / S01-S03 / 第一季 / 全集）
@@ -83,6 +88,11 @@ func resCoverageOf(title string) resCoverage {
 	case reCovEpRangeCn.MatchString(title):
 		m := reCovEpRangeCn.FindStringSubmatch(title)
 		c.EpLo, c.EpHi = atoi(m[1]), atoi(m[2])
+	case reCovEpRangeAll.MatchString(title):
+		m := reCovEpRangeAll.FindStringSubmatch(title)
+		c.EpLo, c.EpHi = atoi(m[1]), atoi(m[2])
+	case covEpUpTo(title) > 0:
+		c.EpLo, c.EpHi = 1, covEpUpTo(title)
 	case reCovEpOne.MatchString(title):
 		m := reCovEpOne.FindStringSubmatch(title)
 		c.EpLo = atoi(firstNonEmpty(m[1], m[2]))
@@ -92,6 +102,16 @@ func resCoverageOf(title string) resCoverage {
 		c.EpLo, c.EpHi = 0, 0
 	}
 	return c
+}
+
+// covEpUpTo 「174最新全集」里的 174；没有返回 0。年份（「2020 全集」）不算
+func covEpUpTo(title string) int {
+	for _, m := range reCovEpUpTo.FindAllStringSubmatch(title, -1) {
+		if n, _ := strconv.Atoi(m[1]); n > 0 && (n < 1900 || n > 2100) {
+			return n
+		}
+	}
+	return 0
 }
 
 // ==================== 过滤与排序 ====================
@@ -370,6 +390,12 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 					// 留给用户在找资源里手动解锁
 					if errors.Is(err, errRe0NoPreview) {
 						c.skip("要花积分、没读到 RE0 文件预览")
+						continue
+					}
+					// 这一轮预览额度用完了：下一轮再看，不按标题判（2026-10-24 现场：额度被缓存里早就判过没用的几条占满，
+					// 后面的按标题「全集」付费解锁，一轮花 4-10 积分、三轮全没用上）
+					if errors.Is(err, errSubPreviewLater) {
+						c.skip("要花积分、这一轮文件预览次数用完，下一轮再看")
 						continue
 					}
 					// 预览不可用（没开放 / 这个网盘不支持 / 出错）：退回按标题判

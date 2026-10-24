@@ -335,6 +335,20 @@ func TestSubRe0PreviewFn(t *testing.T) {
 	if calls != subRe0PreviewMax {
 		t.Fatalf("一轮预览了 %d 次，上限 %d", calls, subRe0PreviewMax)
 	}
+	// 额度用完：返回 errSubPreviewLater（调用方跳过、不按标题判付费）
+	if _, _, err := fn(ResourceItem{Ref: "more"}); !errors.Is(err, errSubPreviewLater) {
+		t.Fatalf("额度用完应返回 errSubPreviewLater: %v", err)
+	}
+	// 缓存里有的不占额度（2026-10-24 现场：额度被早就判过没用的几条占满，后面的按标题付费解锁）
+	r.re0Cached = func(slug string) bool { return slug == "cached" }
+	fn2 := r.re0PreviewFn(sub, map[epKey]bool{{S: 2, E: 1}: true})
+	for i := 0; i < 10; i++ {
+		fn2(ResourceItem{Ref: "cached"})
+	}
+	if _, _, err := fn2(ResourceItem{Ref: "fresh"}); err != nil {
+		t.Fatalf("缓存命中不该占额度: %v", err)
+	}
+	r.re0Cached = nil
 	// 电影：挑得出视频就算能补
 	movie := &model.Subscription{ID: 2, Title: "片", MediaType: "movie"}
 	if covered, _, _ := r.re0PreviewFn(movie, nil)(ResourceItem{Ref: "ok"}); len(covered) != 1 {

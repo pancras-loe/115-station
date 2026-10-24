@@ -22,6 +22,11 @@ func TestResCoverageOf(t *testing.T) {
 		{"三体 全集 1080p", resCoverage{All: true}},
 		{"三体 S01E07 1080p", resCoverage{SeasonLo: 1, SeasonHi: 1, EpLo: 7, EpHi: 7}},
 		{"三体 2023 4K 杜比视界", resCoverage{}},
+		// 2026-10-24 现场：只认「全集」当所有集，1-184 的合集被当成能补 190 多集，花积分解锁
+		{"174最新全集 4K 4K WEB-DL/WEBRip", resCoverage{EpLo: 1, EpHi: 174, All: true}},
+		{"1集-184集合集 2K", resCoverage{EpLo: 1, EpHi: 184, All: true}},
+		{"184集已更新，凡人修仙传:1--184全集，不缺集，已刮销 4K", resCoverage{EpLo: 1, EpHi: 184, All: true}},
+		{"三体 2023 全集", resCoverage{All: true}},
 	}
 	for _, c := range cases {
 		if got := resCoverageOf(c.title); got != c.want {

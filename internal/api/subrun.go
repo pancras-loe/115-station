@@ -184,16 +184,16 @@ type subRunner struct {
 	tc     *TmdbClient
 	target string // 转存目录 cid
 	// subs 绑定了媒体库的转存子目录（stagingsub.go），按订阅选的子目录建包装目录
-	subs     map[string]stagingLib
-	cookie   string
-	libs     []model.Library // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
-	prio     map[uint]subPriority // 一轮里每个订阅的资源优先级（priorityOf 缓存）
+	subs   map[string]stagingLib
+	cookie string
+	libs   []model.Library      // 媒体库表（V2）；空 = 老口径（转存目录 + 子目录绑定）
+	prio   map[uint]subPriority // 一轮里每个订阅的资源优先级（priorityOf 缓存）
 	// washSub 正在给哪个订阅洗版（subwash.go）：这期间建的尝试记成洗版的，分享按集挑时只要比库里那份好的（washBeats）
 	washSub   uint
 	washBeats func(k epKey, f washFile) bool
 	searched  map[uint]subSearchHit // 一轮里每个订阅只搜一次：补缺集与洗版共用
-	re0Left  int             // 今天还能自动解锁多少 RE0 积分，<0 = 不限
-	dianLeft int             // 癫影同上（两个站的积分各算各的）
+	re0Left   int                   // 今天还能自动解锁多少 RE0 积分，<0 = 不限
+	dianLeft  int                   // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
 	stopPaid map[string]bool
 	// 离线：offlineStop 非空 = 这一轮不再提交离线（原因）；offlineLeft 本月还能提交几个、quotaLeft 115 剩余配额，<0 = 不限 / 没查
@@ -216,6 +216,8 @@ type subRunner struct {
 	quota    func() (left, total int, err error) // 115 离线剩余配额
 	// re0Files RE0 文件预览（付费解锁前核对缺集）；nil = 不预览，按标题判
 	re0Files func(slug string) (*re0Preview, error)
+	// re0Cached 这条资源的预览缓存里有没有：有的不占一轮的预览额度；nil = 都算没有
+	re0Cached func(slug string) bool
 	// identity 订阅这一部的形态与同名条目（subtwin.go）；nil = 不查（测试）
 	identity func(sub *model.Subscription) (subIdentity, error)
 	// sleep 两条资源之间的冷却（subSleep）；nil = 不歇（测试）
@@ -326,6 +328,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	r.quota = func() (int, int, error) { return offlineQuota115(r.cookie) }
 	r.identity = func(sub *model.Subscription) (subIdentity, error) { return subIdentityOf(r.tc, sub) }
 	r.re0Files = func(slug string) (*re0Preview, error) { return re0PreviewFiles(h, slug) }
+	r.re0Cached = re0PreviewCached
 	return r, nil
 }
 
@@ -1068,11 +1071,15 @@ func (r *subRunner) sharePickOpts(sub *model.Subscription, it ResourceItem, miss
 	return opts
 }
 
-// subRe0PreviewMax 一个订阅一轮最多预览几条要花积分的 RE0 资源（预览本身有 6 小时缓存，这里管的是冷启动那一轮）
+// subRe0PreviewMax 一个订阅一轮最多新预览几条要花积分的 RE0 资源（缓存里有的不算；预览本身有 6 小时缓存，这里管的是冷启动那一轮）
 const subRe0PreviewMax = 5
 
-// errSubPreviewOff 这一轮不预览了（次数用完 / 没有 slug）：按标题判
+// errSubPreviewOff 不预览（没有 slug / 癫影清单是空的）：按标题判
 var errSubPreviewOff = errors.New("不预览")
+
+// errSubPreviewLater 这一轮的预览额度用完了：要花积分的跳过、下一轮再看，**不按标题判**——
+// 看得到文件的资源没看就花积分，标题估计（尤其「全集」）靠不住
+var errSubPreviewLater = errors.New("这一轮预览次数用完")
 
 // re0PreviewFn 给挑选用的预览：列预览 → 和真正转存同一套按集挑（sharePickOpts）→ 能补上的集
 func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool) func(ResourceItem) ([]epKey, string, error) {
@@ -1084,10 +1091,15 @@ func (r *subRunner) re0PreviewFn(sub *model.Subscription, missing map[epKey]bool
 		if it.Source == "dian" {
 			return r.dianPreview(sub, it, missing)
 		}
-		if it.Ref == "" || used >= subRe0PreviewMax {
+		if it.Ref == "" {
 			return nil, "", errSubPreviewOff
 		}
-		used++
+		if r.re0Cached == nil || !r.re0Cached(it.Ref) {
+			if used >= subRe0PreviewMax {
+				return nil, "", errSubPreviewLater
+			}
+			used++
+		}
 		subLane.setSub("预览 RE0 文件", 0, 0, truncateStr(it.Title, 40))
 		p, err := r.re0Files(it.Ref)
 		if err != nil {

@@ -911,6 +911,21 @@ type re0PreviewHit struct {
 	at  time.Time
 }
 
+// re0PreviewCached 这条资源的预览（含出错的）还在缓存里：订阅据此不占一轮的预览额度
+func re0PreviewCached(slug string) bool {
+	re0PreviewCache.Lock()
+	defer re0PreviewCache.Unlock()
+	hit, ok := re0PreviewCache.m[slug]
+	if !ok {
+		return false
+	}
+	ttl := re0PreviewTTL
+	if hit.err != nil {
+		ttl = re0PreviewErrTTL
+	}
+	return time.Since(hit.at) < ttl
+}
+
 // re0PreviewFiles 预览一条资源的文件列表（带缓存）。预览没开 / 这个网盘不支持预览时返回错误，调用方退回按标题判
 func re0PreviewFiles(h *Handler, slug string) (*re0Preview, error) {
 	web := re0Channel(loadRe0Cfg()) == "web"
