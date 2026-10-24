@@ -106,6 +106,32 @@ export interface AdoptReport {
 /** 入队一次只读预演，结果在任务详情的 result 里 */
 export const adoptPreview = (body: { scan_dir?: string }) => http.post<QueuedReply>('/sync/adopt/preview', body)
 
+/** 批量改写已有 STRM 的直链地址：预演与执行共用的报告（后端 strmrebase.go 的 strmRebaseReport） */
+export interface StrmRebaseReport {
+  /** 改成的地址（已保存的直连域名） */
+  target: string
+  /** 台账里的视频 */
+  total: number
+  /** 本地读不到的 */
+  missing: number
+  /** 不是本站格式的直链，不碰 */
+  foreign: number
+  /** 已经是当前地址 */
+  current: number
+  /** 写着别的地址的，按旧地址分组 */
+  stale: { base: string; count: number }[]
+  stale_total: number
+  samples: { rel: string; old: string; new: string }[]
+  /** 只在执行结果里有 */
+  rewritten: number
+  failed: number
+}
+
+/** 只读预演：读本地 STRM，零 115 请求。库大、本地是网络盘时要读一会儿 */
+export const strmRebasePreview = () => http.get<StrmRebaseReport>('/sync/strm-rebase/preview', { timeoutMs: 180_000 })
+/** 入队改写：from 是要改的旧地址，空 = 全部 */
+export const strmRebase = (from: string[]) => http.post<QueuedReply>('/sync/strm-rebase', { from })
+
 export interface IncrSummary {
   /** 轮次号，与日志里的 [同步#N] 对应 */
   round: number

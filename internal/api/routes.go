@@ -244,6 +244,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/sync/orphans", h.ListOrphans)
 		protected.POST("/sync/orphans/clean", h.CleanOrphans)
 		protected.POST("/sync/adopt/preview", h.AdoptPreview) // 接管已有 STRM：只读预演（adopt.go）
+		// 批量改写已有 STRM 的直链地址（换了直连域名之后），只动本地（strmrebase.go）
+		protected.GET("/sync/strm-rebase/preview", h.StrmRebasePreview)
+		protected.POST("/sync/strm-rebase", h.StrmRebase)
 		// 深度删除（本地已删、网盘还在）：上一条的镜像，删的是网盘源文件。
 		protected.GET("/sync/deep-delete/records", h.ListDeepDeleteRecords)
 		protected.GET("/emby/webhook-status", h.EmbyWebhookStatus)

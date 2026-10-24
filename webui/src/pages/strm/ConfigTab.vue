@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
@@ -7,11 +7,14 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
+import StrmRebaseDialog from '@/components/strm/StrmRebaseDialog.vue'
+import { syncApi } from '@/api'
+import type { StrmRebaseReport } from '@/api/sync'
 import { useSetting } from '@/composables/useSetting'
 
 // keep_ext 后端存的是字符串 'true'/'false' 而不是布尔（旧版遗留），
 // 这里保持原样，改成布尔会让老配置读出来是 undefined
-const { model, loading, saving, save, reset } = useSetting('strm', {
+const { model, loading, saving, saved, save, reset } = useSetting('strm', {
   domain: '',
   format: 'pick_code_name',
   keep_ext: 'true',
@@ -54,6 +57,37 @@ const example = computed(() => {
     ? `${domain}/d/${id}`
     : `${domain}/d/${id}?/钢铁侠.2008.1080p.BluRay.X264.DTS-TnT.mkv`
 })
+
+const normDomain = (d: string) => d.trim().replace(/\/+$/, '')
+
+// 批量改写已有 STRM 的地址（strmrebase.go）。两个入口：域名下面的按钮随时打开；
+// 保存时域名变了，先在后台预演一次，真有写着旧地址的才弹出来（没有就不打扰）
+const rebaseShow = ref(false)
+const rebasePreload = ref<StrmRebaseReport | null>(null)
+const rebaseAfterSave = ref(false)
+const domainUnsaved = computed(() => normDomain(model.value.domain) !== normDomain(saved.value.domain))
+
+function openRebase() {
+  rebasePreload.value = null
+  rebaseAfterSave.value = false
+  rebaseShow.value = true
+}
+
+async function onSave() {
+  const before = normDomain(saved.value.domain)
+  if (!(await save())) return
+  const after = normDomain(model.value.domain)
+  if (!after || after === before) return
+  try {
+    const r = await syncApi.strmRebasePreview()
+    if (!r.stale_total) return
+    rebasePreload.value = r
+    rebaseAfterSave.value = true
+    rebaseShow.value = true
+  } catch {
+    // 预演失败（挂载没就绪等）不打扰保存；用户可以从「改写已有 STRM」按钮进去看原因
+  }
+}
 </script>
 
 <template>
@@ -67,6 +101,10 @@ const example = computed(() => {
       <p v-if="showSuggest" class="suggest">
         还没填，播放时按 http://172.17.0.1:6086 兜底（只在本机 Docker 网络里通）。
         <HButton variant="ghost" size="sm" @click="model.domain = suggestDomain">填入 {{ suggestDomain }}</HButton>
+      </p>
+      <p v-else-if="!loading && saved.domain.trim()" class="suggest">
+        换了域名、已经生成的 STRM 还是旧地址？
+        <HButton variant="ghost" size="sm" @click="openRebase">改写已有 STRM…</HButton>
       </p>
     </FieldRow>
 
@@ -101,9 +139,15 @@ const example = computed(() => {
     </FieldRow>
 
     <FormActions>
-      <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+      <HButton variant="primary" :loading="saving" @click="onSave">保存配置</HButton>
       <HButton variant="tertiary" @click="reset">重置配置</HButton>
     </FormActions>
+    <StrmRebaseDialog
+      v-model:show="rebaseShow"
+      :preload="rebasePreload"
+      :unsaved="domainUnsaved"
+      :after-save="rebaseAfterSave"
+    />
   </SectionCard>
 </template>
 

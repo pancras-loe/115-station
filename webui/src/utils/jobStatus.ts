@@ -31,6 +31,7 @@ export const JOB_KIND: Record<string, string> = {
   deepdel: '深度删除',
   full: '全量同步',
   adopt: '接管已有 STRM',
+  strmrebase: '改写 STRM 地址',
   incr: '增量同步',
   background: '后台任务',
 }
