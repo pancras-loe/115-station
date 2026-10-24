@@ -14,7 +14,10 @@ package api
 //   - 库里那份有多好不能看库里的文件名：整理按模板改了名，模板没写画质的话名字里什么都看不出，
 //     任何资源都「更好」，每轮换一次。按整理记录里这个文件的原名（orgRecordFile.Orig）认，没有就用台账名，
 //     读过媒体信息的叠上读到的画质（probeJudgeName）；连分辨率都认不出的那一集不洗。
-//   - 只用 115 分享（能按集挑、不扣离线配额），不花积分。
+//   - 只用 115 分享（能按集挑、不扣离线配额）。RE0 / 癫影要花积分的也能用（2026-10-24 起，维护者要求）：
+//     单条上限、当天预算与补缺的自动解锁共用，一个订阅一轮（补缺 + 洗版）最多付费 1 条；
+//     标题得写明画质、而且明确比库里某一集好（subWashTitleBeats，体积偏好比不出来的不算），
+//     能预览的先按文件核对（预览也按「比库里好」挑），看不到文件的照补缺的口径处理。
 //   - 洗版试过的资源单独记（SubAttempt.Wash）：补缺时「里面没有缺的集」的合集，正是洗版要看的东西。
 
 import (
@@ -233,20 +236,37 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 		missing[k] = true
 	}
 	sortEpKeys(want)
+	// 先挂上「比库里好」：付费资源的文件预览在挑选时就要按它挑（sharePickOpts 看 washSub）
+	r.washSub = sub.ID
+	r.washBeats = func(k epKey, f washFile) bool {
+		cur, ok := st.Want[k]
+		return ok && prio.compareFiles(f, cur) > 0
+	}
+	defer func() { r.washSub, r.washBeats = 0, nil }()
+
 	pctx := subPickCtx{
 		Sub: sub, Missing: want, Tried: tried, Now: r.now(),
 		Exclude: append(splitKeywords(r.cfg.ExcludeDefault), splitKeywords(sub.Exclude)...),
 		Include: splitKeywords(sub.Include),
 		Cond:    subCondOf(r.cfg, sub.Cond),
-		// 只用分享、不花积分
-		OfflineMode: subOfflineShareOnly, Re0Left: 0, DianLeft: 0,
+		// 只用分享；要花积分的与补缺共用自动解锁的上限与预算
+		OfflineMode: subOfflineShareOnly,
+		Re0Max:      r.cfg.Re0UnlockMax, Re0Left: r.re0Left, DianMax: r.cfg.DianUnlockMax, DianLeft: r.dianLeft,
 		Skipped: map[string]int{}, Prio: prio,
+		PaidGate: func(it ResourceItem) string {
+			if !subWashTitleBeats(it.Title, st.Want, prio) {
+				return "要花积分、标题看不出比库里好"
+			}
+			return ""
+		},
 	}
+	pctx.Re0Preview = r.re0PreviewFn(sub, missing)
+	// 超限的不通知：洗版不是缺集，库里有能看的版本，不值得推「去手动解锁」
 	cands, _ := planSubCandidates(items, pctx)
 	// 标题写明了画质、却一集都比不过库里的，不用去列
 	kept := cands[:0]
 	for _, c := range cands {
-		if c.Paid > 0 || c.Item.offline() {
+		if c.Item.offline() {
 			continue
 		}
 		if subWashTitleHopeless(c.Item.Title, st.Want, prio) {
@@ -258,13 +278,6 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 		return false
 	}
 
-	r.washSub = sub.ID
-	r.washBeats = func(k epKey, f washFile) bool {
-		cur, ok := st.Want[k]
-		return ok && prio.compareFiles(f, cur) > 0
-	}
-	defer func() { r.washSub, r.washBeats = 0, nil }()
-
 	kept, ok := r.previewShares(sub, kept, missing)
 	if !ok {
 		return false
@@ -273,6 +286,9 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 	for i, c := range kept {
 		if len(missing) == 0 || subLane.stopRequested() || got >= r.cfg.MaxEpsPerSub || tries >= r.cfg.MaxResPerSub {
 			break
+		}
+		if c.Paid > 0 && !r.canPay(sub, c) {
+			continue
 		}
 		if !c.coversAnyMissing(missing, sub.MediaType == "movie") {
 			continue
@@ -295,6 +311,24 @@ func (r *subRunner) searchAndWash(sub *model.Subscription, st subWashState, prio
 		log.Printf("[订阅] ♻ 《%s》洗版：从「%s」转存更好的版本（%s）", sub.Title, truncateStr(c.Item.Title, 50), subEpisodesText(sub, covered))
 	}
 	return submitted
+}
+
+// subWashTitleBeats 要花积分的洗版资源：标题写明了画质，而且明确比库里某一集好（只按名字比、严格大于）。
+// 和库里那份命中同一条、这条又写了体积偏好的不算：标题上没有单个文件的体积，比不出来就不花积分
+func subWashTitleBeats(title string, want map[epKey]washFile, prio subPriority) bool {
+	if !prio.paidOK(title) {
+		return false
+	}
+	tt := washTier(title, prio.Rules)
+	for _, cur := range want {
+		if tt >= 0 && tt == washTierOf(cur, prio.Rules) && prio.sizePreferAt(tt) {
+			continue
+		}
+		if prio.compare(title, cur.Name) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // subWashTitleHopeless 资源标题明确写了画质，而且对要洗的每一集都不比库里的好。

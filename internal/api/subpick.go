@@ -182,6 +182,8 @@ type subPickCtx struct {
 	// Re0Preview 付费解锁前看一眼 RE0 的文件预览：返回按文件能补上的缺集（电影挑得出能用的视频就是一个零值），
 	// 一集都补不上时 why 说明原因；err 非空 = 预览不可用，退回按标题判。nil = 不预览（测试 / 没接）
 	Re0Preview func(it ResourceItem) (covered []epKey, why string, err error)
+	// PaidGate 要花积分的资源在预览 / 解锁之前再过一道（洗版：标题得明确比库里好）；返回非空 = 跳过的原因。nil = 不加
+	PaidGate func(it ResourceItem) string
 
 	// 离线：OfflineMode 空 = 不限；剧集只算播出满 OfflineWait 的缺集（MissingAir 里没有日期的不等）
 	OfflineMode string
@@ -391,6 +393,12 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				if !movie && c.onlyFresh() && (cand.Cov.EpLo == 0 || cand.Covers == 0) {
 					c.skip("要花积分、追的是新集，标题里没写到")
 					continue
+				}
+				if c.PaidGate != nil {
+					if why := c.PaidGate(it); why != "" {
+						c.skip(why)
+						continue
+					}
 				}
 				capMax, capLeft := c.paidCap(it.Source)
 				over := capMax <= 0 || cand.Paid > capMax || (capLeft >= 0 && cand.Paid > capLeft)

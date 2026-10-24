@@ -196,6 +196,8 @@ type subRunner struct {
 	dianLeft  int                   // 癫影同上（两个站的积分各算各的）
 	// stopPaid 解锁报了积分不足 / 没登录的来源：这一轮不再在这个来源付费解锁
 	stopPaid map[string]bool
+	// paidSubs 这一轮已经付费解锁过的订阅：补缺与洗版合起来一个订阅一轮最多付费 1 条
+	paidSubs map[uint]bool
 	// 离线：offlineStop 非空 = 这一轮不再提交离线（原因）；offlineLeft 本月还能提交几个、quotaLeft 115 剩余配额，<0 = 不限 / 没查
 	offlineChecked         bool
 	offlineStop            string
@@ -339,6 +341,12 @@ func subPointsSpentToday(h *Handler, now time.Time, source string) int {
 	h.DB.Model(&model.SubAttempt{}).Where("created_at >= ? AND points > 0 AND source = ?", start, source).
 		Select("COALESCE(SUM(points), 0)").Scan(&sum)
 	return int(sum)
+}
+
+// canPay 这条要花积分的资源这一轮还能不能解锁：这个订阅这一轮没付过费、来源没报积分不足、今天的预算够
+func (r *subRunner) canPay(sub *model.Subscription, c subCand) bool {
+	left := r.paidLeft(c.Item.Source)
+	return !r.paidSubs[sub.ID] && !r.stopPaid[c.Item.Source] && (left < 0 || c.Paid <= left)
 }
 
 // paidLeft 这个来源今天还能自动解锁多少积分，<0 = 不限
@@ -663,7 +671,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 	}
 
 	// got 这一轮补上了几集（电影算 1）。候选从头试到尾，没用上的不提前停（见 subscribeCfg.MaxResPerSub）
-	submitted, tries, got, paidUsed, offlineUsed := false, 0, 0, false, false
+	submitted, tries, got, offlineUsed := false, 0, 0, false
 	for i, c := range cands {
 		if len(missing) == 0 || subLane.stopRequested() {
 			break
@@ -676,7 +684,7 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 			item.Note = joinNote(item.Note, fmt.Sprintf("这一轮试了 %d 条资源，到了上限，剩下的下一轮接着试", tries))
 			break
 		}
-		if left := r.paidLeft(c.Item.Source); c.Paid > 0 && (paidUsed || r.stopPaid[c.Item.Source] || (left >= 0 && c.Paid > left)) {
+		if c.Paid > 0 && !r.canPay(sub, c) {
 			continue
 		}
 		// 前面的资源补上了一部分：预览核实的 / 标题写明的范围里已经没有还缺的，就不用再试它
@@ -703,9 +711,6 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		tries++
 		subLane.setSub("尝试资源", i+1, len(cands), truncateStr(c.Item.Title, 40))
 		att, covered := r.tryOne(sub, c, missing, r.cfg.MaxEpsPerSub-got)
-		if att.Points > 0 {
-			paidUsed = true
-		}
 		if att.Kind == "offline" && att.LinkID > 0 {
 			offlineUsed = true
 			r.offlineSpent(max(att.Tasks, 1))
@@ -970,6 +975,10 @@ func (r *subRunner) tryOne(sub *model.Subscription, c subCand, missing map[epKey
 	if rl.Unlocked && c.Paid > 0 {
 		att.Points = c.Paid
 		r.paidSpend(c.Item.Source, c.Paid)
+		if r.paidSubs == nil {
+			r.paidSubs = map[uint]bool{}
+		}
+		r.paidSubs[sub.ID] = true
 		r.notify("🔓 订阅自动解锁"+botSourceLabel(c.Item.Source)+"资源", r.re0SpentText(sub, c), sub, false)
 	}
 	att.URL = truncateStr(rl.URL, 1000)

@@ -199,7 +199,7 @@ const offlineHint = computed(() => {
 const washHint = computed(() => {
   if (form.value.priority?.mode === 'custom') return '资源优先级是自定义，和整理的洗版策略判得不一样，不能洗版；改成「跟随洗版策略」'
   const until = props.edit?.wash_until ? `（洗到 ${props.edit.wash_until.slice(5, 10)}）` : ''
-  return `库里已有、没达标（没命中洗版策略第 1 条）的集，出现更好的 115 分享就转进来，交给整理替换；补齐后再洗一段时间${until}。要求整理的洗版策略是替换（replace），不花积分、不用离线`
+  return `库里已有、没达标（没命中洗版策略第 1 条）的集，出现更好的 115 分享就转进来，交给整理替换；补齐后再洗一段时间${until}。要求整理的洗版策略是替换（replace），不用离线；RE0 / 癫影要花积分的只在标题明确比库里好时解锁，上限与预算同自动解锁`
 })
 
 const scopeHint = computed(() => {

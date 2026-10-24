@@ -212,3 +212,45 @@ func TestSubWashEndToEnd(t *testing.T) {
 		t.Fatalf("自定义不洗: %+v / %+v", item, sub)
 	}
 }
+
+// 洗版付费：标题写明画质、明确比库里某一集好才花积分；没写画质 / 不比库里好的不花
+func TestSubWashTitleBeats(t *testing.T) {
+	prio := subPriority{Rules: washTestRules}
+	want := map[epKey]washFile{{1, 2}: {Name: "剧.S01E02.1080p.WEB-DL.mkv"}}
+	if !subWashTitleBeats("剧 S01 2160p DV WEB-DL", want, prio) {
+		t.Fatal("2160p DV 比库里 1080p 好，应该能付费")
+	}
+	for _, title := range []string{"剧 全集", "剧 S01 1080p WEB-DL", "剧 S01 1080p WEBRip"} {
+		if subWashTitleBeats(title, want, prio) {
+			t.Fatalf("%q 不该付费", title)
+		}
+	}
+}
+
+// 洗版的 PaidGate 在预览之前拦：标题不比库里好的连预览都不做
+func TestPlanSubCandidatesPaidGate(t *testing.T) {
+	prio := subPriority{Rules: washTestRules}
+	want := map[epKey]washFile{{1, 2}: {Name: "剧.S01E02.1080p.WEB-DL.mkv"}}
+	sub := &model.Subscription{ID: 1, MediaType: "tv"}
+	items := []ResourceItem{
+		{Source: "re0", Kind: "share115", Action: "unlock", Title: "剧 S01 2160p DV", Ref: "good", Relevant: true, Points: pts(5)},
+		{Source: "re0", Kind: "share115", Action: "unlock", Title: "剧 S01 1080p WEBRip", Ref: "bad", Relevant: true, Points: pts(5)},
+	}
+	previewed := map[string]bool{}
+	skipped := map[string]int{}
+	cands, _ := planSubCandidates(items, subPickCtx{Prio: prio, Sub: sub, Missing: epKeys("S01E02"), Now: time.Now(), Re0Max: 20, Re0Left: -1,
+		Skipped: skipped,
+		Re0Preview: func(it ResourceItem) ([]epKey, string, error) {
+			previewed[it.Ref] = true
+			return epKeys("S01E02"), "", nil
+		},
+		PaidGate: func(it ResourceItem) string {
+			if !subWashTitleBeats(it.Title, want, prio) {
+				return "要花积分、标题看不出比库里好"
+			}
+			return ""
+		}})
+	if len(cands) != 1 || cands[0].Item.Ref != "good" || previewed["bad"] || skipped["要花积分、标题看不出比库里好"] != 1 {
+		t.Fatalf("候选 %+v 预览 %v 跳过 %v", cands, previewed, skipped)
+	}
+}
