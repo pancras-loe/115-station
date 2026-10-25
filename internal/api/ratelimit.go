@@ -65,7 +65,10 @@ func isWriteAPI(api string) bool {
 		// 连着提交两个分享就撞 190044「操作过于频繁」（2026-10-14 现场）
 		strings.Contains(api, "/share/receive") ||
 		strings.Contains(api, "/files/upload") ||
-		strings.Contains(api, "/rb/secret_del") // 回收站彻底删除（rbclean.go）
+		strings.Contains(api, "/rb/secret_del") || // 回收站彻底删除（rbclean.go）
+		// Cookie 通道的删除（删进回收站）打的是 /rb/delete，不是 /files/delete：原来漏了，
+		// 空目录清理、深度删除、定时清空目录都按读间隔在发
+		strings.Contains(api, "/rb/delete")
 }
 
 // readGap 读间隔：不超过 1 秒（用户间隔更大时按 1 秒走读通道）

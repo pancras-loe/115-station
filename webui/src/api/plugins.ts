@@ -201,3 +201,47 @@ export const aliTestAccount = (id: number) => http.post<{ message: string }>(`/a
 export const aliQRCode = () => http.post<{ t: string; ck: string; image: string }>('/ali2115/qrcode')
 export const aliQRCheck = (t: string, ck: string) =>
   http.post<{ status: string; message?: string; id?: number }>('/ali2115/qrcode/check', { t, ck })
+
+// ============ 定时清空 115 目录 ============
+/** account 同媒体库：0 = 主号，其他是附加账号 id */
+export interface DirCleanDir {
+  account: number
+  cid: string
+  path: string
+}
+export interface DirCleanAcct {
+  id: number
+  name: string
+  main: boolean
+  logged_in: boolean
+}
+export interface DirCleanConfig {
+  enabled: boolean
+  cron: string
+  dirs: DirCleanDir[]
+  accounts: DirCleanAcct[]
+  next_run?: string
+  last_result?: string
+  last_result_at?: string
+  last_ok?: boolean
+  running?: boolean
+}
+export interface DirCleanResult {
+  account: string
+  cid: string
+  path: string
+  dirs: number
+  files: number
+  size: number
+  deleted: number
+  error?: string
+}
+
+export const dirCleanConfig = () => http.get<DirCleanConfig>('/dirclean/config')
+/** 保存时后端逐个核对目录位置（媒体库 / 转存文件夹及它们的上级拒收），目录多时要几秒 */
+export const saveDirClean = (body: { enabled: boolean; cron: string; dirs: DirCleanDir[] }) =>
+  http.post('/dirclean/config', body, { timeoutMs: 5 * 60_000 })
+/** 只读预演：按没保存的目录列出会删什么 */
+export const previewDirClean = (dirs: DirCleanDir[]) =>
+  http.post<{ data?: DirCleanResult[]; message?: string }>('/dirclean/preview', { dirs }, { timeoutMs: 10 * 60_000 })
+export const runDirClean = () => http.post<{ message?: string }>('/dirclean/run')

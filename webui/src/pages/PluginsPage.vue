@@ -5,7 +5,7 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, CloudUpload, Images, Play, Settings2, Trash2 } from '@lucide/vue'
+import { BrushCleaning, CalendarCheck, CloudUpload, Images, Play, Settings2, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
@@ -13,6 +13,7 @@ import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import AliTransferModal from '@/components/plugins/AliTransferModal.vue'
 import RecycleCleanModal from '@/components/plugins/RecycleCleanModal.vue'
+import DirCleanModal from '@/components/plugins/DirCleanModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
@@ -118,6 +119,42 @@ async function rbRun() {
   }
 }
 
+// ============ 定时清空 115 目录 ============
+const dcShow = ref(false)
+
+/** 立即清空在后台跑，这里轮询配置里的 running / last_result（同回收站清理） */
+async function dcRun() {
+  const ok = await dialog.confirm({
+    title: '立即清空目录',
+    content: '按已保存的设置，把这些目录里的全部内容删进 115 回收站（目录本身留着，回收站里能还原）。确定？',
+    tone: 'danger',
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '清空', value: true, variant: 'danger' },
+    ],
+  })
+  if (!ok) return
+  busy.value.dirclean = true
+  results.value.dirclean = { status: 'pending', title: '清空中…' }
+  try {
+    const before = (await pluginsApi.dirCleanConfig()).last_result_at
+    await pluginsApi.runDirClean()
+    for (let i = 0; i < 200; i++) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const d = await pluginsApi.dirCleanConfig()
+      if (!d.running && d.last_result_at && d.last_result_at !== before) {
+        results.value.dirclean = { status: d.last_ok ? 'ok' : 'err', title: d.last_ok ? '清空完成' : '清空出错', detail: d.last_result }
+        return
+      }
+    }
+    results.value.dirclean = { status: 'pending', title: '还在清空，结果稍后见通知与日志' }
+  } catch (e) {
+    results.value.dirclean = { status: 'err', title: '清空失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    busy.value.dirclean = false
+  }
+}
+
 // ============ 阿里云盘秒传 ============
 const aliShow = ref(false)
 
@@ -163,6 +200,16 @@ const plugins: Plugin[] = [
     runLabel: '立即清理',
     onConfig: () => (rbShow.value = true),
     onRun: rbRun,
+  },
+  {
+    key: 'dirclean',
+    name: '定时清空 115 目录',
+    icon: BrushCleaning,
+    desc: '按计划把指定的几个 115 目录（云下载、最近接收、冗余……）里的内容删进回收站，目录本身留着。媒体库与转存文件夹不能选。',
+    available: true,
+    runLabel: '立即清空',
+    onConfig: () => (dcShow.value = true),
+    onRun: dcRun,
   },
   {
     key: 'ali2115',
@@ -228,6 +275,7 @@ const availableCount = plugins.filter((p) => p.available).length
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
     <AliTransferModal v-model:show="aliShow" />
     <RecycleCleanModal v-model:show="rbShow" />
+    <DirCleanModal v-model:show="dcShow" />
   </SectionCard>
 </template>
 
