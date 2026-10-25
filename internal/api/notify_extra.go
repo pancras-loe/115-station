@@ -172,7 +172,8 @@ func (h *Handler) OneBotEvent(c *gin.Context) {
 		sender := strings.Join(strings.FieldsFunc(fmt.Sprint(ev.UserID), func(r rune) bool {
 			return r < '0' || r > '9'
 		}), "")
-		if admin == "" || sender == admin {
+		// 管理 QQ 留空 = 不开指令（界面就是这么写的）；原来留空时谁私聊机器人都能触发整理 / 转存
+		if admin != "" && sender == admin {
 			text := strings.TrimSpace(ev.RawMessage)
 			if text != "" {
 				go h.wecomHandleCommand(sender, text) // 与企微机器人同一套路由（sender 作会话隔离键）

@@ -6,12 +6,15 @@ import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
+import HModal from '@/components/hero/HModal.vue'
+import { BookOpen } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
+import MessageHelp from './message/MessageHelp.vue'
 import { configApi, http } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
@@ -19,6 +22,7 @@ import { useTabQuery } from '@/composables/useTabQuery'
 import { MESSAGE_DEFAULTS, type MessageConfig } from '@/types/message'
 
 const tab = useTabQuery('wecom')
+const helpVisible = ref(false)
 
 // 五个通道共用一个 Setting key，所以整页一份 model，任一页签保存的都是全量配置
 const { model, saving, save, reset } = useSetting<MessageConfig>('message', MESSAGE_DEFAULTS)
@@ -103,6 +107,15 @@ const channels = computed(() => ({
   qqoff: model.value.qq_official.enabled,
 }))
 
+const HELP_TITLES: Record<string, string> = {
+  wecom: '企业微信怎么配',
+  tg: 'Telegram 机器人怎么配',
+  feishu: '飞书怎么配',
+  onebot: 'QQ · OneBot 怎么配',
+  qqoff: 'QQ 官方机器人怎么配',
+}
+const helpChannel = computed(() => (tab.value in HELP_TITLES ? tab.value : 'wecom') as 'wecom' | 'tg' | 'feishu' | 'onebot' | 'qqoff')
+
 const TABS = computed(() => [
   { value: 'wecom', label: '企业微信', dot: channels.value.wecom },
   { value: 'tg', label: 'TG 机器人', dot: channels.value.tg },
@@ -121,6 +134,12 @@ const TABS = computed(() => [
 <template v-if="tab === 'wecom'">
       
       <SectionCard title="企业微信" hint="通知推送 + 双向机器人">
+        <template #extra>
+          <HButton size="sm" variant="ghost" @click="helpVisible = true">
+            <template #icon><BookOpen :size="14" /></template>
+            使用说明
+          </HButton>
+        </template>
         <FieldRow label="企业 ID" tip="企业微信「我的企业」页的 CorpID（ww 开头）。">
           <HInput v-model="model.wecom.corp_id" placeholder="corpid" :input-attrs="plainProps('wecom-corp-id')" />
         </FieldRow>
@@ -170,6 +189,12 @@ const TABS = computed(() => [
 <template v-if="tab === 'tg'">
       
       <SectionCard title="Telegram 机器人" hint="通知推送 + 私聊指令">
+        <template #extra>
+          <HButton size="sm" variant="ghost" @click="helpVisible = true">
+            <template #icon><BookOpen :size="14" /></template>
+            使用说明
+          </HButton>
+        </template>
         <HAlert status="accent" class="note-top">
           {{ tgStatus }}。私聊发送 /help 查看指令，搜索结果可点击按钮或回复序号。
           服务重启或重新启用后不补执行离线期间的指令，请重新发送。
@@ -193,6 +218,12 @@ const TABS = computed(() => [
 <template v-if="tab === 'feishu'">
       
       <SectionCard title="飞书">
+        <template #extra>
+          <HButton size="sm" variant="ghost" @click="helpVisible = true">
+            <template #icon><BookOpen :size="14" /></template>
+            使用说明
+          </HButton>
+        </template>
         <HAlert status="accent" class="note-top">
           飞书群「自定义机器人」：群设置 → 群机器人 → 添加自定义机器人，拿到 Webhook
           地址（可加签名校验）。仅支持接收通知，不支持指令。
@@ -216,6 +247,12 @@ const TABS = computed(() => [
 <template v-if="tab === 'onebot'">
       
       <SectionCard title="QQ · OneBot">
+        <template #extra>
+          <HButton size="sm" variant="ghost" @click="helpVisible = true">
+            <template #icon><BookOpen :size="14" /></template>
+            使用说明
+          </HButton>
+        </template>
         <HAlert status="accent" class="note-top">
           对接 NapCat / Lagrange / LLOneBot 等 OneBot 实现：需要你自己运行一个 QQ
           客户端容器并登录。支持通知推送 + 私聊指令（整理 / 同步 / 状态等，与管理后台互斥）。
@@ -272,6 +309,12 @@ const TABS = computed(() => [
 <template v-if="tab === 'qqoff'">
       
       <SectionCard title="QQ 官方机器人">
+        <template #extra>
+          <HButton size="sm" variant="ghost" @click="helpVisible = true">
+            <template #icon><BookOpen :size="14" /></template>
+            使用说明
+          </HButton>
+        </template>
         <HAlert status="warning" class="note-top">
           q.qq.com 注册的官方机器人：创建沙箱/正式群并获取群 ID（group_openid，可从官方回调事件里查看）。
           注意官方群消息有审核与 @ 限制，适合通知推送，发送可能被平台拒绝。
@@ -295,6 +338,10 @@ const TABS = computed(() => [
         <TestBanner :state="banner" />
       </SectionCard>
 </template>
+
+    <HModal v-model:show="helpVisible" :title="HELP_TITLES[helpChannel]" width="860px">
+      <MessageHelp :channel="helpChannel" />
+    </HModal>
 </div>
 </template>
 
