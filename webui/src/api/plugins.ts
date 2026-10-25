@@ -59,6 +59,57 @@ export const previewRbClean = (accounts: { id: number; keep_days: number }[]) =>
   http.post<{ data?: RbCleanAcct[]; message?: string }>('/rbclean/preview', { accounts }, { timeoutMs: 10 * 60_000 })
 export const runRbClean = () => http.post<{ message?: string }>('/rbclean/run')
 
+// ---- 定时清理 115 离线任务（offclean.go） ----
+export interface OffCleanConfig {
+  enabled: boolean
+  cron: string
+  /** 删下载失败的 */
+  failed: boolean
+  /** 添加超过几小时还没下完的删；0 = 不删 */
+  stuck_hours: number
+  /** true = 115 App 里自己加的也删 */
+  all: boolean
+  accounts: { id: number; name: string; main: boolean; logged_in: boolean; on: boolean }[]
+  next_run?: string
+  last_result?: string
+  last_result_at?: string
+  last_ok?: boolean
+  running?: boolean
+}
+export interface OffCleanTask {
+  name: string
+  /** -1 失败 / 0 排队 / 1 下载中 */
+  status: number
+  percent: number
+  hours: number
+  size: number
+  mine: boolean
+}
+export interface OffCleanResult {
+  id: number
+  account: string
+  total: number
+  matched: number
+  deleted: number
+  tasks: OffCleanTask[]
+  error?: string
+}
+export interface OffCleanReq {
+  enabled: boolean
+  cron: string
+  failed: boolean
+  stuck_hours: number
+  all: boolean
+  /** 开着的账号 id */
+  accounts: number[]
+}
+export const offCleanConfig = () => http.get<OffCleanConfig>('/offclean/config')
+export const saveOffClean = (body: OffCleanReq) => http.post('/offclean/config', body)
+/** 只读预演：按没保存的规则列出会删哪些，列出的账号不看开关 */
+export const previewOffClean = (body: OffCleanReq) =>
+  http.post<{ data?: OffCleanResult[]; message?: string }>('/offclean/preview', body, { timeoutMs: 5 * 60_000 })
+export const runOffClean = () => http.post<{ message?: string }>('/offclean/run')
+
 // ---- 媒体库封面生成 ----
 export interface CoverGenConfig {
   enabled: boolean

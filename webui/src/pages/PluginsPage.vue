@@ -5,7 +5,7 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { BrushCleaning, CalendarCheck, CloudUpload, FolderInput, Images, Play, Settings2, Trash2 } from '@lucide/vue'
+import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
@@ -14,6 +14,7 @@ import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import AliTransferModal from '@/components/plugins/AliTransferModal.vue'
 import RecycleCleanModal from '@/components/plugins/RecycleCleanModal.vue'
 import DirCleanModal from '@/components/plugins/DirCleanModal.vue'
+import OfflineCleanModal from '@/components/plugins/OfflineCleanModal.vue'
 import AliDirCleanModal from '@/components/plugins/AliDirCleanModal.vue'
 import AliRecycleCleanModal from '@/components/plugins/AliRecycleCleanModal.vue'
 import StrmMigrateModal, { type StrmMigrateTab } from '@/components/plugins/StrmMigrateModal.vue'
@@ -150,6 +151,21 @@ const rbRun = () =>
     run: pluginsApi.runRbClean,
   })
 
+// ============ 清理 115 离线任务 ============
+const ocShow = ref(false)
+const ocRun = () =>
+  bgRun({
+    key: 'offclean',
+    verb: '清理',
+    confirm: {
+      title: '立即清理离线任务',
+      content: '按已保存的设置，把打开清理的账号里下载失败、卡住太久的离线任务删掉（只删任务，不删网盘里的文件）。确定？',
+      action: '删除任务',
+    },
+    status: pluginsApi.offCleanConfig,
+    run: pluginsApi.runOffClean,
+  })
+
 // ============ 定时清空 115 目录 ============
 const dcShow = ref(false)
 const dcRun = () =>
@@ -252,6 +268,16 @@ const plugins: Plugin[] = [
     runLabel: '立即清理',
     onConfig: () => (rbShow.value = true),
     onRun: rbRun,
+  },
+  {
+    key: 'offclean',
+    name: '清理 115 离线任务',
+    icon: CloudOff,
+    desc: '按计划删掉 115 离线列表里下载失败、卡在百分之几很久不动的任务，默认只动本站提交的。只删任务，不删网盘里的文件。',
+    available: true,
+    runLabel: '立即清理',
+    onConfig: () => (ocShow.value = true),
+    onRun: ocRun,
   },
   {
     key: 'dirclean',
@@ -358,6 +384,7 @@ const availableCount = plugins.filter((p) => p.available).length
     <AliTransferModal v-model:show="aliShow" />
     <RecycleCleanModal v-model:show="rbShow" />
     <DirCleanModal v-model:show="dcShow" />
+    <OfflineCleanModal v-model:show="ocShow" />
     <AliDirCleanModal v-model:show="adcShow" />
     <AliRecycleCleanModal v-model:show="arbShow" />
     <StrmMigrateModal v-model:show="smShow" v-model:tab="smTab" />

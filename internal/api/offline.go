@@ -160,7 +160,20 @@ func (h *Handler) offlineSubmitTask(rawURL, target, source string, organize bool
 // offlineDeleteTask 删一个离线任务（web 接口 ac=task_del，p115client clouddownload_task_del 的 web 形态；
 // flag=0 不删已下载的文件，调用方自己收拾目录）
 func offlineDeleteTask(cookie, hash string) error {
-	body, err := post115Form("https://115.com/web/lixian/?ac=task_del", url.Values{"hash[0]": {hash}, "flag": {"0"}}, cookie, ua115Unified(), 15*time.Second)
+	return offlineDeleteTasks(cookie, []string{hash})
+}
+
+// offlineDeleteTasks 一次删几个离线任务（hash[0] hash[1] …，p115client offline_remove 同款）。
+// flag=0：只删任务、不删已经下到网盘里的文件
+func offlineDeleteTasks(cookie string, hashes []string) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	form := url.Values{"flag": {"0"}}
+	for i, h := range hashes {
+		form.Set(fmt.Sprintf("hash[%d]", i), h)
+	}
+	body, err := post115Form("https://115.com/web/lixian/?ac=task_del", form, cookie, ua115Unified(), 30*time.Second)
 	if err != nil {
 		return err
 	}
@@ -594,26 +607,40 @@ func StartOfflineTaskMonitor(h *Handler) {
 // fetchLixianTasksRaw 拉取离线任务原始列表（明文 web 接口，与 add_task_url 同通道；
 // 兼容 data/info、数组、{tasks}/{list} 多种响应形态）
 func fetchLixianTasksRaw(cookie string) ([]map[string]interface{}, error) {
-	body, err := post115Form("https://115.com/web/lixian/?ac=task_lists", url.Values{}, cookie, ua115Unified(), 15*time.Second)
+	items, _, err := fetchLixianTasksPage(cookie, 0)
+	return items, err
+}
+
+// fetchLixianTasksPage 读第 page 页（从 1 起；0 = 不带 page，115 给第一页），另返回 115 报的总页数（没给为 0）。
+// 一页条数由 115 定（p115client 记的默认 30），翻页按 page_count，不假定每页给满
+func fetchLixianTasksPage(cookie string, page int) ([]map[string]interface{}, int, error) {
+	form := url.Values{}
+	if page > 0 {
+		form.Set("page", strconv.Itoa(page))
+	}
+	body, err := post115Form("https://115.com/web/lixian/?ac=task_lists", form, cookie, ua115Unified(), 15*time.Second)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var resp struct {
-		State bool   `json:"state"`
-		Error string `json:"error"`
+		State     bool            `json:"state"`
+		Error     string          `json:"error"`
+		PageCount json.RawMessage `json:"page_count"`
 	}
 	if json.Unmarshal(body, &resp) != nil || !resp.State {
 		msg := resp.Error
 		if msg == "" {
 			msg = truncateStr(string(body), 120)
 		}
-		return nil, fmt.Errorf("115 拒绝: %s", msg)
+		return nil, 0, fmt.Errorf("115 拒绝: %s", msg)
 	}
 	items, ok := extractTaskItems(body)
 	if !ok {
-		return nil, fmt.Errorf("任务列表结构无法解析: %s", truncateStr(string(body), 150))
+		return nil, 0, fmt.Errorf("任务列表结构无法解析: %s", truncateStr(string(body), 150))
 	}
-	return items, nil
+	pages := 0
+	fmt.Sscan(rawStr(resp.PageCount), &pages)
+	return items, pages, nil
 }
 
 // extractTaskItems 从 115 离线任务响应中形态宽容地提取任务数组：
@@ -674,11 +701,15 @@ func unwrapItems(v interface{}) ([]map[string]interface{}, bool) {
 // offlineTaskInfo 离线任务摘要
 type offlineTaskInfo struct {
 	key     string // info_hash 优先，空则 name
+	hash    string // 115 的 info_hash（删任务要它；没给就是空）
 	name    string
+	url     string // 提交的原始链接（认是不是本站提交的）
 	fileID  string // 产物落在转存目录里的 fid（115 的 file_id），台账与整理记录靠它对账
 	status  int
 	percent int   // 下载进度 0-100（下载中提示用）
 	delTime int64 // 完成时间戳（秒；115 任务列表会长期保留历史任务，用它区分新旧）
+	addTime int64 // 添加时间戳（秒）
+	size    int64
 }
 
 // offlineQuota115 115 离线下载剩余 / 总配额（GET /web/lixian/?ac=get_quota_info，只要 cookie）。
@@ -708,12 +739,18 @@ func offlineQuota115(cookie string) (left, total int, err error) {
 	return int(q), int(t), nil
 }
 
-// fetchOfflineTaskList 拉取离线任务列表（web lixian 加密接口，防御式解析）
+// fetchOfflineTaskList 拉取离线任务列表（web lixian 加密接口，防御式解析；只读第一页，监视器看最新的就够）
 func fetchOfflineTaskList(cookie string) ([]offlineTaskInfo, error) {
 	raws, err := fetchLixianTasksRaw(cookie)
 	if err != nil {
 		return nil, err
 	}
+	return parseOfflineTasks(raws), nil
+}
+
+// parseOfflineTasks 原始任务 → 摘要。字段名照 115driver OfflineTask（info_hash / percentDone /
+// add_time / last_update / url），老的 percent / del_time 写法一并认
+func parseOfflineTasks(raws []map[string]interface{}) []offlineTaskInfo {
 	tasks := make([]offlineTaskInfo, 0, len(raws))
 	for _, m := range raws {
 		name := firstStr(m, "name", "task_name")
@@ -732,32 +769,48 @@ func fetchOfflineTaskList(cookie string) ([]offlineTaskInfo, error) {
 				status = 2
 			case strings.Contains(v, "下载"):
 				status = 1
+			default:
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					status = n
+				}
 			}
 		}
-		key := firstStr(m, "info_hash", "infoHash")
+		hash := firstStr(m, "info_hash", "infoHash")
+		key := hash
 		if key == "" {
 			key = name
 		}
 		percent := 0
-		switch v := m["percent"].(type) {
-		case float64:
-			percent = int(v)
-		case string:
-			if f, perr := strconv.ParseFloat(strings.TrimSuffix(v, "%"), 64); perr == nil {
-				percent = int(f)
+		for _, k := range []string{"percentDone", "percent"} {
+			if v, ok := m[k]; ok {
+				switch v := v.(type) {
+				case float64:
+					percent = int(v)
+				case string:
+					if f, perr := strconv.ParseFloat(strings.TrimSuffix(v, "%"), 64); perr == nil {
+						percent = int(f)
+					}
+				}
+				break
 			}
 		}
-		delTime := int64(0)
-		switch v := m["del_time"].(type) {
-		case float64:
-			delTime = int64(v)
-		case string:
-			delTime, _ = strconv.ParseInt(v, 10, 64)
-		}
-		tasks = append(tasks, offlineTaskInfo{key: key, name: name, fileID: firstStr(m, "file_id", "fileId"),
-			status: status, percent: percent, delTime: delTime})
+		tasks = append(tasks, offlineTaskInfo{key: key, hash: hash, name: name, url: firstStr(m, "url"),
+			fileID: firstStr(m, "file_id", "fileId"), status: status, percent: percent,
+			delTime: anyUnix(m["del_time"]), addTime: anyUnix(m["add_time"]), size: anyUnix(m["size"])})
 	}
-	return tasks, nil
+	return tasks
+}
+
+// anyUnix 数字或数字字符串 → int64（115 同一个字段有时给数字有时给字符串）
+func anyUnix(v interface{}) int64 {
+	switch v := v.(type) {
+	case float64:
+		return int64(v)
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n
+	}
+	return 0
 }
 
 // shareFolderCid 转存/待整理目录 cid（setting share.folder；未配置返回空）

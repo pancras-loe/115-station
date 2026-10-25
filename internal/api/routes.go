@@ -122,6 +122,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
 	StartRbCleanScheduler(h)         // 定时清理 115 回收站：只删 N 天前删除的（rbclean.go）
+	StartOffCleanScheduler(h)        // 定时清理 115 离线任务：删下载失败 / 卡住的（offclean.go）
 	StartDirCleanScheduler(h)        // 定时清空 115 指定目录：删进回收站（dirclean.go）
 	StartAliDirCleanScheduler(h)     // 定时清空阿里云盘指定目录（alidirclean.go）
 	StartAliRbCleanScheduler(h)      // 定时清理阿里云盘回收站（alirbclean.go）
@@ -491,6 +492,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/rbclean/config", h.RbCleanSaveConfig)
 		protected.POST("/rbclean/preview", h.RbCleanPreview)
 		protected.POST("/rbclean/run", h.RbCleanRun)
+		protected.GET("/offclean/config", h.OffCleanGetConfig)
+		protected.POST("/offclean/config", h.OffCleanSaveConfig)
+		protected.POST("/offclean/preview", h.OffCleanPreview)
+		protected.POST("/offclean/run", h.OffCleanRun)
 		protected.GET("/dirclean/config", h.DirCleanGetConfig)
 		protected.POST("/dirclean/config", h.DirCleanSaveConfig)
 		protected.POST("/dirclean/preview", h.DirCleanPreview)

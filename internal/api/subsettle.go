@@ -165,13 +165,17 @@ func subLandedText(sub *model.Subscription, eps []epKey, ev subEval) string {
 // subMarkOfflineFailed 离线监视器看到任务失败：对应的订阅尝试直接判失败，不用等 3 天超时。
 // 不设重试时间：115 报失败多半是资源本身的问题（死种、版权屏蔽），再提交只是再扣一次配额
 func subMarkOfflineFailed(db *gorm.DB, linkID uint, name string) {
+	subMarkOfflineReason(db, linkID, "115 离线任务失败："+truncateStr(name, 200))
+}
+
+// subMarkOfflineReason 同上，原因自己写（离线任务清理删掉卡住的任务时用，offclean.go）
+func subMarkOfflineReason(db *gorm.DB, linkID uint, reason string) {
 	if db == nil || linkID == 0 {
 		return
 	}
 	now := time.Now()
 	db.Model(&model.SubAttempt{}).Where("link_id = ? AND status = ?", linkID, subAttemptInflight).
-		Updates(map[string]any{"status": subAttemptFailed, "reason": "115 离线任务失败：" + truncateStr(name, 200),
-			"resolved_at": now})
+		Updates(map[string]any{"status": subAttemptFailed, "reason": truncateStr(reason, 480), "resolved_at": now})
 }
 
 // ==================== 排期 ====================
