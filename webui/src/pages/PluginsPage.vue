@@ -5,17 +5,18 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { CalendarCheck, CloudUpload, Images, Play, Settings2 } from '@lucide/vue'
+import { CalendarCheck, CloudUpload, Images, Play, Settings2, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import AliTransferModal from '@/components/plugins/AliTransferModal.vue'
+import RecycleCleanModal from '@/components/plugins/RecycleCleanModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
-const { message } = useFeedback()
+const { message, dialog } = useFeedback()
 const router = useRouter()
 
 /** 每张插件卡的「立即运行」结果，展示在卡片内 */
@@ -81,6 +82,42 @@ async function cgRun() {
   }
 }
 
+// ============ 清理 115 回收站 ============
+const rbShow = ref(false)
+
+/** 立即清理在后台跑（回收站大时要翻很多页），这里轮询配置里的 running / last_result */
+async function rbRun() {
+  const ok = await dialog.confirm({
+    title: '立即清理回收站',
+    content: '按已保存的设置，把打开清理的账号里超过保留天数的回收站内容彻底删除，无法还原。确定？',
+    tone: 'danger',
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '彻底删除', value: true, variant: 'danger' },
+    ],
+  })
+  if (!ok) return
+  busy.value.rbclean = true
+  results.value.rbclean = { status: 'pending', title: '清理中…' }
+  try {
+    const before = (await pluginsApi.rbCleanConfig()).last_result_at
+    await pluginsApi.runRbClean()
+    for (let i = 0; i < 200; i++) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const d = await pluginsApi.rbCleanConfig()
+      if (!d.running && d.last_result_at && d.last_result_at !== before) {
+        results.value.rbclean = { status: d.last_ok ? 'ok' : 'err', title: d.last_ok ? '清理完成' : '清理出错', detail: d.last_result }
+        return
+      }
+    }
+    results.value.rbclean = { status: 'pending', title: '还在清理，结果稍后见通知与日志' }
+  } catch (e) {
+    results.value.rbclean = { status: 'err', title: '清理失败', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    busy.value.rbclean = false
+  }
+}
+
 // ============ 阿里云盘秒传 ============
 const aliShow = ref(false)
 
@@ -116,6 +153,16 @@ const plugins: Plugin[] = [
     runLabel: '立即生成',
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
+  },
+  {
+    key: 'rbclean',
+    name: '清理 115 回收站',
+    icon: Trash2,
+    desc: '按计划彻底删除回收站里超过保留天数（7 / 30 / 自定义天）的内容，保留期内的照旧能还原。每个 115 账号单独设清不清、保留几天。',
+    available: true,
+    runLabel: '立即清理',
+    onConfig: () => (rbShow.value = true),
+    onRun: rbRun,
   },
   {
     key: 'ali2115',
@@ -180,6 +227,7 @@ const availableCount = plugins.filter((p) => p.available).length
 
     <CoverGenModal ref="cgModal" v-model:show="cgShow" />
     <AliTransferModal v-model:show="aliShow" />
+    <RecycleCleanModal v-model:show="rbShow" />
   </SectionCard>
 </template>
 

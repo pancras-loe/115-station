@@ -64,7 +64,8 @@ func isWriteAPI(api string) bool {
 		// 分享转存真正打的是 /share/receive：原来只认 /files/receive，转存按 1 秒读间隔走，
 		// 连着提交两个分享就撞 190044「操作过于频繁」（2026-10-14 现场）
 		strings.Contains(api, "/share/receive") ||
-		strings.Contains(api, "/files/upload")
+		strings.Contains(api, "/files/upload") ||
+		strings.Contains(api, "/rb/secret_del") // 回收站彻底删除（rbclean.go）
 }
 
 // readGap 读间隔：不超过 1 秒（用户间隔更大时按 1 秒走读通道）

@@ -12,6 +12,53 @@ export const saveCheckin = (body: { enabled: boolean; cron: string }) =>
   http.post('/115checkin/config', body)
 export const runCheckin = () => http.post<{ message?: string }>('/115checkin/run')
 
+// ---- 定时清理 115 回收站 ----
+/** 一个 115 账号的清理设置（执行时间全局一个，其余按账号） */
+export interface RbCleanAcctCfg {
+  id: number
+  name: string
+  main: boolean
+  logged_in: boolean
+  on: boolean
+  keep_days: number
+  has_password: boolean
+}
+export interface RbCleanConfig {
+  enabled: boolean
+  cron: string
+  accounts: RbCleanAcctCfg[]
+  next_run?: string
+  last_result?: string
+  last_result_at?: string
+  last_ok?: boolean
+  running?: boolean
+}
+export interface RbCleanAcct {
+  id: number
+  account: string
+  keep_days: number
+  total: number
+  expired: number
+  size: number
+  deleted: number
+  error?: string
+}
+/** password 不带 = 不改，空串 = 清掉 */
+export interface RbCleanAcctReq {
+  id: number
+  on: boolean
+  keep_days: number
+  password?: string
+}
+
+export const rbCleanConfig = () => http.get<RbCleanConfig>('/rbclean/config')
+export const saveRbClean = (body: { enabled: boolean; cron: string; accounts: RbCleanAcctReq[] }) =>
+  http.post('/rbclean/config', body)
+/** 只读预演：按没保存的保留天数算会删多少，列出的账号不看开关（回收站大时要翻很多页） */
+export const previewRbClean = (accounts: { id: number; keep_days: number }[]) =>
+  http.post<{ data?: RbCleanAcct[]; message?: string }>('/rbclean/preview', { accounts }, { timeoutMs: 10 * 60_000 })
+export const runRbClean = () => http.post<{ message?: string }>('/rbclean/run')
+
 // ---- 媒体库封面生成 ----
 export interface CoverGenConfig {
   enabled: boolean

@@ -77,6 +77,7 @@ defineProps<{ state?: BannerState | null }>()
   margin-top: 1px;
   color: var(--c-text-2);
   word-break: break-all;
+  white-space: pre-line;
 }
 .trailing {
   flex-shrink: 0;
