@@ -121,8 +121,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 	// 启动 115 每日签到调度器（配置时间窗口内随机执行）
 	Start115CheckinScheduler(h)
-	StartRbCleanScheduler(h) // 定时清理 115 回收站：只删 N 天前删除的（rbclean.go）
-	StartDirCleanScheduler(h) // 定时清空 115 指定目录：删进回收站（dirclean.go）
+	StartRbCleanScheduler(h)         // 定时清理 115 回收站：只删 N 天前删除的（rbclean.go）
+	StartDirCleanScheduler(h)        // 定时清空 115 指定目录：删进回收站（dirclean.go）
+	StartAliDirCleanScheduler(h)     // 定时清空阿里云盘指定目录（alidirclean.go）
+	StartAliRbCleanScheduler(h)      // 定时清理阿里云盘回收站（alirbclean.go）
 	re0BrowserInit(h.Config.DataDir) // RE0 网页登录：查本地有没有浏览器，配了网页登录又没有就后台下载（re0browser.go）
 	StartRe0CheckinScheduler(h)      // RE0 每日签到：08:00 后今天没签成就签
 	StartDianCheckinScheduler(h)     // 癫影每日签到：同 RE0
@@ -492,6 +494,14 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/dirclean/config", h.DirCleanSaveConfig)
 		protected.POST("/dirclean/preview", h.DirCleanPreview)
 		protected.POST("/dirclean/run", h.DirCleanRun)
+		protected.GET("/alidirclean/config", h.AliDirCleanGetConfig)
+		protected.POST("/alidirclean/config", h.AliDirCleanSaveConfig)
+		protected.POST("/alidirclean/preview", h.AliDirCleanPreview)
+		protected.POST("/alidirclean/run", h.AliDirCleanRun)
+		protected.GET("/alirbclean/config", h.AliRbCleanGetConfig)
+		protected.POST("/alirbclean/config", h.AliRbCleanSaveConfig)
+		protected.POST("/alirbclean/preview", h.AliRbCleanPreview)
+		protected.POST("/alirbclean/run", h.AliRbCleanRun)
 
 		// 媒体库封面生成（分类聚合 TMDB 海报 → 合成封面 → 推送 Emby）
 		protected.GET("/covergen/config", h.CoverGenGetConfig)

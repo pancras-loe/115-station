@@ -67,13 +67,15 @@ func aliErrCode(err error) string {
 
 // aliClient 一个阿里云盘账号的会话
 type aliClient struct {
-	refresh  string
-	access   string
-	userID   string
-	driveID  string
-	nick     string
-	deviceID string
-	sign     string
+	refresh string
+	access  string
+	userID  string
+	driveID string
+	// backupDrive 备份盘（default_drive_id）；没分资源盘的老账号与 driveID 相同
+	backupDrive string
+	nick        string
+	deviceID    string
+	sign        string
 	// save refresh token 轮换后写回（nil = 不写，测试用）
 	save func(c *aliClient)
 }
@@ -107,6 +109,7 @@ func newAliClient(refresh string, save func(c *aliClient)) (*aliClient, error) {
 	}
 	// 资源盘 / 备份盘分开之后，分享只能存进资源盘；老账号没有资源盘就用默认盘
 	c.driveID = firstNonEmpty(u.ResourceDriveID, u.DefaultDriveID, c.driveID)
+	c.backupDrive = firstNonEmpty(u.DefaultDriveID, c.driveID)
 	if c.driveID == "" {
 		return nil, fmt.Errorf("阿里云盘没返回网盘编号")
 	}
@@ -358,7 +361,10 @@ func (c *aliClient) saveShareIDs(shareToken, shareID string, fileIDs []string, t
 // ---- 自己网盘 ----
 
 // listDir 列自己网盘的一层（带 content_hash）
-func (c *aliClient) listDir(parent string) ([]aliFile, error) {
+func (c *aliClient) listDir(parent string) ([]aliFile, error) { return c.listDirIn(c.driveID, parent) }
+
+// listDirIn 列某个盘（资源盘 / 备份盘）的一层
+func (c *aliClient) listDirIn(drive, parent string) ([]aliFile, error) {
 	var all []aliFile
 	marker := ""
 	for page := 0; page < 200; page++ {
@@ -366,7 +372,7 @@ func (c *aliClient) listDir(parent string) ([]aliFile, error) {
 			Items      []aliFile `json:"items"`
 			NextMarker string    `json:"next_marker"`
 		}
-		body := map[string]any{"drive_id": c.driveID, "parent_file_id": parent, "limit": 200,
+		body := map[string]any{"drive_id": drive, "parent_file_id": parent, "limit": 200,
 			"fields": "*", "order_by": "name", "order_direction": "ASC", "marker": marker}
 		if err := c.call("/adrive/v3/file/list", body, &resp, "", aliCanaryDrive); err != nil {
 			return nil, err
@@ -416,6 +422,91 @@ func (c *aliClient) downloadURL(fileID string) (aliDownload, error) {
 func (c *aliClient) deleteFile(fileID string) error {
 	return c.call("/v3/file/delete", map[string]any{"drive_id": c.driveID, "file_id": fileID}, nil, "", aliCanaryDrive)
 }
+
+// ---- 回收站与批量删除（定时清空目录 / 清理回收站，alidirclean.go / alirbclean.go）----
+
+// aliTrashItem 回收站里的一条
+type aliTrashItem struct {
+	FileID    string `json:"file_id"`
+	DriveID   string `json:"drive_id"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Size      int64  `json:"size"`
+	TrashedAt string `json:"trashed_at"` // 进回收站的时间（RFC3339）
+}
+
+// listRecycle 翻完某个盘的回收站（OpenList / aligo 同款 /v2/recyclebin/list，marker 翻页）
+func (c *aliClient) listRecycle(drive string) ([]aliTrashItem, error) {
+	var all []aliTrashItem
+	marker := ""
+	for page := 0; page < 2000; page++ {
+		var resp struct {
+			Items      []aliTrashItem `json:"items"`
+			NextMarker string         `json:"next_marker"`
+		}
+		body := map[string]any{"drive_id": drive, "limit": 100, "order_by": "name", "order_direction": "DESC", "marker": marker}
+		if err := c.call("/v2/recyclebin/list", body, &resp, "", aliCanaryDrive); err != nil {
+			return all, err
+		}
+		for i := range resp.Items {
+			if resp.Items[i].DriveID == "" {
+				resp.Items[i].DriveID = drive
+			}
+		}
+		all = append(all, resp.Items...)
+		if resp.NextMarker == "" || len(resp.Items) == 0 {
+			return all, nil
+		}
+		marker = resp.NextMarker
+	}
+	return all, fmt.Errorf("回收站超过 20 万条，没读完")
+}
+
+// aliBatchSize 阿里云盘 batch 一次最多 100 个子请求
+const aliBatchSize = 100
+
+// batchByID 对一组文件发同一种子请求（/recyclebin/trash 删进回收站、/file/delete 彻底删除），每批 100 个。
+// 返回成功了几个；找不到的文件（已经不在了）算成功。ids 为空不发请求
+func (c *aliClient) batchByID(sub, drive string, ids []string) (int, error) {
+	done := 0
+	for i := 0; i < len(ids); i += aliBatchSize {
+		end := min(i+aliBatchSize, len(ids))
+		reqs := make([]map[string]any, 0, end-i)
+		for j, id := range ids[i:end] {
+			reqs = append(reqs, map[string]any{
+				"id":      fmt.Sprint(j),
+				"method":  "POST",
+				"url":     sub,
+				"headers": map[string]string{"Content-Type": "application/json"},
+				"body":    map[string]any{"drive_id": drive, "file_id": id},
+			})
+		}
+		var resp struct {
+			Responses []struct {
+				Status int             `json:"status"`
+				Body   json.RawMessage `json:"body"`
+			} `json:"responses"`
+		}
+		if err := c.call("/adrive/v2/batch", map[string]any{"requests": reqs, "resource": "file"}, &resp, "", aliCanaryDrive); err != nil {
+			return done, err
+		}
+		for _, r := range resp.Responses {
+			if r.Status >= 400 && r.Status != http.StatusNotFound {
+				e := &aliAPIError{Status: r.Status}
+				_ = json.Unmarshal(r.Body, e)
+				return done, e
+			}
+			done++
+		}
+		if i+aliBatchSize < len(ids) {
+			time.Sleep(aliBatchGap)
+		}
+	}
+	return done, nil
+}
+
+// aliBatchGap 两批之间歇一下：阿里云盘对连续写请求回 TooManyRequests
+var aliBatchGap = 500 * time.Millisecond
 
 // aliRangeSHA1 读源文件 [start, end]（含两端）这一段算 SHA1（115 二次认证用，一般只有几十 KB）
 func aliRangeSHA1(link, spec string) (string, error) {

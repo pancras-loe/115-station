@@ -245,3 +245,79 @@ export const saveDirClean = (body: { enabled: boolean; cron: string; dirs: DirCl
 export const previewDirClean = (dirs: DirCleanDir[]) =>
   http.post<{ data?: DirCleanResult[]; message?: string }>('/dirclean/preview', { dirs }, { timeoutMs: 10 * 60_000 })
 export const runDirClean = () => http.post<{ message?: string }>('/dirclean/run')
+
+// ============ 定时清空阿里云盘目录（alidirclean.go） ============
+/** account = 阿里云盘账号 id（与秒传共用登录）；drive：resource 资源盘 / backup 备份盘 */
+export interface AliDirCleanDir {
+  account: number
+  drive: 'resource' | 'backup'
+  path: string
+  file_id?: string
+}
+export interface AliCleanAcct {
+  id: number
+  name: string
+  last_err?: string
+}
+export interface AliDirCleanConfig {
+  enabled: boolean
+  cron: string
+  dirs: AliDirCleanDir[]
+  accounts: AliCleanAcct[]
+  next_run?: string
+  last_result?: string
+  last_result_at?: string
+  last_ok?: boolean
+  running?: boolean
+}
+export interface AliDirCleanResult {
+  account: string
+  drive: string
+  path: string
+  dirs: number
+  files: number
+  size: number
+  deleted: number
+  error?: string
+}
+export const aliDirCleanConfig = () => http.get<AliDirCleanConfig>('/alidirclean/config')
+/** 保存时后端按路径逐级查出目录（查不到 / 秒传临时目录拒收） */
+export const saveAliDirClean = (body: { enabled: boolean; cron: string; dirs: AliDirCleanDir[] }) =>
+  http.post('/alidirclean/config', body, { timeoutMs: 5 * 60_000 })
+export const previewAliDirClean = (dirs: AliDirCleanDir[]) =>
+  http.post<{ data?: AliDirCleanResult[]; message?: string }>('/alidirclean/preview', { dirs }, { timeoutMs: 10 * 60_000 })
+export const runAliDirClean = () => http.post<{ message?: string }>('/alidirclean/run')
+
+// ============ 清理阿里云盘回收站（alirbclean.go） ============
+/** keep_days 0 = 整个清空 */
+export interface AliRbCleanAcct extends AliCleanAcct {
+  on: boolean
+  keep_days: number
+}
+export interface AliRbCleanConfig {
+  enabled: boolean
+  cron: string
+  accounts: AliRbCleanAcct[]
+  next_run?: string
+  last_result?: string
+  last_result_at?: string
+  last_ok?: boolean
+  running?: boolean
+}
+export interface AliRbCleanResult {
+  id: number
+  account: string
+  keep_days: number
+  total: number
+  expired: number
+  unknown: number
+  size: number
+  deleted: number
+  error?: string
+}
+export const aliRbCleanConfig = () => http.get<AliRbCleanConfig>('/alirbclean/config')
+export const saveAliRbClean = (body: { enabled: boolean; cron: string; accounts: { id: number; on: boolean; keep_days: number }[] }) =>
+  http.post('/alirbclean/config', body)
+export const previewAliRbClean = (accounts: { id: number; keep_days: number }[]) =>
+  http.post<{ data?: AliRbCleanResult[]; message?: string }>('/alirbclean/preview', { accounts }, { timeoutMs: 10 * 60_000 })
+export const runAliRbClean = () => http.post<{ message?: string }>('/alirbclean/run')

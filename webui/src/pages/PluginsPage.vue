@@ -14,6 +14,8 @@ import CoverGenModal from '@/components/plugins/CoverGenModal.vue'
 import AliTransferModal from '@/components/plugins/AliTransferModal.vue'
 import RecycleCleanModal from '@/components/plugins/RecycleCleanModal.vue'
 import DirCleanModal from '@/components/plugins/DirCleanModal.vue'
+import AliDirCleanModal from '@/components/plugins/AliDirCleanModal.vue'
+import AliRecycleCleanModal from '@/components/plugins/AliRecycleCleanModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
@@ -83,77 +85,113 @@ async function cgRun() {
   }
 }
 
-// ============ 清理 115 回收站 ============
-const rbShow = ref(false)
+// ============ 后台跑的清理任务（回收站清理 / 清空目录，115 与阿里云盘各一份） ============
+interface BgStatus {
+  running?: boolean
+  last_ok?: boolean
+  last_result?: string
+  last_result_at?: string
+}
+interface BgTask {
+  key: string
+  confirm: { title: string; content: string; action: string }
+  verb: string // 清理 / 清空
+  status: () => Promise<BgStatus>
+  run: () => Promise<unknown>
+}
 
-/** 立即清理在后台跑（回收站大时要翻很多页），这里轮询配置里的 running / last_result */
-async function rbRun() {
+/** 确认后让后端在后台跑，这里轮询配置里的 running / last_result，结果显示在卡片里 */
+async function bgRun(t: BgTask) {
   const ok = await dialog.confirm({
-    title: '立即清理回收站',
-    content: '按已保存的设置，把打开清理的账号里超过保留天数的回收站内容彻底删除，无法还原。确定？',
+    title: t.confirm.title,
+    content: t.confirm.content,
     tone: 'danger',
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
-      { label: '彻底删除', value: true, variant: 'danger' },
+      { label: t.confirm.action, value: true, variant: 'danger' },
     ],
   })
   if (!ok) return
-  busy.value.rbclean = true
-  results.value.rbclean = { status: 'pending', title: '清理中…' }
+  busy.value[t.key] = true
+  results.value[t.key] = { status: 'pending', title: `${t.verb}中…` }
   try {
-    const before = (await pluginsApi.rbCleanConfig()).last_result_at
-    await pluginsApi.runRbClean()
+    const before = (await t.status()).last_result_at
+    await t.run()
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 3000))
-      const d = await pluginsApi.rbCleanConfig()
+      const d = await t.status()
       if (!d.running && d.last_result_at && d.last_result_at !== before) {
-        results.value.rbclean = { status: d.last_ok ? 'ok' : 'err', title: d.last_ok ? '清理完成' : '清理出错', detail: d.last_result }
+        results.value[t.key] = { status: d.last_ok ? 'ok' : 'err', title: d.last_ok ? `${t.verb}完成` : `${t.verb}出错`, detail: d.last_result }
         return
       }
     }
-    results.value.rbclean = { status: 'pending', title: '还在清理，结果稍后见通知与日志' }
+    results.value[t.key] = { status: 'pending', title: `还在${t.verb}，结果稍后见通知与日志` }
   } catch (e) {
-    results.value.rbclean = { status: 'err', title: '清理失败', detail: e instanceof Error ? e.message : '' }
+    results.value[t.key] = { status: 'err', title: `${t.verb}失败`, detail: e instanceof Error ? e.message : '' }
   } finally {
-    busy.value.rbclean = false
+    busy.value[t.key] = false
   }
 }
+
+// ============ 清理 115 回收站 ============
+const rbShow = ref(false)
+const rbRun = () =>
+  bgRun({
+    key: 'rbclean',
+    verb: '清理',
+    confirm: {
+      title: '立即清理回收站',
+      content: '按已保存的设置，把打开清理的账号里超过保留天数的回收站内容彻底删除，无法还原。确定？',
+      action: '彻底删除',
+    },
+    status: pluginsApi.rbCleanConfig,
+    run: pluginsApi.runRbClean,
+  })
 
 // ============ 定时清空 115 目录 ============
 const dcShow = ref(false)
-
-/** 立即清空在后台跑，这里轮询配置里的 running / last_result（同回收站清理） */
-async function dcRun() {
-  const ok = await dialog.confirm({
-    title: '立即清空目录',
-    content: '按已保存的设置，把这些目录里的全部内容删进 115 回收站（目录本身留着，回收站里能还原）。确定？',
-    tone: 'danger',
-    actions: [
-      { label: '取消', value: false, variant: 'tertiary' },
-      { label: '清空', value: true, variant: 'danger' },
-    ],
+const dcRun = () =>
+  bgRun({
+    key: 'dirclean',
+    verb: '清空',
+    confirm: {
+      title: '立即清空目录',
+      content: '按已保存的设置，把这些目录里的全部内容删进 115 回收站（目录本身留着，回收站里能还原）。确定？',
+      action: '清空',
+    },
+    status: pluginsApi.dirCleanConfig,
+    run: pluginsApi.runDirClean,
   })
-  if (!ok) return
-  busy.value.dirclean = true
-  results.value.dirclean = { status: 'pending', title: '清空中…' }
-  try {
-    const before = (await pluginsApi.dirCleanConfig()).last_result_at
-    await pluginsApi.runDirClean()
-    for (let i = 0; i < 200; i++) {
-      await new Promise((r) => setTimeout(r, 3000))
-      const d = await pluginsApi.dirCleanConfig()
-      if (!d.running && d.last_result_at && d.last_result_at !== before) {
-        results.value.dirclean = { status: d.last_ok ? 'ok' : 'err', title: d.last_ok ? '清空完成' : '清空出错', detail: d.last_result }
-        return
-      }
-    }
-    results.value.dirclean = { status: 'pending', title: '还在清空，结果稍后见通知与日志' }
-  } catch (e) {
-    results.value.dirclean = { status: 'err', title: '清空失败', detail: e instanceof Error ? e.message : '' }
-  } finally {
-    busy.value.dirclean = false
-  }
-}
+
+// ============ 定时清空阿里云盘目录 ============
+const adcShow = ref(false)
+const adcRun = () =>
+  bgRun({
+    key: 'alidirclean',
+    verb: '清空',
+    confirm: {
+      title: '立即清空阿里云盘目录',
+      content: '按已保存的设置，把这些目录里的全部内容删进阿里云盘回收站（目录本身留着，回收站里能还原）。确定？',
+      action: '清空',
+    },
+    status: pluginsApi.aliDirCleanConfig,
+    run: pluginsApi.runAliDirClean,
+  })
+
+// ============ 清理阿里云盘回收站 ============
+const arbShow = ref(false)
+const arbRun = () =>
+  bgRun({
+    key: 'alirbclean',
+    verb: '清理',
+    confirm: {
+      title: '立即清理阿里云盘回收站',
+      content: '按已保存的设置，把打开清理的阿里云盘账号回收站里的内容彻底删除，无法还原。确定？',
+      action: '彻底删除',
+    },
+    status: pluginsApi.aliRbCleanConfig,
+    run: pluginsApi.runAliRbClean,
+  })
 
 // ============ 阿里云盘秒传 ============
 const aliShow = ref(false)
@@ -221,6 +259,26 @@ const plugins: Plugin[] = [
     onConfig: () => (aliShow.value = true),
     onRun: () => router.push({ name: 'media-transfer', query: { tab: 'link' } }),
   },
+  {
+    key: 'alidirclean',
+    name: '定时清空阿里云盘目录',
+    icon: BrushCleaning,
+    desc: '按计划把阿里云盘里指定的几个目录（来自分享……）里的内容删进回收站，目录本身留着。共用「阿里云盘秒传」登录的账号。',
+    available: true,
+    runLabel: '立即清空',
+    onConfig: () => (adcShow.value = true),
+    onRun: adcRun,
+  },
+  {
+    key: 'alirbclean',
+    name: '清理阿里云盘回收站',
+    icon: Trash2,
+    desc: '按计划彻底删除阿里云盘回收站的内容：整个清空，或只删超过保留天数的。资源盘、备份盘都清，每个账号单独设。',
+    available: true,
+    runLabel: '立即清理',
+    onConfig: () => (arbShow.value = true),
+    onRun: arbRun,
+  },
 ]
 
 const availableCount = plugins.filter((p) => p.available).length
@@ -276,6 +334,8 @@ const availableCount = plugins.filter((p) => p.available).length
     <AliTransferModal v-model:show="aliShow" />
     <RecycleCleanModal v-model:show="rbShow" />
     <DirCleanModal v-model:show="dcShow" />
+    <AliDirCleanModal v-model:show="adcShow" />
+    <AliRecycleCleanModal v-model:show="arbShow" />
   </SectionCard>
 </template>
 
