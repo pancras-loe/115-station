@@ -59,7 +59,7 @@ func strmRelCandidates(videoRel string) []string {
 // strmNameFor 这个视频实际该写成的 STRM 文件名（按台账裁决，model.DB 为空时直接用新写法）：
 //
 //  1. 台账里这个 fid 已有同目录的视频行 → 沿用它的名字。已落盘的文件名字不会因为
-//     换了写入路径（全量 / 增量 / 整理）而来回变；
+//     换了写入路径（全量 / 增量 / 整理）而来回变；接管来的任意名字（AdoptName）在网盘没改名时同样沿用；
 //  2. 新写法的名字已被台账里**别的、未失效的**文件占着 → 同目录另有同基名的视频（X.mkv 与 X.mp4），
 //     这个退回旧写法 X.mkv.strm；
 //  3. 否则用新写法。
@@ -74,7 +74,12 @@ func strmNameFor(f remoteFile) string {
 	if f.Fid != "" {
 		var own model.SyncedFile
 		if model.DB.Where("file_id = ?", f.ledgerFid()).First(&own).Error == nil && path.Dir(own.RelPath) == f.Path {
-			if b := path.Base(own.RelPath); b == name || b == legacy {
+			b := path.Base(own.RelPath)
+			if b == name || b == legacy {
+				return b
+			}
+			// 接管来的别的写法（文件名模板、Windows 替换过字符，adopt.go）：网盘上没改过名就沿用
+			if own.AdoptName != "" && own.AdoptName == f.Name && strings.HasSuffix(strings.ToLower(b), ".strm") {
 				return b
 			}
 		}

@@ -60,12 +60,11 @@ const example = computed(() => {
 
 const normDomain = (d: string) => d.trim().replace(/\/+$/, '')
 
-// 批量改写已有 STRM 的地址（strmrebase.go）。两个入口：域名下面的按钮随时打开；
-// 保存时域名变了，先在后台预演一次，真有写着旧地址的才弹出来（没有就不打扰）
+// 替换已有 STRM 的地址（strmrebase.go，完整入口在扩展功能「STRM 迁移」）。这里两个入口：域名下面的按钮随时打开；
+// 保存时域名变了，先在后台读一遍分组，真有写着别的本站地址的才弹出来（没有就不打扰），面板会把它们预填成旧地址
 const rebaseShow = ref(false)
 const rebasePreload = ref<StrmRebaseReport | null>(null)
 const rebaseAfterSave = ref(false)
-const domainUnsaved = computed(() => normDomain(model.value.domain) !== normDomain(saved.value.domain))
 
 function openRebase() {
   rebasePreload.value = null
@@ -80,7 +79,7 @@ async function onSave() {
   if (!after || after === before) return
   try {
     const r = await syncApi.strmRebasePreview()
-    if (!r.stale_total) return
+    if (!r.groups.some((g) => g.station && g.base.toLowerCase() !== after.toLowerCase())) return
     rebasePreload.value = r
     rebaseAfterSave.value = true
     rebaseShow.value = true
@@ -104,7 +103,7 @@ async function onSave() {
       </p>
       <p v-else-if="!loading && saved.domain.trim()" class="suggest">
         换了域名、已经生成的 STRM 还是旧地址？
-        <HButton variant="ghost" size="sm" @click="openRebase">改写已有 STRM…</HButton>
+        <HButton variant="ghost" size="sm" @click="openRebase">替换已有 STRM 的地址…</HButton>
       </p>
     </FieldRow>
 
@@ -145,7 +144,6 @@ async function onSave() {
     <StrmRebaseDialog
       v-model:show="rebaseShow"
       :preload="rebasePreload"
-      :unsaved="domainUnsaved"
       :after-save="rebaseAfterSave"
     />
   </SectionCard>

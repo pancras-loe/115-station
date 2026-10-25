@@ -90,12 +90,14 @@ type jobParams struct {
 	Person *personJobParams `json:"person,omitempty"`
 	// LibName 清理移出配置的媒体库的本地残留（libleft.go）
 	LibName string `json:"lib_name,omitempty"`
-	// Adopt 接管已有 STRM 的预演参数（adopt.go）
+	// Adopt 接管已有 STRM 的预演 / 执行参数（adopt.go）
 	Adopt *adoptJobParams `json:"adopt,omitempty"`
 	// Ali 阿里云盘分享秒传进 115（ali2115.go）
 	Ali *aliJobParams `json:"ali,omitempty"`
-	// RebaseFrom 批量改写 STRM 地址：只改这些旧地址的，空 = 全部（strmrebase.go）
+	// RebaseFrom 升级前排进队列的老「改写 STRM 地址」任务：这些旧地址换成已保存的直连域名（strmrebase.go）
 	RebaseFrom []string `json:"rebase_from,omitempty"`
+	// RebasePairs 批量替换 STRM 地址：旧地址开头 → 新地址开头（strmrebase.go）
+	RebasePairs []strmRebasePair `json:"rebase_pairs,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

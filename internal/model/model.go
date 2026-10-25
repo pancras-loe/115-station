@@ -191,6 +191,10 @@ type SyncedFile struct {
 	// FileID 按 115 的 fid 原样存：fid 是 115 全局的编号（openStrm 多账号也按 file_id 一个主键存），
 	// 万一撞了，写台账时 applySyncResults 拒绝覆盖别的账号的行（不悄悄串号）
 	Account uint `json:"account" gorm:"index;default:0"`
+	// AdoptName 接管别的项目的 STRM 时（adopt.go），本地 STRM 名不是本站的两种写法，记下当时的网盘文件名。
+	// 网盘上没改过名（文件名还是它）就一直沿用本地现有的 STRM 名（strmNameFor），否则全量会在旁边按本站写法再写一份；
+	// 改过名就照本站写法走。空 = 不是这种情况
+	AdoptName string `json:"adopt_name,omitempty" gorm:"size:500"`
 	// OrphanAt 最近一次「完整」全量扫描中该文件在网盘上已不存在的时刻。
 	// 非空即为失效 STRM 候选：本地 strm/附属还在，源文件没了（网页版手动删除、
 	// 增量同步停机期间的变动等生活事件漏掉的情况）。只做标记不自动删除，

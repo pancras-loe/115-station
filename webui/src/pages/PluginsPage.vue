@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, type Component } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, ref, type Component } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { BrushCleaning, CalendarCheck, CloudUpload, Images, Play, Settings2, Trash2 } from '@lucide/vue'
+import { BrushCleaning, CalendarCheck, CloudUpload, FolderInput, Images, Play, Settings2, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
@@ -16,11 +16,13 @@ import RecycleCleanModal from '@/components/plugins/RecycleCleanModal.vue'
 import DirCleanModal from '@/components/plugins/DirCleanModal.vue'
 import AliDirCleanModal from '@/components/plugins/AliDirCleanModal.vue'
 import AliRecycleCleanModal from '@/components/plugins/AliRecycleCleanModal.vue'
+import StrmMigrateModal, { type StrmMigrateTab } from '@/components/plugins/StrmMigrateModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const { message, dialog } = useFeedback()
 const router = useRouter()
+const route = useRoute()
 
 /** 每张插件卡的「立即运行」结果，展示在卡片内 */
 const results = ref<Record<string, BannerState | null>>({})
@@ -196,6 +198,18 @@ const arbRun = () =>
 // ============ 阿里云盘秒传 ============
 const aliShow = ref(false)
 
+// ============ STRM 迁移（替换地址 / 接管其他项目） ============
+const smShow = ref(false)
+const smTab = ref<StrmMigrateTab>('rebase')
+function smOpen(tab: StrmMigrateTab) {
+  smTab.value = tab
+  smShow.value = true
+}
+// 「Strm 管理 → 全量」的「接管已有 STRM」跳过来：/plugins?open=strm-migrate&tab=adopt
+onMounted(() => {
+  if (route.query.open === 'strm-migrate') smOpen(route.query.tab === 'adopt' ? 'adopt' : 'rebase')
+})
+
 // ============ 插件清单 ============
 interface Plugin {
   key: string
@@ -258,6 +272,16 @@ const plugins: Plugin[] = [
     runLabel: '去贴链接',
     onConfig: () => (aliShow.value = true),
     onRun: () => router.push({ name: 'media-transfer', query: { tab: 'link' } }),
+  },
+  {
+    key: 'strmmigrate',
+    name: 'STRM 迁移',
+    icon: FolderInput,
+    desc: '换了 IP / 端口 / 挂载点：把本地 STRM 开头的旧地址批量换成新的，本站和别的项目写的都行。从 p115strmhelper 等项目换过来：接管已有 STRM，路径不动，Emby 观看记录保留。',
+    available: true,
+    runLabel: '接管其他项目',
+    onConfig: () => smOpen('rebase'),
+    onRun: () => smOpen('adopt'),
   },
   {
     key: 'alidirclean',
@@ -336,6 +360,7 @@ const availableCount = plugins.filter((p) => p.available).length
     <DirCleanModal v-model:show="dcShow" />
     <AliDirCleanModal v-model:show="adcShow" />
     <AliRecycleCleanModal v-model:show="arbShow" />
+    <StrmMigrateModal v-model:show="smShow" v-model:tab="smTab" />
   </SectionCard>
 </template>
 

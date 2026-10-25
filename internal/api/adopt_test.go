@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"115-station/internal/model"
 )
 
 // adoptTestIDBase 真实的文件 id 是十几位的数，太小的 id 编出来的 pickcode 过不了 validFilePickcode 的长度检查
@@ -125,7 +128,7 @@ func TestPlanAdoptBuckets(t *testing.T) {
 	}
 	ledger := map[string]string{"103": "影视/剧集/C/Season 1/C S01E01.strm"}
 
-	rep := planAdopt(locals, remote, ledger, root)
+	rep, acts := planAdopt(locals, remote, ledger, root)
 	want := map[string]int{
 		adoptBucketAdopt: 4, adoptBucketRename: 1, adoptBucketAlready: 1, adoptBucketMoved: 1, adoptBucketDup: 1,
 		adoptBucketMissing: 2, adoptBucketShare: 1, adoptBucketUnknown: 1, adoptBucketNotLocal: 1,
@@ -161,6 +164,26 @@ func TestPlanAdoptBuckets(t *testing.T) {
 	if rep.Formats[strmFmtHelper] != 9 || rep.Formats[strmFmtStation] != 1 || rep.Formats[strmFmtOpenList] != 1 {
 		t.Errorf("Formats = %+v", rep.Formats)
 	}
+	// 执行时只接管「原样接管」「名字不同」两桶留下的那份
+	got := map[string]string{}
+	for _, a := range acts {
+		got[a.Local.Rel] = a.Bucket + ":" + a.File.Fid
+	}
+	wantActs := map[string]string{
+		"影视/电影/A (2020)/A (2020).strm":     "adopt:101",
+		"影视/电影/B (2021)/B (2021).iso.strm": "adopt:102",
+		"影视/电影/F (2017)/F (2017).strm":     "adopt:106",
+		"影视/电影/G (2016)/G (2016).strm":     "adopt:107",
+		"影视/电影/D (2019)/D： 导演剪辑版.strm":     "rename:104",
+	}
+	if len(got) != len(wantActs) {
+		t.Errorf("acts = %+v", got)
+	}
+	for k, v := range wantActs {
+		if got[k] != v {
+			t.Errorf("act %s = %q，期望 %q", k, got[k], v)
+		}
+	}
 }
 
 // 多数对不上位置时判 move；一个都没对上判 empty
@@ -177,7 +200,10 @@ func TestPlanAdoptVerdict(t *testing.T) {
 		{Rel: "/old/strm/电影/A/A.strm", Abs: "/old/strm/电影/A/A.strm", Ref: ref(pcA)},
 		{Rel: "/old/strm/电影/B/B.strm", Abs: "/old/strm/电影/B/B.strm", Ref: ref(pcB)},
 	}
-	rep := planAdopt(locals, remote, nil, "/media/")
+	rep, acts := planAdopt(locals, remote, nil, "/media/")
+	if len(acts) != 0 {
+		t.Errorf("位置不同的不接管：%+v", acts)
+	}
 	if rep.Verdict != "move" || rep.count(adoptBucketMoved) != 2 {
 		t.Fatalf("Verdict=%s moved=%d", rep.Verdict, rep.count(adoptBucketMoved))
 	}
@@ -185,7 +211,7 @@ func TestPlanAdoptVerdict(t *testing.T) {
 		t.Errorf("前缀换算：%+v", rep.Shifts)
 	}
 
-	rep = planAdopt([]localStrm{{Rel: "a/b.strm", Abs: "/media/a/b.strm", Ref: parseForeignStrm("hello")}}, remote, nil, "/media")
+	rep, _ = planAdopt([]localStrm{{Rel: "a/b.strm", Abs: "/media/a/b.strm", Ref: parseForeignStrm("hello")}}, remote, nil, "/media")
 	if rep.Verdict != "empty" {
 		t.Errorf("Verdict=%s", rep.Verdict)
 	}
@@ -241,5 +267,112 @@ func TestScanLocalStrms(t *testing.T) {
 	got, err = scanLocalStrms(root, other, nil)
 	if err != nil || len(got) != 2 || !filepath.IsAbs(filepath.FromSlash(got[0].Rel)) {
 		t.Errorf("根外扫描：%+v %v", got, err)
+	}
+}
+
+// 执行：改写内容（还原修改时间）、登记台账（名字不同的记下 AdoptName）、只登记本地已有的附属文件、写上迁移标记；
+// 之后 strmNameFor 沿用接管来的名字，网盘改名后才换回本站写法
+func TestApplyAdopt(t *testing.T) {
+	// 104 已有一行（上次接管到一半、本站写过另一处）：冲突时 AdoptName 也要补上
+	deepDelTestDB(t, []model.SyncedFile{{FileID: "104", RelPath: "旧/位置.strm", Kind: "video"}})
+	t.Cleanup(func() {
+		model.DB.Where("key IN ?", []string{strmMigrateKey, strmISOMigrateKey}).Delete(&model.Setting{})
+	})
+	model.DB.Where("key IN ?", []string{strmMigrateKey, strmISOMigrateKey}).Delete(&model.Setting{})
+
+	sp := adoptTestStable(t)
+	root := t.TempDir()
+	old := time.Date(2025, 1, 2, 3, 4, 5, 0, time.Local)
+	write := func(rel, body string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(p), 0o777)
+		os.WriteFile(p, []byte(body), 0o666)
+		os.Chtimes(p, old, old)
+	}
+	read := func(rel string) string {
+		b, _ := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		return string(b)
+	}
+	fa := remoteFile{Fid: "101", PickCode: adoptTestPC(t, 101, sp), Path: "影视/电影/A (2020)", Name: "A (2020).mkv", Size: 9}
+	fb := remoteFile{Fid: "102", PickCode: adoptTestPC(t, 102, sp), Path: "影视/电影/B (2021)", Name: "B (2021).iso"}
+	fd := remoteFile{Fid: "104", PickCode: adoptTestPC(t, 104, sp), Path: "影视/电影/D (2019)", Name: "D: 导演剪辑版.mkv"}
+	fe := remoteFile{Fid: "105", PickCode: adoptTestPC(t, 105, sp), Path: "影视/电影/E (2018)", Name: "E (2018).mkv"}
+	const domain = "http://nas:6086"
+	write("影视/电影/A (2020)/A (2020).strm", "http://mp:3000/api/v1/plugin/P115StrmHelper/redirect_url?pickcode="+fa.PickCode)
+	write("影视/电影/B (2021)/B (2021).iso.strm", "http://q:1/115/url/video.iso?pickcode="+fb.PickCode)
+	write("影视/电影/D (2019)/D： 导演剪辑版.strm", "http://mp:3000/api/v1/plugin/P115StrmHelper/redirect_url?pickcode="+fd.PickCode)
+	write("影视/电影/E (2018)/E (2018).strm", strmURLFor(domain, "pick_code_name", true, fe)) // 本来就是本站直链
+	write("影视/电影/A (2020)/poster.jpg", "img")
+	lr := func(rel string) localStrm { return localStrm{Rel: rel} }
+	acts := []adoptAction{
+		{Local: lr("影视/电影/A (2020)/A (2020).strm"), File: fa, Bucket: adoptBucketAdopt},
+		{Local: lr("影视/电影/B (2021)/B (2021).iso.strm"), File: fb, Bucket: adoptBucketAdopt},
+		{Local: lr("影视/电影/D (2019)/D： 导演剪辑版.strm"), File: fd, Bucket: adoptBucketRename},
+		{Local: lr("影视/电影/E (2018)/E (2018).strm"), File: fe, Bucket: adoptBucketAdopt},
+		{Local: lr("影视/电影/Z/不见了.strm"), File: remoteFile{Fid: "199", PickCode: adoptTestPC(t, 199, sp), Path: "影视/电影/Z", Name: "Z.mkv"}, Bucket: adoptBucketAdopt},
+	}
+	assets := []remoteFile{
+		{Fid: "301", PickCode: adoptTestPC(t, 301, sp), Path: "影视/电影/A (2020)", Name: "poster.jpg"},
+		{Fid: "302", PickCode: adoptTestPC(t, 302, sp), Path: "影视/电影/A (2020)", Name: "fanart.jpg"}, // 本地没有
+	}
+
+	ap := applyAdopt(model.DB, root, acts, assets, domain, "pick_code_name", true, nil)
+	if ap != (adoptApplied{Adopted: 4, Renamed: 1, Rewritten: 3, Unchanged: 1, Failed: 1, Assets: 1}) {
+		t.Fatalf("结果 %+v", ap)
+	}
+	if got := read("影视/电影/A (2020)/A (2020).strm"); got != domain+"/d/"+fa.PickCode+".mkv?/A (2020).mkv" {
+		t.Errorf("A 改写成 %q", got)
+	}
+	if got := read("影视/电影/B (2021)/B (2021).iso.strm"); got != strmURLFor(domain, "pick_code_name", true, fb) {
+		t.Errorf("B 改写成 %q", got)
+	}
+	if st, _ := os.Stat(filepath.Join(root, "影视", "电影", "A (2020)", "A (2020).strm")); !st.ModTime().Equal(old) {
+		t.Errorf("修改时间应还原，得到 %v", st.ModTime())
+	}
+
+	var rows []model.SyncedFile
+	model.DB.Order("file_id").Find(&rows)
+	byFid := map[string]model.SyncedFile{}
+	for _, r := range rows {
+		byFid[r.FileID] = r
+	}
+	if r := byFid["101"]; r.RelPath != "影视/电影/A (2020)/A (2020).strm" || r.Kind != "video" || r.PickCode != fa.PickCode || r.Size != 9 || r.AdoptName != "" {
+		t.Errorf("101 行 %+v", r)
+	}
+	if r := byFid["104"]; r.RelPath != "影视/电影/D (2019)/D： 导演剪辑版.strm" || r.AdoptName != fd.Name {
+		t.Errorf("104 行（冲突更新）%+v", r)
+	}
+	if _, ok := byFid["199"]; ok {
+		t.Error("本地读不到的不该登记")
+	}
+	if r := byFid["301"]; r.Kind != "asset" || r.RelPath != "影视/电影/A (2020)/poster.jpg" {
+		t.Errorf("附属 301 %+v", r)
+	}
+	if _, ok := byFid["302"]; ok {
+		t.Error("本地没有的附属文件不该登记")
+	}
+	var marks int64
+	model.DB.Model(&model.Setting{}).Where("key IN ?", []string{strmMigrateKey, strmISOMigrateKey}).Count(&marks)
+	if marks != 2 {
+		t.Errorf("迁移标记 %d 个", marks)
+	}
+
+	// 全量 / 增量沿用接管来的名字；ISO 的 stem.iso.strm 本来就是本站认的旧写法
+	if n := strmNameFor(fd); n != "D： 导演剪辑版.strm" {
+		t.Errorf("strmNameFor(D) = %q", n)
+	}
+	if n := strmNameFor(fb); n != "B (2021).iso.strm" {
+		t.Errorf("strmNameFor(B) = %q", n)
+	}
+	renamed := fd
+	renamed.Name = "D 导演剪辑版.mkv"
+	if n := strmNameFor(renamed); n != "D 导演剪辑版.strm" {
+		t.Errorf("网盘改名后应按本站写法，得到 %q", n)
+	}
+
+	// 重跑一遍：内容都已是本站直链，结果一样
+	ap = applyAdopt(model.DB, root, acts[:4], nil, domain, "pick_code_name", true, nil)
+	if ap.Rewritten != 0 || ap.Unchanged != 4 || ap.Adopted != 4 {
+		t.Errorf("重跑 %+v", ap)
 	}
 }

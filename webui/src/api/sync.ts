@@ -101,36 +101,62 @@ export interface AdoptReport {
   other_account: number
   /** ok 可以接管；move 多数位置对不上；empty 一个都没对上 */
   verdict: 'ok' | 'move' | 'empty'
+  /** 执行的结果（只在执行任务里有） */
+  applied?: AdoptApplied
+}
+
+export interface AdoptApplied {
+  /** 登记进台账的视频 */
+  adopted: number
+  /** 其中沿用非本站写法文件名的 */
+  renamed: number
+  /** 内容改写成本站直链的 */
+  rewritten: number
+  /** 内容本来就是本站直链的 */
+  unchanged: number
+  failed: number
+  /** 登记的本地已有附属文件 */
+  assets: number
+  full_job_id?: number
 }
 
 /** 入队一次只读预演，结果在任务详情的 result 里 */
 export const adoptPreview = (body: { scan_dir?: string }) => http.post<QueuedReply>('/sync/adopt/preview', body)
+/** 入队执行接管：后端重新扫一遍、对一遍号再接管，不拿上一次预演的结果 */
+export const adoptApply = (body: { scan_dir?: string; then_full?: boolean }) =>
+  http.post<QueuedReply>('/sync/adopt/apply', body)
 
-/** 批量改写已有 STRM 的直链地址：预演与执行共用的报告（后端 strmrebase.go 的 strmRebaseReport） */
+/** 一组替换：内容以 from 开头的，这一段换成 to */
+export interface StrmRebasePair {
+  from: string
+  to: string
+}
+
+/** 批量替换 STRM 地址：预演与执行共用的报告（后端 strmrebase.go 的 strmRebaseReport） */
 export interface StrmRebaseReport {
-  /** 改成的地址（已保存的直连域名） */
-  target: string
-  /** 台账里的视频 */
-  total: number
-  /** 本地读不到的 */
-  missing: number
-  /** 不是本站格式的直链，不碰 */
-  foreign: number
-  /** 已经是当前地址 */
-  current: number
-  /** 写着别的地址的，按旧地址分组 */
-  stale: { base: string; count: number }[]
-  stale_total: number
+  /** 本地媒体根 */
+  root: string
+  /** 扫到的 .strm */
+  scanned: number
+  unreadable: number
+  /** 按地址开头分组（多的在前）；station = 本站格式的直链 */
+  groups: { base: string; count: number; station?: boolean }[]
+  /** 每组替换命中几个 */
+  pairs: { from: string; to: string; count: number }[]
+  matched: number
   samples: { rel: string; old: string; new: string }[]
+  /** 已保存的直连域名（没填过是空） */
+  domain: string
   /** 只在执行结果里有 */
   rewritten: number
   failed: number
 }
 
-/** 只读预演：读本地 STRM，零 115 请求。库大、本地是网络盘时要读一会儿 */
-export const strmRebasePreview = () => http.get<StrmRebaseReport>('/sync/strm-rebase/preview', { timeoutMs: 180_000 })
-/** 入队改写：from 是要改的旧地址，空 = 全部 */
-export const strmRebase = (from: string[]) => http.post<QueuedReply>('/sync/strm-rebase', { from })
+/** 只读预演：读本地 STRM，零 115 请求。pairs 为空时只给分组。库大、本地是网络盘时要读一会儿 */
+export const strmRebasePreview = (pairs: StrmRebasePair[] = []) =>
+  http.post<StrmRebaseReport>('/sync/strm-rebase/preview', { pairs }, { timeoutMs: 180_000 })
+/** 入队替换 */
+export const strmRebase = (pairs: StrmRebasePair[]) => http.post<QueuedReply>('/sync/strm-rebase', { pairs })
 
 export interface IncrSummary {
   /** 轮次号，与日志里的 [同步#N] 对应 */

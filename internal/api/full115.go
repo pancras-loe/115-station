@@ -1020,19 +1020,7 @@ func writeStrm(localRoot, domain, format string, keepExt, skipExist bool, f remo
 
 // writeStrmNamed 同 writeStrm，文件名由调用方定（同一批里去重同名视频时用）
 func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f remoteFile, strmName string) (strmRel string, wrote bool, err error) {
-	base := strings.TrimRight(domain, "/")
-	idPart := f.playID() // 附加账号的文件是 {账号}~{pickcode}（acctlibs.go）
-	if keepExt || isISOName(f.Name) {
-		// ISO 不看开关一律带 .iso：STRM 名不带扩展名之后，直链是本地唯一认得出光盘镜像的地方（strmiso.go）
-		idPart += pathExt(f.Name)
-	}
-	var streamURL string
-	if format == "pick_code" {
-		streamURL = fmt.Sprintf("%s/d/%s", base, idPart)
-	} else {
-		// 「#」要转义：同集多份保留时的「xxx#A.mkv」（orgdup.go），不转的话 # 之后被当成 URL 片段截掉
-		streamURL = fmt.Sprintf("%s/d/%s?/%s", base, idPart, strings.ReplaceAll(f.Name, "#", "%23"))
-	}
+	streamURL := strmURLFor(domain, format, keepExt, f)
 
 	// 本地目录：保持网盘目录结构
 	dir := filepath.Join(localRoot, filepath.FromSlash(f.Path))
@@ -1056,6 +1044,21 @@ func writeStrmNamed(localRoot, domain, format string, keepExt, skipExist bool, f
 	}
 	markFreshStrm(strmPath) // 入库确认后只探新写出的（embyfresh.go）
 	return strmRel, true, nil
+}
+
+// strmURLFor 这个视频的 STRM 内容（本站直链）。写 STRM 与接管已有 STRM（adopt.go）共用这一份拼法
+func strmURLFor(domain, format string, keepExt bool, f remoteFile) string {
+	base := strings.TrimRight(domain, "/")
+	idPart := f.playID() // 附加账号的文件是 {账号}~{pickcode}（acctlibs.go）
+	if keepExt || isISOName(f.Name) {
+		// ISO 不看开关一律带 .iso：STRM 名不带扩展名之后，直链是本地唯一认得出光盘镜像的地方（strmiso.go）
+		idPart += pathExt(f.Name)
+	}
+	if format == "pick_code" {
+		return fmt.Sprintf("%s/d/%s", base, idPart)
+	}
+	// 「#」要转义：同集多份保留时的「xxx#A.mkv」（orgdup.go），不转的话 # 之后被当成 URL 片段截掉
+	return fmt.Sprintf("%s/d/%s?/%s", base, idPart, strings.ReplaceAll(f.Name, "#", "%23"))
 }
 
 // ledgerFidTaken 这些行里，fid 已经被**别的账号**的台账行占着的（返回这些 fid）。

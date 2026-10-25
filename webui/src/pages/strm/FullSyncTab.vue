@@ -14,7 +14,6 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import FullHelp from './FullHelp.vue'
-import AdoptDialog from '@/components/strm/AdoptDialog.vue'
 import TabSummary, { type SummaryItem } from '@/components/strm/TabSummary.vue'
 import { libraryApi, syncApi, tasksApi } from '@/api'
 import type { FullSyncMode, OrphanReport } from '@/api/sync'
@@ -132,7 +131,6 @@ const extraLibs = computed(() => (cfg.value.extra_libs ?? []).filter((e) => e.ci
 const extraLibCount = computed(() => extraLibs.value.length)
 const extraLibTitle = computed(() => extraLibs.value.map((e) => e.path || `cid ${e.cid}`).join('\n'))
 const helpVisible = ref(false)
-const adoptVisible = ref(false)
 
 /** 还没跑过全量（历史与各库结果都空）：设置挪到最上面 */
 const firstRun = computed(() => hist.value !== null && !hist.value.length && !libs.value.some((l) => l.last_sync))
@@ -244,10 +242,11 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
       <button type="button" class="loc-help" @click="helpVisible = true">
         <BookOpen :size="14" />功能介绍
       </button>
-      <!-- 从别的 STRM 项目换过来时用：认下本地已有的 STRM，Emby 条目不动（ADOPT-STRM-PLAN.md） -->
-      <button type="button" class="loc-help" @click="adoptVisible = true">
+      <!-- 从别的 STRM 项目换过来时用：认下本地已有的 STRM，Emby 条目不动（ADOPT-STRM-PLAN.md）。
+           2026-10-25 起在扩展功能「STRM 迁移」里，这里只留跳转 -->
+      <RouterLink :to="{ name: 'plugins', query: { open: 'strm-migrate', tab: 'adopt' } }" class="loc-help">
         <FolderInput :size="14" />接管已有 STRM
-      </button>
+      </RouterLink>
     </div>
 
     <TabSummary :items="summary">
@@ -453,7 +452,6 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
     <HModal v-model:show="helpVisible" title="全量同步是怎么回事" width="860px">
       <FullHelp />
     </HModal>
-    <AdoptDialog v-model:show="adoptVisible" :local-path="cfg.local_path" />
   </div>
 </template>
 
@@ -538,6 +536,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
   font: inherit;
   font-size: 12.5px;
   color: var(--muted);
+  text-decoration: none;
   cursor: pointer;
 }
 .loc-help:hover {
