@@ -276,7 +276,7 @@ export interface OrganizeRecord {
   /** 手动提交的不如库里已有的，停下来问要不要强制洗版（「基础配置 → 洗版待确认」，与「人工确认」开关无关） */
   hold_wash?: boolean
   wash_list?: WashAskItem[]
-  /** 已提交的回答：force 强制洗版 / skip 按已存在处理；没答过为空 */
+  /** 已提交的回答：force 强制洗版 / skip 不洗版；没答过为空 */
   wash_choice?: string
   /** 暂存的指定（还没提交到任务队列）；0 = 没有 */
   pending_tmdb_id?: number
@@ -335,7 +335,7 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
 export const submitDupChoice = (id: number, actions: DupAction[]) =>
   http.post<QueuedReply>(`/organize/records/${id}/dup`, { actions })
 
-/** 洗版待确认：force 强制洗版（库里的旧版进 115 回收站）/ skip 按已存在处理 → 入任务队列（走确认入库的执行器） */
+/** 洗版待确认：force 强制洗版（库里的旧版进 115 回收站）/ skip 不洗版 → 入任务队列（走确认入库的执行器） */
 export const submitWashChoice = (id: number, choice: 'force' | 'skip') =>
   http.post<QueuedReply>(`/organize/records/${id}/wash`, { choice })
 

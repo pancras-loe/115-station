@@ -561,6 +561,10 @@ func runWashReplaceWithNotify(ops washFileOps, cfg *OrgConfig, media *TmdbMedia,
 	return washReplaced
 }
 
+// orgStageWash 判输没换的「已存在」记录打这个 Stage：界面与通知写「不洗版」，
+// 和真正的「已存在」（同一份文件 sha1 相同）分开 —— 两件事混成一个词，用户会以为库里就是这一份
+const orgStageWash = "wash"
+
 // washExistsMsg 「移到已存在」的理由文案。两种理由必须分开说：
 // 「库内已有更优版本」是策略比出来的，「库内已有同一份文件」是 sha1 撞上的。
 // 此前合成一句「库内已有相同或更优版本」，用户配了 replace 却没看到洗版时
@@ -569,14 +573,14 @@ func washExistsMsg(decision string) string {
 	if decision == washSameFile {
 		return "库内已有同一份文件（sha1 相同）"
 	}
-	return "库内已有更优版本"
+	return "不洗版：库内已有更优版本"
 }
 
 // washExistsMsgWhy 同 washExistsMsg，策略比出来的带上为什么没换（「新来的不如库里的（分辨率：1080p < 2160p）」）。
 // 原来只有一句「库内已有更优版本」，用户看不出是哪一项输了
 func washExistsMsgWhy(decision, why string) string {
 	if decision == washNotBetter && why != "" {
-		return "没换：" + why
+		return "不洗版：" + why
 	}
 	return washExistsMsg(decision)
 }
@@ -717,7 +721,7 @@ func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *wa
 	}
 	// skip：库里已有（同集/同组任意版本）就不再收新的
 	if mode == "skip" {
-		onLog(fmt.Sprintf("○ 洗版判定: skip 模式，库内已有，%s 按已存在处理", truncateStr(newName, 60)))
+		onLog(fmt.Sprintf("○ 洗版判定: skip 模式，库内已有，%s 不洗版", truncateStr(newName, 60)))
 		plan.decision, plan.why, plan.oldName = washNotBetter, "策略是「不要新的」", ledgerName(cands[0])
 		return plan
 	}
@@ -733,7 +737,7 @@ func decideWash(media *TmdbMedia, nf washFile, newSha1, targetDir string, st *wa
 	oldName := ledgerName(best)
 	// 全部打平时保守不替换；体积只在规则写了 size_prefer 时比（见 washquality.go）
 	if c, why := washCompareFiles(nf, ledgerWashFile(best), st.PriorityLevel); c <= 0 {
-		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（%s），按已存在处理",
+		onLog(fmt.Sprintf("○ 《%s》洗版判定：新版 %s 不优于库内 %s（%s），不洗版",
 			media.Title, shortLogName(newName), shortLogName(oldName), why))
 		plan.decision, plan.oldName = washNotBetter, oldName
 		plan.why = "新来的不如库里的（" + why + "）"

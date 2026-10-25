@@ -76,4 +76,16 @@ func TestOrgOutcomeNotifyText(t *testing.T) {
 	if none := orgOutcomeNotifyText(recs[:1], now); none != "" {
 		t.Fatalf("全部成功时不推: %s", none)
 	}
+	held := []*model.OrganizeRecord{
+		{Status: orgStatusAwaiting, SourceFid: "w1", Title: "怒之杀", HoldWash: true, Message: "要强制洗版吗？"},
+		{Status: orgStatusAwaiting, SourceFid: "u1", Title: "同集多份", HoldDup: true, Message: "选留哪份"},
+	}
+	nowash := orgOutcomeNotifyText([]*model.OrganizeRecord{{Status: "exists", Stage: orgStageWash, SourceFid: "n1",
+		Title: "怒之杀", Year: "2026", Message: washExistsMsgWhy(washNotBetter, "新来的不如库里的（杜比视界：没有 < 有）")}}, now)
+	if !strings.Contains(nowash, "○ 不洗版 · 怒之杀 (2026)") || strings.Contains(nowash, "已存在 ·") {
+		t.Fatalf("判输没换要写「不洗版」，别和「已存在」混: %s", nowash)
+	}
+	if dup := orgOutcomeNotifyText(held, now); dup != "" {
+		t.Fatalf("洗版待确认 / 同集多份另有带按钮的通知，汇总里不该再列: %s", dup)
+	}
 }

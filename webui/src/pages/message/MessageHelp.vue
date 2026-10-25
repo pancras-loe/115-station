@@ -90,7 +90,7 @@ const origin = location.origin
             <tr><td><code>整理</code> / <code>同步</code></td><td>手动触发整理、增量同步（进任务队列）</td></tr>
             <tr><td><code>状态</code></td><td>当前任务、转存目录还有几个条目、最近几个任务的结果</td></tr>
             <tr><td><code>多份 编号 选择</code></td><td>同一集有几份、改名会重名时，选保留哪份（通知里会写怎么回）</td></tr>
-            <tr><td><code>洗版 编号 是/否</code></td><td>手动转存的不如库里的、停下来问的：强制洗版还是按已存在处理</td></tr>
+            <tr><td><code>洗版 编号 是/否</code></td><td>手动转存的不如库里的、停下来问的：强制洗版还是不洗版</td></tr>
             <tr><td><code>帮助</code></td><td>列出以上指令</td></tr>
           </tbody>
         </table>

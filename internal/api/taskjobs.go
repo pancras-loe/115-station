@@ -147,7 +147,7 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 		return
 	}
 	if rec.HoldWash && rec.WashChoice == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条是手动提交的不如库里的，请先选「强制洗版」或「按已存在处理」"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条是手动提交的不如库里的，请先选「强制洗版」或「不洗版」"})
 		return
 	}
 	job, err := h.enqueueConfirm(&rec, req)

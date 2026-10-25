@@ -131,7 +131,7 @@ func TestSubmitWashChoice(t *testing.T) {
 	if _, err := h.submitWashChoice(&rec, "maybe", "web", true); err == nil {
 		t.Fatal("认不出的回答应拒绝")
 	}
-	if out := h.washTGCallback("w:" + fmt.Sprint(rec.ID) + ":s"); !strings.Contains(out, "按已存在处理") || !strings.Contains(out, "任务 #") {
+	if out := h.washTGCallback("w:" + fmt.Sprint(rec.ID) + ":s"); !strings.Contains(out, "不洗版") || !strings.Contains(out, "任务 #") {
 		t.Fatalf("TG 按钮应提交：%s", out)
 	}
 	if out := h.washBotCommand("wecom-user", fmt.Sprint(rec.ID)+" 是"); !strings.Contains(out[0], "答过了") {

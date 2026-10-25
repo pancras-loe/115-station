@@ -20,9 +20,9 @@ import (
 // 手动提交的内容洗版判输、直接移进「已存在」的话，用户事后想「还是要新的这份」就只能去「已存在」里
 // 自己捞。所以开着 org-basic.wash_ask 时，**订阅以外**提交的内容（链接转存页、找资源、机器人贴链接、
 // 离线下载、自己放进转存目录的）判输了先不动：原地登记一条 HoldWash 的待确认记录，推一条通知问
-// 「强制洗版」还是「按已存在处理」，网页、TG 按钮、企微回复都能答。
+// 「强制洗版」还是「不洗版」，网页、TG 按钮、企微回复都能答。
 //   - 强制洗版：走「确认入库」，洗版换成 forceWashStrategy（库里同一部电影 / 同一集的版本进 115 回收站）；
-//   - 按已存在处理：走「确认入库」，不再问，照原来的判定移「已存在」。
+//   - 不洗版：走「确认入库」，不再问，照原来的判定把新的移进「已存在」文件夹。
 // 同一份文件（sha1 相同）不问：内容一模一样，换了等于白删一份。订阅的不问：订阅自己有洗版（subwash.go），
 // 判得和整理一样，转进来又判输多半是同名并排的旧版，问了也是白问。
 // 取代了原来机器人的「强制覆盖 <链接>」：那个要在提交前就想好，这里等判输了再问。
@@ -30,7 +30,7 @@ import (
 
 const (
 	washChoiceForce = "force" // 强制洗版
-	washChoiceSkip  = "skip"  // 按已存在处理
+	washChoiceSkip  = "skip"  // 不洗版
 )
 
 // washAskItem 一个判输的视频：新来的、库里比下去它的那份、为什么
@@ -120,7 +120,7 @@ func washChoiceText(choice string) string {
 	if choice == washChoiceForce {
 		return "强制洗版"
 	}
-	return "按已存在处理"
+	return "不洗版"
 }
 
 // submitWashChoice 记下回答并入「确认入库」队列。网页、机器人共用这一个入口。
@@ -130,7 +130,7 @@ func (h *Handler) submitWashChoice(rec *model.OrganizeRecord, choice, source str
 		return model.TaskJob{}, errors.New("这条记录不在「洗版待确认」状态（可能已经处理过）")
 	}
 	if choice != washChoiceForce && choice != washChoiceSkip {
-		return model.TaskJob{}, errors.New("回答只能是强制洗版或按已存在处理")
+		return model.TaskJob{}, errors.New("回答只能是强制洗版或不洗版")
 	}
 	q := h.DB.Model(&model.OrganizeRecord{}).Where("id = ? AND status = ? AND hold_wash = ?", rec.ID, orgStatusAwaiting, true)
 	if !override {
@@ -206,14 +206,14 @@ func washNoticeLines(rec *model.OrganizeRecord, items []washAskItem) []string {
 	}
 	return append(lines, "",
 		"强制洗版 = 库里同一部电影 / 同一集原有的版本移到 115 回收站（可还原），新的入库",
-		"按已存在处理 = 新的移到「已存在」")
+		"不洗版 = 库里的不动，新的移到「已存在」文件夹")
 }
 
 // washTGButtons TG 按钮：w:<记录 id>:<f | s>
 func washTGButtons(id uint) [][]tgButton {
 	return [][]tgButton{{
 		{Text: "⚡ 强制洗版", Data: fmt.Sprintf("w:%d:f", id)},
-		{Text: "按已存在处理", Data: fmt.Sprintf("w:%d:s", id)},
+		{Text: "不洗版", Data: fmt.Sprintf("w:%d:s", id)},
 	}}
 }
 
@@ -243,7 +243,7 @@ func notifyWashHold(rec *model.OrganizeRecord) {
 	}
 	if cfg.Wecom.isEnabled() && cfg.Wecom.CorpID != "" && cfg.Wecom.Secret != "" {
 		go sendWecom(cfg.Wecom, strings.Join(append(append([]string(nil), body...), "",
-			fmt.Sprintf("回复「洗版 %d 是」强制洗版，「洗版 %d 否」按已存在处理。", rec.ID, rec.ID)), "\n"))
+			fmt.Sprintf("回复「洗版 %d 是」强制洗版，「洗版 %d 否」不洗版。", rec.ID, rec.ID)), "\n"))
 	}
 	sendExtraChannels(cfg, body[0], strings.Join(append(append([]string(nil), body[1:]...), "", web), "\n"))
 }
@@ -293,7 +293,7 @@ func washReplyChoice(word string) string {
 	switch strings.ToLower(strings.TrimSpace(word)) {
 	case "是", "要", "强制", "强制洗版", "洗", "洗版", "y", "yes", "f", "force":
 		return washChoiceForce
-	case "否", "不", "不要", "不用", "已存在", "按已存在处理", "跳过", "n", "no", "s", "skip":
+	case "否", "不", "不要", "不用", "不洗", "不洗版", "已存在", "跳过", "n", "no", "s", "skip":
 		return washChoiceSkip
 	}
 	return ""
@@ -313,7 +313,7 @@ func (h *Handler) washBotCommand(user, args string) []string {
 		for i := range recs {
 			lines = append(lines, fmt.Sprintf("#%d %s：%s", recs[i].ID, recs[i].Title, recs[i].Message))
 		}
-		return append(lines, "", "回复「洗版 <编号>」看详情，「洗版 <编号> 是」强制洗版，「洗版 <编号> 否」按已存在处理。")
+		return append(lines, "", "回复「洗版 <编号>」看详情，「洗版 <编号> 是」强制洗版，「洗版 <编号> 否」不洗版。")
 	}
 	id64, err := strconv.ParseUint(strings.TrimPrefix(fields[0], "#"), 10, 32)
 	if err != nil {
@@ -325,11 +325,11 @@ func (h *Handler) washBotCommand(user, args string) []string {
 	}
 	if len(fields) == 1 {
 		return append(washNoticeLines(rec, parseWashItems(rec.WashGroups)), "",
-			fmt.Sprintf("回复「洗版 %d 是」强制洗版，「洗版 %d 否」按已存在处理。", rec.ID, rec.ID))
+			fmt.Sprintf("回复「洗版 %d 是」强制洗版，「洗版 %d 否」不洗版。", rec.ID, rec.ID))
 	}
 	choice := washReplyChoice(fields[1])
 	if choice == "" {
-		return []string{fmt.Sprintf("认不出「%s」：写「是」强制洗版，或「否」按已存在处理。", fields[1])}
+		return []string{fmt.Sprintf("认不出「%s」：写「是」强制洗版，或「否」不洗版。", fields[1])}
 	}
 	job, err := h.submitWashChoice(rec, choice, dupBotSource(user), false)
 	if err != nil {

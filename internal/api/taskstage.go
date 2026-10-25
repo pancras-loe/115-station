@@ -77,7 +77,7 @@ func planSubmit(recs []model.OrganizeRecord) submitPlan {
 		case r.HoldDup && r.DupChoice == "":
 			skip("同一集有几份文件的条目要先选择保留哪份")
 		case r.HoldWash && r.WashChoice == "" && r.PendingTmdbID <= 0:
-			skip("洗版待确认的条目要先选「强制洗版」或「按已存在处理」")
+			skip("洗版待确认的条目要先选「强制洗版」或「不洗版」")
 		case r.PendingTmdbID > 0 && r.Status == orgStatusAwaiting:
 			p.staged = append(p.staged, r)
 		case r.PendingTmdbID > 0:

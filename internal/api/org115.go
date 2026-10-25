@@ -167,6 +167,10 @@ func orgOutcomeNotifyText(recs []*model.OrganizeRecord, now time.Time) string {
 		if r == nil || r.Status == "success" {
 			continue
 		}
+		// 洗版待确认 / 同集多份停下时各自另推一条带按钮的（notifyWashHold / notifyDupHold），这里再列就重复了
+		if r.Status == orgStatusAwaiting && (r.HoldWash || r.HoldDup) {
+			continue
+		}
 		key := r.SourceFid + "|" + r.Status + "|" + r.Message
 		if r.SourceFid != "" {
 			if _, ok := orgOutcomeSeen.at[key]; ok {
@@ -185,7 +189,7 @@ func orgOutcomeNotifyText(recs []*model.OrganizeRecord, now time.Time) string {
 				name += " (" + r.Year + ")"
 			}
 		}
-		lines = append(lines, fmt.Sprintf("%s %s\n   %s", orgOutcomeLabel(r.Status), truncateStr(name, 60), truncateStr(r.Message, 120)))
+		lines = append(lines, fmt.Sprintf("%s %s\n   %s", orgOutcomeLabel(r), truncateStr(name, 60), truncateStr(r.Message, 120)))
 	}
 	if n == 0 {
 		return ""
@@ -197,9 +201,12 @@ func orgOutcomeNotifyText(recs []*model.OrganizeRecord, now time.Time) string {
 	return strings.Join(lines, "\n")
 }
 
-func orgOutcomeLabel(status string) string {
-	switch status {
+func orgOutcomeLabel(r *model.OrganizeRecord) string {
+	switch r.Status {
 	case "exists":
+		if r.Stage == orgStageWash {
+			return "○ 不洗版 ·" // 判输没换，不是同一份文件已存在
+		}
 		return "○ 已存在 ·"
 	case "unrecognized":
 		return "? 未识别 ·"

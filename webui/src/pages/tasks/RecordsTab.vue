@@ -84,7 +84,7 @@ const FILTERS: { key: string; label: string; type: TagType }[] = [
   { key: 'problem', label: '需要处理', type: 'error' },
   { key: 'staged', label: '已指定', type: 'info' },
   { key: 'success', label: '成功', type: 'success' },
-  { key: 'exists', label: '已存在', type: 'info' },
+  { key: 'exists', label: '已存在 / 不洗版', type: 'info' },
   { key: 'unrecognized', label: '未识别', type: 'warning' },
   { key: 'failed', label: '失败', type: 'error' },
 ]
@@ -121,6 +121,15 @@ const STATUS_META: Record<string, { text: string; type: TagType }> = {
   exists: { text: '已存在', type: 'info' },
   unrecognized: { text: '未识别', type: 'warning' },
   failed: { text: '失败', type: 'error' },
+}
+
+/**
+ * 状态文案。「已存在」状态里有两种：同一份文件（sha1 相同）真的已经在库里，
+ * 和洗版判输没换（stage=wash，老记录看「没换：」开头）—— 后者叫「不洗版」，混成一个词会被读成库里就是这一份
+ */
+function statusText(r: OrganizeRecord) {
+  if (r.status === 'exists' && (r.stage === 'wash' || /^(没换|不洗版)：/.test(r.message ?? ''))) return '不洗版'
+  return STATUS_META[r.status]?.text ?? r.status
 }
 
 const STAGE_TEXT: Record<string, string> = {
@@ -344,7 +353,7 @@ async function confirmOne(r: OrganizeRecord) {
   }
 }
 
-// ---- 洗版待确认：手动提交的不如库里的，强制洗版 / 按已存在处理（都走确认入库的执行器） ----
+// ---- 洗版待确认：手动提交的不如库里的，强制洗版 / 不洗版（都走确认入库的执行器） ----
 async function doWash(r: OrganizeRecord, choice: 'force' | 'skip') {
   acting.value = r.id
   try {
@@ -650,7 +659,7 @@ function shareOutText(o: ShareOutView): string {
             <div class="main">
               <div class="head">
                 <HChip :color="chipColor(STATUS_META[r.status]?.type)">
-                  {{ STATUS_META[r.status]?.text ?? r.status }}
+                  {{ statusText(r) }}
                 </HChip>
                 <HChip v-if="queuedJob(r)?.status === 'running'" color="accent">执行中</HChip>
                 <HChip v-else-if="queuedJob(r)" :title="queuedJob(r)?.title">排队中 · 第 {{ queuedJob(r)?.position }} 位</HChip>
@@ -683,7 +692,7 @@ function shareOutText(o: ShareOutView): string {
                     {{ r.recog_via === 'ai_pick' ? 'AI 选定' : 'AI 识别' }} {{ r.ai_score ?? 0 }} 分
                   </HChip>
                 </template>
-                <span v-if="r.stage && r.status !== 'success' && r.status !== 'awaiting'" class="dim">
+                <span v-if="r.stage && r.stage !== 'wash' && r.status !== 'success' && r.status !== 'awaiting'" class="dim">
                   {{ STAGE_TEXT[r.stage] ?? r.stage }}
                 </span>
               </div>
@@ -703,7 +712,7 @@ function shareOutText(o: ShareOutView): string {
               >
                 <template v-if="r.hold_dup">{{ r.message }}</template>
                 <template v-else-if="r.hold_wash">
-                  {{ r.wash_choice ? `已选「${r.wash_choice === 'force' ? '强制洗版' : '按已存在处理'}」，排队中` : r.message }}
+                  {{ r.wash_choice ? `已选「${r.wash_choice === 'force' ? '强制洗版' : '不洗版'}」，排队中` : r.message }}
                 </template>
                 <template v-else-if="r.tmdb_id">
                   <span class="plan-label">将入库到</span>
@@ -829,11 +838,11 @@ function shareOutText(o: ShareOutView): string {
                     size="sm"
                     variant="tertiary"
                     :disabled="busy || queuedJob(r)?.status === 'running'"
-                    title="照洗版判定，把这次的移到「已存在」"
+                    title="库里的不动，这次的移到「已存在」文件夹"
                     @click="doWash(r, 'skip')"
                   >
                     <template #icon><Check /></template>
-                    按已存在处理
+                    不洗版
                   </HButton>
                 </template>
                 <HButton

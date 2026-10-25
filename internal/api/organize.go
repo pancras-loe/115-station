@@ -127,7 +127,7 @@ type orgCtx struct {
 	// 同前缀的兄弟散文件要靠它认来源链接（分享转存只记了顶层条目名）
 	top string
 	// washChoice 洗版待确认上用户的回答（orgwashask.go）：force = 强制洗版（洗版换成 forceWashStrategy），
-	// skip = 按已存在处理（不再问）；空 = 还没问过，开着 wash_ask 时判输的照常停下来问
+	// skip = 不洗版（不再问，新的移进「已存在」文件夹）；空 = 还没问过，开着 wash_ask 时判输的照常停下来问
 	washChoice string
 	// keepSource 源目录里还有别的待确认记录的文件（确认时剔掉了，confirmOne）：收尾不收拾源目录、不整目录搬走
 	keepSource bool
@@ -2514,7 +2514,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 			failMedia("failed", "move", "移到已存在失败: "+err.Error(), media, category, targetDir)
 			return append(results, OrganizeResult{FileName: dir.Name + "/", Status: "failed", Message: err.Error()})
 		}
-		reason := "库内已有更优版本"
+		reason := washExistsMsg(washNotBetter)
 		switch {
 		case sameFileVideos == 0 && firstWhy != "":
 			reason = washExistsMsgWhy(washNotBetter, firstWhy)
@@ -2528,9 +2528,13 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		msg := fmt.Sprintf("%s，%d 个视频已移到 已存在/%s", reason, rejectVideos, holdingDir)
 		onLog(fmt.Sprintf("○ %s/ - %s", dir.Name, msg))
+		stage := ""
+		if sameFileVideos == 0 {
+			stage = orgStageWash // 全是判输的：「不洗版」，不是「已存在」
+		}
 		ctx.sink.note(&model.OrganizeRecord{
 			Source: dir.Name + "/", SourceFid: dir.Fid, SourceKind: "dir",
-			Status: "exists", Message: msg,
+			Status: "exists", Stage: stage, Message: msg,
 			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
 			MediaType: media.MediaType, PosterPath: media.PosterPath,
 			Category: category, TargetDir: targetDir,
@@ -3181,7 +3185,11 @@ func siblingExistsRecord(main OrganizeResult, rec *model.OrganizeRecord, exists 
 	if len(files) == 0 {
 		return nil
 	}
-	reason := "库内已有更优版本"
+	reason := washExistsMsg(washNotBetter)
+	stage := ""
+	if sameFile == 0 {
+		stage = orgStageWash
+	}
 	switch {
 	case sameFile == len(exists):
 		reason = washExistsMsg(washSameFile)
@@ -3194,7 +3202,7 @@ func siblingExistsRecord(main OrganizeResult, rec *model.OrganizeRecord, exists 
 	}
 	er := &model.OrganizeRecord{
 		Source: files[0].Name, SourceFid: files[0].Fid, SourceKind: "file",
-		Status: "exists", Message: fmt.Sprintf("%s，%d 个视频已移到 %s", reason, len(exists), dest),
+		Status: "exists", Stage: stage, Message: fmt.Sprintf("%s，%d 个视频已移到 %s", reason, len(exists), dest),
 		TmdbID: main.TmdbID, Title: main.Title, Year: main.Year, MediaType: main.MediaType,
 		Category: main.Category, TargetDir: main.TargetDir,
 		Files: marshalRecordFiles(files), VideoCount: len(exists),
@@ -3390,9 +3398,13 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 		msg := washExistsMsgWhy(decision, why) + "，已移到 已存在/" + holdingDir
 		result.Status, result.Message = "exists", msg
 		onLog(fmt.Sprintf("○ %s - %s", f.Name, msg))
+		stage := ""
+		if decision == washNotBetter {
+			stage = orgStageWash
+		}
 		ctx.sink.note(&model.OrganizeRecord{
 			Source: f.Name, SourceFid: f.Fid, SourceKind: "file",
-			Status: "exists", Message: msg,
+			Status: "exists", Stage: stage, Message: msg,
 			TmdbID: media.TmdbID, Title: media.Title, Year: media.Year,
 			MediaType: media.MediaType, PosterPath: media.PosterPath,
 			Category: category, TargetDir: targetDir,
