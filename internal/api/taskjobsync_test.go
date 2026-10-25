@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"115-station/internal/model"
@@ -90,12 +91,17 @@ func TestBackgroundRunHistory(t *testing.T) {
 func TestSummarizeOrganizeAndStoppable(t *testing.T) {
 	r, msg := summarizeOrganize([]OrganizeResult{
 		{Status: "success"}, {Status: "success"}, {Status: "exists"}, {Status: "failed"}, {Status: orgStatusAwaiting},
-	})
+	}, nil)
 	if r != (organizeJobResult{Success: 2, Exists: 1, Failed: 1, Awaiting: 1}) || msg == "" {
 		t.Fatalf("整理汇总不对：%+v %q", r, msg)
 	}
-	if _, msg := summarizeOrganize(nil); msg != "待整理目录里没有需要处理的内容" {
+	if _, msg := summarizeOrganize(nil, nil); msg != "待整理目录里没有需要处理的内容" {
 		t.Fatalf("空整理的措辞不对：%q", msg)
+	}
+	// 转存进来的内容并进了一个停着待确认的目录：要说出来，别报「没有需要处理的内容」
+	held := []heldSkip{{Name: "与狼共眠 更至14全20集", Kind: "洗版待确认", ID: 12}}
+	if r, msg := summarizeOrganize(nil, held); r.Held != 1 || !strings.Contains(msg, "与狼共眠") || !strings.Contains(msg, "#12") || !strings.Contains(msg, "洗版待确认") {
+		t.Fatalf("跳过的待确认条目要写进结果：%+v %q", r, msg)
 	}
 
 	cases := []struct {

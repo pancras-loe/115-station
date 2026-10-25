@@ -1827,6 +1827,7 @@ func runOrganizeEngine(ops *pan115Ops, cfg *OrgConfig, sink *orgSink, onLog func
 	// （否则会出现"已经存在文件夹移进自己"、转存目录被当容器壳搬进冗余等事故）。
 	// 绑定了媒体库的转存子目录同样不是条目，展开成它里面一层、各自以子目录为扫描根（stagingsub.go）
 	topEntries, ctxs := stagingWork(ctx, expandStagingEntries(orgLister(ops), cfg, topEntries, onLog))
+	logHeldOnce(sink.heldSkips, onLog, time.Now())
 	if len(topEntries) == 0 {
 		return results, 0 // 空转静默：定时任务每 10 分钟一轮，不为空目录刷日志
 	}

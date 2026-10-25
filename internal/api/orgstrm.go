@@ -68,6 +68,8 @@ type orgSink struct {
 	// acct 也决定写出的 STRM 直链带不带账号段、台账行记在哪个账号（applySyncResults）
 	libID uint
 	acct  uint
+	// heldSkips 本轮因为等确认跳过的顶层条目（dropHeld 记），整理结果里要说出来
+	heldSkips []heldSkip
 
 	mu          sync.Mutex
 	jobs        map[string]scrapeJob // key 去重：一部剧的多个条目只刮一次

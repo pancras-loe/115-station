@@ -165,3 +165,22 @@ func TestCountUnheldSkipsAwaiting(t *testing.T) {
 		t.Fatalf("countUnheld = %d，想要 1", n)
 	}
 }
+
+// dropHeld 跳过的条目记进 sink，同一批日志只打一次
+func TestDropHeldRecordsSkips(t *testing.T) {
+	sink := &orgSink{}
+	c := &orgCtx{cfg: &OrgConfig{}, sink: sink, held: map[string]*awaitingRef{"d": {id: 7, wash: true}}}
+	if out := c.dropHeld([]dirEntry{{Fid: "d", Name: "剧 A"}, {Fid: "e", Name: "剧 B"}}); len(out) != 1 {
+		t.Fatalf("洗版待确认的要跳过: %+v", out)
+	}
+	if len(sink.heldSkips) != 1 || sink.heldSkips[0] != (heldSkip{Name: "剧 A", Kind: "洗版待确认", ID: 7}) {
+		t.Fatalf("跳过的要记下来: %+v", sink.heldSkips)
+	}
+	var logs []string
+	now := time.Now()
+	logHeldOnce(sink.heldSkips, func(m string) { logs = append(logs, m) }, now)
+	logHeldOnce(sink.heldSkips, func(m string) { logs = append(logs, m) }, now.Add(time.Minute))
+	if len(logs) != 1 {
+		t.Fatalf("同一批只打一行日志: %v", logs)
+	}
+}

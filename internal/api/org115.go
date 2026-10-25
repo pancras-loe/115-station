@@ -25,12 +25,18 @@ import (
 // 加载配置 → 整理引擎（自带落盘）→ 刮削 → Emby 刷新
 // 返回步骤摘要与错误（错误时 steps 里带原因）
 func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResult, runErr error) {
+	steps, details, _, err := h.executeOrganizeHeld()
+	return steps, details, err
+}
+
+// executeOrganizeHeld 同 executeOrganize，另外带回本轮因为等确认跳过的条目
+func (h *Handler) executeOrganizeHeld() (stepsOut []gin.H, detailsOut []OrganizeResult, heldOut []heldSkip, runErr error) {
 	defer func() { failTask(runErr) }()
 	if _, err := loadTmdbClient(); err != nil {
-		return nil, nil, fmt.Errorf("未执行：%w", err)
+		return nil, nil, nil, fmt.Errorf("未执行：%w", err)
 	}
 	if msg := mediaRootProblem(); msg != "" {
-		return nil, nil, fmt.Errorf("未执行：%s", msg)
+		return nil, nil, nil, fmt.Errorf("未执行：%s", msg)
 	}
 	orgStart := time.Now()
 	log.Printf("[整理] ▶ 开始整理 %s", time.Now().Format("15:04:05"))
@@ -39,7 +45,7 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	// 一个库一轮（orgconfigv2.go）：放进哪个库的转存文件夹就整理进哪个库，用那个库所在账号的通道
 	runs, problems, err := h.organizeRuns()
 	if err != nil {
-		return append(steps, gin.H{"step": "整理", "status": "跳过", "message": err.Error()}), nil, err
+		return append(steps, gin.H{"step": "整理", "status": "跳过", "message": err.Error()}), nil, nil, err
 	}
 	for _, p := range problems {
 		steps = append(steps, gin.H{"step": "整理", "status": "失败", "message": p})
@@ -66,6 +72,7 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 		sink.flushRefresh()
 		finishOrganize(sink, results, orgStart)
 		all = append(all, results...)
+		heldOut = append(heldOut, sink.heldSkips...)
 	}
 
 	existsCount, failedCount, awaitingCount := 0, 0, 0
@@ -85,9 +92,9 @@ func (h *Handler) executeOrganize() (stepsOut []gin.H, detailsOut []OrganizeResu
 	}
 	steps = append(steps, gin.H{"step": "整理", "status": "完成", "message": msg})
 	if len(runs) == 0 && len(problems) > 0 {
-		return steps, all, fmt.Errorf("%s", strings.Join(problems, "；"))
+		return steps, all, heldOut, fmt.Errorf("%s", strings.Join(problems, "；"))
 	}
-	return steps, all, nil
+	return steps, all, heldOut, nil
 }
 
 // libStepPrefix 多个库时步骤摘要前面带上库名

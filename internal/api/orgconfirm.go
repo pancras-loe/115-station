@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"115-station/internal/model"
@@ -43,6 +44,75 @@ type awaitingRef struct {
 
 // sticky 开关关着也不许自动整理接手：接手就是再判一遍、又停回来
 func (r *awaitingRef) sticky() bool { return r.ai || r.dup || r.twin || r.wash }
+
+// kind 停下的原因，给「本轮跳过了哪些」的提示用
+func (r *awaitingRef) kind() string {
+	switch {
+	case r.wash:
+		return "洗版待确认"
+	case r.dup:
+		return "同集多份待选"
+	case r.twin:
+		return "同名待指定"
+	case r.ai:
+		return "AI 识别待确认"
+	}
+	return "人工确认"
+}
+
+// heldSkip 本轮因为等确认被跳过的一个顶层条目
+type heldSkip struct {
+	Name string
+	Kind string
+	ID   uint // 整理记录 id
+}
+
+// heldSkipText 跳过的条目说成一句话。转存进来的内容落进一个还停着待确认的目录时（同名目录 115 转存会并进去），
+// 整理什么都不做；不说出来的话用户只看到「没有需要处理的内容」，以为整理坏了
+func heldSkipText(held []heldSkip) string {
+	if len(held) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	for i, s := range held {
+		if i == 3 {
+			parts = append(parts, fmt.Sprintf("等 %d 个", len(held)))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("「%s」（%s，记录 #%d）", truncateStr(s.Name, 40), s.Kind, s.ID))
+	}
+	return fmt.Sprintf("%d 个条目在等你确认、本轮没动：%s，到 任务中心 → 整理记录 → 待确认 处理", len(held), strings.Join(parts, "、"))
+}
+
+// heldLogSeen 同一批跳过的条目多久内不重复打日志（定时整理每 10 分钟一轮）
+var heldLogSeen = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+// logHeldOnce 跳过的条目打一行日志，同一批 6 小时内只打一次
+func logHeldOnce(held []heldSkip, onLog func(string), now time.Time) {
+	if len(held) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(held))
+	for _, s := range held {
+		ids = append(ids, fmt.Sprint(s.ID)+":"+s.Name)
+	}
+	key := strings.Join(ids, "|")
+	heldLogSeen.Lock()
+	for k, t := range heldLogSeen.at {
+		if now.Sub(t) > orgOutcomeQuiet {
+			delete(heldLogSeen.at, k)
+		}
+	}
+	_, seen := heldLogSeen.at[key]
+	heldLogSeen.at[key] = now
+	heldLogSeen.Unlock()
+	if !seen {
+		onLog("⏸ " + heldSkipText(held))
+	}
+}
 
 // loadAwaiting 所有待确认记录，按 fid 索引：记录自身的 SourceFid 与登记的每个文件都算，
 // 散文件的待确认记录挂着同前缀的其他集，它们作为顶层条目时同样要被认出来
@@ -82,6 +152,8 @@ func (c *orgCtx) dropHeld(entries []dirEntry) []dirEntry {
 		// AI 判定 / 撞名停下的不管开关怎样都跳过：接手就是重新识别、再调一次模型、再停回来
 		if ref := c.held[e.Fid]; ref == nil || (!c.cfg.ManualConfirm && !ref.sticky()) {
 			out = append(out, e)
+		} else if c.sink != nil {
+			c.sink.heldSkips = append(c.sink.heldSkips, heldSkip{Name: e.Name, Kind: ref.kind(), ID: ref.id})
 		}
 	}
 	return out

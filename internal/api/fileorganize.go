@@ -221,7 +221,7 @@ func execFileOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	sink.flushRefresh()
 	finishOrganize(sink, results, orgStart)
 
-	res, msg := summarizeOrganize(results)
+	res, msg := summarizeOrganize(results, nil)
 	if len(results) == 0 {
 		msg = "所选条目都被跳过了（见实时日志）"
 	}

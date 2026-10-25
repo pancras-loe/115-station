@@ -29,10 +29,11 @@ type organizeJobResult struct {
 	Exists   int `json:"exists"`
 	Failed   int `json:"failed"`
 	Awaiting int `json:"awaiting"`
+	Held     int `json:"held,omitempty"` // 本轮因为等确认没动的条目
 }
 
 // summarizeOrganize 整理结果 → 计数与一句话（纯函数，便于单测）
-func summarizeOrganize(details []OrganizeResult) (organizeJobResult, string) {
+func summarizeOrganize(details []OrganizeResult, held []heldSkip) (organizeJobResult, string) {
 	var r organizeJobResult
 	for _, d := range details {
 		switch d.Status {
@@ -46,12 +47,19 @@ func summarizeOrganize(details []OrganizeResult) (organizeJobResult, string) {
 			r.Failed++
 		}
 	}
+	r.Held = len(held)
 	if len(details) == 0 {
+		if len(held) > 0 {
+			return r, "没有新内容可整理；" + heldSkipText(held)
+		}
 		return r, "待整理目录里没有需要处理的内容"
 	}
 	msg := fmt.Sprintf("成功 %d · 已存在 %d · 失败 %d", r.Success, r.Exists, r.Failed)
 	if r.Awaiting > 0 {
 		msg += fmt.Sprintf(" · 待确认 %d（到整理记录里确认）", r.Awaiting)
+	}
+	if len(held) > 0 {
+		msg += "；另有 " + heldSkipText(held)
 	}
 	return r, msg
 }
@@ -72,11 +80,11 @@ func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if out, err, stop := noOrganizeLibOutcome(job); stop {
 		return out, err
 	}
-	_, details, err := h.executeOrganize()
+	_, details, held, err := h.executeOrganizeHeld()
 	if err != nil {
 		return jobOutcome{}, err
 	}
-	res, msg := summarizeOrganize(details)
+	res, msg := summarizeOrganize(details, held)
 	out := jobOutcome{Message: msg, Result: res}
 	if decodeJobParams(job).Scheduled {
 		// 定时整理：独立增量轮询关着时在这里串一轮增量（逃生门下的老行为）；
