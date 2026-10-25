@@ -11,6 +11,8 @@ export interface OrgBasic {
   manual_confirm: boolean
   /** 关掉「同名待确认」：TMDB 上同名的几部分不出来时照旧取第一个（反着存，老配置没有这个键 = 开着） */
   no_twin_hold: boolean
+  /** 洗版待确认：手动提交（订阅以外）的不如库里的，先不移「已存在」，停下来问要不要强制洗版 */
+  wash_ask: boolean
   /** 同集多份（改名后会重名）等了多少小时没人选就自动处理；0 = 一直等 */
   dup_auto_hours: number
   /** 超时怎么处理：keep_all 都保留（#A #B）/ recommend 有推荐留推荐、没有就都保留 */
@@ -24,6 +26,7 @@ export const ORG_BASIC_DEFAULTS: OrgBasic = {
   redundant_path: '',
   manual_confirm: false,
   no_twin_hold: false,
+  wash_ask: false,
   dup_auto_hours: 0,
   dup_auto_action: 'keep_all',
 }

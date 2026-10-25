@@ -580,14 +580,19 @@ func splitWecomText(msg string) []string {
 	return out
 }
 
+// tgHTMLEscaper 纯文本放进 parse_mode=HTML 的消息前转义（TG 只认这三个实体）
+var tgHTMLEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+
 // sendTelegram 发送 Telegram 消息
 func sendTelegram(cfg TGConfig, msg string) error {
 	client := &http.Client{Timeout: 20 * time.Second}
 
 	sendURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", cfg.Token)
 
+	// 正文都是纯文本，HTML 模式下 < > & 必须转义：洗版理由「杜比视界：没有 < 有」曾让整条通知被 TG 拒收
+	// （can't parse entities: Unsupported start tag）
 	payload := fmt.Sprintf(`{"chat_id":"%s","text":%s,"parse_mode":"HTML"}`,
-		cfg.ChatID, mustJSON(msg))
+		cfg.ChatID, mustJSON(tgHTMLEscaper.Replace(msg)))
 
 	req, err := http.NewRequest("POST", sendURL, strings.NewReader(payload))
 	if err != nil {

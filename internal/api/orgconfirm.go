@@ -37,11 +37,12 @@ type awaitingRef struct {
 	ai      bool // AI 判定停下的（OrganizeRecord.HoldAI）：「人工确认」开关关着也不自动接手
 	dup     bool // 撞名停下的（OrganizeRecord.HoldDup，orgdup.go）：同上，留哪份只有用户知道
 	twin    bool // 同名同分停下的（OrganizeRecord.HoldTwin）：同上，是哪一部只有用户知道
+	wash    bool // 手动提交的判输了、问要不要强制洗版（OrganizeRecord.HoldWash，orgwashask.go）：同上
 	fids    []string
 }
 
 // sticky 开关关着也不许自动整理接手：接手就是再判一遍、又停回来
-func (r *awaitingRef) sticky() bool { return r.ai || r.dup || r.twin }
+func (r *awaitingRef) sticky() bool { return r.ai || r.dup || r.twin || r.wash }
 
 // loadAwaiting 所有待确认记录，按 fid 索引：记录自身的 SourceFid 与登记的每个文件都算，
 // 散文件的待确认记录挂着同前缀的其他集，它们作为顶层条目时同样要被认出来
@@ -51,9 +52,9 @@ func loadAwaiting() map[string]*awaitingRef {
 		return out
 	}
 	var rows []model.OrganizeRecord
-	model.DB.Select("id, created_at, source_fid, files, hold_ai, hold_dup, hold_twin").Where("status = ?", orgStatusAwaiting).Find(&rows)
+	model.DB.Select("id, created_at, source_fid, files, hold_ai, hold_dup, hold_twin, hold_wash").Where("status = ?", orgStatusAwaiting).Find(&rows)
 	for _, r := range rows {
-		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI, dup: r.HoldDup, twin: r.HoldTwin}
+		ref := &awaitingRef{id: r.ID, created: r.CreatedAt, ai: r.HoldAI, dup: r.HoldDup, twin: r.HoldTwin, wash: r.HoldWash}
 		if r.SourceFid != "" {
 			ref.fids = append(ref.fids, r.SourceFid)
 		}
@@ -157,6 +158,17 @@ func (c *orgCtx) holdForConfirm(source, fid, kind string, media *TmdbMedia, pars
 		c.held[id] = ref
 	}
 	return res
+}
+
+// awaitingOthers 除了这一条之外的待确认记录（按 fid）：确认时同一个源目录里别人的文件不碰
+func awaitingOthers(id uint) map[string]*awaitingRef {
+	out := loadAwaiting()
+	for fid, ref := range out {
+		if ref.id == id {
+			delete(out, fid)
+		}
+	}
+	return out
 }
 
 // awaitingFidSet 待确认条目的 fid 集合（转存守望者判断「目录里还有没有活」用）
@@ -271,7 +283,7 @@ func (h *Handler) confirmAwaitingIn(cfg *OrgConfig, ops *pan115Ops, recs []model
 		}
 		ctx := &orgCtx{ops: ops, cfg: &rcfg, tc: tc, rules: rules, libAbs: libAbs, sink: sink,
 			pruner: pruner, onLog: logFn, forced: media, dupChoice: parseDupChoice(rec.DupChoice),
-			held: map[string]*awaitingRef{}, handled: map[string]bool{}}
+			washChoice: rec.WashChoice, held: awaitingOthers(rec.ID), handled: map[string]bool{}}
 		sink.reuse = &awaitingRef{id: rec.ID, created: rec.CreatedAt, manual: tmdbID != rec.TmdbID, twin: rec.HoldTwin}
 		log.Printf("[整理] ▶ 人工确认《%s》→ %s (%s) [tmdb=%d]", rec.Source, media.Title, media.Year, tmdbID)
 
@@ -324,7 +336,21 @@ func confirmOne(ctx *orgCtx, rec *model.OrganizeRecord) string {
 		case len(files) == 0:
 			return "源目录已经空了，这条记录可以直接删掉"
 		}
-		processDir(ctx, dirEntry{Fid: rec.SourceFid, Cid: rec.SourceFid, Name: name, IsDir: true}, files)
+		// 同一个源目录里可能还停着别的待确认（一部剧几集撞名、另几集判输等着问）：
+		// 那些文件不归这一条，剔掉、源目录留着给它们
+		kept := files[:0]
+		for _, f := range files {
+			if ctx.held[f.Fid] == nil {
+				kept = append(kept, f)
+			}
+		}
+		if len(kept) < len(files) {
+			ctx.keepSource = true
+		}
+		if len(kept) == 0 {
+			return "源目录里只剩别的待确认条目的文件，这条记录可以直接删掉"
+		}
+		processDir(ctx, dirEntry{Fid: rec.SourceFid, Cid: rec.SourceFid, Name: name, IsDir: true}, kept)
 		return ""
 	}
 

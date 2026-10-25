@@ -17,10 +17,10 @@ var tgMenu = []map[string]string{
 	{"command": "sub", "description": "订阅：/sub 片名"},
 	{"command": "subs", "description": "我的订阅"},
 	{"command": "download", "description": "下载或转存：/download 链接"},
-	{"command": "force", "description": "强制覆盖转存：/force 115分享链接"},
 	{"command": "organize", "description": "执行整理"},
 	{"command": "sync", "description": "执行增量同步"},
 	{"command": "dup", "description": "同集多份：选择保留哪份"},
+	{"command": "wash", "description": "洗版待确认：要不要强制洗版"},
 	{"command": "cancel", "description": "关闭当前搜索"},
 }
 
@@ -30,9 +30,9 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/sub 片名：订阅，定时找缺的集，转存后自动入库（找资源的结果里也能点「订阅这部」）\n" +
 	"/subs 我的订阅：看进度、立即搜索、暂停、取消\n" +
 	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
-	"/force 115分享链接（或「强制覆盖 链接」）：转存后整理不看洗版策略，库里同一部电影 / 同一集原有的版本进 115 回收站\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
-	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n\n" +
+	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
+	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是按已存在处理（通知里的按钮也能选）\n\n" +
 	"不想打斜杠也行，直接发中文：「搜索 片名」「订阅 片名」「我的订阅」「观影 片名」「网盘 片名」「整理」「同步」「状态」。\n\n" +
 	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
 	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
@@ -62,14 +62,13 @@ func tgCommand(text string) (string, string) {
 		"/search": "search", "so": "search", "/gy": "gy", "gy": "gy", "/wp": "wp", "wp": "wp",
 		"/download": "download", "dl": "download", "/organize": "organize", "整理": "organize",
 		"/sync": "sync", "同步": "sync", "/cancel": "cancel", "取消": "cancel",
-		"/dup": "dup", "/force": "force",
+		"/dup": "dup", "/wash": "wash",
 		"/sub": "sub", "/subscribe": "sub", "/subs": "subs", "我的订阅": "subs", "订阅列表": "subs",
 	}
 	if cmd, ok := aliases[first]; ok {
 		return cmd, args
 	}
-	// 「强制覆盖」放最前：后面的 classifyLink 认分享链接只看包含，整句会被当成普通转存
-	for _, p := range []struct{ prefix, command string }{{"强制覆盖", "force"}, {"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}, {"多份", "dup"}, {"订阅", "sub"}} {
+	for _, p := range []struct{ prefix, command string }{{"洗版", "wash"}, {"搜索", "search"}, {"找资源", "search"}, {"观影", "gy"}, {"网盘", "wp"}, {"下载", "download"}, {"多份", "dup"}, {"订阅", "sub"}} {
 		if strings.HasPrefix(text, p.prefix) {
 			return p.command, strings.TrimSpace(strings.TrimPrefix(text, p.prefix))
 		}
@@ -119,6 +118,14 @@ func (b *tgConversation) handle(u tgUpdate) {
 		return
 	}
 	b.chat, b.user = m.Chat.ID, from.ID
+	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "w:") {
+		// 洗版待确认的按钮：w:<记录 id>:<f 强制洗版 | s 按已存在处理>，同样认数据库里的记录（orgwashask.go）
+		text := b.h.washTGCallback(u.Callback.Data)
+		if err := b.api.edit(b.ctx, b.chat, m.ID, text, nil); err != nil && b.ctx.Err() == nil {
+			b.reply(text)
+		}
+		return
+	}
 	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "d:") {
 		// 同集多份的按钮：d:<记录 id>:<组>:<操作>，认数据库里的记录，不靠会话（orgdupbot.go）
 		text, buttons := b.h.dupTGCallback(u.Callback.Data)
@@ -173,12 +180,14 @@ func (b *tgConversation) handle(u tgUpdate) {
 		b.show(b.h.botSubsList(b.flowKey()), &msg)
 	case "dup":
 		b.reply(b.h.dupBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
-	case "status", "download", "force", "organize", "sync":
-		if (cmd == "download" || cmd == "force") && args == "" {
+	case "wash":
+		b.reply(b.h.washBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
+	case "status", "download", "organize", "sync":
+		if cmd == "download" && args == "" {
 			b.reply("请在命令后填写链接。")
 			return
 		}
-		text := map[string]string{"status": "状态", "download": "下载 " + args, "force": "强制覆盖 " + args, "organize": "整理", "sync": "同步"}[cmd]
+		text := map[string]string{"status": "状态", "download": "下载 " + args, "organize": "整理", "sync": "同步"}[cmd]
 		// 只允许明确列出的业务进入公共路由，中文别名同样不能绕进补全或建库。
 		reply := b.replyForCurrentChat()
 		b.h.handleBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), text, reply)

@@ -41,6 +41,8 @@ type orgRecordDTO struct {
 	// DupList / DupPicked 同集多份待选的各组与已提交的选择（展开好的 DupGroups / DupChoice，见 orgdup.go）
 	DupList   []dupGroup        `json:"dup_list,omitempty"`
 	DupPicked map[string]string `json:"dup_picked,omitempty"`
+	// WashList 洗版待确认里判输的各个视频（展开好的 WashGroups，见 orgwashask.go）
+	WashList []washAskItem `json:"wash_list,omitempty"`
 	// LibName 落点在附加媒体库时那个库的目录名（主库为空，界面上不显示）。只查路径缓存，不发请求
 	LibName string `json:"lib_name,omitempty"`
 	// DeepDeletable 记录里有文件还在媒体库台账里，「深度删除」才有东西可删（与 deepDelRowsForRecord 同口径）。
@@ -67,6 +69,9 @@ func toRecordDTO(r model.OrganizeRecord, links map[uint]*model.DownloadLink, inL
 	}
 	if r.HoldDup {
 		d.DupList, d.DupPicked = parseDupGroups(r.DupGroups), parseDupChoice(r.DupChoice)
+	}
+	if r.HoldWash {
+		d.WashList = parseWashItems(r.WashGroups)
 	}
 	return d
 }

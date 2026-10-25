@@ -254,10 +254,6 @@ type DownloadLink struct {
 	// ShareOuts 发布结果，列表接口按需填（不是表字段）
 	ShareOuts []ShareOut `json:"share_outs,omitempty" gorm:"-"`
 
-	// Force 「强制覆盖」提交的（机器人「强制覆盖 <链接>」）：整理这批内容时不看洗版策略，
-	// 库里同一部电影 / 同一集原有的版本一律进 115 回收站（api/wash.go 的 forceWashStrategy）
-	Force bool `json:"force,omitempty"`
-
 	CreatedAt time.Time `json:"created_at" gorm:"index"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -545,6 +541,13 @@ type OrganizeRecord struct {
 	HoldDup   bool   `json:"hold_dup"`
 	DupGroups string `json:"dup_groups" gorm:"type:text"`
 	DupChoice string `json:"dup_choice" gorm:"type:text"`
+	// HoldWash 这条待确认是「手动提交的内容不优于库里已有的」停下来问要不要强制洗版的
+	// （org-basic.wash_ask，api/orgwashask.go）：115 同一个分享转存过一次就不能再转，
+	// 直接移进「已存在」的话用户事后想换也换不回来。同 HoldDup：开关关着也不自动接手。
+	// WashGroups 是判输的各个视频（[]washAskItem 的 JSON），WashChoice 是用户的回答（force 强制洗版 / skip 按已存在处理）
+	HoldWash   bool   `json:"hold_wash"`
+	WashGroups string `json:"wash_groups" gorm:"type:text"`
+	WashChoice string `json:"wash_choice" gorm:"size:8"`
 	// PendingTmdbID / PendingMediaType / PendingLabel 用户暂存的指定（还没提交到任务队列）。
 	// 放在记录上而不是前端：改了几十条一刷新全丢是最坏的体验，换台设备也要能接着提交。
 	// 提交入队时清空。PendingLabel 是「片名 (年份)」，列表直接显示，不必再查 TMDB

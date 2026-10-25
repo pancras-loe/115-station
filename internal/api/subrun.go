@@ -313,7 +313,7 @@ func newSubRunner(h *Handler) (*subRunner, error) {
 	r.rmdir = func(cid string) error { return ops.deleteFiles([]string{cid}) }
 	r.offline = func(link, target string) (int, string, uint, string) {
 		// 不做秒传试探：tryOffline 自己等 30 秒，没秒传就弃用；到了的跟这一轮一起整理
-		return h.offlineSubmitTask(link, target, "订阅", false)
+		return h.offlineSubmitTask(link, target, dlLinkSourceSub, false)
 	}
 	r.landed = func(cid string) []string {
 		entries, _, err := ops.listEntries(cid, 0)
@@ -1035,7 +1035,7 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	for _, e := range pick.Picks {
 		ids = append(ids, e.ID)
 	}
-	linkID, err := r.h.shareReceivePicked(rl.URL, rl.Code, ids, cid, firstNonEmpty(title, c.Item.Title), "订阅", []string{wrapper})
+	linkID, err := r.h.shareReceivePicked(rl.URL, rl.Code, ids, cid, firstNonEmpty(title, c.Item.Title), dlLinkSourceSub, []string{wrapper})
 	if err != nil {
 		r.dropWrapper(cid, wrapper)
 		return fail(err.Error(), true)

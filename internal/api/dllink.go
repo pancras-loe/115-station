@@ -87,12 +87,6 @@ func linkHashOf(raw string) string {
 // name 提交时取得到多少算多少（ed2k/http 有文件名，磁力没有，靠监视器回填）；
 // names 是已知的产物名清单（分享转存从 /share/snap 拿，离线为空）
 func dlLinkRecord(h *Handler, rawURL, kind, name, source string, names []string) uint {
-	return dlLinkRecordOpt(h, rawURL, kind, name, source, names, false)
-}
-
-// dlLinkRecordOpt 同 dlLinkRecord，force = 「强制覆盖」提交的。标记和这一行一起写：
-// 内容此时已经在转存目录里，分两步写的话守望者可能恰好在中间开始整理，按洗版策略处理掉
-func dlLinkRecordOpt(h *Handler, rawURL, kind, name, source string, names []string, force bool) uint {
 	if h == nil || h.DB == nil || rawURL == "" {
 		return 0
 	}
@@ -104,7 +98,7 @@ func dlLinkRecordOpt(h *Handler, rawURL, kind, name, source string, names []stri
 	}
 	row := model.DownloadLink{
 		Kind: kind, URL: truncateStr(rawURL, 1000), Hash: linkHashOf(rawURL),
-		Name: truncateStr(name, 500), Source: source, ResultNames: marshalStrs(names), Force: force,
+		Name: truncateStr(name, 500), Source: source, ResultNames: marshalStrs(names),
 	}
 	if err := h.DB.Create(&row).Error; err != nil {
 		log.Printf("[来源链接] ○ 登记失败（不影响下载）: %v", err)
@@ -216,10 +210,14 @@ func dlLinkMatch(db *gorm.DB, rec *model.OrganizeRecord) uint {
 	return 0
 }
 
-// dlLinkForced 这个整理条目是不是「强制覆盖」的链接转存进来的。认法与 dlLinkMatch 同口径
+// dlLinkSourceSub 订阅提交的来源链接（DownloadLink.Source，subrun.go 两处都这么写）
+const dlLinkSourceSub = "订阅"
+
+// dlLinkFromSub 这个整理条目是不是订阅转存 / 离线进来的。认法与 dlLinkMatch 同口径
 // （fid 精确、名字兜底，新的优先）；names 依次是条目自己的名字与它所在的上层条目名
-// （容器目录里的子目录要靠顶层名认）。纯本地 DB 查询，不碰 115
-func dlLinkForced(db *gorm.DB, fid string, names ...string) bool {
+// （容器目录里的子目录要靠顶层名认）。认不出来源的不算订阅：磁力秒传时监视器可能还没回填产物名，
+// 用户在 115 App 里自己放进转存目录的也认不出，这两种都是用户手动的。纯本地 DB 查询，不碰 115
+func dlLinkFromSub(db *gorm.DB, fid string, names ...string) bool {
 	if db == nil {
 		return false
 	}
@@ -234,8 +232,8 @@ func dlLinkForced(db *gorm.DB, fid string, names ...string) bool {
 			continue
 		}
 		var row model.DownloadLink
-		if db.Select("id", "force").First(&row, id).Error == nil && row.Force {
-			return true
+		if db.Select("id", "source").First(&row, id).Error == nil {
+			return row.Source == dlLinkSourceSub
 		}
 	}
 	return false

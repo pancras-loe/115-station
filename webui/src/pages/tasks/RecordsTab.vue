@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Trash2,
   X,
+  Zap,
 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import HAlert from '@/components/hero/HAlert.vue'
@@ -255,12 +256,17 @@ const selected = ref(new Set<number>())
  */
 function canSubmit(r: OrganizeRecord) {
   if (needsDupPick(r)) return false // 同集多份要先选留哪份，批量提交帮不了它
+  if (needsWashPick(r) && !(r.pending_tmdb_id ?? 0)) return false // 洗版待确认要先答强制洗版还是按已存在
   return (r.pending_tmdb_id ?? 0) > 0 || (r.status === 'awaiting' && r.tmdb_id > 0)
 }
 
 /** 同集多份待选、还没提交过选择（待确认的新条目，或重新整理撞名停下的已整理条目） */
 function needsDupPick(r: OrganizeRecord) {
   return !!r.hold_dup && !Object.keys(r.dup_picked ?? {}).length
+}
+/** 洗版待确认、还没答过 */
+function needsWashPick(r: OrganizeRecord) {
+  return !!r.hold_wash && !r.wash_choice
 }
 const confirmable = computed(() => rows.value.filter(canSubmit))
 const allPicked = computed(
@@ -333,6 +339,21 @@ async function confirmOne(r: OrganizeRecord) {
     await queue.submitted(d.job_id)
   } catch (e) {
     toastError(e, '确认失败')
+  } finally {
+    acting.value = 0
+  }
+}
+
+// ---- 洗版待确认：手动提交的不如库里的，强制洗版 / 按已存在处理（都走确认入库的执行器） ----
+async function doWash(r: OrganizeRecord, choice: 'force' | 'skip') {
+  acting.value = r.id
+  try {
+    const d = await organizeApi.submitWashChoice(r.id, choice)
+    message.success(d.message)
+    await queue.submitted(d.job_id)
+    await reload()
+  } catch (e) {
+    toastError(e, '提交失败')
   } finally {
     acting.value = 0
   }
@@ -647,6 +668,7 @@ function shareOutText(o: ShareOutView): string {
                 >
                 <HChip v-if="r.stage === 'moved'" color="warning" :title="r.message">已移出媒体库</HChip>
                 <HChip v-if="r.hold_dup" color="warning">同集多份</HChip>
+                <HChip v-if="r.hold_wash && r.status === 'awaiting'" color="warning">洗版待确认</HChip>
                 <HChip v-if="r.hold_twin && r.status === 'awaiting'" color="warning">同名待确认</HChip>
                 <HChip v-if="r.manual_tmdb" color="success">手动指定</HChip>
                 <template v-else-if="r.recog_via">
@@ -674,8 +696,15 @@ function shareOutText(o: ShareOutView): string {
               <SourceLink v-if="r.link" class="from" :link="r.link.url" :kind="r.link.kind" />
 
               <!-- 待确认：最要紧的是「会被整理成什么、放到哪」，单独一行突出 -->
-              <div v-if="r.status === 'awaiting'" class="plan" :class="{ 'plan-miss': !r.tmdb_id || needsDupPick(r) }">
+              <div
+                v-if="r.status === 'awaiting'"
+                class="plan"
+                :class="{ 'plan-miss': !r.tmdb_id || needsDupPick(r) || needsWashPick(r) }"
+              >
                 <template v-if="r.hold_dup">{{ r.message }}</template>
+                <template v-else-if="r.hold_wash">
+                  {{ r.wash_choice ? `已选「${r.wash_choice === 'force' ? '强制洗版' : '按已存在处理'}」，排队中` : r.message }}
+                </template>
                 <template v-else-if="r.tmdb_id">
                   <span class="plan-label">将入库到</span>
                   <code class="plan-dir">{{ r.target_dir ? libDir(r) : '（确认时按模板生成）' }}</code>
@@ -684,6 +713,18 @@ function shareOutText(o: ShareOutView): string {
               </div>
               <!-- 同名停下：列出几部同名、各自的 tmdb 编号，用户据此判断是不是暂定的那部 -->
               <div v-if="r.status === 'awaiting' && r.hold_twin && r.tmdb_id" class="plan plan-miss">{{ r.message }}</div>
+
+              <!-- 洗版待确认：新来的 / 库里的逐个列出，用户据此决定换不换 -->
+              <ul v-if="r.status === 'awaiting' && r.hold_wash && r.wash_list?.length" class="wash-list">
+                <li v-for="w in r.wash_list.slice(0, 5)" :key="w.fid">
+                  <div class="wash-row"><span class="wash-tag">新</span><span class="wash-name" :title="w.name">{{ w.name }}</span></div>
+                  <div v-if="w.old" class="wash-row">
+                    <span class="wash-tag old">库里</span><span class="wash-name" :title="w.old">{{ w.old }}</span>
+                  </div>
+                  <div v-if="w.why" class="wash-why">{{ w.why }}</div>
+                </li>
+                <li v-if="r.wash_list.length > 5" class="wash-why">…另有 {{ r.wash_list.length - 5 }} 个</li>
+              </ul>
 
               <!-- 重新整理撞名停下的已整理条目：选完按选择再整理一次 -->
               <div v-if="r.hold_dup && r.status !== 'awaiting'" class="plan plan-miss">{{ dupNote(r) }}</div>
@@ -764,6 +805,37 @@ function shareOutText(o: ShareOutView): string {
                   <template #icon><Copy /></template>
                   {{ needsDupPick(r) ? '选择保留' : '改选' }}
                 </HButton>
+                <template v-else-if="r.hold_wash">
+                  <HPopconfirm
+                    danger
+                    confirm-text="强制洗版"
+                    :disabled="busy || queuedJob(r)?.status === 'running'"
+                    @confirm="doWash(r, 'force')"
+                  >
+                    <HButton
+                      size="sm"
+                      variant="primary"
+                      :disabled="busy || queuedJob(r)?.status === 'running'"
+                      :loading="acting === r.id"
+                    >
+                      <template #icon><Zap /></template>
+                      强制洗版
+                    </HButton>
+                    <template #content>
+                      不看洗版策略：库里同一部电影 / 同一集原有的版本移到 115 回收站（可还原），这次的入库。
+                    </template>
+                  </HPopconfirm>
+                  <HButton
+                    size="sm"
+                    variant="tertiary"
+                    :disabled="busy || queuedJob(r)?.status === 'running'"
+                    title="照洗版判定，把这次的移到「已存在」"
+                    @click="doWash(r, 'skip')"
+                  >
+                    <template #icon><Check /></template>
+                    按已存在处理
+                  </HButton>
+                </template>
                 <HButton
                   v-else
                   size="sm"
@@ -1096,6 +1168,42 @@ function shareOutText(o: ShareOutView): string {
 }
 .plan-miss {
   color: var(--warning-soft-foreground);
+}
+.wash-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.wash-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.wash-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-soft-foreground);
+  font-size: 11px;
+}
+.wash-tag.old {
+  background: var(--surface-secondary);
+  color: var(--muted);
+}
+.wash-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+.wash-why {
+  color: var(--muted);
 }
 
 .meta {

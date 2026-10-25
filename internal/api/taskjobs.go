@@ -146,6 +146,10 @@ func (h *Handler) ConfirmOrganizeRecord(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条是同一集有几份文件、改名后会重名，请先选择保留哪份"})
 		return
 	}
+	if rec.HoldWash && rec.WashChoice == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "这一条是手动提交的不如库里的，请先选「强制洗版」或「按已存在处理」"})
+		return
+	}
 	job, err := h.enqueueConfirm(&rec, req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

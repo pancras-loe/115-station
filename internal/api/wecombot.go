@@ -219,11 +219,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		return
 	}
 	lower := strings.ToLower(text)
-	// 「强制覆盖 <链接>」要先于直接发链接判断：classifyLink 认分享链接只看包含，整句会被当成普通转存
-	if rest, ok := strings.CutPrefix(strings.TrimSpace(text), "强制覆盖"); ok {
-		h.botForceShare(strings.TrimSpace(rest), reply)
-		return
-	}
 	// 直接发链接（无需"下载"前缀）：磁力/ed2k/http/115分享 一键触发
 	if classifyLink(strings.TrimSpace(text)) != "" {
 		h.wecomHandleLink(strings.TrimSpace(text), reply)
@@ -241,13 +236,13 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		reply(
 			"可用指令：",
 			"直接发链接 — 磁力/ed2k/HTTP 提交离线下载；115 分享链接（连同提取码一起发）自动转存并整理入库",
-			"强制覆盖 <115 分享链接> — 转存并整理，不看洗版策略：库里同一部电影 / 同一集原有的版本进 115 回收站",
 			"状态 — 任务状态 + 转存目录 + 离线任务",
 			"搜索 <片名> — 找资源：观影 / 盘搜 / TG 频道 / 不太灵 / RE0 一起搜，TMDB 选片后回序号转存或离线（可连续挑多条；RE0 要花积分的会先问，回 y 确认、c 取消）",
 			"观影 <片名> / 网盘 <片名> — 只搜观影 / 只搜网盘",
 			"  资源列表里：0 自动择优，n / p 翻页，b 重新选片，r 重搜，q 退出",
 			"整理 / 同步 — 手动触发整理、增量同步",
 			"多份 — 同一集有几份文件、改名会重名时选择保留哪份（多份 <编号> <选择>）",
+			"洗版 — 手动转存的不如库里的、停下来问的：洗版 <编号> 是（强制洗版）/ 否（按已存在处理）",
 			"订阅 <片名> — 订阅：定时找缺的集，转存后自动入库（找资源的列表里回复 s 订阅这部）",
 			"我的订阅 — 看进度；选一个后 a 立即搜索，z 暂停 / 恢复，x 取消订阅",
 		)
@@ -349,6 +344,9 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		}
 		wecomShow(h.botSubFind("bot:"+user, kw, wecomFlowIO(reply)), reply)
 
+	case strings.HasPrefix(text, "洗版"):
+		reply(h.washBotCommand(user, strings.TrimSpace(strings.TrimPrefix(text, "洗版")))...)
+
 	case strings.HasPrefix(text, "多份"):
 		reply(h.dupBotCommand(user, strings.TrimSpace(strings.TrimPrefix(text, "多份")))...)
 
@@ -402,32 +400,6 @@ func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
 		return
 	}
 	reply("✓ 已提交离线下载", "下载完成后自动整理入库并通知。")
-}
-
-// botForceShare 机器人「强制覆盖 <115 分享链接>」：转存后整理时不看洗版策略，
-// 库里同一部电影 / 同一集原有的版本进 115 回收站（DownloadLink.Force → forceWashStrategy）。
-// 只收 115 分享：磁力离线的产物要等监视器回填才认得出来源，认不出就悄悄退回洗版，不如不收
-func (h *Handler) botForceShare(msg string, reply func(lines ...string)) {
-	shareURL, code := splitShareLink(msg)
-	if shareURL == "" {
-		reply("用法：强制覆盖 <115 分享链接>（连同提取码一起发）",
-			"转存后整理时不看洗版策略，库里同一部电影 / 同一集原有的版本移到 115 回收站。")
-		return
-	}
-	reply("⏳ 开始转存 115 分享（强制覆盖）…", truncateStr(shareURL, 70))
-	go func() {
-		msg, ok, fail, err := h.shareReceiveForce(shareURL, code, "机器人")
-		if err != nil {
-			reply("✗ 转存失败: " + err.Error())
-			return
-		}
-		if ok == 0 && fail == 0 {
-			reply("分享为空，未转存任何内容")
-			return
-		}
-		reply("✓ "+msg+"（整理入库已自动触发）",
-			"⚡ 强制覆盖：库里同一部电影 / 同一集原有的版本会移到 115 回收站，可在 115 回收站还原。")
-	}()
 }
 
 var (

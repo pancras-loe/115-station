@@ -46,9 +46,11 @@ type OrgConfig struct {
 	ManualConfirm bool `json:"manual_confirm"`
 	// NoTwinHold 关掉「同名待确认」（twinHold）：TMDB 上同名同分时照旧取相关度第一的。
 	// 反着存是为了老配置里没有这个键时默认开着
-	NoTwinHold bool   `json:"no_twin_hold"`
-	MinSize    int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
-	ShareCid   string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
+	NoTwinHold bool `json:"no_twin_hold"`
+	// WashAsk 洗版待确认：手动提交（订阅以外）的内容判输时先不移「已存在」，停下来问要不要强制洗版（orgwashask.go）
+	WashAsk  bool   `json:"wash_ask"`
+	MinSize  int64  `json:"-"` // MB，loadOrgConfig 从「识别规则」配置注入
+	ShareCid string `json:"-"` // 转存/待整理目录 cid（loadOrgConfig 注入，等于它给的 Pending；扫描根被换成别处时它仍是保护子树）
 	// OtherLibs 附加媒体库（full.extra_libs，libroots.go）。分类规则写了 library 的整理进它们（classify）；
 	// 同时和工作区根一样是保护子树：库根本身不被当条目整理、不被空目录清理删掉
 	OtherLibs []string `json:"-"`
@@ -124,21 +126,20 @@ type orgCtx struct {
 	// top 正在处理的顶层条目名（processEntry 第 0 层设置）：容器目录里的子目录、
 	// 同前缀的兄弟散文件要靠它认来源链接（分享转存只记了顶层条目名）
 	top string
-	// forceSaid 「强制覆盖」的提示已经为哪个条目打过（兄弟散文件逐集判，一部只打一行）
-	forceSaid string
+	// washChoice 洗版待确认上用户的回答（orgwashask.go）：force = 强制洗版（洗版换成 forceWashStrategy），
+	// skip = 按已存在处理（不再问）；空 = 还没问过，开着 wash_ask 时判输的照常停下来问
+	washChoice string
+	// keepSource 源目录里还有别的待确认记录的文件（确认时剔掉了，confirmOne）：收尾不收拾源目录、不整目录搬走
+	keepSource bool
 }
 
-// forceFor 这个条目是不是「强制覆盖」提交的链接转存进来的（DownloadLink.Force）。
-// 是的话洗版换成 forceWashStrategy：不看配置的策略，库里原有的版本进 115 回收站
-func (c *orgCtx) forceFor(fid string, names ...string) bool {
-	if !dlLinkForced(model.DB, fid, append(names, c.top)...) {
-		return false
+// washStrategyFor 这一部用哪条洗版策略：用户确认过「强制洗版」的换成 forceWashStrategy
+func (c *orgCtx) washStrategyFor(mediaType, category string) *washStrategy {
+	if c.washChoice == washChoiceForce {
+		c.onLog("⚡ 已确认强制洗版：不看洗版策略，库里同一部电影 / 同一集原有的版本进 115 回收站")
+		return forceWashStrategy()
 	}
-	if c.top == "" || c.forceSaid != c.top {
-		c.forceSaid = c.top
-		c.onLog("⚡ " + shortLogName(names[0]) + " 来自「强制覆盖」提交的链接：不看洗版策略，库里原有的版本进 115 回收站")
-	}
-	return true
+	return matchWashStrategy(mediaType, category)
 }
 
 // probeSessionFor 这一部影视的读取会话（没开读取媒体信息时为 nil，nil 会话什么都不做）
@@ -2245,7 +2246,7 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 
 	// 直接查网盘去重（不依赖本地缓存表，不会过期）
 	// 检查网盘目标目录里是否有相同 SHA1 的文件
-	if len(videoFiles) == 1 && checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
+	if len(videoFiles) == 1 && !ctx.keepSource && checkByCloudSHA1(ops, media, cfg, libAbs, mainVideo.Sha1, parsed, mainVideo.Name) {
 		if err := ops.moveFiles(cfg.Existing, []string{dir.Fid}); err != nil {
 			onLog(fmt.Sprintf("✗ %s/ - 移动到已存在失败: %v", dir.Name, err))
 		} else {
@@ -2305,10 +2306,11 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 	// 153 集的动漫光让位 + 移「已存在」就是十几分钟，这段时间整理一直占着 taskMu，
 	// 增量同步每 30 秒来一次全被挡回去（现场日志：转存后 2 分半还没开始整理）
 	sc := newWashScanner(ops, cfg).inLib(ctx.libName())
-	st := matchWashStrategy(media.MediaType, category)
-	if ctx.forceFor(dir.Fid, dir.Name, dir.Parent) {
-		st = forceWashStrategy()
-	}
+	st := ctx.washStrategyFor(media.MediaType, category)
+	// 手动提交的、判输了：先不移「已存在」，停下来问要不要强制洗版（orgwashask.go）
+	ask := ctx.washAsk(dir.Fid, dir.Name, dir.Parent)
+	var asked []remoteFile // 停下来问的视频
+	var askItems []washAskItem
 	var accepted []remoteFile
 	planOf := map[string]*washPlan{} // fid → 让旧版让位的计划（撞名停下 / 移走的不执行）
 	var rejectFids []string          // 判为已存在的视频 + 跟着它命名的字幕
@@ -2348,6 +2350,12 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		if plan.decision != washNotBetter && plan.decision != washSameFile {
 			accepted = append(accepted, vf)
+			continue
+		}
+		if plan.decision == washNotBetter && ask {
+			excluded[vf.Fid] = true
+			asked = append(asked, vf)
+			askItems = append(askItems, washAskItem{Fid: vf.Fid, Name: vf.Name, Old: plan.oldName, Why: plan.why})
 			continue
 		}
 		rejectVideos++
@@ -2391,7 +2399,15 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		}
 		return targets[vf.Fid], ep
 	}, func(name string) int { return washRankIn(st, judgeOf(name)) }, ctx.dupChoice, libClash...)
-	holdLeft := len(dup.held) > 0 // 源目录里还有等着选的文件：收尾不收拾源目录
+	// 源目录里还有等着选 / 等着回答的文件：收尾不收拾源目录
+	holdLeft := len(dup.held) > 0 || len(asked) > 0 || ctx.keepSource
+	if len(asked) > 0 {
+		held := append(append([]remoteFile(nil), asked...), dupCompanions(asked, files)...)
+		for _, f := range held {
+			excluded[f.Fid] = true
+		}
+		results = append(results, ctx.holdWash(dir.Name+"/", dir.Fid, "dir", media, category, rootRel, asked, held, askItems)...)
+	}
 	if dup.changed() {
 		accepted = dup.keep
 		if len(dup.drop) > 0 {
@@ -2997,6 +3013,9 @@ type sibOutcome struct {
 	strm     int
 	decision string // 判为已存在时的洗版判定（washNotBetter / washSameFile）
 	holding  string // 判为已存在时搬进的 已存在/ 下的子目录
+	// ask 判输了、停下来问要不要强制洗版（orgwashask.go）；video 是这一集本身
+	ask   *washAskItem
+	video remoteFile
 }
 
 func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult) sibOutcome {
@@ -3036,13 +3055,18 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 	}
 
 	// 洗版判定：每集各判一次（主文件赢了不代表这一集也该顶掉库内的）
-	force := ctx.forceFor(f.Fid, f.Name)
-	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
+	force := ctx.washChoice == washChoiceForce
+	switch decision, why, oldName := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
 	case washFailed:
 		return fail("洗版旧版让位失败")
 	case washReplaced:
 		// 旧版已让位，落入下方正常入库
 	case washNotBetter, washSameFile:
+		if decision == washNotBetter && ctx.washAsk(f.Fid, f.Name) {
+			// 手动提交的、判输了：原地不动，由 organizeSiblings 汇成一条洗版待确认
+			return sibOutcome{result: OrganizeResult{FileName: f.Name, Status: orgStatusAwaiting, Message: why},
+				ask: &washAskItem{Fid: f.Fid, Name: f.Name, Old: oldName, Why: why}, video: f}
+		}
 		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
 		if err != nil {
 			return fail("移到已存在失败: " + err.Error())
@@ -3106,9 +3130,15 @@ func organizeIdentifiedFile(ctx *orgCtx, f remoteFile, mainResult OrganizeResult
 func organizeSiblings(ctx *orgCtx, rec *model.OrganizeRecord, main OrganizeResult, siblings []remoteFile) []OrganizeResult {
 	var out []OrganizeResult
 	var exists []sibOutcome
+	var asked []remoteFile
+	var askItems []washAskItem
 	for _, sib := range siblings {
 		ctx.handled[sib.Fid] = true
 		o := organizeIdentifiedFile(ctx, sib, main)
+		if o.ask != nil {
+			asked, askItems = append(asked, o.video), append(askItems, *o.ask)
+			continue
+		}
 		out = append(out, o.result)
 		switch o.result.Status {
 		case "success":
@@ -3119,6 +3149,15 @@ func organizeSiblings(ctx *orgCtx, rec *model.OrganizeRecord, main OrganizeResul
 	}
 	if er := siblingExistsRecord(main, rec, exists); er != nil {
 		ctx.sink.note(er)
+	}
+	if len(asked) > 0 {
+		// 判输的几集汇成一条洗版待确认（散文件：字幕在转存目录里同前缀，确认时 processSingleFile 会带上）
+		media := &TmdbMedia{Title: main.Title, Year: main.Year, MediaType: main.MediaType, TmdbID: main.TmdbID}
+		rootRel := main.TargetDir
+		if rec != nil {
+			media.PosterPath, rootRel = rec.PosterPath, rec.TargetDir
+		}
+		out = append(out, ctx.holdWash(asked[0].Name, asked[0].Fid, "file", media, main.Category, rootRel, asked, asked, askItems)...)
 	}
 	return out
 }
@@ -3325,14 +3364,23 @@ func processSingleFile(ctx *orgCtx, f remoteFile) (OrganizeResult, *model.Organi
 	}
 
 	// 洗版判定（此前只有目录条目走，待整理目录里是散文件时整段被跳过）
-	force := ctx.forceFor(f.Fid, f.Name)
-	switch decision, why := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
+	force := ctx.washChoice == washChoiceForce
+	if force {
+		onLog("⚡ 已确认强制洗版：不看洗版策略，库里同一部电影 / 同一集原有的版本进 115 回收站")
+	}
+	switch decision, why, oldName := tryWashReplace(ops, cfg, ctx.libName(), media, probeJudgeName(f.Name, parsed.Media), f.Size, f.Sha1, targetDir, targetDir+"/"+pathBase(newPath), force, onLog); decision {
 	case washFailed:
 		result.Status, result.Message = "failed", "洗版旧版让位失败"
 		return fail("failed", "move", result.Message)
 	case washReplaced:
 		// 旧版已让位，落入下方正常入库
 	case washNotBetter, washSameFile:
+		if decision == washNotBetter && ctx.washAsk(f.Fid, f.Name) {
+			// 手动提交的、判输了：原地不动，停下来问（同前缀的兄弟集各自作为条目再判）
+			res := ctx.holdWash(f.Name, f.Fid, "file", media, category, rootRel, []remoteFile{f}, []remoteFile{f},
+				[]washAskItem{{Fid: f.Fid, Name: f.Name, Old: oldName, Why: why}})
+			return res[0], nil
+		}
 		holdingCid, err := moveToHoldingDir(ops, cfg.Existing, holdingDir, []string{f.Fid})
 		if err != nil {
 			result.Status, result.Message = "failed", "移到已存在失败: "+err.Error()

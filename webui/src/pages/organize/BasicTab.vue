@@ -230,6 +230,7 @@ function pickMine() {
   const d: Record<string, string | boolean | number> = {
     manual_confirm: model.value.manual_confirm,
     no_twin_hold: model.value.no_twin_hold,
+    wash_ask: model.value.wash_ask,
     dup_auto_hours: model.value.dup_auto_hours,
     dup_auto_action: model.value.dup_auto_action,
   }
@@ -342,6 +343,18 @@ const TRIGGERS: { name: string; text: string }[] = [
             <HSwitch v-model="twinHold" />
             <span class="switch-hint">
               {{ twinHold ? '同名分不出是哪一部时停下等你确认' : '同名时取 TMDB 排第一的（可能认错）' }}
+            </span>
+          </div>
+        </FieldRow>
+
+        <FieldRow
+          label="洗版待确认"
+          tip="115 同一个分享转存过一次就不能再转。打开后，你手动提交的内容（链接转存、找资源、机器人贴链接、离线下载，订阅的除外）整理时洗版判定不如库里已有的，先不移进「已存在」，原地停在「整理记录 → 待确认」问你：强制洗版（库里同一部电影 / 同一集原有的版本移到 115 回收站，这次的入库），还是按已存在处理。通知里也能答：TG 点按钮，企业微信回复「洗版 编号 是 / 否」。和库里是同一份文件（sha1 相同）的不问。"
+        >
+          <div class="switch-row">
+            <HSwitch v-model="model.wash_ask" />
+            <span class="switch-hint">
+              {{ model.wash_ask ? '手动提交的不如库里的时停下来问' : '不如库里的直接移进「已存在」' }}
             </span>
           </div>
         </FieldRow>

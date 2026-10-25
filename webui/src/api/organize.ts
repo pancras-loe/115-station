@@ -174,6 +174,16 @@ export interface DupFile {
   in_library?: boolean
 }
 
+/** 洗版待确认里判输的一个视频 */
+export interface WashAskItem {
+  fid: string
+  name: string
+  /** 库里比下去它的那份 */
+  old: string
+  /** 为什么没换（「新来的不如库里的（杜比视界：没有 < 有）」） */
+  why: string
+}
+
 /** 一组改名后会重名的文件 */
 export interface DupGroup {
   /** 撞上的落点：库内目录 / 新文件名 */
@@ -263,6 +273,11 @@ export interface OrganizeRecord {
   dup_list?: DupGroup[]
   /** 已提交的选择：fid → keep / drop / A..Z；没选过为空 */
   dup_picked?: Record<string, string>
+  /** 手动提交的不如库里已有的，停下来问要不要强制洗版（「基础配置 → 洗版待确认」，与「人工确认」开关无关） */
+  hold_wash?: boolean
+  wash_list?: WashAskItem[]
+  /** 已提交的回答：force 强制洗版 / skip 按已存在处理；没答过为空 */
+  wash_choice?: string
   /** 暂存的指定（还没提交到任务队列）；0 = 没有 */
   pending_tmdb_id?: number
   pending_media_type?: string
@@ -319,6 +334,10 @@ export const confirmRecord = (id: number, pick?: { tmdbId: number; mediaType: st
 /** 同集多份：提交每一组的选择 → 入任务队列（走确认入库的执行器） */
 export const submitDupChoice = (id: number, actions: DupAction[]) =>
   http.post<QueuedReply>(`/organize/records/${id}/dup`, { actions })
+
+/** 洗版待确认：force 强制洗版（库里的旧版进 115 回收站）/ skip 按已存在处理 → 入任务队列（走确认入库的执行器） */
+export const submitWashChoice = (id: number, choice: 'force' | 'skip') =>
+  http.post<QueuedReply>(`/organize/records/${id}/wash`, { choice })
 
 /** 库内疑似同集多份（只读台账）的一组 */
 export interface DupScanItem {
