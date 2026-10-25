@@ -12,7 +12,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
-import { pluginsApi } from '@/api'
+import { configApi, pluginsApi } from '@/api'
 import type { RbCleanAcctReq } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
@@ -37,6 +37,7 @@ interface Row {
   days: number
   preset: string
   hasPassword: boolean
+  /** 已保存的回显掩码 SECRET_MASK，点眼睛按需取明文 */
   password: string
   /** 动过密钥框才提交 password（不带 = 后端不改） */
   pwTouched: boolean
@@ -71,7 +72,7 @@ watch(show, async (v) => {
         days,
         preset: PRESETS.includes(days) ? String(days) : 'custom',
         hasPassword: a.has_password,
-        password: '',
+        password: a.has_password ? configApi.SECRET_MASK : '',
         pwTouched: false,
       }
     })
@@ -117,7 +118,7 @@ async function save() {
   try {
     const accounts: RbCleanAcctReq[] = rows.value.map((r) => {
       const a: RbCleanAcctReq = { id: r.id, on: r.on, keep_days: r.days || 30 }
-      if (r.pwTouched) a.password = r.password.trim()
+      if (r.pwTouched && r.password !== configApi.SECRET_MASK) a.password = r.password.trim()
       return a
     })
     await pluginsApi.saveRbClean({ enabled: enabled.value, cron: cron.value.trim() || DEFAULT_CRON, accounts })
@@ -176,7 +177,8 @@ async function save() {
             <SecretInput
               :model-value="r.password"
               :name="`rbclean-secret-${r.id}`"
-              :placeholder="r.hasPassword ? '安全密钥已保存（不改就留空）' : '安全密钥（没开可不填）'"
+              :reveal="r.hasPassword ? { key: 'rbclean', field: `accounts.${r.id}.password` } : undefined"
+              placeholder="安全密钥（没开可不填）"
               class="pw"
               @update:model-value="(v) => setPassword(r, v)"
             />

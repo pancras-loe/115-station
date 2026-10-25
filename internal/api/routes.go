@@ -1625,6 +1625,7 @@ var sensitiveSettingKeys = map[string]bool{
 	"emby-notify": true, // webhook token
 	"github":      true, // GitHub Token（github.go）
 	"dian":        true, // 癫影账号密码（dian.go）
+	"rbclean":     true, // 各账号的 115 安全密钥（rbclean.go，界面走 /rbclean/config，眼睛查看走 /config/secret）
 	// 下面三个界面走各自的专用接口（/re0/config 等），但通用接口同样读得到，漏了就是明文
 	"re0":      true, // 应用 Secret、Access / Refresh Token、网页登录密码（re0.go）
 	"guanying": true, // 密码与站点会话 Cookie（guanying.go）

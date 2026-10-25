@@ -513,7 +513,7 @@ func checkRbAcctReqs(reqs []rbAcctReq, accts []rbAcct) error {
 		if r.KeepDays < 1 || r.KeepDays > rbCleanMaxDays {
 			return fmt.Errorf("保留天数要在 1–%d 之间", rbCleanMaxDays)
 		}
-		if r.Password != nil && !rbCleanPasswordOK(strings.TrimSpace(*r.Password)) {
+		if r.Password != nil && *r.Password != settingMask && !rbCleanPasswordOK(strings.TrimSpace(*r.Password)) {
 			return fmt.Errorf("安全密钥是 6 位数字")
 		}
 	}
@@ -526,7 +526,8 @@ func applyRbAcctReqs(cfg *rbCleanCfg, reqs []rbAcctReq) {
 		key := fmt.Sprint(r.ID)
 		ac := cfg.Accts[key]
 		ac.On, ac.KeepDays = r.On, r.KeepDays
-		if r.Password != nil {
+		// 掩码原样回传 = 没改（界面回显的是 settingMask，与 unmaskSensitiveJSON 同口径）
+		if r.Password != nil && *r.Password != settingMask {
 			ac.Password = strings.TrimSpace(*r.Password)
 		}
 		cfg.Accts[key] = ac

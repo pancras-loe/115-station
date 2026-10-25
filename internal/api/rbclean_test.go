@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -110,6 +111,24 @@ func TestRbAcctReqs(t *testing.T) {
 	}
 	if a := cfg.Accts["2"]; !a.On || a.KeepDays != 90 || a.Password != "222222" {
 		t.Fatalf("%+v", a)
+	}
+	// 掩码原样回传 = 不改（界面回显的是掩码）
+	if err := checkRbAcctReqs([]rbAcctReq{{ID: 1, KeepDays: 7, Password: pw(settingMask)}}, accts); err != nil {
+		t.Fatal(err)
+	}
+	applyRbAcctReqs(&cfg, []rbAcctReq{{ID: 1, On: true, KeepDays: 7, Password: pw(settingMask)}})
+	if cfg.Accts["1"].Password != "111111" {
+		t.Fatal("掩码不能覆盖已存的密钥")
+	}
+	// 通用接口读 rbclean 要掩掉密钥，眼睛查看按点路径取得到
+	raw := `{"accounts":{"1":{"on":true,"keep_days":7,"password":"111111"}}}`
+	if !isSensitiveSetting("rbclean") || strings.Contains(maskSensitiveJSON(raw), "111111") {
+		t.Fatal("rbclean 的密钥要掩码")
+	}
+	var root any
+	_ = json.Unmarshal([]byte(raw), &root)
+	if secretAt(root, []string{"accounts", "1", "password"}) != "111111" {
+		t.Fatal("点路径取不到密钥")
 	}
 	// 带空串 = 清掉
 	applyRbAcctReqs(&cfg, []rbAcctReq{{ID: 2, On: true, KeepDays: 90, Password: pw("")}})
