@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestParseDiscoverPage(t *testing.T) {
 	// trending/all：混着人物、纪录片、没海报的
@@ -49,5 +52,41 @@ func TestDiscoverFilterList(t *testing.T) {
 		if _, err := discoverFilterList(c[0], c[1], c[2]); err == nil {
 			t.Fatalf("%v 应该被拒收", c)
 		}
+	}
+}
+
+func TestSortDiscoverPool(t *testing.T) {
+	pool := func() []manualCand {
+		return []manualCand{
+			{ID: 1, Vote: 7.0, voteCount: 500, date: "2024-05-01"},
+			{ID: 2, Vote: 9.5, voteCount: 3, date: "2025-01-01"}, // 人数太少：按评分排时垫底
+			{ID: 3, Vote: 8.2, voteCount: 900, date: ""},         // 没日期：按时间排时垫底
+			{ID: 4, Vote: 8.2, voteCount: 100, date: "2023-12-31"},
+		}
+	}
+	ids := func(cs []manualCand) []int {
+		out := make([]int, len(cs))
+		for i, c := range cs {
+			out[i] = c.ID
+		}
+		return out
+	}
+	p := pool()
+	sortDiscoverPool(p, "vote")
+	if got := ids(p); !slices.Equal(got, []int{3, 4, 1, 2}) { // 3、4 同分保持原先后
+		t.Fatalf("按评分: %v", got)
+	}
+	p = pool()
+	sortDiscoverPool(p, "date")
+	if got := ids(p); !slices.Equal(got, []int{2, 1, 4, 3}) {
+		t.Fatalf("按时间: %v", got)
+	}
+	p = pool()
+	sortDiscoverPool(p, "")
+	if got := ids(p); !slices.Equal(got, []int{1, 2, 3, 4}) {
+		t.Fatalf("原顺序: %v", got)
+	}
+	if discoverSortOK("popularity.desc") {
+		t.Fatal("不认得的排序应拒收")
 	}
 }

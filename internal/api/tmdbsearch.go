@@ -102,6 +102,9 @@ type manualCand struct {
 	// Original 原名：影视转存按它判断资源标题是不是这部片（英文资源名多用原名）
 	Original   string `json:"original_title,omitempty"`
 	popularity float64
+	// date 上映 / 首播日期、voteCount 评分人数：发现页按上映时间 / 评分排序用，不下发
+	date      string
+	voteCount int
 	// minor 纪录片 / 脱口秀 / 新闻 / 没海报的条目：不过滤（偶尔真要找），排在正片后面
 	minor bool
 }
@@ -118,6 +121,7 @@ type tmdbRawItem struct {
 	PosterPath    string  `json:"poster_path"`
 	BackdropPath  string  `json:"backdrop_path"`
 	VoteAverage   float64 `json:"vote_average"`
+	VoteCount     int     `json:"vote_count"`
 	Overview      string  `json:"overview"`
 	Popularity    float64 `json:"popularity"`
 	GenreIDs      []int   `json:"genre_ids"` // 只有搜索结果带，详情接口是 genres 对象数组
@@ -139,6 +143,7 @@ func (r tmdbRawItem) cand(kind string) manualCand {
 	return manualCand{
 		ID: r.ID, MediaType: kind, Title: title, Year: year, Poster: r.PosterPath, Backdrop: r.BackdropPath,
 		Vote: r.VoteAverage, Overview: r.Overview, Original: orig, popularity: r.Popularity,
+		date: date, voteCount: r.VoteCount,
 		minor: r.PosterPath == "" || slices.ContainsFunc(r.GenreIDs, func(g int) bool { return slices.Contains(tmdbMinorGenres, g) }),
 	}
 }

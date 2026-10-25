@@ -1,9 +1,11 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -164,8 +166,132 @@ func parseDiscoverPage(body []byte, l discoverList) ([]manualCand, int, error) {
 	return out, r.TotalPages, nil
 }
 
-// TmdbDiscover GET /tmdb/discover?list=trending_day&page=1
-// list=filter 时按 kind / country / genre 筛选（discoverFilterList）。
+// ---- 排序（sort=vote / date）----
+//
+// TMDB 的 trending / popular / now_playing 这些端点不收 sort_by；discover 收，但按评分排的是全库，
+// 出来的是几票的冷门片，已经不是「这个榜单」了。所以排序一律在榜单本身的前几页里排：
+// 先按榜单原来的顺序取前 tmdbDiscoverSortPool 页，去重后整体重排，再按每页 20 条切给前端。
+// 意思是「本周趋势里评分最高的」，而不是「TMDB 上评分最高的」。
+
+// tmdbDiscoverSortPool 排序时取榜单前几页（100 部左右）。再往后越冷门，排进来反而把热门的挤下去
+const tmdbDiscoverSortPool = 5
+
+// tmdbDiscoverPageSize 排序后每页切几条（同 TMDB 一页的条数，前端翻页手感不变）
+const tmdbDiscoverPageSize = 20
+
+// tmdbDiscoverMinVotes 评分人数不到这个数的按评分排时放到后面：刚上线的片三五个人打了 9 分，排第一没意义
+const tmdbDiscoverMinVotes = 20
+
+// discoverSortOK 认得的排序；空 = 榜单原顺序（热度）
+func discoverSortOK(s string) bool {
+	return s == "" || s == "vote" || s == "date"
+}
+
+// sortDiscoverPool 按 vote（评分高到低，人数太少的垫底）或 date（上映 / 首播新到旧，没日期的垫底）重排。
+// 稳定排序：分数一样的保持榜单原来的先后
+func sortDiscoverPool(items []manualCand, by string) {
+	switch by {
+	case "vote":
+		slices.SortStableFunc(items, func(a, b manualCand) int {
+			fa, fb := a.voteCount >= tmdbDiscoverMinVotes, b.voteCount >= tmdbDiscoverMinVotes
+			if fa != fb {
+				if fa {
+					return -1
+				}
+				return 1
+			}
+			return cmp.Compare(b.Vote, a.Vote)
+		})
+	case "date":
+		slices.SortStableFunc(items, func(a, b manualCand) int {
+			if (a.date == "") != (b.date == "") {
+				if a.date == "" {
+					return 1
+				}
+				return -1
+			}
+			return cmp.Compare(b.date, a.date) // YYYY-MM-DD 按字符串比就是按时间比
+		})
+	}
+}
+
+// discoverFetch 读榜单的一页（原顺序），半小时缓存
+func discoverFetch(tc *TmdbClient, list discoverList, key string, page int) (discoverPage, error) {
+	// 语言进缓存键：改了 TMDB 语言设置，片名跟着换
+	ck := key + "|" + strconv.Itoa(page) + "|" + tc.Language
+	tmdbDiscoverMu.Lock()
+	hit, ok := tmdbDiscoverCache[ck]
+	tmdbDiscoverMu.Unlock()
+	if ok && time.Since(hit.at) < tmdbDiscoverTTL {
+		return hit, nil
+	}
+
+	params := map[string]string{"page": strconv.Itoa(page), "include_adult": "false"}
+	for k, v := range list.params {
+		params[k] = v
+	}
+	body, err := tc.get(list.path, params)
+	if err != nil {
+		return discoverPage{}, errors.New("TMDB 榜单读取失败: " + err.Error())
+	}
+	items, total, err := parseDiscoverPage(body, list)
+	if err != nil {
+		return discoverPage{}, errors.New("TMDB 榜单解析失败: " + err.Error())
+	}
+	pg := discoverPage{items: items, hasMore: page < min(total, tmdbDiscoverMaxPage), at: time.Now()}
+	tmdbDiscoverMu.Lock()
+	for k, v := range tmdbDiscoverCache { // 顺手清过期的，榜单键就几十个，不另起清理
+		if time.Since(v.at) >= tmdbDiscoverTTL {
+			delete(tmdbDiscoverCache, k)
+		}
+	}
+	tmdbDiscoverCache[ck] = pg
+	tmdbDiscoverMu.Unlock()
+	return pg, nil
+}
+
+// discoverSorted 排序后的第 page 页：取前 tmdbDiscoverSortPool 页（第一页之后并发读，各页走同一份缓存），
+// 去重、重排、切页。第一页之外读失败的页直接略过，少几部不影响排序结果能看
+func discoverSorted(tc *TmdbClient, list discoverList, key string, page int, by string) ([]manualCand, bool, error) {
+	first, err := discoverFetch(tc, list, key, 1)
+	if err != nil {
+		return nil, false, err
+	}
+	pages := []discoverPage{first}
+	if first.hasMore {
+		rest := make([]discoverPage, tmdbDiscoverSortPool-1)
+		var wg sync.WaitGroup
+		for i := range rest {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				if pg, err := discoverFetch(tc, list, key, i+2); err == nil {
+					rest[i] = pg
+				}
+			}(i)
+		}
+		wg.Wait()
+		pages = append(pages, rest...)
+	}
+	var pool []manualCand
+	seen := map[string]bool{}
+	for _, pg := range pages {
+		for _, c := range pg.items {
+			k := c.MediaType + ":" + strconv.Itoa(c.ID)
+			if !seen[k] { // 翻页期间排名会变，同一部可能在两页各出现一次
+				seen[k] = true
+				pool = append(pool, c)
+			}
+		}
+	}
+	sortDiscoverPool(pool, by)
+	lo := min((page-1)*tmdbDiscoverPageSize, len(pool))
+	hi := min(lo+tmdbDiscoverPageSize, len(pool))
+	return pool[lo:hi], hi < len(pool), nil
+}
+
+// TmdbDiscover GET /tmdb/discover?list=trending_day&page=1&sort=vote
+// list=filter 时按 kind / country / genre 筛选（discoverFilterList）；sort 见 sortDiscoverPool，空 = 原顺序。
 // 不带 list 时只返回榜单清单（前端页签）与筛选项
 func (h *Handler) TmdbDiscover(c *gin.Context) {
 	key := c.Query("list")
@@ -175,6 +301,11 @@ func (h *Handler) TmdbDiscover(c *gin.Context) {
 			lists = append(lists, gin.H{"key": l.key, "label": l.label})
 		}
 		c.JSON(http.StatusOK, gin.H{"lists": lists, "countries": tmdbDiscoverCountries, "genres": tmdbDiscoverGenres})
+		return
+	}
+	sortBy := c.Query("sort")
+	if !discoverSortOK(sortBy) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未知的排序: " + sortBy})
 		return
 	}
 	var list *discoverList
@@ -197,45 +328,27 @@ func (h *Handler) TmdbDiscover(c *gin.Context) {
 		return
 	}
 	page, _ := strconv.Atoi(c.Query("page"))
-	page = min(max(page, 1), tmdbDiscoverMaxPage)
 
 	tc, err := loadTmdbClient()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error() + "（先在系统配置完成 TMDB 设置）"})
 		return
 	}
-	// 语言进缓存键：改了 TMDB 语言设置，片名跟着换
-	ck := key + "|" + strconv.Itoa(page) + "|" + tc.Language
-	tmdbDiscoverMu.Lock()
-	hit, ok := tmdbDiscoverCache[ck]
-	tmdbDiscoverMu.Unlock()
-	if ok && time.Since(hit.at) < tmdbDiscoverTTL {
-		c.JSON(http.StatusOK, gin.H{"data": hit.items, "has_more": hit.hasMore})
-		return
-	}
-
-	params := map[string]string{"page": strconv.Itoa(page), "include_adult": "false"}
-	for k, v := range list.params {
-		params[k] = v
-	}
-	body, err := tc.get(list.path, params)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB 榜单读取失败: " + err.Error()})
-		return
-	}
-	items, total, err := parseDiscoverPage(body, *list)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "TMDB 榜单解析失败: " + err.Error()})
-		return
-	}
-	pg := discoverPage{items: items, hasMore: page < min(total, tmdbDiscoverMaxPage), at: time.Now()}
-	tmdbDiscoverMu.Lock()
-	for k, v := range tmdbDiscoverCache { // 顺手清过期的，榜单键就几十个，不另起清理
-		if time.Since(v.at) >= tmdbDiscoverTTL {
-			delete(tmdbDiscoverCache, k)
+	if sortBy != "" {
+		page = min(max(page, 1), tmdbDiscoverSortPool)
+		items, more, err := discoverSorted(tc, *list, key, page, sortBy)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
 		}
+		c.JSON(http.StatusOK, gin.H{"data": items, "has_more": more})
+		return
 	}
-	tmdbDiscoverCache[ck] = pg
-	tmdbDiscoverMu.Unlock()
+	page = min(max(page, 1), tmdbDiscoverMaxPage)
+	pg, err := discoverFetch(tc, *list, key, page)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"data": pg.items, "has_more": pg.hasMore})
 }

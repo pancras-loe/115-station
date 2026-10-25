@@ -38,9 +38,11 @@ export interface DiscoverFilter {
   country: string
   genre: string
 }
-export const tmdbDiscover = (list: string, page = 1, filter?: DiscoverFilter) =>
+/** 榜单排序：空 = 榜单原顺序（热度）；vote 评分、date 上映时间，都是在榜单前 100 部左右里重排（tmdbdiscover.go） */
+export type DiscoverSort = '' | 'vote' | 'date'
+export const tmdbDiscover = (list: string, page = 1, filter?: DiscoverFilter, sort: DiscoverSort = '') =>
   http.get<{ data?: TmdbCandidate[]; has_more?: boolean }>('/tmdb/discover', {
-    params: filter ? { list, page, ...filter } : { list, page },
+    params: { list, page, ...(filter ?? {}), ...(sort ? { sort } : {}) },
   })
 
 export const tmdbImageUrl = (path: string, size = 'w154') =>

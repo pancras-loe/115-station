@@ -6,7 +6,7 @@ import HSegmented from '@/components/hero/HSegmented.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import CandidateGrid from '@/components/transfer/CandidateGrid.vue'
 import { resourcesApi, transferApi } from '@/api'
-import type { DiscoverFilter, DiscoverList, DiscoverOpt, TmdbCandidate } from '@/api/resources'
+import type { DiscoverFilter, DiscoverList, DiscoverOpt, DiscoverSort, TmdbCandidate } from '@/api/resources'
 import type { OwnedInfo } from '@/api/transfer'
 
 /**
@@ -14,6 +14,8 @@ import type { OwnedInfo } from '@/api/transfer'
  * 条目自带 TMDB 编号，直接进找资源。榜单清单由后端给（tmdbdiscover.go），这里不写死。
  * 下面一行按 电影 / 剧集 + 地区 + 题材 筛选（list=filter），选项同样由后端给；
  * 动了任何一项就换成筛选结果，点上面的榜单回到榜单。
+ * 排序（热度 / 评分 / 上映时间）榜单与筛选都管，记在本机：后端在榜单前 100 部左右里重排，
+ * 不是 TMDB 全库按评分排（那样出来的全是几票的冷门片）。
  */
 const props = defineProps<{
   /** 打开时先看哪个榜单；filter = 直接进按条件筛选 */
@@ -22,6 +24,7 @@ const props = defineProps<{
 const emit = defineEmits<{ pick: [TmdbCandidate]; back: [] }>()
 
 const LS_KEY = 'transfer.discover.list'
+const LS_SORT = 'transfer.discover.sort'
 const lists = ref<DiscoverList[]>([])
 const current = ref('')
 const items = ref<TmdbCandidate[]>([])
@@ -33,6 +36,32 @@ const loadingMore = ref(false)
 const hint = ref('')
 // 切页签很快时，晚回来的旧榜单别盖掉新的
 let seq = 0
+
+// ---- 排序 ----
+const SORT_OPTS: { label: string; value: DiscoverSort }[] = [
+  { label: '按热度', value: '' },
+  { label: '按评分', value: 'vote' },
+  { label: '按上映时间', value: 'date' },
+]
+function savedSort(): DiscoverSort {
+  try {
+    const v = localStorage.getItem(LS_SORT) ?? ''
+    return SORT_OPTS.some((o) => o.value === v) ? (v as DiscoverSort) : ''
+  } catch {
+    return ''
+  }
+}
+const sort = ref<DiscoverSort>(savedSort())
+function setSort(v: DiscoverSort) {
+  if (v === sort.value) return
+  sort.value = v
+  try {
+    localStorage.setItem(LS_SORT, v)
+  } catch {
+    // 存不了就每次按热度
+  }
+  void load()
+}
 
 // ---- 筛选 ----
 const countries = ref<DiscoverOpt[]>([])
@@ -73,7 +102,7 @@ async function load(more = false) {
   }
   try {
     const p = more ? page.value + 1 : 1
-    const d = await resourcesApi.tmdbDiscover(list, p, f)
+    const d = await resourcesApi.tmdbDiscover(list, p, f, sort.value)
     if (my !== seq) return
     const got = d.data ?? []
     // 榜单翻页期间排名会变，同一部可能在两页各出现一次
@@ -177,6 +206,13 @@ onMounted(async () => {
       />
       <button v-if="filtering" type="button" class="clear" @click="clearFilter">清除筛选</button>
       <span v-else class="f-hint">选一项按条件筛选</span>
+      <HSelect
+        :model-value="sort"
+        :options="SORT_OPTS"
+        aria-label="排序"
+        class="f-sel f-sort"
+        @update:model-value="(v) => setSort(((v as string) ?? '') as DiscoverSort)"
+      />
     </div>
     <CandidateGrid :items="items" :owned="owned" :loading="loading" :hint="hint" no-skip @pick="(c) => emit('pick', c)" />
     <div v-if="hasMore && !loading" class="more">
@@ -204,6 +240,10 @@ onMounted(async () => {
 }
 .f-sel {
   width: 132px;
+}
+/* 排序与筛选是两回事，推到这一行最右边 */
+.f-sort {
+  margin-left: auto;
 }
 .f-hint {
   font-size: 12px;
