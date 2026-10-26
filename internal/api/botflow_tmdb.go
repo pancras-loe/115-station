@@ -117,12 +117,12 @@ func (h *Handler) wecomTmdbMulti(q string) ([]wecomTmdbHit, error) {
 			out = append(out, tvs[ti])
 			ti++
 		}
-		if len(out) >= 8 {
+		if len(out) >= botMaxMedia {
 			break
 		}
 	}
-	if len(out) > 8 {
-		out = out[:8]
+	if len(out) > botMaxMedia {
+		out = out[:botMaxMedia]
 	}
 	return out, nil
 }

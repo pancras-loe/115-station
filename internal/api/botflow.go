@@ -42,6 +42,10 @@ const (
 	botFlowTTL  = 10 * time.Minute
 	// botMaxItems 聚合搜索动辄一两百条，会话里只留排在前面的这些（翻页到底也够挑了）
 	botMaxItems = 96
+	// botMaxMedia 选片时 TMDB 候选最多留几部：原来截到 8 部（只有一页、翻不了），
+	// 想要的那部常排在第 9 名之后（「别班」搜出一屏同名电影）。企微 news 一条最多 8 张卡片，
+	// 卡片按页生成，每页 botPageSize 张，不受这个数影响
+	botMaxMedia = 20
 	// botAllWait 全部来源一起搜时最多等多久：超时的来源不等了，结果里写明
 	botAllWait = 60 * time.Second // RE0 网页通道冷启动浏览器 + 过 Cloudflare 要二三十秒
 )
