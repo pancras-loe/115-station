@@ -32,7 +32,8 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
-	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n\n" +
+	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n" +
+	"/ptsignin PT 站签到：立即跑一轮，跑完回复汇总\n\n" +
 	"不想打斜杠也行，直接发中文：「搜索 片名」「订阅 片名」「我的订阅」「观影 片名」「网盘 片名」「整理」「同步」「状态」。\n\n" +
 	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
 	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
@@ -62,7 +63,7 @@ func tgCommand(text string) (string, string) {
 		"/search": "search", "so": "search", "/gy": "gy", "gy": "gy", "/wp": "wp", "wp": "wp",
 		"/download": "download", "dl": "download", "/organize": "organize", "整理": "organize",
 		"/sync": "sync", "同步": "sync", "/cancel": "cancel", "取消": "cancel",
-		"/dup": "dup", "/wash": "wash",
+		"/dup": "dup", "/wash": "wash", "/ptsignin": "ptsignin", "pt签到": "ptsignin",
 		"/sub": "sub", "/subscribe": "sub", "/subs": "subs", "我的订阅": "subs", "订阅列表": "subs",
 	}
 	if cmd, ok := aliases[first]; ok {
@@ -182,6 +183,8 @@ func (b *tgConversation) handle(u tgUpdate) {
 		b.reply(b.h.dupBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
 	case "wash":
 		b.reply(b.h.washBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
+	case "ptsignin":
+		b.h.botPtSignin(b.replyForCurrentChat())
 	case "status", "download", "organize", "sync":
 		if cmd == "download" && args == "" {
 			b.reply("请在命令后填写链接。")

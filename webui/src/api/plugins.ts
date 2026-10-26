@@ -372,3 +372,97 @@ export const saveAliRbClean = (body: { enabled: boolean; cron: string; accounts:
 export const previewAliRbClean = (accounts: { id: number; keep_days: number }[]) =>
   http.post<{ data?: AliRbCleanResult[]; message?: string }>('/alirbclean/preview', { accounts }, { timeoutMs: 10 * 60_000 })
 export const runAliRbClean = () => http.post<{ message?: string }>('/alirbclean/run')
+
+// ---- PT 站签到（ptsignin.go，设计见 PT-SIGNIN-PLAN.md） ----
+export type PtResultKind = 'ok' | 'login' | 'fail'
+export interface PtPreset {
+  key: string
+  name: string
+  domains: string[]
+  handler: string
+  cred: 'cookie' | 'token'
+  note?: string
+  unavailable?: boolean
+}
+export interface PtDay {
+  result: PtResultKind
+  reason?: string
+  message: string
+  at: string
+}
+export interface PtSite {
+  id: number
+  preset: string
+  name: string
+  base_url: string
+  handler: string
+  cred: 'cookie' | 'token'
+  has_cookie: boolean
+  has_token: boolean
+  cookie_end?: string
+  ua: string
+  proxy: boolean
+  mode: 'signin' | 'keep'
+  enabled: boolean
+  need_fix: boolean
+  today?: PtDay
+  /** 近 7 天每天的结果（旧 → 新，最后是今天），没跑是 '' */
+  week: ('' | PtResultKind)[]
+}
+/** 新增 / 修改 / 测试；cookie、token 不传 = 不改 */
+export interface PtSiteReq {
+  preset?: string
+  name?: string
+  base_url?: string
+  cookie?: string
+  token?: string
+  ua: string
+  proxy: boolean
+  mode: 'signin' | 'keep'
+  enabled?: boolean
+}
+export interface PtResult {
+  result: PtResultKind
+  reason?: string
+  message: string
+}
+export interface PtRecordRow {
+  site_id: number
+  name: string
+  days: (PtDay | null)[]
+  ok: number
+}
+export interface PtRecords {
+  days: string[]
+  rows: PtRecordRow[]
+  last: { start?: string; seconds?: number; trigger?: string }
+  items: { name: string; result: PtResultKind; reason?: string; message: string; at: string }[]
+  notify_preview: string
+}
+export interface PtConfig {
+  enabled: boolean
+  mode: 'window' | 'cron'
+  window_from: string
+  window_to: string
+  cron: string
+  gap_min: number
+  gap_max: number
+  retry: boolean
+  notify: 'always' | 'fail_only' | 'off'
+  today_at?: string
+  next_run?: string
+  running?: boolean
+}
+export const ptPresets = () => http.get<{ data: PtPreset[] }>('/ptsignin/presets')
+export const ptSites = () => http.get<{ data: PtSite[]; running: boolean }>('/ptsignin/sites')
+export const ptCreateSite = (body: PtSiteReq) => http.post<{ data: PtSite }>('/ptsignin/sites', body)
+export const ptUpdateSite = (id: number, body: PtSiteReq) => http.put<{ data: PtSite }>(`/ptsignin/sites/${id}`, body)
+export const ptDeleteSite = (id: number) => http.del(`/ptsignin/sites/${id}`)
+export const ptTestSite = (body: PtSiteReq & { id?: number }) =>
+  http.post<{ data: PtResult; ms: number }>('/ptsignin/test', body, { timeoutMs: 90_000 })
+export const ptRunAll = () => http.post<{ message?: string }>('/ptsignin/run', {})
+export const ptRunOne = (siteId: number) =>
+  http.post<{ data: PtResult }>('/ptsignin/run', { site_id: siteId }, { timeoutMs: 3 * 60_000 })
+export const ptRecords = () => http.get<PtRecords>('/ptsignin/records')
+export const ptConfig = () => http.get<PtConfig>('/ptsignin/config')
+export const ptSaveConfig = (body: Omit<PtConfig, 'today_at' | 'next_run' | 'running'>) => http.post('/ptsignin/config', body)

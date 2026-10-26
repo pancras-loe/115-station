@@ -5,7 +5,7 @@ import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import { heroTone } from '@/components/hero/tone'
-import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Trash2 } from '@lucide/vue'
+import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Stamp, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
@@ -17,6 +17,7 @@ import DirCleanModal from '@/components/plugins/DirCleanModal.vue'
 import OfflineCleanModal from '@/components/plugins/OfflineCleanModal.vue'
 import AliDirCleanModal from '@/components/plugins/AliDirCleanModal.vue'
 import AliRecycleCleanModal from '@/components/plugins/AliRecycleCleanModal.vue'
+import PtSigninModal from '@/components/plugins/PtSigninModal.vue'
 import StrmMigrateModal, { type StrmMigrateTab } from '@/components/plugins/StrmMigrateModal.vue'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -211,6 +212,21 @@ const arbRun = () =>
     run: pluginsApi.runAliRbClean,
   })
 
+// ============ PT 站签到 ============
+const ptShow = ref(false)
+async function ptRun() {
+  busy.value.ptsignin = true
+  results.value.ptsignin = { status: 'pending', title: '开始签到…' }
+  try {
+    const d = await pluginsApi.ptRunAll()
+    results.value.ptsignin = { status: 'ok', title: d.message || '开始签到', detail: '一个站接一个跑，结果在「配置规则」里看，跑完推送汇总。' }
+  } catch (e) {
+    results.value.ptsignin = { status: 'err', title: '没能开始', detail: e instanceof Error ? e.message : '' }
+  } finally {
+    busy.value.ptsignin = false
+  }
+}
+
 // ============ 阿里云盘秒传 ============
 const aliShow = ref(false)
 
@@ -248,6 +264,16 @@ const plugins: Plugin[] = [
     runLabel: '立即签到',
     onConfig: ckOpen,
     onRun: ckRun,
+  },
+  {
+    key: 'ptsignin',
+    name: 'PT 站签到',
+    icon: Stamp,
+    desc: '给常用的 PT 站每天签到（织梦、蟹黄堡、听听歌、学校…），认不出签到结果时至少确认登录保号。贴 Cookie 就能用，每天在时间窗里随机一刻跑，结果推送汇总。',
+    available: true,
+    runLabel: '立即签到',
+    onConfig: () => (ptShow.value = true),
+    onRun: ptRun,
   },
   {
     key: 'covergen',
@@ -387,6 +413,7 @@ const availableCount = plugins.filter((p) => p.available).length
     <OfflineCleanModal v-model:show="ocShow" />
     <AliDirCleanModal v-model:show="adcShow" />
     <AliRecycleCleanModal v-model:show="arbShow" />
+    <PtSigninModal v-model:show="ptShow" />
     <StrmMigrateModal v-model:show="smShow" v-model:tab="smTab" />
   </SectionCard>
 </template>

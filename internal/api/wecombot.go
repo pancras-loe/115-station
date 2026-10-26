@@ -245,6 +245,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"洗版 — 手动转存的不如库里的、停下来问的：洗版 <编号> 是（强制洗版）/ 否（不洗版）",
 			"订阅 <片名> — 订阅：定时找缺的集，转存后自动入库（找资源的列表里回复 s 订阅这部）",
 			"我的订阅 — 看进度；选一个后 a 立即搜索，z 暂停 / 恢复，x 取消订阅",
+			"PT签到 — 立即给 PT 站签到一轮，跑完回复汇总",
 		)
 
 	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
@@ -349,6 +350,9 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 
 	case strings.HasPrefix(text, "多份"):
 		reply(h.dupBotCommand(user, strings.TrimSpace(strings.TrimPrefix(text, "多份")))...)
+
+	case lower == "pt签到" || lower == "ptsignin":
+		h.botPtSignin(reply)
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")

@@ -129,6 +129,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 	re0BrowserInit(h.Config.DataDir) // RE0 网页登录：查本地有没有浏览器，配了网页登录又没有就后台下载（re0browser.go）
 	StartRe0CheckinScheduler(h)      // RE0 每日签到：08:00 后今天没签成就签
 	StartDianCheckinScheduler(h)     // 癫影每日签到：同 RE0
+	StartPtSigninScheduler(h)        // PT 站签到：每天时间窗里随机一刻（ptsignin.go）
 	StartCoverGenScheduler(h)
 	StartMetaFillScheduler(h)   // 媒体信息补全：cron 命中只入刮削队列（扫描完再建刮削 / 探测任务）
 	StartPersonFillScheduler(h) // 演职人员补全：cron 命中只入人物队列
@@ -493,6 +494,17 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/rbclean/config", h.RbCleanSaveConfig)
 		protected.POST("/rbclean/preview", h.RbCleanPreview)
 		protected.POST("/rbclean/run", h.RbCleanRun)
+		// PT 站签到（ptsignin.go / ptsigninapi.go）
+		protected.GET("/ptsignin/presets", h.PtSigninPresets)
+		protected.GET("/ptsignin/sites", h.PtSigninSites)
+		protected.POST("/ptsignin/sites", h.PtSigninCreate)
+		protected.PUT("/ptsignin/sites/:id", h.PtSigninUpdate)
+		protected.DELETE("/ptsignin/sites/:id", h.PtSigninDelete)
+		protected.POST("/ptsignin/test", h.PtSigninTest)
+		protected.POST("/ptsignin/run", h.PtSigninRun)
+		protected.GET("/ptsignin/records", h.PtSigninRecords)
+		protected.GET("/ptsignin/config", h.PtSigninGetConfig)
+		protected.POST("/ptsignin/config", h.PtSigninSaveConfig)
 		protected.GET("/offclean/config", h.OffCleanGetConfig)
 		protected.POST("/offclean/config", h.OffCleanSaveConfig)
 		protected.POST("/offclean/preview", h.OffCleanPreview)

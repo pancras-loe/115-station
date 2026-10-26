@@ -299,6 +299,37 @@ type PanSource struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// PtSite PT 站签到的一个站点（2026-10-26，api/ptsignin.go，设计见 docs/115-station-notes/PT-SIGNIN-PLAN.md）。
+// 和 115 没有关系，不放进 Storage。Cookie / Token 只在这张表里，接口只回有没有、日志里不打印
+type PtSite struct {
+	ID      uint   `json:"id" gorm:"primaryKey"`
+	Preset  string `json:"preset" gorm:"size:32"` // 预置站 key；自定义的站为空，走通用流程
+	Name    string `json:"name" gorm:"size:64"`
+	BaseURL string `json:"base_url" gorm:"size:255"` // https://站点/（带 attendance.php 的保留原样）
+	Cookie  string `json:"-" gorm:"type:text"`
+	Token   string `json:"-" gorm:"size:1024"` // Rousi Pro 的 API Token
+	UA      string `json:"ua" gorm:"size:512"` // 空 = 内置的 Chrome UA
+	Proxy   bool   `json:"proxy"`              // 走全局代理
+	Mode    string `json:"mode" gorm:"size:16"` // signin 签到 / keep 只保号（只访问首页）
+	Enabled bool   `json:"enabled"`
+	// NeedFix 上一次是 Cookie / Token 失效：界面描红；改了凭据清掉
+	NeedFix   bool      `json:"need_fix"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PtSigninLog 一个站一次签到的结果，保留含当天 14 天
+type PtSigninLog struct {
+	ID      uint      `json:"id" gorm:"primaryKey"`
+	SiteID  uint      `json:"site_id" gorm:"index"`
+	Day     string    `json:"day" gorm:"index;size:10"` // 2006-01-02
+	At      time.Time `json:"at"`
+	Trigger string    `json:"trigger" gorm:"size:16"` // cron / manual / bot / retry
+	Result  string    `json:"result" gorm:"size:8"`   // ok 签到成功 / login 只确认登录 / fail 失败
+	Reason  string    `json:"reason" gorm:"size:16"`  // 失败原因分类：cookie / token / cf / net / http / unknown
+	Message string    `json:"message" gorm:"size:255"`
+}
+
 // EmbyExtractMark 请 Emby 提前探测媒体信息的记账（按 Emby 条目 id，见 api/embyextract.go）。
 // 每次探测都经 302 取一次 115 直链，所以同一个条目的尝试次数与间隔必须有硬上限，
 // 且重启后仍然有效 —— 失败 / 超时的条目绝不能每次入库确认、每次刮削都再探一遍。成功即删行
@@ -725,6 +756,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&Library{},
 		&CategoryScheme{},
 		&PanSource{},
+		&PtSite{},
+		&PtSigninLog{},
 	); err != nil {
 		return nil, err
 	}
