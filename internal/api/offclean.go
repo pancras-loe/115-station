@@ -265,7 +265,8 @@ func (h *Handler) runOffClean(accts []rbAcct, rule offCleanRule, dry bool) []off
 			return hits[i].Hours > hits[j].Hours
 		})
 		res.Matched = len(hits)
-		res.Tasks = hits[:min(len(hits), offCleanShow)]
+		// 一条都没挑中时 hits 是 nil，切出来还是 nil，会盖掉上面的 []、序列化成 null（前端 .length 报错）
+		res.Tasks = append([]offCleanHit{}, hits[:min(len(hits), offCleanShow)]...)
 		if !dry {
 			for i := 0; i < len(hits); i += offCleanBatch {
 				part := hits[i:min(i+offCleanBatch, len(hits))]

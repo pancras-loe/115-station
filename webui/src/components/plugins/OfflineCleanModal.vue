@@ -90,7 +90,7 @@ async function runPreview() {
   preview.value = { status: 'pending', title: '读离线任务列表中…' }
   try {
     const d = await pluginsApi.previewOffClean(body(pick.map((r) => r.id)))
-    previewData.value = d.data ?? []
+    previewData.value = (d.data ?? []).map((a) => ({ ...a, tasks: a.tasks ?? [] }))
     const errs = previewData.value.some((a) => a.error)
     preview.value = { status: errs ? 'err' : 'ok', title: '预览（没有删除任何东西）', detail: d.message }
   } catch (e) {
