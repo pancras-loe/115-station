@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -321,9 +320,9 @@ func (h *Handler) aliDirCleanOnce(notify bool) {
 	msg, ok := aliDirCleanSummary(res, false)
 	flat := strings.ReplaceAll(msg, "\n", "；")
 	if ok {
-		log.Printf("[阿里清空目录] ✓ %s", flat)
+		plogAliDirClean.Printf("✓ %s", flat)
 	} else {
-		log.Printf("[阿里清空目录] ✗ %s", flat)
+		plogAliDirClean.Printf("✗ %s", flat)
 	}
 	_ = updateAliDirCleanCfg(func(c *aliDirCleanCfg) {
 		c.LastResult, c.LastOK = msg, ok
@@ -500,7 +499,7 @@ func (h *Handler) AliDirCleanSaveConfig(c *gin.Context) {
 	for _, d := range dirs {
 		paths = append(paths, aliDriveLabel(d.Drive)+d.Path)
 	}
-	log.Printf("[配置] 定时清空阿里云盘目录：%v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(paths, "、"), "没有目录"))
+	plogAliDirClean.Printf("○ 保存配置：开启 %v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(paths, "、"), "没有目录"))
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

@@ -126,15 +126,19 @@ func (pc *ptClient) do(method, rawURL string, body io.Reader, hdr map[string]str
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
+	start := time.Now()
 	res, err := pc.c.Do(req)
 	if err != nil {
+		plogPtSignin.Printf("✗ %s：%s %s 请求失败：%s", pc.site.Name, method, req.URL.Path, ptShortErr(err))
 		return nil, err
 	}
 	defer res.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, ptMaxBody))
 	if err != nil {
+		plogPtSignin.Printf("✗ %s：%s %s 读正文失败：%s", pc.site.Name, method, req.URL.Path, ptShortErr(err))
 		return nil, err
 	}
+	pc.logStep(method, req.URL, res, len(raw), time.Since(start))
 	// 老站有 GBK / Big5：按 Content-Type 与 meta charset 转 UTF-8
 	text := string(raw)
 	if r, err := charset.NewReader(bytes.NewReader(raw), res.Header.Get("Content-Type")); err == nil {
@@ -143,6 +147,21 @@ func (pc *ptClient) do(method, rawURL string, body io.Reader, hdr map[string]str
 		}
 	}
 	return &ptResp{status: res.StatusCode, body: text, header: res.Header}, nil
+}
+
+// logStep 每个请求记一行，排查卡在哪一步用：只写路径（查询串里可能有 passkey），不写 Cookie / Token；
+// 被跳转了把落到哪写出来，跳回 login.php 一眼就看出是 Cookie 失效
+func (pc *ptClient) logStep(method string, u *url.URL, res *http.Response, size int, took time.Duration) {
+	jump := ""
+	if res.Request != nil && res.Request.URL != nil && res.Request.URL.Path != u.Path {
+		jump = "，跳到 " + res.Request.URL.Path
+	}
+	extra := ""
+	if res.Header.Get("Cf-Mitigated") != "" {
+		extra = "，Cloudflare 拦截"
+	}
+	plogPtSignin.Printf("○ %s：%s %s → HTTP %d（%.1f KB，%.1f 秒%s%s）", pc.site.Name, method, u.Path,
+		res.StatusCode, float64(size)/1024, took.Seconds(), jump, extra)
 }
 
 func (pc *ptClient) get(u string) (*ptResp, error) { return pc.do(http.MethodGet, u, nil, nil) }

@@ -15,7 +15,6 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -928,7 +927,7 @@ func (h *Handler) coverPushEmby(name, itemID string, data []byte) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("上传失败：HTTP %d", resp.StatusCode)
 	}
-	log.Printf("[媒体库海报] ✓ 已推送 Emby 媒体库《%s》", name)
+	plogCoverGen.Printf("✓ 已推送 Emby 媒体库《%s》", name)
 	return nil
 }
 
@@ -1035,7 +1034,7 @@ func StartCoverGenScheduler(h *Handler) {
 			}()
 		}
 	}()
-	log.Println("[媒体库海报] ✓ 定时任务已启动")
+	plogCoverGen.Printf("✓ 定时任务已启动")
 }
 func (h *Handler) CoverGenGetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": h.loadCoverGenCfg()})

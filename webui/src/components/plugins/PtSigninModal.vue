@@ -13,6 +13,7 @@ import StatusStrip, { type StripItem } from '@/components/ui/StatusStrip.vue'
 import PtSiteDialog from './ptsignin/PtSiteDialog.vue'
 import PtRecords from './ptsignin/PtRecords.vue'
 import PtSettings from './ptsignin/PtSettings.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
 import { RESULT_LABEL, failLabel, handlerLabel, logoHue } from './ptsignin/pt'
 import { pluginsApi } from '@/api'
 import type { PtConfig, PtPreset, PtSite } from '@/api/plugins'
@@ -25,7 +26,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 const show = defineModel<boolean>('show', { default: false })
 const { message, dialog } = useFeedback()
 
-type Tab = 'sites' | 'records' | 'settings'
+type Tab = 'sites' | 'records' | 'settings' | 'log'
 const tab = ref<Tab>('sites')
 const sites = ref<PtSite[]>([])
 const presets = ref<PtPreset[]>([])
@@ -134,6 +135,7 @@ const tabs = computed(() => [
   { value: 'sites' as const, label: '站点', count: needFix.value, countTone: 'danger' as const },
   { value: 'records' as const, label: '记录' },
   { value: 'settings' as const, label: '设置' },
+  { value: 'log' as const, label: '日志' },
 ])
 
 // ---- 卡片 ----
@@ -287,7 +289,8 @@ function onStrip(key: string) {
     </div>
 
     <PtRecords v-else-if="tab === 'records'" class="pane" />
-    <PtSettings v-else class="pane" @saved="load" />
+    <PtSettings v-else-if="tab === 'settings'" class="pane" @saved="load" />
+    <PluginLogPanel v-else plugin-key="ptsignin" class="pane" />
 
     <PtSiteDialog v-model:show="dlgShow" :presets="presets" :sites="sites" :edit="editing" @saved="load" />
   </HModal>

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -230,7 +229,7 @@ func rebaseStrms(root string, pairs []strmRebasePair, apply bool, progress func(
 	}
 	counts := map[groupKey]int{}
 	shown := map[string]string{} // 分组 key（小写）→ 第一次见到的写法
-	err := walkStrmFiles(root, func(p string, st os.FileInfo) {
+	err := walkStrmFiles(plogStrmRebase, root, func(p string, st os.FileInfo) {
 		rel := localRelOrEmpty(root, p)
 		rep.Scanned++
 		if progress != nil && rep.Scanned%500 == 0 {
@@ -272,7 +271,7 @@ func rebaseStrms(root string, pairs []strmRebasePair, apply bool, progress func(
 		// 只换这一行，别的行（个别播放列表式 STRM 的 #EXTM3U 等）原样留着
 		lines[idx] = strings.Replace(lines[idx], line, next, 1)
 		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o666); err != nil {
-			log.Printf("[STRM] ✗ 替换地址失败 %s: %v", rel, err)
+			plogStrmRebase.Printf("✗ 替换地址失败 %s: %v", rel, err)
 			rep.Failed++
 			return
 		}
@@ -419,7 +418,7 @@ func execStrmRebaseJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	for _, p := range rep.Pairs {
 		desc = append(desc, fmt.Sprintf("%s → %s %d 个", p.From, p.To, p.Count))
 	}
-	log.Printf("[STRM] ✓ 替换地址（%s）：改写 %d 个、失败 %d 个，共扫 %d 个 STRM",
+	plogStrmRebase.Printf("✓ 替换地址（%s）：改写 %d 个、失败 %d 个，共扫 %d 个 STRM",
 		strings.Join(desc, "；"), rep.Rewritten, rep.Failed, rep.Scanned)
 	out := jobOutcome{Result: rep}
 	switch {

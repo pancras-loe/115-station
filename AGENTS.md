@@ -207,6 +207,7 @@ git tag v26.10.9 && git push origin v26.10.9
 
 - **注释与日志一律中文**，且注释解释「为什么」而不是「做什么」；现有注释里包含大量踩坑记录，改动时不要删。
 - 日志前缀风格：`[模块] ✓/✗/○ 消息`，例如 `[TLS] ✓ HTTPS 已启用`。
+- **扩展功能的日志一律走 `pluginlog.go` 的插件日志**（2026-10-27，MoviePilot 插件日志同款）：`plogPtSignin.Printf("✓ …")` 自己加前缀，照常进 app.log，另追加一份到 `/logs/plugins/<插件 key>.log`（1MB 切一份、留一份旧的），插件弹窗的「日志」页签（`components/plugins/PluginLogPanel.vue`，没页签的弹窗用 `logTab.ts` 包一层「设置 / 日志」）读 `GET /plugins/logs/:key`。key 与 `PluginsPage.vue` 的插件 key 一致、登记在 `pluginLogKeys`。新插件照这个加一个 logger，**别再直接 `log.Printf`**，保存配置也写进插件日志、不用 `[配置]`。PT 签到每个请求记一行（方法、路径、状态码、大小、耗时、跳到哪），**只写路径，不写查询串与 Cookie / Token**。
 - Gin handler 挂在 `*Handler` 上（`h.DB` / `h.Config`），注册集中在 `routes.go` 的 `SetupRoutes`。
 - 路由分三档：`/api/auth/*`（公开）、`/api/*`（JWT 保护的 `protected` 组）、若干无鉴权但带 token 校验的回调端点（Emby webhook、OAuth callback、302 直链）。
 - 配置读取顺序：**数据库 `Setting` 表优先，环境变量兜底**（如 115 请求间隔）。

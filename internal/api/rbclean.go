@@ -25,7 +25,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -390,9 +389,9 @@ func (h *Handler) rbCleanOnce(notify bool) {
 	msg, ok := rbCleanSummary(res, false)
 	flat := strings.ReplaceAll(msg, "\n", "；")
 	if ok {
-		log.Printf("[回收站清理] ✓ %s", flat)
+		plogRbClean.Printf("✓ %s", flat)
 	} else {
-		log.Printf("[回收站清理] ✗ %s", flat)
+		plogRbClean.Printf("✗ %s", flat)
 	}
 	_ = updateRbCleanCfg(func(c *rbCleanCfg) {
 		c.LastResult, c.LastOK = msg, ok
@@ -571,7 +570,7 @@ func (h *Handler) RbCleanSaveConfig(c *gin.Context) {
 			on = append(on, fmt.Sprintf("id=%d 保留 %d 天", r.ID, r.KeepDays))
 		}
 	}
-	log.Printf("[配置] 回收站清理：%v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(on, "、"), "没有开启的账号"))
+	plogRbClean.Printf("○ 保存配置：开启 %v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(on, "、"), "没有开启的账号"))
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

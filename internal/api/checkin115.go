@@ -17,7 +17,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -117,14 +116,14 @@ func (h *Handler) run115CheckinOnce(notify bool) (bool, string) {
 	cookie, err := h.get115Cookie()
 	if err != nil || cookie == "" {
 		msg := "未绑定 115 账号，无法签到"
-		log.Printf("[115签到] ✗ %s", msg)
+		plogCheckin.Printf("✗ %s", msg)
 		return false, msg
 	}
 
 	// 1. 今日是否已签
 	if signed, err := sign115Status(cookie); err == nil && signed {
 		msg := "今日已签到，无需重复签到"
-		log.Printf("[115签到] ○ %s", msg)
+		plogCheckin.Printf("○ %s", msg)
 		return true, msg
 	}
 
@@ -169,15 +168,15 @@ func (h *Handler) run115CheckinOnce(notify bool) (bool, string) {
 			break
 		}
 		if attempt < 3 {
-			log.Printf("[115签到] ○ 第 %d/3 次失败: %s，3 秒后重试", attempt, msg)
+			plogCheckin.Printf("○ 第 %d/3 次失败: %s，3 秒后重试", attempt, msg)
 			time.Sleep(3 * time.Second)
 		}
 	}
 
 	if ok {
-		log.Printf("[115签到] ✓ %s", msg)
+		plogCheckin.Printf("✓ %s", msg)
 	} else {
-		log.Printf("[115签到] ✗ %s", msg)
+		plogCheckin.Printf("✗ %s", msg)
 	}
 	if notify {
 		title := "115 签到失败"
@@ -205,7 +204,7 @@ func Start115CheckinScheduler(h *Handler) {
 			h.checkinTick()
 		}
 	}()
-	log.Println("[调度] 115 签到调度器已启动（cron 触发）")
+	plogCheckin.Printf("✓ 调度器已启动（cron 触发）")
 }
 
 func (h *Handler) checkinTick() {
@@ -292,7 +291,7 @@ func (h *Handler) Checkin115SaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	log.Printf("[配置] 115 签到：%v，cron %s", cfg.Enabled, cfg.Cron)
+	plogCheckin.Printf("○ 保存配置：开启 %v，cron %s", cfg.Enabled, cfg.Cron)
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

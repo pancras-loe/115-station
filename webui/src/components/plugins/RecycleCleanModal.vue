@@ -2,6 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
+import { usePluginLogTab } from './logTab'
 import HAlert from '@/components/hero/HAlert.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
@@ -17,6 +20,7 @@ import type { RbCleanAcctReq } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const show = defineModel<boolean>('show', { default: false })
+const { tab, logTabs } = usePluginLogTab(show)
 const { message } = useFeedback()
 
 const DEFAULT_CRON = '30 4 * * *'
@@ -134,6 +138,8 @@ async function save() {
 
 <template>
   <HModal v-model:show="show" title="清理 115 回收站" width="600px">
+    <HTabs v-model="tab" :items="logTabs" variant="secondary" class="plog-tabs" />
+    <template v-if="tab === 'set'">
     <HAlert status="warning" class="warn">
       早于保留期的回收站内容会被<b>彻底删除，无法还原</b>。本站的空目录清理、深度删除、洗版让位都是删进回收站，保留期内还能找回。
     </HAlert>
@@ -189,7 +195,10 @@ async function save() {
 
     <TestBanner :state="preview" />
 
-    <template #footer>
+    </template>
+    <PluginLogPanel v-else plugin-key="rbclean" />
+
+    <template v-if="tab === 'set'" #footer>
       <div class="foot">
         <HButton variant="tertiary" :loading="previewing" :disabled="!rows.length" @click="runPreview">
           预览会删多少
@@ -203,6 +212,9 @@ async function save() {
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .warn {
   margin-bottom: 14px;
 }

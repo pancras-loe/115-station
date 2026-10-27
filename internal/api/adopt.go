@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -353,15 +352,15 @@ func adoptPathShift(localDir, expectDir string) (from, to string) {
 // adoptStrmReadLimit 读 STRM 内容的上限：正常的直链不过几百字节，读多了只会拖慢万级目录的扫描
 const adoptStrmReadLimit = 8 << 10
 
-// walkStrmFiles 遍历 dir 下所有 .strm（跳过隐藏目录与群晖的 @eaDir），读不了的子目录记一行日志跳过。
+// walkStrmFiles 遍历 dir 下所有 .strm（跳过隐藏目录与群晖的 @eaDir），读不了的子目录往 lg 记一行跳过。
 // 接管与替换地址（strmrebase.go）共用
-func walkStrmFiles(dir string, fn func(p string, st os.FileInfo)) error {
+func walkStrmFiles(lg pluginLogger, dir string, fn func(p string, st os.FileInfo)) error {
 	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if p == dir {
 				return err
 			}
-			log.Printf("[STRM] ○ 读不了 %s，跳过: %v", p, err)
+			lg.Printf("○ 读不了 %s，跳过: %v", p, err)
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -379,7 +378,7 @@ func walkStrmFiles(dir string, fn func(p string, st os.FileInfo)) error {
 		}
 		st, err := d.Info()
 		if err != nil {
-			log.Printf("[STRM] ○ 读不了 %s，跳过: %v", p, err)
+			lg.Printf("○ 读不了 %s，跳过: %v", p, err)
 			return nil
 		}
 		fn(p, st)
@@ -391,10 +390,10 @@ func walkStrmFiles(dir string, fn func(p string, st os.FileInfo)) error {
 func scanLocalStrms(scanDir, localRoot string, progress func(int)) ([]localStrm, error) {
 	root := filepath.Clean(localRoot)
 	var out []localStrm
-	err := walkStrmFiles(scanDir, func(p string, _ os.FileInfo) {
+	err := walkStrmFiles(plogAdopt, scanDir, func(p string, _ os.FileInfo) {
 		content, err := readHead(p, adoptStrmReadLimit)
 		if err != nil {
-			log.Printf("[接管] ○ 读不了 %s，跳过: %v", p, err)
+			plogAdopt.Printf("○ 读不了 %s，跳过: %v", p, err)
 			return
 		}
 		abs := filepath.ToSlash(p)
@@ -580,13 +579,13 @@ func applyAdopt(db *gorm.DB, root string, acts []adoptAction, assets []remoteFil
 		p := filepath.Join(root, filepath.FromSlash(a.Local.Rel))
 		st, err := os.Stat(p)
 		if err != nil || st.IsDir() {
-			log.Printf("[接管] ✗ 读不了 %s: %v", a.Local.Rel, err)
+			plogAdopt.Printf("✗ 读不了 %s: %v", a.Local.Rel, err)
 			ap.Failed++
 			continue
 		}
 		old, err := os.ReadFile(p)
 		if err != nil {
-			log.Printf("[接管] ✗ 读不了 %s: %v", a.Local.Rel, err)
+			plogAdopt.Printf("✗ 读不了 %s: %v", a.Local.Rel, err)
 			ap.Failed++
 			continue
 		}
@@ -597,7 +596,7 @@ func applyAdopt(db *gorm.DB, root string, acts []adoptAction, assets []remoteFil
 			// 整个内容换成本站直链（本站写的 STRM 就这一行，全量「内容一样就不写」才认得出它）。
 			// 不调 markFreshStrm：一次改写上万个，下一次入库确认会把整库排进探测（§6.16）
 			if err := os.WriteFile(p, []byte(want), 0o666); err != nil {
-				log.Printf("[接管] ✗ 改写 %s 失败: %v", a.Local.Rel, err)
+				plogAdopt.Printf("✗ 改写 %s 失败: %v", a.Local.Rel, err)
 				ap.Failed++
 				continue
 			}
@@ -646,7 +645,7 @@ func applyAdopt(db *gorm.DB, root string, acts []adoptAction, assets []remoteFil
 		db.Model(&model.Setting{}).Where("key = ?", k).Count(&n)
 		if n == 0 {
 			if err := db.Create(&model.Setting{Key: k, Value: "1"}).Error; err != nil {
-				log.Printf("[接管] ○ 写迁移标记 %s 失败: %v", k, err)
+				plogAdopt.Printf("○ 写迁移标记 %s 失败: %v", k, err)
 			}
 		}
 	}
@@ -679,7 +678,7 @@ func execAdoptJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		msg += fmt.Sprintf("；%d 个库没取到清单", run.failed)
 	}
 	if !params.Apply {
-		log.Printf("[接管] ✓ 预演完成（%s）：%s", rep.ScanDir, msg)
+		plogAdopt.Printf("✓ 预演完成（%s）：%s", rep.ScanDir, msg)
 		return jobOutcome{Message: msg, Result: rep, Partial: run.failed > 0}, nil
 	}
 
@@ -697,12 +696,12 @@ func execAdoptJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if params.ThenFull {
 		p := h.fullParamsFromConfig()
 		if p.Cid == "" && len(loadLibraries()) == 0 {
-			log.Printf("[接管] ○ 没配全量同步，接管后的全量没排")
+			plogAdopt.Printf("○ 没配全量同步，接管后的全量没排")
 		} else if fj, err := enqueueJob(h.DB, jobSpec{Kind: "full", Title: "全量同步（接管后补写）", DedupeKey: "full",
 			Source: "web", Priority: jobPriorityManual, Params: jobParams{Sync: &syncJobParams{
 				Cid: p.Cid, LocalPath: p.LocalPath, VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt, Mode: p.Mode,
 			}}}); err != nil {
-			log.Printf("[接管] ✗ 接管后的全量同步入队失败: %v", err)
+			plogAdopt.Printf("✗ 接管后的全量同步入队失败: %v", err)
 		} else {
 			ap.FullJobID = fj.ID
 		}
@@ -716,7 +715,7 @@ func execAdoptJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if ap.FullJobID > 0 {
 		out += "；已排一次全量同步补写本地没有的"
 	}
-	log.Printf("[接管] ✓ %s（%s）", out, msg)
+	plogAdopt.Printf("✓ %s（%s）", out, msg)
 	return jobOutcome{Message: out, Result: rep, Partial: ap.Failed > 0 || run.failed > 0}, nil
 }
 

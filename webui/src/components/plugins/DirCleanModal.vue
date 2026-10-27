@@ -3,6 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { Plus, X } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
+import { usePluginLogTab } from './logTab'
 import HAlert from '@/components/hero/HAlert.vue'
 import HSelect from '@/components/hero/HSelect.vue'
 import Cid115Input, { type CidValue } from '@/components/Cid115Input.vue'
@@ -14,6 +17,7 @@ import type { DirCleanAcct, DirCleanDir } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const show = defineModel<boolean>('show', { default: false })
+const { tab, logTabs } = usePluginLogTab(show)
 const { message } = useFeedback()
 
 const DEFAULT_CRON = '0 5 * * *'
@@ -127,6 +131,8 @@ async function save() {
 
 <template>
   <HModal v-model:show="show" title="定时清空 115 目录" width="620px">
+    <HTabs v-model="tab" :items="logTabs" variant="secondary" class="plog-tabs" />
+    <template v-if="tab === 'set'">
     <HAlert status="warning" class="warn">
       到点把这些目录里的<b>全部内容</b>删进 115 回收站，目录本身留着。回收站里还能还原；开着「清理 115 回收站」的话，过了保留天数就彻底删除。
     </HAlert>
@@ -171,7 +177,10 @@ async function save() {
 
     <TestBanner :state="preview" />
 
-    <template #footer>
+    </template>
+    <PluginLogPanel v-else plugin-key="dirclean" />
+
+    <template v-if="tab === 'set'" #footer>
       <div class="foot">
         <HButton variant="tertiary" :loading="previewing" :disabled="!rows.length" @click="runPreview">
           预览会删什么
@@ -185,6 +194,9 @@ async function save() {
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .warn {
   margin-bottom: 14px;
 }

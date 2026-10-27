@@ -17,7 +17,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"path"
 	"strconv"
@@ -379,7 +378,7 @@ func (r *ali2115Run) cleanStale(root, keep string) {
 	for _, f := range list {
 		if f.isDir() && strings.HasPrefix(f.Name, "job") && f.Name != keep {
 			if err := r.ali.deleteFile(f.FileID); err != nil {
-				log.Printf("[阿里秒传] ○ 上次的临时目录 %s 没删掉: %v", f.Name, err)
+				plogAli2115.Printf("○ 上次的临时目录 %s 没删掉: %v", f.Name, err)
 			}
 		}
 	}
@@ -418,7 +417,7 @@ func (r *ali2115Run) run() (res ali2115Result, canceled bool, err error) {
 	}
 	defer func() {
 		if derr := r.ali.deleteFile(jobDir); derr != nil {
-			log.Printf("[阿里秒传] ✗ 阿里云盘临时目录 %s/%s 没删掉，请手动删除: %v", aliTempRoot, jobName, derr)
+			plogAli2115.Printf("✗ 阿里云盘临时目录 %s/%s 没删掉，请手动删除: %v", aliTempRoot, jobName, derr)
 		}
 	}()
 	copies, err := r.stage(tok, jobDir, items)
@@ -492,7 +491,7 @@ func (r *ali2115Run) run() (res ali2115Result, canceled bool, err error) {
 		case err != nil:
 			res.Failed++
 			res.Errors = append(res.Errors, it.Name+"："+err.Error())
-			log.Printf("[阿里秒传] ✗ %s: %v", it.Name, err)
+			plogAli2115.Printf("✗ %s: %v", it.Name, err)
 		case hit:
 			res.OK++
 		default:
@@ -506,7 +505,7 @@ func (r *ali2115Run) run() (res ali2115Result, canceled bool, err error) {
 		// 一个都没进来：收掉空包装目录，留着守望者会反复整理它直到熔断（同订阅的 dropWrapper）
 		if r.x.rmdir != nil {
 			if err := r.x.rmdir(wrap); err != nil {
-				log.Printf("[阿里秒传] ✗ 空目录「%s」没删掉，请到转存文件夹手动删除: %v", res.Wrapper, err)
+				plogAli2115.Printf("✗ 空目录「%s」没删掉，请到转存文件夹手动删除: %v", res.Wrapper, err)
 			}
 		}
 		res.Wrapper = ""
@@ -597,14 +596,14 @@ func execAli2115Job(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 			h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("title", truncateStr("阿里云盘秒传："+title, 250))
 		},
 	}
-	log.Printf("[阿里秒传] ▶ %s（%s）", p.ShareID, acctLabelOf(h, acct))
+	plogAli2115.Printf("▶ %s（%s）", p.ShareID, acctLabelOf(h, acct))
 	res, canceled, err := r.run()
 	if err != nil {
-		log.Printf("[阿里秒传] ✗ %s: %v", p.ShareID, err)
+		plogAli2115.Printf("✗ %s: %v", p.ShareID, err)
 		return jobOutcome{Result: res}, err
 	}
 	msg := res.summary()
-	log.Printf("[阿里秒传] ✓ %s", msg)
+	plogAli2115.Printf("✓ %s", msg)
 	if res.OK > 0 {
 		go h.triggerOrganizeAndSync()
 		msg += "，整理入库已排上"

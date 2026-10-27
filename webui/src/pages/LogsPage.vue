@@ -8,6 +8,7 @@ import { RefreshCw, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import { systemApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { logToneOf } from '@/utils/logTone'
 
 const { message } = useFeedback()
 
@@ -43,14 +44,7 @@ const filtered = computed(() => {
   return lines.value.filter((l) => l.toLowerCase().includes(k))
 })
 
-/** 日志行的级别着色：按前缀符号判定，与后端 `[模块] ✓/✗/○ 消息` 的约定对齐 */
-function toneOf(line: string) {
-  if (line.includes('✗') || /ERROR|error|失败|错误/.test(line)) return 'err'
-  if (line.includes('✓') || /成功|完成/.test(line)) return 'ok'
-  if (line.includes('⚠') || /WARN|warn|警告/.test(line)) return 'warn'
-  if (line.includes('○')) return 'dim'
-  return ''
-}
+const toneOf = logToneOf
 
 let timer: number | undefined
 function startTimer() {

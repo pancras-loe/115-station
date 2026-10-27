@@ -22,7 +22,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -292,9 +291,9 @@ func (h *Handler) aliRbCleanOnce(notify bool) {
 	msg, ok := aliRbSummary(res, false)
 	flat := strings.ReplaceAll(msg, "\n", "；")
 	if ok {
-		log.Printf("[阿里回收站] ✓ %s", flat)
+		plogAliRbClean.Printf("✓ %s", flat)
 	} else {
-		log.Printf("[阿里回收站] ✗ %s", flat)
+		plogAliRbClean.Printf("✗ %s", flat)
 	}
 	_ = updateAliRbCleanCfg(func(c *aliRbCleanCfg) {
 		c.LastResult, c.LastOK = msg, ok
@@ -444,7 +443,7 @@ func (h *Handler) AliRbCleanSaveConfig(c *gin.Context) {
 			on = append(on, fmt.Sprintf("id=%d 保留 %d 天", r.ID, r.KeepDays))
 		}
 	}
-	log.Printf("[配置] 阿里云盘回收站清理：%v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(on, "、"), "没有开启的账号"))
+	plogAliRbClean.Printf("○ 保存配置：开启 %v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(on, "、"), "没有开启的账号"))
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

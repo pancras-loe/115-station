@@ -604,6 +604,9 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 			log.Printf("[系统] 任务日志已清空（界面操作）")
 			c.JSON(http.StatusOK, gin.H{"message": "日志已清空"})
 		})
+		// 扩展功能各自的日志（pluginlog.go）
+		protected.GET("/plugins/logs/:key", h.GetPluginLogs)
+		protected.POST("/plugins/logs/:key/clear", h.ClearPluginLogs)
 		protected.GET("/system/backup", h.SystemBackup)
 		// 备份与恢复（backup.go）：恢复只暂存，重启时换进去
 		protected.GET("/system/backups", h.ListBackups)

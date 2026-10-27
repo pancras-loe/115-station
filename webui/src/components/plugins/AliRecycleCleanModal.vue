@@ -2,6 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
+import { usePluginLogTab } from './logTab'
 import HAlert from '@/components/hero/HAlert.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
@@ -15,6 +18,7 @@ import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const show = defineModel<boolean>('show', { default: false })
+const { tab, logTabs } = usePluginLogTab(show)
 const { message } = useFeedback()
 
 const DEFAULT_CRON = '40 4 * * *'
@@ -117,6 +121,8 @@ async function save() {
 
 <template>
   <HModal v-model:show="show" title="清理阿里云盘回收站" width="560px">
+    <HTabs v-model="tab" :items="logTabs" variant="secondary" class="plog-tabs" />
+    <template v-if="tab === 'set'">
     <HAlert v-if="!rows.length && !loading" status="warning" class="warn">
       还没登录阿里云盘：先到「阿里云盘秒传」的配置里扫码登录，这里共用那个账号。
     </HAlert>
@@ -165,7 +171,10 @@ async function save() {
 
     <TestBanner :state="preview" />
 
-    <template #footer>
+    </template>
+    <PluginLogPanel v-else plugin-key="alirbclean" />
+
+    <template v-if="tab === 'set'" #footer>
       <div class="foot">
         <HButton variant="tertiary" :loading="previewing" :disabled="!rows.length" @click="runPreview">
           预览会删多少
@@ -179,6 +188,9 @@ async function save() {
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .warn {
   margin-bottom: 14px;
 }

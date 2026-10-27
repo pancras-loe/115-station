@@ -2,6 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
+import { usePluginLogTab } from './logTab'
 import HChip from '@/components/hero/HChip.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
@@ -15,6 +18,7 @@ import type { OffCleanReq, OffCleanResult } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const show = defineModel<boolean>('show', { default: false })
+const { tab, logTabs } = usePluginLogTab(show)
 const { message } = useFeedback()
 
 const DEFAULT_CRON = '0 * * * *'
@@ -134,6 +138,8 @@ function stateText(t: { status: number; percent: number; hours: number }): strin
 
 <template>
   <HModal v-model:show="show" title="清理 115 离线任务" width="600px">
+    <HTabs v-model="tab" :items="logTabs" variant="secondary" class="plog-tabs" />
+    <template v-if="tab === 'set'">
     <p class="lead">
       115 离线大多是秒传，个别磁力会下载失败或卡在百分之几一直不动。这里按计划把它们从 115 的离线列表里删掉，只删任务、不删已经下进网盘的文件；下载完成的不动。
     </p>
@@ -183,7 +189,10 @@ function stateText(t: { status: number; percent: number; hours: number }): strin
       <div v-if="a.matched > a.tasks.length" class="pv-more">…还有 {{ a.matched - a.tasks.length }} 条</div>
     </div>
 
-    <template #footer>
+    </template>
+    <PluginLogPanel v-else plugin-key="offclean" />
+
+    <template v-if="tab === 'set'" #footer>
       <div class="foot">
         <HButton variant="tertiary" :loading="previewing" :disabled="!rows.length || (!failed && !stuckOn)" @click="runPreview">
           预览会删哪些
@@ -197,6 +206,9 @@ function stateText(t: { status: number; percent: number; hours: number }): strin
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .lead {
   margin: 0 0 14px;
   font-size: 12.5px;

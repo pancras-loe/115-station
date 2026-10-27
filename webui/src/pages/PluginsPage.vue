@@ -6,6 +6,7 @@ import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
+import HTabs from '@/components/hero/HTabs.vue'
 import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Stamp, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -21,6 +22,8 @@ import AliDirCleanModal from '@/components/plugins/AliDirCleanModal.vue'
 import AliRecycleCleanModal from '@/components/plugins/AliRecycleCleanModal.vue'
 import PtSigninModal from '@/components/plugins/PtSigninModal.vue'
 import StrmMigrateModal, { type StrmMigrateTab } from '@/components/plugins/StrmMigrateModal.vue'
+import PluginLogPanel from '@/components/plugins/PluginLogPanel.vue'
+import { usePluginLogTab } from '@/components/plugins/logTab'
 import { pluginsApi } from '@/api'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
@@ -34,6 +37,7 @@ const busy = ref<Record<string, boolean>>({})
 
 // ============ 115 每日签到 ============
 const ckShow = ref(false)
+const { tab: ckTab, logTabs: ckTabs } = usePluginLogTab(ckShow)
 const ckForm = ref({ enabled: false, cron: '0 8 * * *' })
 const ckSaving = ref(false)
 
@@ -472,15 +476,18 @@ const shownCount = computed(() => groups.value.reduce((n, g) => n + g.items.leng
     </section>
 
     <!-- 115 签到配置 -->
-    <HModal v-model:show="ckShow" title="115 每日签到" width="480px">
+    <HModal v-model:show="ckShow" title="115 每日签到" width="560px">
+      <HTabs v-model="ckTab" :items="ckTabs" variant="secondary" class="plog-tabs" />
+      <PluginLogPanel v-if="ckTab === 'log'" plugin-key="checkin" />
       <FieldRow
+        v-else
         label="自动签到"
         wide
         tip="开启后按计划自动签到领积分（连续签到有加成，积分可在 115 App 积分中心使用）。失败自动重试 3 次，结果推送通知。"
       >
         <SchedulePicker v-model="ckForm.cron" v-model:enabled="ckForm.enabled" toggle placeholder="0 8 * * *" />
       </FieldRow>
-      <template #footer>
+      <template v-if="ckTab === 'set'" #footer>
         <div class="foot-right">
           <HButton variant="tertiary" @click="ckShow = false">取消</HButton>
           <HButton variant="primary" :loading="ckSaving" @click="ckSave">保存</HButton>
@@ -501,6 +508,9 @@ const shownCount = computed(() => groups.value.reduce((n, g) => n + g.items.leng
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .toolbar {
   display: flex;
   flex-wrap: wrap;

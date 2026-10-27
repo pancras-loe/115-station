@@ -16,7 +16,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"sort"
 	"strings"
@@ -209,6 +208,7 @@ func ptSigninOne(s *model.PtSite) ptResult {
 	if r.done() || (r.Reason != ptWhyUnknown && r.Reason != ptWhyHTTP) || ptHandlerOf(s) == ptHandRousi {
 		return r
 	}
+	plogPtSignin.Printf("○ %s：签到没认出（%s），改查首页确认登录", s.Name, r.Message)
 	l := ptCheckLogin(pc)
 	if l.done() {
 		return ptLogin("签到没确认（" + r.Message + "），首页确认已登录")
@@ -235,7 +235,7 @@ func ptRecord(db *gorm.DB, s *model.PtSite, r ptResult, trigger string, at time.
 	}
 	if err := db.Create(&model.PtSigninLog{SiteID: s.ID, Day: at.Format("2006-01-02"), At: at, Trigger: trigger,
 		Result: r.Result, Reason: r.Reason, Message: msg}).Error; err != nil {
-		log.Printf("[PT签到] ○ 结果落库失败（%s）: %v", s.Name, err)
+		plogPtSignin.Printf("○ 结果落库失败（%s）: %v", s.Name, err)
 	}
 	need := r.Reason == ptWhyCookie || r.Reason == ptWhyToken
 	if need != s.NeedFix {
@@ -290,6 +290,7 @@ func (h *Handler) ptRunRound(trigger string, ids []uint) ([]ptRoundItem, error) 
 	if len(ids) == 0 {
 		done = ptDoneToday(h.DB, now.Format("2006-01-02"))
 	}
+	plogPtSignin.Printf("▶ 开始签到（%s）：%d 个站，今天已做完、跳过 %d 个", ptTriggerLabel(trigger), len(sites), ptCountDone(sites, done))
 	start := ptNow()
 	var items []ptRoundItem
 	requested := 0
@@ -310,9 +311,9 @@ func (h *Handler) ptRunRound(trigger string, ids []uint) ([]ptRoundItem, error) 
 		at := ptNow()
 		ptRecord(h.DB, s, r, trigger, at)
 		if r.done() {
-			log.Printf("[PT签到] ✓ %s：%s", s.Name, r.Message)
+			plogPtSignin.Printf("✓ %s：%s", s.Name, r.Message)
 		} else {
-			log.Printf("[PT签到] ✗ %s：%s", s.Name, r.Message)
+			plogPtSignin.Printf("✗ %s：%s", s.Name, r.Message)
 		}
 		items = append(items, ptRoundItem{SiteID: s.ID, Name: s.Name, ptResult: r, At: at})
 	}
@@ -322,6 +323,31 @@ func (h *Handler) ptRunRound(trigger string, ids []uint) ([]ptRoundItem, error) 
 		})
 	}
 	return items, nil
+}
+
+// ptTriggerLabel 日志里写触发来源
+func ptTriggerLabel(trigger string) string {
+	switch trigger {
+	case "cron":
+		return "定时"
+	case "retry":
+		return "失败重试"
+	case "manual":
+		return "手动"
+	case "bot":
+		return "机器人"
+	}
+	return trigger
+}
+
+func ptCountDone(sites []model.PtSite, done map[uint]bool) int {
+	n := 0
+	for _, s := range sites {
+		if done[s.ID] {
+			n++
+		}
+	}
+	return n
 }
 
 // ptRunnable 去掉暂不支持的站（馒头 / 朱雀 / 影巢：库里本不该有，老数据或手填的地址也拦一下）
@@ -459,7 +485,7 @@ func (h *Handler) ptRoundAsync(trigger string, ids []uint, reply func(...string)
 	go func() {
 		items, err := h.ptRunRound(trigger, ids)
 		if err != nil {
-			log.Printf("[PT签到] ✗ 读站点失败: %v", err)
+			plogPtSignin.Printf("✗ 读站点失败: %v", err)
 			if reply != nil {
 				reply("✗ PT 签到失败：" + err.Error())
 			}
@@ -523,7 +549,7 @@ func (h *Handler) ptSigninTick(now time.Time) {
 			_ = updatePtSigninCfg(func(c *ptSigninCfg) { c.Today, c.TodayAt = day, at })
 			cfg.Today, cfg.TodayAt = day, at
 			if at != "" {
-				log.Printf("[PT签到] ○ 今天 %s 签到", at)
+				plogPtSignin.Printf("○ 今天 %s 签到", at)
 			}
 		}
 		if !ptDue(cfg, now) {

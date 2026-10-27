@@ -22,7 +22,6 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -366,9 +365,9 @@ func (h *Handler) offCleanOnce(notify bool) {
 	msg, ok := offCleanSummary(res, false)
 	flat := strings.ReplaceAll(msg, "\n", "；")
 	if ok {
-		log.Printf("[离线清理] ✓ %s", flat)
+		plogOffClean.Printf("✓ %s", flat)
 	} else {
-		log.Printf("[离线清理] ✗ %s", flat)
+		plogOffClean.Printf("✗ %s", flat)
 	}
 	_ = updateOffCleanCfg(func(c *offCleanCfg) {
 		c.LastResult, c.LastOK = msg, ok
@@ -515,7 +514,7 @@ func (h *Handler) OffCleanSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	log.Printf("[配置] 离线任务清理：%v，cron %s，失败 %v、卡住 %d 小时、全部 %v，账号 %v", req.Enabled, cronExpr, req.Failed, req.StuckHours, req.All, req.Accounts)
+	plogOffClean.Printf("○ 保存配置：开启 %v，cron %s，失败 %v、卡住 %d 小时、全部 %v，账号 %v", req.Enabled, cronExpr, req.Failed, req.StuckHours, req.All, req.Accounts)
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

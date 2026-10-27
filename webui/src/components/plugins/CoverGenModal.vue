@@ -14,6 +14,7 @@ import HSelect from '@/components/hero/HSelect.vue'
 import { ImageUp, RefreshCw } from '@lucide/vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
 import { pluginsApi } from '@/api'
 import type { CoverGenConfig } from '@/api/plugins'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -221,7 +222,7 @@ defineExpose({ loadCovers })
 <template>
   <HModal v-model:show="show" title="媒体库海报" class="cg-modal" width="920px">
     <div class="h-tabs-page">
-<HTabs v-model="tab" :items="[{ value: 'style', label: '封面样式' }, { value: 'title', label: '标题与范围' }, { value: 'run', label: '生成与定时' }, { value: 'gallery', label: '已生成', count: covers.length }]" />
+<HTabs v-model="tab" :items="[{ value: 'style', label: '封面样式' }, { value: 'title', label: '标题与范围' }, { value: 'run', label: '生成与定时' }, { value: 'gallery', label: '已生成', count: covers.length }, { value: 'log', label: '日志' }]" />
 <template v-if="tab === 'style'">
         <!-- 预览固定在左边、样式列表在右边独立滚动：之前列表排在预览下方，
              往下翻着挑样式时预览已经滚出视野，选完还得再翻回去看效果。 -->
@@ -354,6 +355,7 @@ defineExpose({ loadCovers })
           <p v-else class="muted empty">还没有生成过封面，保存配置后在插件卡片上点「立即生成」。</p>
         </div>
 </template>
+<PluginLogPanel v-if="tab === 'log'" plugin-key="covergen" class="pane" />
 </div>
 
     <template #footer>

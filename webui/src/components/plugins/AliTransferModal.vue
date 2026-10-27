@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HTabs from '@/components/hero/HTabs.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
+import { usePluginLogTab } from './logTab'
 import HSelect, { type SelectOption } from '@/components/hero/HSelect.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -16,6 +19,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
  * 提交链接不在这里：在「发现与订阅 → 链接转存」贴，和 115 分享同一个入口
  */
 const show = defineModel<boolean>('show', { default: false })
+const { tab, logTabs } = usePluginLogTab(show)
 const { message, dialog } = useFeedback()
 
 const form = ref<Ali2115Config>({ enabled: false, source: 0, media_only: true })
@@ -169,6 +173,8 @@ async function remove(a: AliAccount) {
 
 <template>
   <HModal v-model:show="show" title="阿里云盘秒传" width="560px">
+    <HTabs v-model="tab" :items="logTabs" variant="secondary" class="plog-tabs" />
+    <template v-if="tab === 'set'">
     <HAlert status="default">
       在「发现与订阅 → 链接转存」贴阿里云盘分享，按文件的 SHA1 秒传进 115 转存文件夹，进来后自动整理入库。
       文件内容不经过本站；115 上没有的文件秒传不了，会跳过并列在任务结果里。
@@ -217,7 +223,10 @@ async function remove(a: AliAccount) {
       </FieldRow>
     </div>
 
-    <template #footer>
+    </template>
+    <PluginLogPanel v-else plugin-key="ali2115" />
+
+    <template v-if="tab === 'set'" #footer>
       <div class="foot-right">
         <HButton variant="tertiary" @click="show = false">取消</HButton>
         <HButton variant="primary" :loading="saving" @click="save">保存</HButton>
@@ -227,6 +236,9 @@ async function remove(a: AliAccount) {
 </template>
 
 <style scoped>
+.plog-tabs {
+  margin-bottom: 14px;
+}
 .sec {
   margin: 14px 0 6px;
   font-size: 12.5px;

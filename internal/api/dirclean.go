@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -431,9 +430,9 @@ func (h *Handler) dirCleanOnce(notify bool) {
 	msg, ok := dirCleanSummary(res, false)
 	flat := strings.ReplaceAll(msg, "\n", "；")
 	if ok {
-		log.Printf("[清空目录] ✓ %s", flat)
+		plogDirClean.Printf("✓ %s", flat)
 	} else {
-		log.Printf("[清空目录] ✗ %s", flat)
+		plogDirClean.Printf("✗ %s", flat)
 	}
 	_ = updateDirCleanCfg(func(c *dirCleanCfg) {
 		c.LastResult, c.LastOK = msg, ok
@@ -662,7 +661,7 @@ func (h *Handler) DirCleanSaveConfig(c *gin.Context) {
 	for _, d := range dirs {
 		paths = append(paths, firstNonEmpty(d.Path, d.Cid))
 	}
-	log.Printf("[配置] 定时清空目录：%v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(paths, "、"), "没有目录"))
+	plogDirClean.Printf("○ 保存配置：开启 %v，cron %s，%s", req.Enabled, cronExpr, firstNonEmpty(strings.Join(paths, "、"), "没有目录"))
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

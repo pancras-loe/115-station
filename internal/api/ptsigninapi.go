@@ -5,7 +5,6 @@ package api
 // Cookie / Token 只进不出：列表只回有没有与末 4 位；PUT 不带这两个字段 = 不改。
 
 import (
-	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -249,7 +248,7 @@ func logPtSite(what string, s *model.PtSite) {
 	if s.Mode == ptModeKeep {
 		mode = "只保号"
 	}
-	log.Printf("[PT签到] ○ %s站点 %s（%s，%s）", what, s.Name, ptHostOf(s.BaseURL), mode)
+	plogPtSignin.Printf("○ %s站点 %s（%s，%s）", what, s.Name, ptHostOf(s.BaseURL), mode)
 }
 
 func (h *Handler) ptSiteByParam(c *gin.Context) *model.PtSite {
@@ -523,7 +522,7 @@ func (h *Handler) PtSigninSaveConfig(c *gin.Context) {
 	if cfg.Mode == ptModeCron {
 		when = "cron " + cfg.Cron
 	}
-	log.Printf("[配置] PT 签到：%v，%s", cfg.Enabled, when)
+	plogPtSignin.Printf("○ 保存配置：开启 %v，%s", cfg.Enabled, when)
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 

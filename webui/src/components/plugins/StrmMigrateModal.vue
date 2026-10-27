@@ -4,6 +4,7 @@ import HModal from '@/components/hero/HModal.vue'
 import HTabs from '@/components/hero/HTabs.vue'
 import AdoptPanel from '@/components/strm/AdoptPanel.vue'
 import StrmRebasePanel from '@/components/strm/StrmRebasePanel.vue'
+import PluginLogPanel from './PluginLogPanel.vue'
 
 /**
  * 扩展功能「STRM 迁移」：两件事都是处理本地已有的 STRM，放在一起。
@@ -11,7 +12,7 @@ import StrmRebasePanel from '@/components/strm/StrmRebasePanel.vue'
  * - 接管其他项目：认出旧 STRM 指向哪个网盘文件，换成本站直链并登记台账，之后由本站管理（adopt.go）。
  * 两个页签各自挂载，切走时卸掉；任务在队列里照常跑完，结果在任务中心也看得到
  */
-export type StrmMigrateTab = 'rebase' | 'adopt'
+export type StrmMigrateTab = 'rebase' | 'adopt' | 'log'
 
 const show = defineModel<boolean>('show', { required: true })
 const tab = defineModel<StrmMigrateTab>('tab', { default: 'rebase' })
@@ -19,6 +20,7 @@ const tab = defineModel<StrmMigrateTab>('tab', { default: 'rebase' })
 const TABS: { value: StrmMigrateTab; label: string }[] = [
   { value: 'rebase', label: '替换地址' },
   { value: 'adopt', label: '接管其他项目' },
+  { value: 'log', label: '日志' },
 ]
 </script>
 
@@ -28,7 +30,8 @@ const TABS: { value: StrmMigrateTab; label: string }[] = [
       <HTabs v-model="tab" :items="TABS" variant="secondary" />
       <template v-if="show">
         <StrmRebasePanel v-if="tab === 'rebase'" />
-        <AdoptPanel v-else />
+        <AdoptPanel v-else-if="tab === 'adopt'" />
+        <PluginLogPanel v-else plugin-key="strmmigrate" />
       </template>
     </div>
     <template #footer>

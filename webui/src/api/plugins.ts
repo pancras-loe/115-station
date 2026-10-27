@@ -466,3 +466,9 @@ export const ptRunOne = (siteId: number) =>
 export const ptRecords = () => http.get<PtRecords>('/ptsignin/records')
 export const ptConfig = () => http.get<PtConfig>('/ptsignin/config')
 export const ptSaveConfig = (body: Omit<PtConfig, 'today_at' | 'next_run' | 'running'>) => http.post('/ptsignin/config', body)
+
+// ---- 各插件自己的日志（pluginlog.go）----
+/** key 同扩展功能页的插件 key；最后 lines 行，时间正序 */
+export const pluginLogs = (key: string, lines = 1000) =>
+  http.get<{ lines: string[] }>(`/plugins/logs/${key}`, { params: { lines } })
+export const clearPluginLogs = (key: string) => http.post(`/plugins/logs/${key}/clear`)
