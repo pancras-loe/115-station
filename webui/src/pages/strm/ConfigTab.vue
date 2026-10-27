@@ -8,6 +8,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
 import StrmRebaseDialog from '@/components/strm/StrmRebaseDialog.vue'
+import PlaybackModeCard from '@/components/strm/PlaybackModeCard.vue'
 import { syncApi } from '@/api'
 import type { StrmRebaseReport } from '@/api/sync'
 import { useSetting } from '@/composables/useSetting'
@@ -90,66 +91,75 @@ async function onSave() {
 </script>
 
 <template>
-  <SectionCard title="STRM 配置" hint="直链域名与格式，全量 / 增量同步生成 STRM 时都按这里的规则写。STRM 文件名是视频名去掉扩展名（xxx.mkv → xxx.strm），与网盘上同基名的 NFO / 字幕 / 缩略图配对">
-    <FieldRow
-      label="STRM 直连域名"
-      required
-      tip="STRM 内直链的域名，需指向 302 代理端口（http://NAS_IP:6086）。播放时反代会按客户端实际访问地址自动改写，此项为兜底值。"
-    >
-      <HInput v-model="model.domain" type="url" mono placeholder="http://172.17.0.1:6086" />
-      <p v-if="showSuggest" class="suggest">
-        还没填，播放时按 http://172.17.0.1:6086 兜底（只在本机 Docker 网络里通）。
-        <HButton variant="ghost" size="sm" @click="model.domain = suggestDomain">填入 {{ suggestDomain }}</HButton>
-      </p>
-      <p v-else-if="!loading && saved.domain.trim()" class="suggest">
-        换了域名、已经生成的 STRM 还是旧地址？
-        <HButton variant="ghost" size="sm" @click="openRebase">替换已有 STRM 的地址…</HButton>
-      </p>
-    </FieldRow>
-
-    <FieldRow
-      label="STRM 直连格式"
-      tip="pick_code_name = 直链带原文件名（播放器显示友好）；pick_code = 仅文件 ID（最短）。"
-    >
-      <HSegmented v-model="model.format" :options="FORMAT_OPTIONS" aria-label="STRM 直连格式" />
-    </FieldRow>
-
-    <FieldRow
-      label="保留文件后缀"
-      tip="是 = 直链 ID 段带 .mkv 等后缀（播放器据 URL 识别容器格式）；否 = 纯 ID。"
-    >
-      <HSegmented v-model="model.keep_ext" :options="YES_NO" aria-label="保留文件后缀" />
-    </FieldRow>
-
-    <FieldRow
-      label="本地已存在时"
-      tip="本地已有同名 STRM：覆盖 = 重新生成（推荐）；跳过 = 只生成一次。"
-    >
-      <HSegmented v-model="model.exist" :options="EXIST_OPTIONS" aria-label="本地已存在时" />
-    </FieldRow>
-
-    <FieldRow
-      v-if="example"
-      label="STRM 直链示例"
-      wide
-      tip="按当前配置实时预览生成的直链样式，切换选项立即更新。"
-    >
-      <CopyBox :value="example" tone="primary" />
-    </FieldRow>
-
-    <FormActions>
-      <HButton variant="primary" :loading="saving" @click="onSave">保存配置</HButton>
-      <HButton variant="tertiary" @click="reset">重置配置</HButton>
-    </FormActions>
-    <StrmRebaseDialog
-      v-model:show="rebaseShow"
-      :preload="rebasePreload"
-      :after-save="rebaseAfterSave"
-    />
-  </SectionCard>
+  <!-- 页签切换有过渡动画，模板要单根：两张卡片包一层 -->
+  <div class="cards">
+    <SectionCard title="STRM 配置" hint="直链域名与格式，全量 / 增量同步生成 STRM 时都按这里的规则写。STRM 文件名是视频名去掉扩展名（xxx.mkv → xxx.strm），与网盘上同基名的 NFO / 字幕 / 缩略图配对">
+      <FieldRow
+        label="STRM 直连域名"
+        required
+        tip="STRM 内直链的域名，需指向 302 代理端口（http://NAS_IP:6086）。播放时反代会按客户端实际访问地址自动改写，此项为兜底值。"
+      >
+        <HInput v-model="model.domain" type="url" mono placeholder="http://172.17.0.1:6086" />
+        <p v-if="showSuggest" class="suggest">
+          还没填，播放时按 http://172.17.0.1:6086 兜底（只在本机 Docker 网络里通）。
+          <HButton variant="ghost" size="sm" @click="model.domain = suggestDomain">填入 {{ suggestDomain }}</HButton>
+        </p>
+        <p v-else-if="!loading && saved.domain.trim()" class="suggest">
+          换了域名、已经生成的 STRM 还是旧地址？
+          <HButton variant="ghost" size="sm" @click="openRebase">替换已有 STRM 的地址…</HButton>
+        </p>
+      </FieldRow>
+  
+      <FieldRow
+        label="STRM 直连格式"
+        tip="pick_code_name = 直链带原文件名（播放器显示友好）；pick_code = 仅文件 ID（最短）。"
+      >
+        <HSegmented v-model="model.format" :options="FORMAT_OPTIONS" aria-label="STRM 直连格式" />
+      </FieldRow>
+  
+      <FieldRow
+        label="保留文件后缀"
+        tip="是 = 直链 ID 段带 .mkv 等后缀（播放器据 URL 识别容器格式）；否 = 纯 ID。"
+      >
+        <HSegmented v-model="model.keep_ext" :options="YES_NO" aria-label="保留文件后缀" />
+      </FieldRow>
+  
+      <FieldRow
+        label="本地已存在时"
+        tip="本地已有同名 STRM：覆盖 = 重新生成（推荐）；跳过 = 只生成一次。"
+      >
+        <HSegmented v-model="model.exist" :options="EXIST_OPTIONS" aria-label="本地已存在时" />
+      </FieldRow>
+  
+      <FieldRow
+        v-if="example"
+        label="STRM 直链示例"
+        wide
+        tip="按当前配置实时预览生成的直链样式，切换选项立即更新。"
+      >
+        <CopyBox :value="example" tone="primary" />
+      </FieldRow>
+  
+      <FormActions>
+        <HButton variant="primary" :loading="saving" @click="onSave">保存配置</HButton>
+        <HButton variant="tertiary" @click="reset">重置配置</HButton>
+      </FormActions>
+      <StrmRebaseDialog
+        v-model:show="rebaseShow"
+        :preload="rebasePreload"
+        :after-save="rebaseAfterSave"
+      />
+    </SectionCard>
+    <PlaybackModeCard :domain="saved.domain" />
+  </div>
 </template>
 
 <style scoped>
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
 .suggest {
   margin: 6px 0 0;
   font-size: 12.5px;

@@ -196,6 +196,8 @@ func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) e
 		timing.sources = describePlaybackSources(db, cfg, sources)
 		changed, rewritten := false, 0
 		defer func() { timing.rewritten = rewritten }()
+		pcfg := loadPlaybackCfg()
+		transcodeOK := pcfg.Transcode && playProxy(pcfg, playReq{EmbyUser: embyPlaybackUserID(resp.Request)})
 		for _, s := range sources {
 			ms, ok := s.(map[string]interface{})
 			if !ok {
@@ -210,6 +212,13 @@ func rewritePlaybackInfo(db *gorm.DB, cfg *config.Config) func(*http.Response) e
 			}
 			pc, managed, _ := resolveEmbyPlaybackSource(db, cfg, strmPath, clientHost)
 			if !managed {
+				continue
+			}
+			// 中转 + 允许转码：Emby 判成要转码的（码率超了客户端 / 用户的上限）原样交给 Emby，
+			// 不能一律强制直接串流，那会盖掉 Emby 的码率判定（PROXY-PLAY-PLAN.md §6）。
+			// 这里的用户只是请求里带的提示：放行转码的是 Emby 自己，真正取流时 handleEmbyPlayback 会按核对过的用户再判一次
+			if transcodeOK && embyWantsTranscode(ms) {
+				vlog("[播放] ○ Emby 判定这个版本要转码，交给 Emby（中转用户、允许转码）")
 				continue
 			}
 			id, _ := ms["Id"].(string)
@@ -563,4 +572,12 @@ func registerEmbyProxy(r *gin.Engine, db *gorm.DB, cfg *config.Config) {
 		}
 		embyReverseProxy(db, cfg, targetURL, nil).ServeHTTP(c.Writer, c.Request)
 	})
+}
+
+// embyWantsTranscode Emby 自己判定这个版本只能转码：直接播放与直接串流都不行，且给了转码地址
+func embyWantsTranscode(ms map[string]interface{}) bool {
+	dp, _ := ms["SupportsDirectPlay"].(bool)
+	ds, _ := ms["SupportsDirectStream"].(bool)
+	tu, _ := ms["TranscodingUrl"].(string)
+	return !dp && !ds && tu != ""
 }

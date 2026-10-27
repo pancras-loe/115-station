@@ -138,6 +138,11 @@ func handleProxyRedirect(c *gin.Context, db *gorm.DB, cfg *config.Config) {
 		c.String(http.StatusBadRequest, "missing pickcode")
 		return
 	}
+	// 用户选了本机中转（playmode.go）：直接打 /d/ 的认不出是哪个 Emby 用户，只按全局；Emby 服务器自己来拉一律 302
+	if playProxy(loadPlaybackCfg(), playReq{FromEmbyServer: proxyIsEmbyServer(c.ClientIP())}) {
+		servePickcodeProxy(c, db, cfg, pickcode, "")
+		return
+	}
 	// 命中直链缓存的不扣额度：限流防的是拿 pickcode 遍历把 115 打进风控，
 	// 命中缓存一次 115 请求都不发。播放器起播探测、ffmpeg 每次 Range 重连都会回来要 302，
 	// 原先这些也计数，同一部片子起播几秒就能把额度用光（p115strmhelper / qmediasync 入口都不限流，

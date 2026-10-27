@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
-import { DatabaseBackup, FileWarning, Trash2, Zap } from '@lucide/vue'
+import { DatabaseBackup, FileWarning, MonitorPlay, Trash2, Zap } from '@lucide/vue'
 import StatusStrip from '@/components/ui/StatusStrip.vue'
 import type { StripItem, StripTone } from '@/components/ui/StatusStrip.vue'
-import { syncApi, tasksApi } from '@/api'
+import { playbackApi, syncApi, tasksApi } from '@/api'
+import type { PlaybackConfig, ProxyStatus } from '@/api/playback'
 import type { DeepDeleteRecord, OrphanReport } from '@/api/sync'
 import type { TaskJob } from '@/api/tasks'
 import type { FullSetting } from './fullSetting'
@@ -62,14 +63,28 @@ async function loadLastDel() {
   }
 }
 
+// 播放方式（playmode.go）：读配置与中转状态，都是只读内存的接口
+const play = ref<PlaybackConfig | null>(null)
+const proxy = ref<ProxyStatus | null>(null)
+async function loadPlay() {
+  try {
+    ;[play.value, proxy.value] = await Promise.all([playbackApi.config(), playbackApi.proxyStatus()])
+  } catch {
+    // 读不到维持上一次的
+  }
+}
+
 let timer: number | undefined
 onMounted(() => {
   void loadIncr()
   void loadOrphan()
   void loadLastFull()
   void loadLastDel()
+  void loadPlay()
   timer = window.setInterval(() => {
-    if (!document.hidden) void loadIncr()
+    if (document.hidden) return
+    void loadIncr()
+    void loadPlay()
   }, 15_000)
 })
 const offFinished = queue.onFinished((j) => {
@@ -270,10 +285,31 @@ const delTile = computed<Tile>(() => {
   }
 })
 
-const tiles = computed(() => [incrTile.value, fullTile.value, orphanTile.value, delTile.value])
+const playTile = computed<Tile>(() => {
+  const base = { key: 'play', title: '播放', icon: MonitorPlay }
+  const c = play.value
+  if (!c) return { ...base, ...LOADING }
+  const users = Object.values(c.users ?? {}).filter((m) => m === 'proxy').length
+  const mode = c.mode === 'proxy' ? '默认中转' : users ? `302 · ${users} 人中转` : '302 直连'
+  const s = proxy.value
+  const cool = s?.accounts.find((a) => a.cool_left > 0)
+  const lines: Tile['lines'] = [{ text: mode }]
+  if (s?.plays.length) lines.push({ text: `${s.plays.length} 路在中转` })
+  if (cool) lines.push({ text: `${cool.name} 被 115 限流，暂停 ${cool.cool_left} 秒`, tone: 'warn' })
+  return {
+    ...base,
+    tone: cool ? 'warn' : 'ok',
+    badge: mode,
+    value: mode,
+    lines,
+    short: [mode, s?.plays.length ? `${s.plays.length} 路在传` : '', cool ? '被限流' : ''].filter(Boolean).join(' · '),
+  }
+})
+
+const tiles = computed(() => [incrTile.value, fullTile.value, orphanTile.value, delTile.value, playTile.value])
 
 // 状态条上不放执行按钮（维护者要求）：「立即同步」「开始全量」在各自页签里
-const ACTION: Record<string, string> = { incr: '详情', full: '设置', orphan: '清理', deepdel: '记录' }
+const ACTION: Record<string, string> = { incr: '详情', full: '设置', orphan: '清理', deepdel: '记录', play: '设置' }
 const items = computed<StripItem[]>(() =>
   tiles.value.map((t) => ({
     key: t.key,
@@ -286,6 +322,7 @@ const items = computed<StripItem[]>(() =>
 )
 function act(key: string) {
   if (key === 'orphan') emit('goto', 'full', 'orphans')
+  else if (key === 'play') emit('goto', 'config', 'playback')
   else emit('goto', key)
 }
 </script>

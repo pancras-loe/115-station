@@ -495,6 +495,11 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/rbclean/config", h.RbCleanSaveConfig)
 		protected.POST("/rbclean/preview", h.RbCleanPreview)
 		protected.POST("/rbclean/run", h.RbCleanRun)
+		// 播放方式：302 直连 / 本机中转（playmode.go / playproxy.go）
+		protected.GET("/playback/config", h.PlaybackGetConfig)
+		protected.POST("/playback/config", h.PlaybackSaveConfig)
+		protected.GET("/playback/emby-users", h.PlaybackEmbyUsers)
+		protected.GET("/playback/proxy-status", h.PlaybackProxyStatus)
 		// PT 站签到（ptsignin.go / ptsigninapi.go）
 		protected.GET("/ptsignin/presets", h.PtSigninPresets)
 		protected.GET("/ptsignin/sites", h.PtSigninSites)
