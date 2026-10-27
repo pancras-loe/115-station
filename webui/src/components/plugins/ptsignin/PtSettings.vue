@@ -139,7 +139,7 @@ async function save() {
   max-width: 200px;
 }
 .num {
-  width: 90px;
+  width: 140px;
 }
 .sel {
   max-width: 240px;
