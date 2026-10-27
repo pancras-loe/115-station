@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,9 +18,8 @@ import (
 
 // 版本号与更新检测。
 //
-// 只做到「告诉用户有新版本」：不拉镜像、不重启容器、不挂 Docker socket。
-// 应用内一键更新那条链路（selfupdate.go）已于上线前整条删除，理由见 AGENTS.md §6.7，
-// 用户照提示自己跑 docker compose pull && docker compose up -d。
+// 检测在这里；一键更新（从 ghcr 镜像层取新程序、重启后切过去）在 selfupdate.go，不挂 Docker socket（AGENTS.md §6.7）。
+// 一键更新做不了的部署（不在本站镜像里跑、运行环境变了）照旧提示 docker compose pull && docker compose up -d。
 //
 // 版本号的来源是 git tag：CI 用 `git describe --tags` 算出来注入（main.Version），
 // 正式版按日期写 `v26.10.9`，同一天再发 `v26.10.9-2`（也是正式版），两个版本之间的 master 构建是
@@ -76,6 +76,12 @@ type UpdateStatus struct {
 	CheckedAt   string `json:"checked_at,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Enabled     bool   `json:"enabled"`
+	// 一键更新（selfupdate.go）
+	CanApply     bool         `json:"can_apply"`               // 这个部署能一键更新
+	ApplyBlock   string       `json:"apply_block,omitempty"`   // 不能的原因
+	Apply        *applyStatus `json:"apply,omitempty"`         // 进行中 / 上一次失败
+	ImageVersion string       `json:"image_version,omitempty"` // 当前跑的是下载的版本时，镜像自带的是哪个
+	LastFailed   string       `json:"last_failed,omitempty"`   // 下载的版本启动不起来、退回了镜像自带的
 }
 
 type githubRelease struct {
@@ -164,6 +170,15 @@ func currentUpdateStatus() UpdateStatus {
 		st.PublishedAt = rel.PublishedAt
 		st.HasUpdate = versionNewer(rel.TagName, buildVersion)
 	}
+	st.ApplyBlock = applyBlock()
+	st.CanApply = st.ApplyBlock == ""
+	st.Apply = currentApply()
+	st.ImageVersion = os.Getenv(imageVersionEnvKey)
+	if stagedDataDir != "" {
+		if ss := loadStagedState(stagedDataDir); ss.Failed != "" && time.Since(ss.FailedAt) < 7*24*time.Hour {
+			st.LastFailed = ss.Failed
+		}
+	}
 	return st
 }
 
@@ -214,13 +229,18 @@ func (h *Handler) GetUpdateStatus(c *gin.Context) {
 // CheckUpdateNow POST /system/update/check：立刻查一次（一分钟内重复点直接回缓存）。
 // 手动检查不看「检查更新」开关：用户点了就是想知道
 func (h *Handler) CheckUpdateNow(c *gin.Context) {
+	c.JSON(http.StatusOK, checkUpdateFresh())
+}
+
+// checkUpdateFresh 手动检查（网页 / 机器人）：一分钟内查过且没出错就用缓存
+func checkUpdateFresh() UpdateStatus {
 	updateMu.Lock()
 	fresh := !updateChecked.IsZero() && time.Since(updateChecked) < updateManualGap && updateErr == ""
 	updateMu.Unlock()
 	if !fresh {
 		checkUpdate()
 	}
-	c.JSON(http.StatusOK, currentUpdateStatus())
+	return currentUpdateStatus()
 }
 
 // ==================== 版本号比较 ====================

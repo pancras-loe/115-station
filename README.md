@@ -199,7 +199,12 @@ docker compose up -d
 后台每 12 小时检查一次 GitHub 上的新版本，有新版时侧栏版本号旁出现小红点，
 「系统配置 → 版本更新」里能看更新说明，也可以打开通知推送（同一个版本只推一次）。
 
-本项目**不做**应用内一键更新（那要往容器里挂 Docker socket，风险与收益不成正比），更新方式是：
+**一键更新**：「版本更新」里点「立即更新」，或者给机器人发 `/update`（企微发「检查更新」）。
+程序会从 ghcr.io 下载新版本的程序、校验后重启容器换上，**不需要挂 Docker socket**；
+靠容器的重启策略拉起来（自带的 docker-compose.yml 是 `restart: unless-stopped`）。
+一键更新只换程序，镜像本身不变；碰到改了运行环境的版本，界面会提示改用下面的命令。
+
+也可以自己拉镜像更新：
 
 ```bash
 docker compose pull && docker compose up -d

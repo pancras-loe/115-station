@@ -69,6 +69,13 @@ func (w *rotatingWriter) rotate() {
 }
 
 func main() {
+	// 一键更新下载完新程序后跑一次它，核对版本号（api/selfupdate.go）。
+	// 放在最前面：config.Load 会顺手建 jwt.key，核对版本号不该碰配置目录
+	if len(os.Args) > 1 && os.Args[1] == "--print-version" {
+		fmt.Println(Version)
+		return
+	}
+
 	// 初始化配置
 	cfg := config.Load()
 
@@ -81,6 +88,9 @@ func main() {
 		}
 		return
 	}
+
+	// 一键更新下好了更新的版本就切过去（exec，不返回）；必须在读账号、开库之前（api/selfupdate.go）
+	api.BootStagedVersion(cfg.DataDir, Version)
 
 	log.Printf("115-Station 启动中... 版本:%s（%.7s） 管理端口:%d 代理端口:%d", Version, BuildSHA, cfg.Port, cfg.ProxyPort)
 
@@ -232,6 +242,8 @@ func main() {
 	// 网页「重启」（恢复备份后用）：同一套收尾，退出码非 0，
 	// 让 compose 的重启策略（unless-stopped / always / on-failure）把容器拉起来
 	api.SetRestartHook(func() { gracefulExit("网页请求重启", 1) })
+	// 自己是一键更新下载的那份：撑过一分钟算换上了，推一条「已更新」
+	api.MarkStagedBootOK(Version)
 
 	// 可选 HTTPS（TLS_ENABLE=1）：自签名证书自动生成并持久化，浏览器首次
 	// 访问需一次"高级→继续前往"；Go 的 RunTLS 自动启用 HTTP/2——所有请求

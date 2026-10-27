@@ -1118,6 +1118,7 @@ const ROUTES: Record<string, Route> = {
     published_at: new Date(Date.now() - 86400_000).toISOString(),
     checked_at: new Date().toISOString(),
     enabled: true,
+    can_apply: true,
   },
   '/dashboard': dashboard,
 }

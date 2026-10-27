@@ -319,6 +319,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		})
 		protected.GET("/system/update", h.GetUpdateStatus)
 		protected.POST("/system/update/check", h.CheckUpdateNow)
+		protected.POST("/system/update/apply", h.ApplyUpdate) // 一键更新（selfupdate.go）
 		protected.POST("/system/log-level", func(c *gin.Context) {
 			var req struct {
 				Level string `json:"level"` // simple / verbose

@@ -21,6 +21,7 @@ var tgMenu = []map[string]string{
 	{"command": "sync", "description": "执行增量同步"},
 	{"command": "dup", "description": "同集多份：选择保留哪份"},
 	{"command": "wash", "description": "洗版待确认：要不要强制洗版"},
+	{"command": "update", "description": "检查更新，有新版本可一键更新"},
 	{"command": "cancel", "description": "关闭当前搜索"},
 }
 
@@ -33,7 +34,8 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
 	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n" +
-	"/ptsignin PT 站签到：立即跑一轮，跑完回复汇总\n\n" +
+	"/ptsignin PT 站签到：立即跑一轮，跑完回复汇总\n" +
+	"/update 检查更新：有新版本时点「更新」，确认后下载新程序并重启\n\n" +
 	"不想打斜杠也行，直接发中文：「搜索 片名」「订阅 片名」「我的订阅」「观影 片名」「网盘 片名」「整理」「同步」「状态」。\n\n" +
 	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
 	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
@@ -64,6 +66,7 @@ func tgCommand(text string) (string, string) {
 		"/download": "download", "dl": "download", "/organize": "organize", "整理": "organize",
 		"/sync": "sync", "同步": "sync", "/cancel": "cancel", "取消": "cancel",
 		"/dup": "dup", "/wash": "wash", "/ptsignin": "ptsignin", "pt签到": "ptsignin",
+		"/update": "update", "检查更新": "update", "更新": "update",
 		"/sub": "sub", "/subscribe": "sub", "/subs": "subs", "我的订阅": "subs", "订阅列表": "subs",
 	}
 	if cmd, ok := aliases[first]; ok {
@@ -127,6 +130,14 @@ func (b *tgConversation) handle(u tgUpdate) {
 		}
 		return
 	}
+	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "u:") {
+		// 一键更新的按钮（botupdate.go）：不靠会话，确认那一步再核一次版本号
+		text, buttons := updateTGCallback(u.Callback.Data, b.replyForCurrentChat())
+		if err := b.api.edit(b.ctx, b.chat, m.ID, text, buttons); err != nil && b.ctx.Err() == nil {
+			b.send(text, buttons)
+		}
+		return
+	}
 	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "d:") {
 		// 同集多份的按钮：d:<记录 id>:<组>:<操作>，认数据库里的记录，不靠会话（orgdupbot.go）
 		text, buttons := b.h.dupTGCallback(u.Callback.Data)
@@ -185,6 +196,13 @@ func (b *tgConversation) handle(u tgUpdate) {
 		b.reply(b.h.washBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args)...)
 	case "ptsignin":
 		b.h.botPtSignin(b.replyForCurrentChat())
+	case "update":
+		lines, target := botUpdateCheck()
+		var buttons [][]tgButton
+		if target != "" {
+			buttons = [][]tgButton{{{Text: "更新到 " + target, Data: "u:a:" + target}}}
+		}
+		b.send(strings.Join(lines, "\n"), buttons)
 	case "status", "download", "organize", "sync":
 		if cmd == "download" && args == "" {
 			b.reply("请在命令后填写链接。")

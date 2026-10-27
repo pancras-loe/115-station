@@ -48,6 +48,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends         ca-cert
 
 WORKDIR /app
 
+# 运行环境版本号：一键更新只换程序与前端，不换这一层往上的东西（internal/api/selfupdate.go）。
+# 改了运行阶段（基础镜像、apt 装的包、目录布局）要把它加一，新旧不一样时界面会让用户 docker compose pull
+ENV STATION_RUNTIME=1
+
 # 复制编译好的二进制
 COPY --from=builder /build/115-station .
 # 新前端产物（默认服务的就是它）

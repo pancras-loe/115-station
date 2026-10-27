@@ -156,6 +156,7 @@ func wecomMenuCreate(cfg WecomConfig) error {
 			}},
 			{Name: "插件功能", SubButton: []btn{
 				{Type: "click", Name: "使用帮助", Key: "帮助"},
+				{Type: "click", Name: "检查更新", Key: "检查更新"},
 			}},
 		},
 	}
@@ -246,6 +247,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"订阅 <片名> — 订阅：定时找缺的集，转存后自动入库（找资源的列表里回复 s 订阅这部）",
 			"我的订阅 — 看进度；选一个后 a 立即搜索，z 暂停 / 恢复，x 取消订阅",
 			"PT签到 — 立即给 PT 站签到一轮，跑完回复汇总",
+			"检查更新 — 看有没有新版本；有的话回「更新」，再回「确认更新」下载新程序并重启",
 		)
 
 	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
@@ -353,6 +355,24 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 
 	case lower == "pt签到" || lower == "ptsignin":
 		h.botPtSignin(reply)
+
+	case lower == "检查更新" || lower == "update":
+		lines, target := botUpdateCheck()
+		if target != "" {
+			lines = append(lines, "", "回复「更新」升级到 "+target)
+		}
+		reply(lines...)
+
+	case lower == "更新":
+		lines, target := botUpdateCheck()
+		if target == "" {
+			reply(lines...)
+			return
+		}
+		reply(append(botUpdateConfirmLines(target), "回复「确认更新」开始，不更新就不用理。")...)
+
+	case lower == "确认更新":
+		reply(botUpdateGo("", "企微机器人", reply)...)
 
 	case lower == "alist" || lower == "清空115":
 		reply("该插件功能开发中，敬请期待。")

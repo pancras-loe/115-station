@@ -8,7 +8,18 @@ export interface VersionInfo {
 
 export const version = () => http.get<VersionInfo>('/version')
 
-/** 更新检测结果（后端 update.go）：只提示，不自更新 */
+/** 一键更新的进度（后端 selfupdate.go，内存，重启即清） */
+export interface UpdateApply {
+  phase: 'downloading' | 'restarting' | 'failed'
+  target: string
+  done?: number
+  total?: number
+  error?: string
+  by?: string
+  started: string
+}
+
+/** 更新检测结果（后端 update.go）；一键更新在 selfupdate.go */
 export interface UpdateStatus {
   current: string
   sha?: string
@@ -23,12 +34,24 @@ export interface UpdateStatus {
   error?: string
   /** 定时检查开关 */
   enabled: boolean
+  /** 这个部署能一键更新（在本站镜像里跑、能重启） */
+  can_apply: boolean
+  /** 不能一键更新的原因 */
+  apply_block?: string
+  /** 一键更新进行中 / 上一次失败 */
+  apply?: UpdateApply
+  /** 当前跑的是一键更新下载的版本时，镜像自带的版本 */
+  image_version?: string
+  /** 下载的版本启动不起来、退回了镜像自带的 */
+  last_failed?: string
 }
 
 /** 读缓存的检测结果，不触发请求 GitHub */
 export const updateStatus = () => http.get<UpdateStatus>('/system/update')
 /** 立刻查一次（后端一分钟内重复点直接回缓存） */
 export const checkUpdate = () => http.post<UpdateStatus>('/system/update/check')
+/** 一键更新到 version（必须是检测到的最新版本）：后台下载校验，好了自动重启 */
+export const applyUpdate = (version: string) => http.post<UpdateStatus>('/system/update/apply', { version })
 
 export interface LogsResult {
   logs: string[] | string
