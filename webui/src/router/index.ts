@@ -110,7 +110,7 @@ const routes: RouteRecordRaw[] = [
         path: 'plugins',
         name: 'plugins',
         component: () => import('@/pages/PluginsPage.vue'),
-        meta: { title: '扩展功能', desc: '签到 / 媒体库封面等插件', icon: 'plugin' },
+        meta: { title: '扩展功能', desc: '签到、网盘清理、媒体库工具等插件', icon: 'plugin' },
       },
       {
         path: 'logs',
