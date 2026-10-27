@@ -1278,61 +1278,113 @@ func (h *Handler) TransferOwned(c *gin.Context) {
 
 // ==================== 机器人 ====================
 
-// resBotLabel 机器人列表里的一行：[来源·类型] 标题 | 画质 | 大小 | 做种 | 时间。
-// withSource：几个来源混在一个列表里时带上来源名
-func resBotLabel(it ResourceItem, width int, withSource bool) string {
-	kind := map[string]string{"share115": "115 分享", "magnet": "磁力", "ed2k": "ed2k"}[it.Kind]
-	if kind == "" {
-		kind = pansouTypeLabel(it.Pan)
-		if kind == "" {
-			kind = "其他网盘"
-		}
+// resBotLines 机器人列表里一条资源的两行（2026-10-27 改版）。
+// 原来是一长行「[来源·类型] 标题 | 画质 | 体积 | 时间 | 积分」：标题又长又乱（发布组、
+// 字幕说明、广告都在里面），挑片真正要看的画质 / 体积 / 花不花积分全被挤到行尾，
+// 一屏八条在手机上糊成一片。现在拆成：
+//
+//	head —— 只放挑片要看的：季 · 画质 · 体积 · 做种 · 花不花积分（富文本通道加粗，见 botBold）
+//	sub  —— 来源 · 类型 · 日期 · 原标题（截到 width 字）
+//
+// 一个要点都认不出来（画质体积都没有）时把标题提到 head，只回一行，免得留个空壳。
+func resBotLines(it ResourceItem, width int, withSource bool) (head, sub string) {
+	var hp []string
+	if it.Tags.Season != "" {
+		hp = append(hp, it.Tags.Season)
 	}
-	if withSource {
-		src := botSourceLabel(it.Source)
-		if it.Via != "" {
-			src = "TG" + it.Via // 频道名比「TG 频道」有用：TG@频道
-		}
-		kind = src + "·" + kind
-	}
-	line := "[" + kind + "] " + truncateStr(it.Title, width)
-	var meta []string
-	if q := resTagLine(it.Tags); q != "" {
-		meta = append(meta, q)
-	}
-	if it.Size != "" {
-		meta = append(meta, it.Size)
+	hp = append(hp, resTagParts(it.Tags)...)
+	if sz := resSizeShort(it.Size); sz != "" {
+		hp = append(hp, sz)
 	}
 	if it.Seeds > 0 {
-		meta = append(meta, fmt.Sprintf("做种 %d", it.Seeds))
-	}
-	if it.Code != "" {
-		meta = append(meta, "提取码 "+it.Code)
-	}
-	if it.Time != "" {
-		meta = append(meta, it.Time)
+		hp = append(hp, fmt.Sprintf("做种 %d", it.Seeds))
 	}
 	if resPaidSource(it.Source) {
 		switch {
 		case it.Owned:
-			meta = append(meta, "已解锁")
+			hp = append(hp, "✅ 已解锁")
 		case it.Points != nil && *it.Points == 0:
-			meta = append(meta, "免费")
+			hp = append(hp, "🆓 免费")
 		case it.Points != nil:
-			meta = append(meta, fmt.Sprintf("%d 积分·网页解锁", *it.Points))
+			hp = append(hp, fmt.Sprintf("💎 %d 分", *it.Points))
+		case it.Action == "unlock":
+			hp = append(hp, "💎 要积分")
 		}
 	}
 	if it.SubmittedAt > 0 {
-		meta = append(meta, "提交过")
+		hp = append(hp, "↺ 提交过")
 	}
-	if len(meta) > 0 {
-		line += " | " + strings.Join(meta, " | ")
+
+	var sp []string
+	if withSource {
+		src := botSourceLabel(it.Source)
+		if it.Via != "" {
+			src = "TG@" + it.Via // 频道名比「TG 频道」有用
+		}
+		sp = append(sp, src+" "+resKindShort(it))
+	} else {
+		sp = append(sp, resKindShort(it))
 	}
-	return line
+	if t := resTimeShort(it.Time); t != "" {
+		sp = append(sp, t)
+	}
+	if it.Code != "" {
+		sp = append(sp, "提取码 "+it.Code)
+	}
+	if len(hp) == 0 {
+		// 画质体积都认不出：标题就是唯一的信息，别让它掉到第二行
+		return strings.Join(append(sp, truncateStr(it.Title, width)), " · "), ""
+	}
+	sp = append(sp, truncateStr(it.Title, width))
+	return strings.Join(hp, " · "), strings.Join(sp, " · ")
+}
+
+// resKindShort 列表里的类型短名：来源已经写在前面了，不必再写「115 分享」
+func resKindShort(it ResourceItem) string {
+	switch it.Kind {
+	case "share115":
+		return "分享"
+	case "magnet":
+		return "磁力"
+	case "ed2k":
+		return "ed2k"
+	}
+	if s := pansouTypeLabel(it.Pan); s != "" {
+		return s
+	}
+	return "其他网盘"
+}
+
+// resSizeShort 体积去掉结尾的 B：47.65GB → 47.65G（一行里省两个字）
+func resSizeShort(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if u := strings.ToUpper(s); strings.HasSuffix(u, "B") && len(s) > 1 {
+		if c := u[len(u)-2]; c == 'G' || c == 'M' || c == 'T' || c == 'K' {
+			return s[:len(s)-1]
+		}
+	}
+	return s
+}
+
+// resTimeShort 今年的日期不写年份：2026-06-25 → 06-25
+func resTimeShort(s string) string {
+	s = strings.TrimSpace(s)
+	if y := strconv.Itoa(time.Now().Year()) + "-"; strings.HasPrefix(s, y) {
+		return s[len(y):]
+	}
+	return s
 }
 
 // resTagLine 画质标签连成一串：4K·DV·中字
 func resTagLine(t resTags) string {
+	return strings.Join(resTagParts(t), "·")
+}
+
+// resTagParts 画质标签各自一项：4K / DV / 原盘 / 中字
+func resTagParts(t resTags) []string {
 	var parts []string
 	switch resPixScore(t.Pix) {
 	case 5:
@@ -1353,7 +1405,7 @@ func resTagLine(t resTags) string {
 	if t.Zh {
 		parts = append(parts, "中字")
 	}
-	return strings.Join(parts, "·")
+	return parts
 }
 
 // re0BotFree 机器人能不能直接解锁（RE0 / 癫影）：解锁过的、或者明确 0 积分的（积分不知道的不算）

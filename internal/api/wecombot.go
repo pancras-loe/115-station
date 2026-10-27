@@ -210,7 +210,8 @@ func WecomMenuAutoEnsure() {
 // wecomHandleCommand 指令路由（异步执行，结果用应用消息推回）
 func (h *Handler) wecomHandleCommand(user, text string) {
 	h.handleBotCommand(user, text, func(lines ...string) {
-		NotifyMessage(kindBot, "", strings.Join(lines, "\n"))
+		// 企微只有纯文本：资源列表那两行的重点标记（botBold）在这里去掉
+		NotifyMessage(kindBot, "", botPlain.Replace(strings.Join(lines, "\n")))
 	})
 }
 

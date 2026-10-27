@@ -269,5 +269,5 @@ func (b *tgConversation) show(v botView, msg *int64) {
 		}
 		rows = append(rows, r)
 	}
-	b.upsert(msg, v.text(), rows)
+	b.upsert(msg, v.rich(), rows) // 列表不分段，重点那行交给 TG 渲染成粗体（tgPutText）
 }

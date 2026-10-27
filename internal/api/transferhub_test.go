@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -296,5 +297,55 @@ func TestResolveResourceLink(t *testing.T) {
 		if err != nil || rl.Action != c.action || rl.URL != c.url || rl.Code != c.code {
 			t.Errorf("#%d = %+v, %v", i, rl, err)
 		}
+	}
+}
+
+// 机器人列表一条资源的两行：要点在第一行、标题退到第二行（2026-10-27 改版）
+func TestResBotLines(t *testing.T) {
+	pts := func(n int) *int { return &n }
+	year := strconv.Itoa(time.Now().Year())
+	it := ResourceItem{
+		Source: "re0", Kind: "share115", Action: "unlock", Points: pts(8),
+		Title: "S01 4K WEB-DL DV DDP5.1 内封简中+简韩双语字幕[Cxuan@HiveWeb]",
+		Size:  "47.65GB", Time: year + "-06-25",
+		Tags: resTags{Pix: "2160p", Effect: "DV", Season: "S01", Zh: true},
+	}
+	head, sub := resBotLines(it, 52, true)
+	if head != "S01 · 4K · DV · 中字 · 47.65G · 💎 8 分" {
+		t.Errorf("要点那行不对: %q", head)
+	}
+	if !strings.HasPrefix(sub, "RE0 分享 · 06-25 · S01 4K WEB-DL") { // 今年的日期不写年份
+		t.Errorf("第二行不对: %q", sub)
+	}
+
+	// 已解锁 / 免费各自的说法，不带来源时第二行只有类型
+	it.Owned = true
+	if head, sub = resBotLines(it, 52, false); !strings.Contains(head, "✅ 已解锁") || !strings.HasPrefix(sub, "分享 · ") {
+		t.Errorf("已解锁: %q | %q", head, sub)
+	}
+
+	// 画质体积都认不出：标题提到第一行，不留个只有来源的空壳
+	bare := ResourceItem{Source: "tg", Kind: "magnet", Title: "某某资源", Via: "频道"}
+	if head, sub = resBotLines(bare, 52, true); head != "TG@频道 磁力 · 某某资源" || sub != "" {
+		t.Errorf("没有要点时应只回一行: %q | %q", head, sub)
+	}
+}
+
+// 重点标记：TG 转成 <b>（正文先转义），别的通道去掉标记
+func TestBotBoldRender(t *testing.T) {
+	v := botView{Lines: []string{botBold("4K · 中字") + " <A&B>"}}
+	if v.text() != "4K · 中字 <A&B>" {
+		t.Errorf("纯文本不该带标记: %q", v.text())
+	}
+	payload := map[string]any{}
+	tgPutText(payload, v.rich())
+	if payload["text"] != "<b>4K · 中字</b> &lt;A&amp;B&gt;" || payload["parse_mode"] != "HTML" {
+		t.Errorf("TG 富文本不对: %+v", payload)
+	}
+	// 没有标记的消息照旧纯文本发，免得标题里的尖括号被当成标签
+	plain := map[string]any{}
+	tgPutText(plain, "a <b> & c")
+	if plain["text"] != "a <b> & c" || plain["parse_mode"] != nil {
+		t.Errorf("纯文本消息不该走 HTML: %+v", plain)
 	}
 }

@@ -379,7 +379,8 @@ func tgAllowed(cfg TGConfig, m *tgMessage, from tgUser) bool {
 
 func (a *tgAPI) send(ctx context.Context, chat int64, text string, buttons [][]tgButton) error {
 	// 纯文本避免资源标题里的 HTML 字符破坏消息；按字符分段并只在末段挂按钮。
-	runes := []rune(text)
+	// 分段会把重点标记切成两半（<b> 落在上一段、</b> 在下一段，TG 直接拒收），所以这里只去掉标记
+	runes := []rune(botPlain.Replace(text))
 	for len(runes) > 0 {
 		n := len(runes)
 		if n > 1800 {
@@ -407,6 +408,22 @@ func tgClip(text string) string {
 	return text
 }
 
+// tgPutText 把正文放进请求体：带重点标记（botBold，资源列表那两行）的按 HTML 发——
+// 先转义正文再把标记换成 <b>，顺序反了资源标题里的 & < > 会把整条消息弄坏。
+// 不分段的消息才这么发（sendOne / edit），分段的见 send
+func tgPutText(payload map[string]any, text string) {
+	text = tgClip(text)
+	if !strings.Contains(text, botBoldOn) {
+		payload["text"] = botPlain.Replace(text)
+		return
+	}
+	if strings.Count(text, botBoldOn) != strings.Count(text, botBoldOff) {
+		text += botBoldOff // 截断正好切在标记中间：补一个收尾，别留个不闭合的 <b>
+	}
+	payload["text"] = botRich.Replace(tgHTMLEscaper.Replace(text))
+	payload["parse_mode"] = "HTML"
+}
+
 func tgMarkup(buttons [][]tgButton) map[string]any {
 	if buttons == nil {
 		buttons = [][]tgButton{} // 编辑时传空键盘才能把旧按钮去掉
@@ -416,7 +433,8 @@ func tgMarkup(buttons [][]tgButton) map[string]any {
 
 // sendOne 发一条不分段的消息并返回消息 id，之后原地编辑它（找资源的列表页、搜索进度）
 func (a *tgAPI) sendOne(ctx context.Context, chat int64, text string, buttons [][]tgButton) (int64, error) {
-	payload := map[string]any{"chat_id": chat, "text": tgClip(text)}
+	payload := map[string]any{"chat_id": chat}
+	tgPutText(payload, text)
 	if len(buttons) > 0 {
 		payload["reply_markup"] = tgMarkup(buttons)
 	}
@@ -430,9 +448,9 @@ func (a *tgAPI) sendOne(ctx context.Context, chat int64, text string, buttons []
 // edit 原地改一条消息（MoviePilot 翻页、选片都是编辑原消息，不刷屏）。
 // 内容没变时 Telegram 回 400「message is not modified」，当成功处理
 func (a *tgAPI) edit(ctx context.Context, chat, id int64, text string, buttons [][]tgButton) error {
-	err := a.call(ctx, "editMessageText", map[string]any{
-		"chat_id": chat, "message_id": id, "text": tgClip(text), "reply_markup": tgMarkup(buttons),
-	}, nil)
+	payload := map[string]any{"chat_id": chat, "message_id": id, "reply_markup": tgMarkup(buttons)}
+	tgPutText(payload, text)
+	err := a.call(ctx, "editMessageText", payload, nil)
 	if e, ok := err.(*tgAPIError); ok && e.Code == 400 && strings.Contains(e.desc, "not modified") {
 		return nil
 	}

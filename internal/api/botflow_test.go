@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -227,7 +228,7 @@ func TestBotFlowRe0PaidConfirm(t *testing.T) {
 	if len(paidFlags) != 0 || !strings.Contains(v.text(), "5 积分") || len(v.Buttons) != 1 || v.Buttons[0][0].Act != "y" {
 		t.Fatalf("付费的应当先出确认屏、不提交：%q %v", v.text(), paidFlags)
 	}
-	if v, _ := h.botAct("re0p", "c", "tok", botNoIO); len(paidFlags) != 0 || !strings.Contains(v.text(), "资源") {
+	if v, _ := h.botAct("re0p", "c", "tok", botNoIO); len(paidFlags) != 0 || !strings.Contains(v.text(), "全部来源 2 条") {
 		t.Fatalf("取消应当回到列表、不提交：%q", v.text())
 	}
 	if v, _ := h.botAct("re0p", "y", "tok", botNoIO); !v.Toast || len(paidFlags) != 0 {
@@ -244,5 +245,36 @@ func TestBotFlowRe0PaidConfirm(t *testing.T) {
 	h.botAct("re0p", "2", "tok", botNoIO)
 	if len(paidFlags) != 2 || paidFlags[1] {
 		t.Fatalf("免费的直接提交、不带 paid：%v", paidFlags)
+	}
+}
+
+// 资源列表整屏的排版（2026-10-27 改版）：头一行写片名与条数，之后一条两行、中间空一行
+func TestBotFlowResourceLayout(t *testing.T) {
+	pts := func(n int) *int { return &n }
+	year := strconv.Itoa(time.Now().Year())
+	f := &botFlow{
+		token: "tok", stage: "resource", sent: map[int]bool{},
+		media: wecomTmdbHit{ID: 1, Title: "夺命许愿", Year: "2026", Type: "tv"},
+		items: []ResourceItem{
+			{Source: "re0", Kind: "share115", Action: "unlock", Points: pts(8), Size: "47.65GB", Time: year + "-06-25",
+				Title: "S01 4K WEB-DL DV DDP5.1 内封简中+简韩双语字幕[Cxuan@HiveWeb]",
+				Tags:  resTags{Pix: "2160p", Effect: "DV", Season: "S01", Zh: true}},
+			{Source: "gy", Kind: "magnet", Action: "offline", Size: "52.1GB", Seeds: 12, Time: year + "-05-20",
+				Title: "Wish.Upon.S01.2160p.WEB-DL.H265", Tags: resTags{Pix: "2160p"}},
+		},
+	}
+	v := f.render()
+	t.Log("\n" + v.text())
+	want := []string{
+		"🎬 「夺命许愿」（2026） · 全部来源 2 条",
+		"",
+		"1. S01 · 4K · DV · 中字 · 47.65G · 💎 8 分",
+		"    RE0 分享 · 06-25 · S01 4K WEB-DL DV DDP5.1 内封简中+简韩双语字幕[Cxuan@HiveWeb]",
+		"",
+		"2. 4K · 52.1G · 做种 12",
+		"    观影 磁力 · 05-20 · Wish.Upon.S01.2160p.WEB-DL.H265",
+	}
+	if got := v.text(); got != strings.Join(want, "\n") {
+		t.Errorf("列表排版不对:\n%s\n想要:\n%s", got, strings.Join(want, "\n"))
 	}
 }

@@ -70,7 +70,24 @@ type botView struct {
 	Toast   bool
 }
 
-func (v botView) text() string { return strings.Join(v.Lines, "\n") }
+// 行内「重点」标记：能用富文本的通道（TG）把它渲染成粗体，纯文本通道（企微）去掉标记照常显示。
+// 用控制字符而不是直接写 <b>，是为了让 Lines 始终是纯文本——漏掉一处替换企微就会把标签念出来
+const (
+	botBoldOn  = "\x01"
+	botBoldOff = "\x02"
+)
+
+// botBold 把一段标成重点（资源那两行里的画质 / 体积 / 积分）
+func botBold(s string) string { return botBoldOn + s + botBoldOff }
+
+var (
+	botPlain = strings.NewReplacer(botBoldOn, "", botBoldOff, "")
+	botRich  = strings.NewReplacer(botBoldOn, "<b>", botBoldOff, "</b>")
+)
+
+// text 纯文本（企微、日志、测试看的就是它）；rich 留着重点标记，交给认得它的通道
+func (v botView) text() string { return botPlain.Replace(strings.Join(v.Lines, "\n")) }
+func (v botView) rich() string { return strings.Join(v.Lines, "\n") }
 
 // botSay 一句提示，另发
 func botSay(lines ...string) botView { return botView{Lines: lines, Toast: true} }
@@ -332,7 +349,7 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		if i < 0 {
 			return botSay("没有能自动提交的资源：片名对得上、能直接转存或离线、之前没提交过的一条都没有，请手动挑。"), true
 		}
-		io.say(fmt.Sprintf("⭐ 自动择优：第 %d 条\n%s", i+1, resBotLabel(f.items[i], 80, f.source == "")))
+		io.say(append([]string{fmt.Sprintf("⭐ 自动择优：第 %d 条", i+1)}, resBotBlock(f.items[i], 80, f.source == "")...)...)
 		return h.botSubmitAt(f, i, io, false), true
 	}
 
@@ -450,6 +467,16 @@ func (f *botFlow) bestIndex() int {
 	return -1
 }
 
+// resBotBlock 单独说一条资源时的那一两行（自动择优、解锁确认屏），与列表里同一个排版
+func resBotBlock(it ResourceItem, width int, withSource bool) []string {
+	pick, sub := resBotLines(it, width, withSource)
+	out := []string{botBold(pick)}
+	if sub != "" {
+		out = append(out, "    "+sub)
+	}
+	return out
+}
+
 // renderUnlockAsk 花积分解锁前的确认屏（替换列表那条消息；确认 / 取消后换回列表）
 func (f *botFlow) renderUnlockAsk(i int) botView {
 	it := f.items[i]
@@ -459,11 +486,9 @@ func (f *botFlow) renderUnlockAsk(i int) botView {
 	}
 	return botView{
 		Token: f.token,
-		Lines: []string{
-			fmt.Sprintf("💰 解锁第 %d 条要花%s %s：", i+1, botSourceLabel(it.Source), pts),
-			resBotLabel(it, 80, false),
-			"确认后解锁并转存到 115，积分花了不退。",
-		},
+		Lines: append(append([]string{fmt.Sprintf("💰 解锁第 %d 条要花%s %s：", i+1, botSourceLabel(it.Source), pts)},
+			resBotBlock(it, 80, false)...),
+			"确认后解锁并转存到 115，积分花了不退。"),
 		Buttons: [][]botBtn{{{Text: "✓ 确认解锁（" + pts + "）", Act: "y"}, {Text: "✗ 取消", Act: "c"}}},
 		Hint:    "回复 y 确认解锁，c 取消",
 	}
@@ -516,7 +541,7 @@ func (f *botFlow) render() botView {
 	var hint []string
 	pageNote := ""
 	if f.pages() > 1 {
-		pageNote = fmt.Sprintf("，第 %d/%d 页", f.page+1, f.pages())
+		pageNote = fmt.Sprintf(" · 第 %d/%d 页", f.page+1, f.pages())
 	}
 
 	if f.stage == "media" {
@@ -524,13 +549,14 @@ func (f *botFlow) render() botView {
 		if f.mode == botModeSub {
 			verb = "选一部订阅："
 		}
-		v.Lines = append(v.Lines, fmt.Sprintf("「%s」TMDB 找到 %d 部%s，%s", f.keyword, len(f.movies), pageNote, verb))
+		v.Lines = append(v.Lines, fmt.Sprintf("🔍 「%s」TMDB 找到 %d 部%s，%s", f.keyword, len(f.movies), pageNote, verb))
 		for i := start; i < end; i++ {
 			m := f.movies[i]
-			line := fmt.Sprintf("%d. %s", i+1, m.Title)
+			name := m.Title
 			if m.Year != "" {
-				line += "（" + m.Year + "）"
+				name += "（" + m.Year + "）"
 			}
+			line := fmt.Sprintf("%d. %s", i+1, botBold(name)) // 片名加粗，后面的类型 / 评分是补充
 			if t := botTypeName(m.Type); t != "" {
 				line += " " + t
 			}
@@ -570,17 +596,24 @@ func (f *botFlow) render() botView {
 		if len(f.items) == 0 {
 			v.Lines = append(v.Lines, head+"：没有找到资源（"+botSourceLabel(f.source)+"）")
 		} else {
-			v.Lines = append(v.Lines, fmt.Sprintf("%s%s资源 %d 条%s：", head, botSourceLabel(f.source), len(f.items), pageNote))
+			v.Lines = append(v.Lines, botBold("🎬 "+head)+
+				fmt.Sprintf(" · %s %d 条%s", botSourceLabel(f.source), len(f.items), pageNote))
 		}
 		if f.note != "" {
-			v.Lines = append(v.Lines, "（"+f.note+"）")
+			v.Lines = append(v.Lines, "⚠ "+f.note)
 		}
+		// 一条两行、条目之间空一行：第一行只放挑片要看的（加粗），原标题退到第二行。
+		// 原来挤成一长行，画质 / 体积 / 积分被又长又乱的标题推到行尾，一屏八条看不出重点
 		for i := start; i < end; i++ {
-			line := fmt.Sprintf("%d. %s", i+1, resBotLabel(f.items[i], 60, f.source == ""))
+			pick, sub := resBotLines(f.items[i], 52, f.source == "")
+			line := fmt.Sprintf("%d. %s", i+1, botBold(pick))
 			if f.sent[i] {
-				line = "✓ " + line + " ← 已提交"
+				line += " ✓ 已提交"
 			}
-			v.Lines = append(v.Lines, line)
+			v.Lines = append(v.Lines, "", line)
+			if sub != "" {
+				v.Lines = append(v.Lines, "    "+sub)
+			}
 			nums = append(nums, botBtn{Text: strconv.Itoa(i + 1), Act: strconv.Itoa(i + 1)})
 		}
 		if len(f.items) > 0 {
