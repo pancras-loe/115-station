@@ -12,6 +12,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +91,80 @@ func (h *Handler) botSubscribe(hit wecomTmdbHit) []string {
 		lines = append(lines, "剧集还在播，默认只订最新一季；要订全剧或改范围，到网页「发现与订阅 → 订阅」里修改。")
 	}
 	return lines
+}
+
+// botPicksMax 一条消息里最多认几个序号（选片列表本来就不超过 20 部）
+const botPicksMax = 20
+
+// botPickSplit 序号之间的分界符：中英文逗号、顿号、分号、斜杠、加号与空白
+var botPickSplit = regexp.MustCompile(`[,，、;；/+\s]+`)
+
+// botParsePicks 解析「1,3,5」「1 3」「2-4」这类几个序号的写法，按出现顺序去重。
+// 有一段不是序号（或区间）就整句不认，免得把普通聊天当成选片
+func botParsePicks(text string) []int {
+	t := strings.TrimSpace(text)
+	if t == "" || len(t) > 60 {
+		return nil
+	}
+	var out []int
+	seen := map[int]bool{}
+	add := func(n int) bool {
+		if !seen[n] {
+			if len(out) >= botPicksMax {
+				return false
+			}
+			seen[n] = true
+			out = append(out, n)
+		}
+		return true
+	}
+	for _, seg := range botPickSplit.Split(t, -1) {
+		if seg == "" {
+			continue
+		}
+		if a, b, ok := strings.Cut(strings.ReplaceAll(seg, "~", "-"), "-"); ok {
+			lo, e1 := strconv.Atoi(a)
+			hi, e2 := strconv.Atoi(b)
+			if e1 != nil || e2 != nil || len(a) > 3 || len(b) > 3 || lo > hi {
+				return nil
+			}
+			for n := lo; n <= hi; n++ {
+				if !add(n) {
+					return nil
+				}
+			}
+			continue
+		}
+		if len(seg) > 3 || !regexpPureDigits.MatchString(seg) {
+			return nil
+		}
+		n, _ := strconv.Atoi(seg)
+		if !add(n) {
+			return nil
+		}
+	}
+	return out
+}
+
+// botSubscribeMany 一次订几部（序号从 1 起）：每部一行结果，共同的说明只写一遍
+func (h *Handler) botSubscribeMany(movies []wecomTmdbHit, picks []int) []string {
+	lines := []string{fmt.Sprintf("批量订阅 %d 部：", len(picks))}
+	var notes []string
+	seen := map[string]bool{}
+	for _, n := range picks {
+		res := h.botSubscribe(movies[n-1])
+		if len(res) == 0 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s", n, res[0]))
+		for _, s := range res[1:] {
+			if !seen[s] {
+				seen[s] = true
+				notes = append(notes, s)
+			}
+		}
+	}
+	return append(lines, notes...)
 }
 
 // botSubScopeText 范围一句话（与前端 scopeText 同口径）

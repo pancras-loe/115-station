@@ -191,6 +191,14 @@ func botFlowAct(text string) (string, bool) {
 	if len(t) <= 3 && regexpPureDigits.MatchString(t) {
 		return t, true
 	}
+	// 几个序号（「1,3,5」「1 3」「2-4」）：/sub 选片时一次订几部，统一成「1,3,5」
+	if ns := botParsePicks(t); len(ns) > 1 {
+		parts := make([]string, len(ns))
+		for i, n := range ns {
+			parts[i] = strconv.Itoa(n)
+		}
+		return strings.Join(parts, ","), true
+	}
 	return "", false
 }
 
@@ -328,6 +336,19 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		return h.botSubmitAt(f, i, io, false), true
 	}
 
+	if strings.Contains(act, ",") {
+		if f.mode != botModeSub || f.stage != "media" {
+			return botSay("一次只能选一个序号（选片订阅时才能用逗号隔开选几部）。"), true
+		}
+		ns := botParsePicks(act)
+		for _, n := range ns {
+			if n < 1 || n > len(f.movies) {
+				return botSay(fmt.Sprintf("请选择 1-%d，序号 %d 不在列表里。", len(f.movies), n)), true
+			}
+		}
+		botFlowDrop(key, f)
+		return botNote(h.botSubscribeMany(f.movies, ns)...), true
+	}
 	n, err := strconv.Atoi(act)
 	if err != nil {
 		return botSay("看不懂这个操作。"), true
@@ -534,7 +555,7 @@ func (f *botFlow) render() botView {
 			v.Cards = append(v.Cards, a)
 		}
 		if f.mode == botModeSub {
-			hint = append(hint, fmt.Sprintf("回复 1-%d 订阅", len(f.movies)))
+			hint = append(hint, fmt.Sprintf("回复 1-%d 订阅，订几部用逗号隔开（如 1,3,5）", len(f.movies)))
 		} else {
 			hint = append(hint, fmt.Sprintf("回复 1-%d 选片", len(f.movies)))
 		}

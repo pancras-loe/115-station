@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"115-station/internal/model"
 )
@@ -146,5 +147,67 @@ func TestTgCommandSubscribe(t *testing.T) {
 		if cmd != want[0] || args != want[1] {
 			t.Errorf("%q → %q %q, want %v", in, cmd, args, want)
 		}
+	}
+}
+
+func TestBotParsePicks(t *testing.T) {
+	cases := map[string]string{
+		"1,3,5":   "1,3,5",
+		"1，3、5":   "1,3,5",
+		"1 3":     "1,3",
+		"2-4 7":   "2,3,4,7",
+		"3,3,1":   "3,1",
+		"1;2/3+4": "1,2,3,4",
+		"5":       "5",
+		"1,a":     "",
+		"在吗 1 2":  "",
+		"4-2":     "",
+	}
+	for in, want := range cases {
+		var parts []string
+		for _, n := range botParsePicks(in) {
+			parts = append(parts, fmt.Sprint(n))
+		}
+		if got := strings.Join(parts, ","); got != want {
+			t.Errorf("%q → %q，要 %q", in, got, want)
+		}
+	}
+	if act, ok := botFlowAct("1、2"); !ok || act != "1,2" {
+		t.Fatalf("几个序号应算会话操作: %q %v", act, ok)
+	}
+	if _, ok := botFlowAct("你好 世界"); ok {
+		t.Fatal("普通聊天不该被当成选片")
+	}
+}
+
+// /sub 选片时回复几个序号一次订几部；找资源的选片列表不接受
+func TestBotSubscribeMany(t *testing.T) {
+	h := botSubFixture(t)
+	movies := []wecomTmdbHit{{ID: 600, Title: "剧", Type: "tv"}, {ID: 1, Title: "片名", Type: "movie"}, {ID: 2, Title: "别的", Type: "movie"}}
+	botFlowPut("bs9", &botFlow{token: "t", mode: botModeSub, stage: "media", movies: movies, at: time.Now()})
+	if v, _ := h.botAct("bs9", "1,4", "", botIO{}); !strings.Contains(v.text(), "序号 4 不在列表里") {
+		t.Fatalf("越界应整句拒绝: %q", v.text())
+	}
+	var cnt int64
+	if model.DB.Model(&model.Subscription{}).Count(&cnt); cnt != 0 {
+		t.Fatalf("越界不该订任何一部: %d", cnt)
+	}
+	v, ok := h.botAct("bs9", "1,2", "", botIO{})
+	if !ok || !strings.Contains(v.text(), "1. 🔔 已订阅《剧》") || !strings.Contains(v.text(), "2. 🔔 已订阅《片名》") {
+		t.Fatalf("批量订阅: %q", v.text())
+	}
+	if strings.Count(v.text(), "正在检查缺什么") != 1 {
+		t.Fatalf("共同说明只写一遍: %q", v.text())
+	}
+	if model.DB.Model(&model.Subscription{}).Count(&cnt); cnt != 2 {
+		t.Fatalf("应订上两部: %d", cnt)
+	}
+	if botFlowGet("bs9") != nil {
+		t.Fatal("订阅完会话应关掉")
+	}
+
+	botFlowPut("bs10", &botFlow{token: "t", stage: "media", movies: movies, at: time.Now()})
+	if v, _ := h.botAct("bs10", "1,2", "", botIO{}); !strings.Contains(v.text(), "一次只能选一个") {
+		t.Fatalf("找资源不该批量: %q", v.text())
 	}
 }
