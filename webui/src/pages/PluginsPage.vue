@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref, type Component } from 'vue'
+import { computed, onMounted, ref, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HModal from '@/components/hero/HModal.vue'
-import { heroTone } from '@/components/hero/tone'
+import HSearchField from '@/components/hero/HSearchField.vue'
+import HSegmented from '@/components/hero/HSegmented.vue'
 import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Stamp, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import SchedulePicker from '@/components/ui/SchedulePicker.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
@@ -243,12 +245,26 @@ onMounted(() => {
 })
 
 // ============ 插件清单 ============
+type CatKey = 'signin' | 'clean' | 'media' | 'transfer'
+
+/** 分类按用途分，不按网盘分：同一件事（清理）115 与阿里云盘的放在一起，卡片上另标作用在哪个盘 */
+const categories: { key: CatKey; name: string; hint: string }[] = [
+  { key: 'signin', name: '签到保号', hint: '每天定时签到，领积分、保账号' },
+  { key: 'clean', name: '网盘清理', hint: '定时清掉回收站、离线任务和指定目录，网盘不越用越满' },
+  { key: 'media', name: '媒体库工具', hint: '媒体库封面、STRM 换地址与接管' },
+  { key: 'transfer', name: '转存搬运', hint: '把别的网盘里的资源搬进 115' },
+]
+
 interface Plugin {
   key: string
   name: string
   icon: Component
   desc: string
-  available: boolean
+  cat: CatKey
+  /** 作用在哪：115 / 阿里云盘 / PT 站 / 本地 …，卡片右上角的小标签 */
+  scope: string
+  /** 搜索时额外认的词（拼音缩写、英文、常见叫法），不显示 */
+  keywords?: string
   runLabel?: string
   onConfig?: () => void
   onRun?: () => void
@@ -257,137 +273,203 @@ interface Plugin {
 const plugins: Plugin[] = [
   {
     key: 'checkin',
+    cat: 'signin',
+    scope: '115',
+    keywords: 'qiandao 积分',
     name: '115 每日签到',
     icon: CalendarCheck,
     desc: '按 cron 计划自动签到领积分，结果推送企微 / TG。需先在「账号与媒体库」扫码登录。',
-    available: true,
     runLabel: '立即签到',
     onConfig: ckOpen,
     onRun: ckRun,
   },
   {
     key: 'ptsignin',
+    cat: 'signin',
+    scope: 'PT 站',
+    keywords: 'qiandao pt 保号 cookie',
     name: 'PT 站签到',
     icon: Stamp,
     desc: '给常用的 PT 站每天签到（织梦、蟹黄堡、听听歌、学校…），认不出签到结果时至少确认登录保号。贴 Cookie 就能用，每天在时间窗里随机一刻跑，结果推送汇总。',
-    available: true,
     runLabel: '立即签到',
     onConfig: () => (ptShow.value = true),
     onRun: ptRun,
   },
   {
     key: 'covergen',
+    cat: 'media',
+    scope: 'Emby',
+    keywords: '封面 cover poster',
     name: '媒体库海报',
     icon: Images,
     desc: '从 Emby 媒体库选取海报，合成带库名的封面并推送。未配置 Emby 时使用本地整理台账。支持定时与多种样式。',
-    available: true,
     runLabel: '立即生成',
     onConfig: () => (cgShow.value = true),
     onRun: cgRun,
   },
   {
     key: 'rbclean',
+    cat: 'clean',
+    scope: '115',
+    keywords: '回收站 recycle trash',
     name: '清理 115 回收站',
     icon: Trash2,
     desc: '按计划彻底删除回收站里超过保留天数（7 / 30 / 自定义天）的内容，保留期内的照旧能还原。每个 115 账号单独设清不清、保留几天。',
-    available: true,
     runLabel: '立即清理',
     onConfig: () => (rbShow.value = true),
     onRun: rbRun,
   },
   {
     key: 'offclean',
+    cat: 'clean',
+    scope: '115',
+    keywords: '离线 下载 磁力 offline',
     name: '清理 115 离线任务',
     icon: CloudOff,
     desc: '按计划删掉 115 离线列表里下载失败、卡在百分之几很久不动的任务，默认只动本站提交的。只删任务，不删网盘里的文件。',
-    available: true,
     runLabel: '立即清理',
     onConfig: () => (ocShow.value = true),
     onRun: ocRun,
   },
   {
     key: 'dirclean',
+    cat: 'clean',
+    scope: '115',
+    keywords: '清空 目录 最近接收 云下载',
     name: '定时清空 115 目录',
     icon: BrushCleaning,
     desc: '按计划把指定的几个 115 目录（云下载、最近接收、冗余……）里的内容删进回收站，目录本身留着。媒体库与转存文件夹不能选。',
-    available: true,
     runLabel: '立即清空',
     onConfig: () => (dcShow.value = true),
     onRun: dcRun,
   },
   {
     key: 'ali2115',
+    cat: 'transfer',
+    scope: '阿里云盘',
+    keywords: 'aliyun 秒传 分享 sha1',
     name: '阿里云盘秒传',
     icon: CloudUpload,
     desc: '贴阿里云盘分享，按 SHA1 秒传进 115 转存文件夹并自动整理入库，文件内容不经过本站。115 上没有的文件秒传不了。',
-    available: true,
     runLabel: '去贴链接',
     onConfig: () => (aliShow.value = true),
     onRun: () => router.push({ name: 'media-transfer', query: { tab: 'link' } }),
   },
   {
     key: 'strmmigrate',
+    cat: 'media',
+    scope: '本地 STRM',
+    keywords: 'strm 迁移 替换地址 接管 p115strmhelper 换ip',
     name: 'STRM 迁移',
     icon: FolderInput,
     desc: '换了 IP / 端口 / 挂载点：把本地 STRM 开头的旧地址批量换成新的，本站和别的项目写的都行。从 p115strmhelper 等项目换过来：接管已有 STRM，路径不动，Emby 观看记录保留。',
-    available: true,
     runLabel: '接管其他项目',
     onConfig: () => smOpen('rebase'),
     onRun: () => smOpen('adopt'),
   },
   {
     key: 'alidirclean',
+    cat: 'clean',
+    scope: '阿里云盘',
+    keywords: 'aliyun 清空 目录',
     name: '定时清空阿里云盘目录',
     icon: BrushCleaning,
     desc: '按计划把阿里云盘里指定的几个目录（来自分享……）里的内容删进回收站，目录本身留着。共用「阿里云盘秒传」登录的账号。',
-    available: true,
     runLabel: '立即清空',
     onConfig: () => (adcShow.value = true),
     onRun: adcRun,
   },
   {
     key: 'alirbclean',
+    cat: 'clean',
+    scope: '阿里云盘',
+    keywords: 'aliyun 回收站 recycle trash',
     name: '清理阿里云盘回收站',
     icon: Trash2,
     desc: '按计划彻底删除阿里云盘回收站的内容：整个清空，或只删超过保留天数的。资源盘、备份盘都清，每个账号单独设。',
-    available: true,
     runLabel: '立即清理',
     onConfig: () => (arbShow.value = true),
     onRun: arbRun,
   },
 ]
 
-const availableCount = plugins.filter((p) => p.available).length
+// ============ 分类与搜索 ============
+// 分类记在地址栏（?cat=），刷新、从别的页跳回来都还在
+const cat = computed<CatKey | 'all'>({
+  get: () => {
+    const q = route.query.cat
+    return categories.some((c) => c.key === q) ? (q as CatKey) : 'all'
+  },
+  set: (v) => {
+    router.replace({ query: { ...route.query, cat: v === 'all' ? undefined : v } })
+  },
+})
+const keyword = ref('')
+
+const catOptions = computed(() => [
+  { label: `全部 ${plugins.length}`, value: 'all' as const },
+  ...categories.map((c) => ({ label: `${c.name} ${plugins.filter((p) => p.cat === c.key).length}`, value: c.key })),
+])
+
+/** 搜索不分大小写、忽略空白，名字 / 说明 / 作用范围 / 关键词任一包含就算 */
+function hit(p: Plugin, kw: string) {
+  const hay = [p.name, p.desc, p.scope, p.keywords ?? '', categories.find((c) => c.key === p.cat)?.name ?? '']
+    .join(' ')
+    .toLowerCase()
+    .replace(/\s+/g, '')
+  return kw.split(/\s+/).every((w) => hay.includes(w))
+}
+
+/** 搜索时跨分类找（选着分类也不限制，免得用户以为没有），按分类分组显示 */
+const groups = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  return categories
+    .filter((c) => kw || cat.value === 'all' || c.key === cat.value)
+    .map((c) => ({ ...c, items: plugins.filter((p) => p.cat === c.key && (!kw || hit(p, kw))) }))
+    .filter((g) => g.items.length)
+})
+const shownCount = computed(() => groups.value.reduce((n, g) => n + g.items.length, 0))
 </script>
 
 <template>
-  <SectionCard title="插件扩展" :hint="`共 ${availableCount} 个插件`">
-    <div class="grid">
-      <div v-for="p in plugins" :key="p.key" class="plugin" :class="{ off: !p.available }">
-        <div class="head">
-          <div class="ico"><component :is="p.icon" :size="17" :stroke-width="1.8" /></div>
-          <div class="name">{{ p.name }}</div>
-          <HChip :color="heroTone(p.available ? 'success' : 'default')">
-            {{ p.available ? '可用' : '规划中' }}
-          </HChip>
-        </div>
+  <SectionCard title="插件扩展" :hint="keyword.trim() ? `找到 ${shownCount} 个插件` : `共 ${plugins.length} 个插件`">
+    <div class="toolbar">
+      <HSegmented v-model="cat" :options="catOptions" size="sm" aria-label="插件分类" class="cats" />
+      <HSearchField v-model="keyword" class="search" placeholder="搜索插件：签到、回收站、阿里云盘…" />
+    </div>
 
-        <p class="desc">{{ p.desc }}</p>
+    <EmptyState v-if="!groups.length" :text="`没有和「${keyword.trim()}」相关的插件`" />
 
-        <TestBanner :state="results[p.key]" />
+    <section v-for="g in groups" :key="g.key" class="group">
+      <header class="group-head">
+        <h3 class="group-name">{{ g.name }}</h3>
+        <span class="group-hint">{{ g.hint }}</span>
+      </header>
+      <div class="grid">
+        <div v-for="p in g.items" :key="p.key" class="plugin">
+          <div class="head">
+            <div class="ico"><component :is="p.icon" :size="17" :stroke-width="1.8" /></div>
+            <div class="name">{{ p.name }}</div>
+            <HChip>{{ p.scope }}</HChip>
+          </div>
 
-        <div class="foot">
-          <HButton variant="tertiary" size="sm" :disabled="!p.available" @click="p.onConfig?.()">
-            <template #icon><Settings2 :size="14" /></template>
-            配置规则
-          </HButton>
-          <HButton variant="secondary" size="sm" :disabled="!p.available" :loading="busy[p.key]" @click="p.onRun?.()">
-            <template #icon><Play :size="14" /></template>
-            {{ p.runLabel }}
-          </HButton>
+          <p class="desc">{{ p.desc }}</p>
+
+          <TestBanner :state="results[p.key]" />
+
+          <div class="foot">
+            <HButton variant="tertiary" size="sm" @click="p.onConfig?.()">
+              <template #icon><Settings2 :size="14" /></template>
+              配置规则
+            </HButton>
+            <HButton variant="secondary" size="sm" :loading="busy[p.key]" @click="p.onRun?.()">
+              <template #icon><Play :size="14" /></template>
+              {{ p.runLabel }}
+            </HButton>
+          </div>
         </div>
       </div>
-    </div>
+    </section>
 
     <!-- 115 签到配置 -->
     <HModal v-model:show="ckShow" title="115 每日签到" width="480px">
@@ -419,6 +501,50 @@ const availableCount = plugins.filter((p) => p.available).length
 </template>
 
 <style scoped>
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 4px;
+}
+.cats {
+  min-width: 0;
+  max-width: 100%;
+}
+.search {
+  flex: 1 1 220px;
+  max-width: 320px;
+  margin-left: auto;
+}
+@media (max-width: 720px) {
+  .search {
+    max-width: none;
+    margin-left: 0;
+  }
+}
+
+.group + .group {
+  margin-top: 22px;
+}
+.group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 14px 0 10px;
+}
+.group-name {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.group-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
@@ -434,12 +560,9 @@ const availableCount = plugins.filter((p) => p.available).length
   transition: background-color 0.15s;
 }
 @media (hover: hover) {
-  .plugin:not(.off):hover {
+  .plugin:hover {
     background: color-mix(in oklab, var(--surface-secondary) 70%, var(--surface-tertiary));
   }
-}
-.plugin.off {
-  opacity: 0.6;
 }
 
 .head {
@@ -457,10 +580,6 @@ const availableCount = plugins.filter((p) => p.available).length
   place-items: center;
   background: var(--accent-soft);
   color: var(--accent-soft-foreground);
-}
-.plugin.off .ico {
-  background: var(--default);
-  color: var(--muted);
 }
 .name {
   flex: 1;
