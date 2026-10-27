@@ -58,9 +58,12 @@ func (c scrapeCfg) stationScrapes() bool { return c.provider() == scrapeProvider
 // embyVirtualFolder GET /Library/VirtualFolders 的一项（只取用得到的字段）
 type embyVirtualFolder struct {
 	Name           string   `json:"Name"`
+	ItemID         string   `json:"ItemId"`
 	CollectionType string   `json:"CollectionType"`
 	Locations      []string `json:"Locations"`
 	LibraryOptions struct {
+		EnableRealtimeMonitor        bool `json:"EnableRealtimeMonitor"`
+		EnableChapterImageExtraction bool `json:"EnableChapterImageExtraction"`
 		TypeOptions []struct {
 			Type             string   `json:"Type"`
 			MetadataFetchers []string `json:"MetadataFetchers"`

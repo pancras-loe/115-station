@@ -545,6 +545,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/scrape/config", h.ScrapeSaveConfig)
 		protected.GET("/scrape/emby-check", h.ScrapeEmbyCheck)
 		protected.GET("/emby/path-suggest", h.EmbyPathSuggest)
+		protected.POST("/emby/libraries/plan", h.EmbyLibPlan)
+		protected.POST("/emby/libraries/create", h.EmbyLibCreate)
 		protected.GET("/scrape/status", h.ScrapeStatus)
 
 		// 影视转存 · 木咖（不太灵系影视库，搜索匿名/资源需 VIP token）

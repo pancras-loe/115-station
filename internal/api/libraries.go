@@ -227,22 +227,9 @@ func libEmbyCoverage(pathMapping string, locations []string, libLocal string, ca
 			}
 		}
 	}
-	localRoot, embyRoot := embyPathRoots(pathMapping)
+	_, embyRoot := embyPathRoots(pathMapping)
 	mapped := strings.Contains(pathMapping, "#") && embyRoot != ""
-	lr := strings.TrimRight(localRoot, "/")
-	// toEmby 本地路径换成 Emby 里该填的路径；换算不出返回 false
-	toEmby := func(dir string) (string, bool) {
-		if !mapped {
-			return dir, true // 没配映射：两边看到的是同一个路径
-		}
-		switch {
-		case dir == lr:
-			return embyRoot, true
-		case lr != "" && strings.HasPrefix(dir, lr+"/"):
-			return embyRoot + dir[len(lr):], true
-		}
-		return "", false
-	}
+	toEmby := func(dir string) (string, bool) { return localToEmbyPath(pathMapping, dir) }
 	if st.Partial && len(cats) > 0 {
 		seen := map[string]bool{}
 		var missing []string
@@ -274,6 +261,24 @@ func libEmbyCoverage(pathMapping string, locations []string, libLocal string, ca
 		st.Unmapped = true
 	}
 	return st
+}
+
+// localToEmbyPath 本地路径（/ 分隔）换成 Emby 里该填的路径；路径映射的本地一侧不包含它时换算不出、返回 false。
+// 和 mapLocalToEmbyPath 的区别：那个换不出时原样返回（刷新通知拿本地路径试一次也无妨），
+// 这里要告诉用户「换不出」—— Emby 建库、覆盖检查拿原样的本地路径去填就是错的
+func localToEmbyPath(pathMapping, dir string) (string, bool) {
+	localRoot, embyRoot := embyPathRoots(pathMapping)
+	if !strings.Contains(pathMapping, "#") || embyRoot == "" {
+		return dir, true // 没配映射：两边看到的是同一个路径
+	}
+	lr := strings.TrimRight(localRoot, "/")
+	switch {
+	case dir == lr:
+		return embyRoot, true
+	case lr != "" && strings.HasPrefix(dir, lr+"/"):
+		return embyRoot + dir[len(lr):], true
+	}
+	return "", false
 }
 
 // localSubdirs 本地目录下一层的子目录名（跳过 . 开头的，如 .actors）；读不了返回 nil

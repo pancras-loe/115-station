@@ -744,6 +744,30 @@ const ROUTES: Record<string, Route> = {
     return { data: mockAccts }
   },
   '/media-libs': mockMediaLibsView,
+  '/emby/libraries/plan': (_q: URLSearchParams, init?: RequestInit) => {
+    const ov = new Map((mockBody<{ overrides?: { key: string; name?: string; type?: string }[] }>(init).overrides ?? []).map((o) => [o.key, o]))
+    const cand = (key: string, name: string, type: string, fixed: boolean, paths: { lib: string; rel: string; state: string; note?: string }[], action: string, extra: object = {}) => ({
+      key, name: ov.get(key)?.name || name, type: fixed ? type : ov.get(key)?.type || type, type_fixed: fixed, scrape: 'station',
+      libs: [...new Set(paths.map((p) => p.lib))], action, ...extra,
+      paths: paths.map((p) => ({ local: `/media/${p.lib}/${p.rel}`, emby: `/mnt/media/${p.lib}/${p.rel}`, lib: p.lib, state: p.state, note: p.note })),
+    })
+    return {
+      configured: true, warnings: [],
+      cands: [
+        cand('cat:电影/华语电影', '华语电影', 'movies', true, [{ lib: '主号', rel: '电影/华语电影', state: 'new' }, { lib: '附号', rel: '电影/华语电影', state: 'new' }], 'create'),
+        cand('cat:电影/欧美电影', '欧美电影', 'movies', true, [{ lib: '主号', rel: '电影/欧美电影', state: 'new' }], 'add', { target: '欧美电影' }),
+        cand('cat:剧集/国产剧', '国产剧', 'tvshows', true, [{ lib: '主号', rel: '剧集/国产剧', state: 'new' }], 'create'),
+        cand('lib:9', '收藏', 'mixed', false, [{ lib: '收藏', rel: '', state: 'new' }], 'create'),
+        cand('cat:动漫', '动漫', 'tvshows', true, [{ lib: '主号', rel: '动漫', state: 'covered', note: '已在 Emby 库「动漫」里' }], 'skip', { why: '已经都在 Emby 里' }),
+      ],
+    }
+  },
+  '/emby/libraries/create': (_q: URLSearchParams, init?: RequestInit) => {
+    const keys = mockBody<{ keys: string[] }>(init).keys ?? []
+    const results = keys.map((k, i) => ({ key: k, name: k.split('/').pop()!.replace(/^(cat|lib):/, ''), action: 'create', ok: i !== 2, paths: [`/mnt/media/${k}`],
+      error: i === 2 ? '建库失败：HTTP 400 path does not exist' : undefined, warns: i === 1 ? ['实时监控没设上（现在是开）'] : undefined }))
+    return { results, ok: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length, message: '' }
+  },
   '/category/schemes': (_q: URLSearchParams, init?: RequestInit) => {
     const b = mockBody<{ name: string; copy_from: number }>(init)
     const from = mockSchemes.find((s) => s.id === b.copy_from)

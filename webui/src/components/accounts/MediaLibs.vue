@@ -33,6 +33,7 @@ import HButton from '@/components/hero/HButton.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import MediaLibDialog from './MediaLibDialog.vue'
 import MediaLibBatchDialog from './MediaLibBatchDialog.vue'
+import EmbyLibCreateDialog from './EmbyLibCreateDialog.vue'
 import { libraryApi } from '@/api'
 import type { LibSyncStat, MediaLib, MediaLibsView } from '@/api/library'
 import { fullTime, relTime } from '@/utils/time'
@@ -45,9 +46,22 @@ const { message, dialog } = useFeedback()
 const editing = ref<MediaLib | null>(null)
 const dialogShow = ref(false)
 const batchShow = ref(false)
+const embyShow = ref(false)
 
 function apply(v: MediaLibsView) {
   emit('update', v)
+}
+
+/** 有几个库没全进 Emby（按钮上的小数字） */
+const embyGaps = computed(() => props.view?.libs.filter((l) => l.emby && !l.emby.covered).length ?? 0)
+
+/** Emby 里建了库：重读一次，库卡片上的覆盖情况跟着变 */
+async function reloadView() {
+  try {
+    apply(await libraryApi.getMediaLibs())
+  } catch {
+    // 读不到就等下次打开页面
+  }
 }
 
 function openNew() {
@@ -183,6 +197,9 @@ function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
     <template #extra>
       <div v-if="view?.libs.length" class="extra">
         <HSegmented v-model="viewMode" :options="VIEWS" size="sm" aria-label="显示方式" />
+        <HButton v-if="view.emby_configured && !view.emby_error" size="sm" variant="secondary" @click="embyShow = true">
+          <Tv :size="14" />在 Emby 建库<span v-if="embyGaps" class="gap-dot">{{ embyGaps }}</span>
+        </HButton>
         <HButton size="sm" variant="secondary" @click="batchShow = true"><FolderPlus :size="14" />批量添加</HButton>
         <HButton size="sm" variant="primary" @click="openNew"><Plus :size="14" />添加媒体库</HButton>
       </div>
@@ -338,6 +355,7 @@ function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
 
     <MediaLibDialog v-if="view" v-model:show="dialogShow" :view="view" :lib="editing" @saved="apply" />
     <MediaLibBatchDialog v-if="view" v-model:show="batchShow" :view="view" @saved="apply" />
+    <EmbyLibCreateDialog v-model:show="embyShow" @done="reloadView" />
   </SectionCard>
 </template>
 
@@ -402,8 +420,19 @@ function syncBrief(l: MediaLib): { text: string; warn: boolean; tip: string } {
 
 .extra {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+.gap-dot {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--warning);
+  color: var(--warning-foreground);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
 }
 
 /* 列表：一个库一张横扁小卡片，第一行名字 / 映射 / 操作，第二行一串小字信息 */

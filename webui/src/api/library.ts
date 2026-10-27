@@ -328,3 +328,69 @@ export const updateScheme = (
 ) =>
   http.put<{ message: string; schemes: SchemeView[] }>(`/category/schemes/${id}`, body)
 export const deleteScheme = (id: number) => http.del<{ schemes: SchemeView[] }>(`/category/schemes/${id}`)
+
+// ---- 在 Emby 里批量建媒体库（后端 embylibcreate.go） ----
+
+export type EmbyLibType = 'movies' | 'tvshows' | 'mixed'
+
+export interface EmbyLibPath {
+  local: string
+  emby: string
+  lib: string
+  /** new 新加 / covered 已在 Emby / conflict Emby 有库在它下面 / unmapped 路径映射换算不出 */
+  state: 'new' | 'covered' | 'conflict' | 'unmapped'
+  note?: string
+}
+
+export interface EmbyLibCand {
+  key: string
+  name: string
+  type: EmbyLibType
+  /** 类型来自分类规则，不能改 */
+  type_fixed: boolean
+  /** off = 交给 Emby 刮；station = 本站刮 */
+  scrape: 'off' | 'station'
+  libs: string[]
+  paths: EmbyLibPath[]
+  /** create 新建 / add 给 Emby 里同名的库加路径 / skip 不动 */
+  action: 'create' | 'add' | 'skip'
+  target?: string
+  why?: string
+  note?: string
+}
+
+export interface EmbyLibOverride {
+  key: string
+  name?: string
+  type?: EmbyLibType
+}
+
+export interface EmbyLibPlan {
+  configured: boolean
+  error?: string
+  warnings: string[]
+  cands: EmbyLibCand[]
+}
+
+export interface EmbyLibResult {
+  key: string
+  name: string
+  action: string
+  ok: boolean
+  error?: string
+  warns?: string[]
+  paths: string[]
+}
+
+export interface EmbyLibCreateReq {
+  overrides: EmbyLibOverride[]
+  keys: string[]
+  refresh: boolean
+  realtime: boolean
+  save_nfo: boolean
+}
+
+export const embyLibPlan = (overrides: EmbyLibOverride[] = []) => http.post<EmbyLibPlan>('/emby/libraries/plan', { overrides })
+export const embyLibCreate = (req: EmbyLibCreateReq) =>
+  // 几十个库、每个三四个请求：不用默认的 60 秒超时
+  http.post<{ results: EmbyLibResult[]; ok: number; failed: number; message: string }>('/emby/libraries/create', req, { timeoutMs: 600_000 })
