@@ -267,7 +267,8 @@ func notifyDupHold(rec *model.OrganizeRecord) {
 	if cfg.Wecom.isEnabled() && cfg.Wecom.CorpID != "" && cfg.Wecom.Secret != "" {
 		go sendWecom(cfg.Wecom, strings.Join(append(append([]string(nil), body...), dupCommandHelp(rec, groups)...), "\n"))
 	}
-	sendExtraChannels(cfg, body[0], strings.Join(append(append([]string(nil), body[1:]...), "", web), "\n"))
+	sendExtraChannels(cfg, notifyMsg{Kind: kindOrganize, Title: body[0],
+		Content: strings.Join(append(append([]string(nil), body[1:]...), "", web), "\n")})
 }
 
 // tgClientFor 通知用的 TG 客户端（与接收器同一个 Token，走全局代理）
@@ -535,7 +536,7 @@ func (h *Handler) dupAutoTick() {
 		}
 		lines := dupSubmitLines(groups, picks, job)
 		log.Printf("[整理] ○ 同集多份 #%d 等了 %d 小时没人选，%s", rec.ID, ac.Hours, lines[0])
-		NotifyMessage(fmt.Sprintf("⏱ 同集多份超时自动处理 · %s", rec.Title),
+		NotifyMessage(kindOrganize, fmt.Sprintf("⏱ 同集多份超时自动处理 · %s", rec.Title),
 			fmt.Sprintf("记录 #%d 等了 %d 小时没人选。\n%s", rec.ID, ac.Hours, strings.Join(lines, "\n")))
 	}
 }

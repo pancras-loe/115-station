@@ -312,7 +312,7 @@ func (h *Handler) backupTick(now time.Time) {
 		if err != nil {
 			backupLastErr = err.Error()
 			log.Printf("[备份] ✗ 定时备份失败: %v", err)
-			NotifyMessage("✗ 定时备份失败", err.Error())
+			NotifyMessage(kindTask, "✗ 定时备份失败", err.Error())
 			return
 		}
 		backupLastErr = ""

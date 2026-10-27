@@ -100,7 +100,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	if category == "test" {
 		// Emby 侧点「测试通知」发来的连通测试事件：转发一条测试消息，方便确认全链路
 		log.Printf("[Emby Webhook] 收到 Emby 测试事件，转发连通测试通知")
-		go NotifyMessage("✅ Emby Webhook 连通测试", "Emby → 115-Station → 企微/TG 链路正常")
+		go NotifyMessage(kindSystem, "✅ Emby Webhook 连通测试", "Emby → 115-Station → 企微/TG 链路正常")
 		c.JSON(http.StatusOK, gin.H{"message": "ok（测试事件，已转发）"})
 		return
 	}
@@ -186,7 +186,7 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		content = userName + "：" + content
 	}
 	log.Printf("[Emby Webhook] %s %s", title, content)
-	go NotifyMessage(title, content)
+	go NotifyMessage(kindEmby, title, content)
 	c.JSON(http.StatusOK, gin.H{"message": "ok"})
 }
 

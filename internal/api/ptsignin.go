@@ -476,7 +476,7 @@ func ptNotifyRound(items []ptRoundItem, now time.Time) {
 		return
 	}
 	title, body := ptSummary(items, now)
-	NotifyMessage(title, body)
+	NotifyMessage(kindCheckin, title, body)
 }
 
 // ptRoundAsync 后台跑一轮（定时、界面「全部」、机器人），跑完推通知、排重试。

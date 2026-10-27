@@ -1027,10 +1027,10 @@ func StartCoverGenScheduler(h *Handler) {
 				defer func() { _ = recover() }()
 				n, names, skipped, err := h.runCoverGen()
 				if err != nil {
-					NotifyMessage("", "✗ 媒体库海报生成失败："+err.Error())
+					NotifyMessage(kindTask, "", "✗ 媒体库海报生成失败："+err.Error())
 					return
 				}
-				NotifyMessage("", coverGenResultText(n, names, skipped))
+				NotifyMessage(kindTask, "", coverGenResultText(n, names, skipped))
 			}()
 		}
 	}()

@@ -139,7 +139,7 @@ func finishOrganize(sink *orgSink, results []OrganizeResult, start time.Time) {
 	log.Printf("[整理] ✅ 整理完成（耗时 %s · %s）",
 		time.Since(start).Truncate(time.Second), organizeSummaryLine(sink, results))
 	if text := orgOutcomeNotifyText(sink.recordsSnapshot(), time.Now()); text != "" {
-		go NotifyMessage("📋 整理结果", text)
+		go NotifyMessage(kindOrganize, "📋 整理结果", text)
 	}
 }
 

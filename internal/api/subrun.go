@@ -1596,5 +1596,5 @@ func (r *subRunner) notify(title, content string, sub *model.Subscription, poste
 	if poster && sub != nil && sub.PosterPath != "" && r.tc != nil {
 		img = tmdbImageURL(r.tc.ImageURL, "w500", sub.PosterPath)
 	}
-	NotifyMessageRich(title, content, img, "")
+	NotifyMessageRich(kindSubscribe, title, content, img, "")
 }

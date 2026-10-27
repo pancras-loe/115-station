@@ -52,6 +52,8 @@ type MessageConfig struct {
 	Feishu     FeishuConfig     `json:"feishu"`
 	QQOneBot   QQOneBotConfig   `json:"qq_onebot"`
 	QQOfficial QQOfficialConfig `json:"qq_official"`
+	Iyuu       IyuuConfig       `json:"iyuu"`    // IYUU（爱语飞飞），notify_push.go
+	Webhook    WebhookConfig    `json:"webhook"` // 通用 Webhook，notify_push.go
 }
 
 // FeishuConfig 飞书群自定义机器人（webhook 推送，可选签名）
@@ -231,8 +233,9 @@ func (c *TGConfig) isEnabled() bool {
 	return false
 }
 
-// NotifyMessage 推送消息到所有启用的通知渠道
-func NotifyMessage(title, content string) {
+// NotifyMessage 推送消息到所有启用的通知渠道。
+// kind 是消息类型：IYUU / Webhook 按用户勾选过滤（notify_push.go），其余通道不看它
+func NotifyMessage(kind notifyKind, title, content string) {
 	cfg, err := loadMessageConfig()
 	if err != nil {
 		log.Printf("[通知] ✗ 配置不可用，消息未发送（%s）: %v", title, err)
@@ -256,22 +259,22 @@ func NotifyMessage(title, content string) {
 		go sendTelegram(cfg.TG, fullMsg)
 	}
 
-	// 飞书 / QQ OneBot / QQ 官方机器人
-	sendExtraChannels(cfg, title, content)
+	// 飞书 / QQ OneBot / QQ 官方机器人 / IYUU / Webhook
+	sendExtraChannels(cfg, notifyMsg{Kind: kind, Title: title, Content: content})
 }
 
 // NotifyMessageRich 富媒体通知：带封面图与链接。
 // Telegram 直接发图片（sendPhoto）；企业微信应用消息发 news 图文卡片（picurl 外链封面）。
 // posterURL 为空时自动退回纯文本通知。
 // 飞书 / QQ 发不了图，照 NotifyMessage 发文本 —— 此前这里漏了它们，带海报的订阅通知飞书 / QQ 一条都收不到
-func NotifyMessageRich(title, content, posterURL, linkURL string) {
+func NotifyMessageRich(kind notifyKind, title, content, posterURL, linkURL string) {
 	cfg, err := loadMessageConfig()
 	if err != nil {
 		log.Printf("[通知] ✗ 配置不可用，富通知未发送（%s）: %v", title, err)
 		return
 	}
 	if posterURL == "" {
-		NotifyMessage(title, content)
+		NotifyMessage(kind, title, content)
 		return
 	}
 	if cfg.Wecom.isEnabled() && cfg.Wecom.CorpID != "" && cfg.Wecom.Secret != "" {
@@ -280,7 +283,7 @@ func NotifyMessageRich(title, content, posterURL, linkURL string) {
 	if cfg.TG.isEnabled() && cfg.TG.Token != "" && cfg.TG.ChatID != "" {
 		go sendTelegramPhoto(cfg.TG, title, content, posterURL)
 	}
-	sendExtraChannels(cfg, title, content)
+	sendExtraChannels(cfg, notifyMsg{Kind: kind, Title: title, Content: content, Image: posterURL, Link: linkURL})
 }
 
 // NewsArticle 图文卡片单篇

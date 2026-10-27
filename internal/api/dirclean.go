@@ -449,7 +449,7 @@ func (h *Handler) dirCleanOnce(notify bool) {
 			if !ok {
 				title += "出错"
 			}
-			NotifyMessage(title, msg)
+			NotifyMessage(kindTask, title, msg)
 		}
 	}
 }

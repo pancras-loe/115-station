@@ -210,7 +210,7 @@ func WecomMenuAutoEnsure() {
 // wecomHandleCommand 指令路由（异步执行，结果用应用消息推回）
 func (h *Handler) wecomHandleCommand(user, text string) {
 	h.handleBotCommand(user, text, func(lines ...string) {
-		NotifyMessage("", strings.Join(lines, "\n"))
+		NotifyMessage(kindBot, "", strings.Join(lines, "\n"))
 	})
 }
 

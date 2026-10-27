@@ -383,7 +383,7 @@ func (h *Handler) offCleanOnce(notify bool) {
 			if !ok {
 				title += "失败"
 			}
-			NotifyMessage(title, msg)
+			NotifyMessage(kindTask, title, msg)
 		}
 	}
 }

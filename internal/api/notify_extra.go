@@ -288,8 +288,11 @@ func toBytes(v interface{}) []byte {
 
 // sendExtraChannels 把三个扩展渠道的通知发出（NotifyMessage / 富通知共用）。
 // 返回 errors 里非空项的渠道名拼接（供测试按钮展示）
-func sendExtraChannels(cfg *MessageConfig, title, content string) string {
+func sendExtraChannels(cfg *MessageConfig, m notifyMsg) string {
+	title, content := m.Title, m.Content
 	var errs []string
+	// IYUU / Webhook：按消息类型过滤后排队发（notify_push.go）
+	pushChannels(cfg, m)
 	// 飞书
 	if feishuEnabled(cfg.Feishu) {
 		go func() {
@@ -325,7 +328,7 @@ func sendExtraChannels(cfg *MessageConfig, title, content string) string {
 
 // extraChannelsEnabled 是否有任一扩展渠道启用
 func extraChannelsEnabled(cfg *MessageConfig) bool {
-	return feishuEnabled(cfg.Feishu) ||
+	return feishuEnabled(cfg.Feishu) || cfg.Iyuu.isEnabled() || cfg.Webhook.isEnabled() ||
 		(cfg.QQOneBot.isEnabled() && strings.TrimSpace(cfg.QQOneBot.URL) != "") ||
 		(cfg.QQOfficial.isEnabled() && strings.TrimSpace(cfg.QQOfficial.GroupID) != "")
 }
@@ -353,6 +356,22 @@ func testExtraChannels(cfg *MessageConfig, testMsg string) (string, int) {
 	if cfg.QQOfficial.isEnabled() && strings.TrimSpace(cfg.QQOfficial.GroupID) != "" {
 		if err := sendQQOfficial(cfg.QQOfficial, testMsg, ""); err != nil {
 			errMsg += "QQ官方: " + err.Error() + "; "
+		} else {
+			okCount++
+		}
+	}
+	// IYUU / Webhook 测试不排队、不看类型勾选，当场发一条看结果
+	tm := notifyMsg{Kind: kindSystem, Title: testMsg, Content: "来自 115-Station 的测试消息", At: time.Now()}
+	if cfg.Iyuu.isEnabled() {
+		if err := sendIyuu(cfg.Iyuu, tm); err != nil {
+			errMsg += "IYUU: " + err.Error() + "; "
+		} else {
+			okCount++
+		}
+	}
+	if cfg.Webhook.isEnabled() {
+		if err := sendWebhook(cfg.Webhook, tm); err != nil {
+			errMsg += "Webhook: " + err.Error() + "; "
 		} else {
 			okCount++
 		}

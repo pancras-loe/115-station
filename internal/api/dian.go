@@ -438,7 +438,7 @@ func (h *Handler) runDianCheckin(notify bool) (ok bool, msg string) {
 			if ok {
 				title = "癫影签到成功"
 			}
-			NotifyMessage(title, msg)
+			NotifyMessage(kindCheckin, title, msg)
 		}
 	}()
 	if why := dianCheckinReady(); why != "" {

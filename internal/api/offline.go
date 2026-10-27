@@ -584,13 +584,13 @@ func StartOfflineTaskMonitor(h *Handler) {
 				return strings.Join(names[:keep], "\n") + fmt.Sprintf("\n…等共 %d 个", len(names))
 			}
 			if len(doneNames) > 0 {
-				NotifyMessage("✓ 离线下载完成", fmt.Sprintf("%d 个任务完成，已开始整理入库（完成后另行通知）：\n%s",
+				NotifyMessage(kindTransfer, "✓ 离线下载完成", fmt.Sprintf("%d 个任务完成，已开始整理入库（完成后另行通知）：\n%s",
 					len(doneNames), clip(doneNames, 15)))
 				go h.triggerOrganizeAndSync()
 			}
 			if len(failedNames) > 0 {
 				// ed2k / HTTP 同样走离线任务，标题别写死成「磁力」
-				NotifyMessage("✗ 离线下载失败", fmt.Sprintf("%d 个任务失败（115 离线任务报错，请检查资源或重新提交）：\n%s",
+				NotifyMessage(kindTransfer, "✗ 离线下载失败", fmt.Sprintf("%d 个任务失败（115 离线任务报错，请检查资源或重新提交）：\n%s",
 					len(failedNames), clip(failedNames, 15)))
 			}
 			// 终态表防膨胀：只保留最近一轮见到的任务

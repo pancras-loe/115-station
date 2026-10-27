@@ -115,7 +115,7 @@ func (h *Handler) runRe0Checkin(notify bool) (ok bool, msg string) {
 			if ok {
 				title = "RE0 签到成功"
 			}
-			NotifyMessage(title, msg)
+			NotifyMessage(kindCheckin, title, msg)
 		}
 	}()
 

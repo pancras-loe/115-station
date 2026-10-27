@@ -199,7 +199,7 @@ func notifyUpdate(st UpdateStatus) {
 	if st.URL != "" {
 		content += "\n更新说明：" + st.URL
 	}
-	NotifyMessage("🆕 115-Station 有新版本", content)
+	NotifyMessage(kindSystem, "🆕 115-Station 有新版本", content)
 }
 
 // StartUpdateChecker 后台定时检查更新：启动后 1 分钟一次，之后每 12 小时一次。

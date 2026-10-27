@@ -183,7 +183,7 @@ func (h *Handler) run115CheckinOnce(notify bool) (bool, string) {
 		if ok {
 			title = "115 签到成功"
 		}
-		NotifyMessage(title, msg)
+		NotifyMessage(kindCheckin, title, msg)
 	}
 	return ok, msg
 }

@@ -245,7 +245,8 @@ func notifyWashHold(rec *model.OrganizeRecord) {
 		go sendWecom(cfg.Wecom, strings.Join(append(append([]string(nil), body...), "",
 			fmt.Sprintf("回复「洗版 %d 是」强制洗版，「洗版 %d 否」不洗版。", rec.ID, rec.ID)), "\n"))
 	}
-	sendExtraChannels(cfg, body[0], strings.Join(append(append([]string(nil), body[1:]...), "", web), "\n"))
+	sendExtraChannels(cfg, notifyMsg{Kind: kindOrganize, Title: body[0],
+		Content: strings.Join(append(append([]string(nil), body[1:]...), "", web), "\n")})
 }
 
 // loadWashForBot 机器人只认还没答过的（谁先答算谁的；要改主意请到网页）

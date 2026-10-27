@@ -367,7 +367,7 @@ func (h *Handler) failLibStaging(lib model.Library, reason string) {
 	}
 	log.Printf("[整理] ✗ 媒体库「%s」这一轮不整理：%s（记了 %d 条失败）", lib.Name, reason, n)
 	if !seen {
-		go NotifyMessage("⚠️ 媒体库没法整理", fmt.Sprintf("%s\n改好之后到「任务中心 → 整理记录」对失败的条目点「重新整理」，或等下一轮自动整理", reason))
+		go NotifyMessage(kindOrganize, "⚠️ 媒体库没法整理", fmt.Sprintf("%s\n改好之后到「任务中心 → 整理记录」对失败的条目点「重新整理」，或等下一轮自动整理", reason))
 	}
 }
 

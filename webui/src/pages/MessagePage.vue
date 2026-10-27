@@ -15,17 +15,18 @@ import FormActions from '@/components/ui/FormActions.vue'
 import TestBanner, { type BannerState } from '@/components/ui/TestBanner.vue'
 import CopyBox from '@/components/ui/CopyBox.vue'
 import MessageHelp from './message/MessageHelp.vue'
+import KindPicker from './message/KindPicker.vue'
 import { configApi, http } from '@/api'
 import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
 import { useTabQuery } from '@/composables/useTabQuery'
-import { MESSAGE_DEFAULTS, type MessageConfig } from '@/types/message'
+import { MESSAGE_DEFAULTS, normalizeMessage, type MessageConfig } from '@/types/message'
 
 const tab = useTabQuery('wecom')
 const helpVisible = ref(false)
 
-// 五个通道共用一个 Setting key，所以整页一份 model，任一页签保存的都是全量配置
-const { model, saving, save, reset } = useSetting<MessageConfig>('message', MESSAGE_DEFAULTS)
+// 七个通道共用一个 Setting key，所以整页一份 model，任一页签保存的都是全量配置
+const { model, saving, save, reset } = useSetting<MessageConfig>('message', MESSAGE_DEFAULTS, { normalize: normalizeMessage })
 
 const banner = ref<BannerState | null>(null)
 const testing = ref(false)
@@ -105,7 +106,12 @@ const channels = computed(() => ({
   feishu: model.value.feishu.enabled,
   onebot: model.value.qq_onebot.enabled,
   qqoff: model.value.qq_official.enabled,
+  iyuu: model.value.iyuu.enabled,
+  webhook: model.value.webhook.enabled,
 }))
+
+/** Webhook 请求体模板的示例：企微群机器人（填进去就能用） */
+const WEBHOOK_BODY_EXAMPLE = '{"msgtype":"text","text":{"content":"{{text}}"}}'
 
 const HELP_TITLES: Record<string, string> = {
   wecom: '企业微信怎么配',
@@ -122,6 +128,8 @@ const TABS = computed(() => [
   { value: 'feishu', label: '飞书', dot: channels.value.feishu },
   { value: 'onebot', label: 'QQ · OneBot', dot: channels.value.onebot },
   { value: 'qqoff', label: 'QQ 官方机器人', dot: channels.value.qqoff },
+  { value: 'iyuu', label: 'IYUU（微信）', dot: channels.value.iyuu },
+  { value: 'webhook', label: 'Webhook', dot: channels.value.webhook },
 ])
 </script>
 
@@ -129,7 +137,7 @@ const TABS = computed(() => [
   <div class="h-tabs-page">
 <div class="msg-tabs">
       <HTabs v-model="tab" :items="TABS" />
-      <HChip class="msg-count">已启用 {{ Object.values(channels).filter(Boolean).length }} / 5</HChip>
+      <HChip class="msg-count">已启用 {{ Object.values(channels).filter(Boolean).length }} / {{ TABS.length }}</HChip>
     </div>
 <template v-if="tab === 'wecom'">
       
@@ -338,6 +346,63 @@ const TABS = computed(() => [
         <TestBanner :state="banner" />
       </SectionCard>
 </template>
+<template v-if="tab === 'iyuu'">
+      <SectionCard title="IYUU（爱语飞飞）" hint="微信公众号推送">
+        <HAlert status="accent" class="note-top">
+          微信打开 <a href="https://iyuu.cn" target="_blank" rel="noopener">iyuu.cn</a> 扫码关注「爱语飞飞」公众号，拿到 Token 填进来就能在微信里收通知（同 MoviePilot 的 IYUU 消息通知插件）。
+          只能收通知，不能发指令；IYUU 限制发送频率，消息排队每 5 秒发一条。
+        </HAlert>
+        <FieldRow label="Token" tip="爱语飞飞的 IYUU Token（IYUU 开头）。">
+          <SecretInput v-model="model.iyuu.token" name="iyuu-token" :reveal="{ key: 'message', field: 'iyuu.token' }" placeholder="IYUU…" />
+        </FieldRow>
+        <FieldRow label="推哪些消息" wide tip="只管这个通道；企业微信 / TG 等照旧全推。机器人回复不会推到这里。">
+          <KindPicker v-model="model.iyuu.types" />
+        </FieldRow>
+        <FieldRow label="状态">
+          <HSegmented v-model="model.iyuu.enabled" :options="[{ label: '启用', value: true }, { label: '禁用', value: false }]" />
+        </FieldRow>
+        <FormActions>
+          <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+          <HButton variant="tertiary" :loading="testing" @click="test">测试通知</HButton>
+        </FormActions>
+        <TestBanner :state="banner" />
+      </SectionCard>
+</template>
+<template v-if="tab === 'webhook'">
+      <SectionCard title="Webhook" hint="把通知推到任意地址">
+        <HAlert status="accent" class="note-top">
+          每条通知发一次请求到下面的地址，可对接 Bark、PushPlus、ntfy、企微群机器人或自己写的服务。只能收通知，不能发指令。
+          可用变量：<code v-pre>{{title}}</code> <code v-pre>{{content}}</code> <code v-pre>{{text}}</code>（标题 + 正文）
+          <code v-pre>{{type}}</code> <code v-pre>{{type_name}}</code> <code v-pre>{{image}}</code> <code v-pre>{{link}}</code> <code v-pre>{{time}}</code>，
+          写在地址或请求体模板里都行。
+        </HAlert>
+        <FieldRow label="请求方式" tip="POST 默认发 JSON；GET 把内容放进查询参数，地址里写了变量（如 Bark）就只填变量、不另加参数。">
+          <HSegmented v-model="model.webhook.method" :options="[{ label: 'POST', value: 'POST' }, { label: 'GET', value: 'GET' }]" />
+        </FieldRow>
+        <FieldRow label="地址" wide tip="例：Bark 用 GET + https://api.day.app/你的Key/{{title}}/{{content}}">
+          <HInput v-model="model.webhook.url" placeholder="https://example.com/hook" :input-attrs="plainProps('webhook-url')" />
+        </FieldRow>
+        <FieldRow
+          v-if="model.webhook.method !== 'GET'"
+          label="请求体模板"
+          wide
+          tip="留空发默认 JSON：source / type / type_name / title / content / text / image / link / time。填了就按模板发，变量值按 JSON 字符串转义，写在双引号里即可。"
+        >
+          <HInput v-model="model.webhook.body" :rows="4" mono :placeholder="WEBHOOK_BODY_EXAMPLE" />
+        </FieldRow>
+        <FieldRow label="推哪些消息" wide tip="只管这个通道；企业微信 / TG 等照旧全推。机器人回复不会推到这里。">
+          <KindPicker v-model="model.webhook.types" />
+        </FieldRow>
+        <FieldRow label="状态">
+          <HSegmented v-model="model.webhook.enabled" :options="[{ label: '启用', value: true }, { label: '禁用', value: false }]" />
+        </FieldRow>
+        <FormActions>
+          <HButton variant="primary" :loading="saving" @click="save()">保存配置</HButton>
+          <HButton variant="tertiary" :loading="testing" @click="test">测试通知</HButton>
+        </FormActions>
+        <TestBanner :state="banner" />
+      </SectionCard>
+</template>
 
     <HModal v-model:show="helpVisible" :title="HELP_TITLES[helpChannel]" width="860px">
       <MessageHelp :channel="helpChannel" />
@@ -359,7 +424,7 @@ const TABS = computed(() => [
   flex: none;
   margin-left: auto;
 }
-/* 手机：五个通道页签自己就要横滑，计数挪到页签上方一行，别再跟它抢宽度 */
+/* 手机：七个通道页签自己就要横滑，计数挪到页签上方一行，别再跟它抢宽度 */
 @media (max-width: 720px) {
   .msg-tabs {
     flex-direction: column-reverse;

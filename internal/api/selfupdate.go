@@ -231,7 +231,7 @@ func MarkStagedBootOK(own string) {
 				from = "旧版本"
 			}
 			log.Printf("[更新] ✓ 已更新到 %s", own)
-			NotifyMessage("✓ 115-Station 已更新", fmt.Sprintf("%s → %s", from, own))
+			NotifyMessage(kindSystem, "✓ 115-Station 已更新", fmt.Sprintf("%s → %s", from, own))
 		}
 	}()
 }

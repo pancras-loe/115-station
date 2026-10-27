@@ -31,7 +31,7 @@ var embyDelGrace = 3 * time.Second
 const embyDelWindow = 2 * time.Minute
 
 // embyDelSend 可替换，测试里收消息用
-var embyDelSend = func(title, content string) { go NotifyMessage(title, content) }
+var embyDelSend = func(title, content string) { go NotifyMessage(kindDelete, title, content) }
 
 type embyDelNotice struct {
 	title   string // 空 = 不推这次删除本身（本站自产的回声），只在深删被拦下 / 失败时单报

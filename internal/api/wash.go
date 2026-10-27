@@ -1032,7 +1032,7 @@ func noteWashReplace(media *TmdbMedia, oldName, newName, destination string) {
 		washQualityOf(oldName), washQualityOf(newName), destination)
 	key := washNoteKeyOf(media)
 	if key == "" {
-		go NotifyMessage("♻️ 洗版替换", text)
+		go NotifyMessage(kindOrganize, "♻️ 洗版替换", text)
 		return
 	}
 	washNoteMu.Lock()
@@ -1051,7 +1051,7 @@ func noteWashReplace(media *TmdbMedia, oldName, newName, destination string) {
 	washNoteMu.Unlock()
 	time.AfterFunc(washNoteTTL, func() {
 		for _, n := range washNotesFor(key) {
-			NotifyMessage("♻️ 洗版替换", n) // 没人认领：兜底单独发
+			NotifyMessage(kindOrganize, "♻️ 洗版替换", n) // 没人认领：兜底单独发
 		}
 	})
 }

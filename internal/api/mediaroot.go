@@ -142,7 +142,7 @@ func mediaRootProblem() string {
 	if rootProbText != "" && time.Since(rootProbSent) > 6*time.Hour {
 		rootProbSent = time.Now()
 		log.Printf("[媒体根] ✗ %s", rootProbText)
-		go NotifyMessage("⚠️ 本地媒体目录没挂上", rootProbText)
+		go NotifyMessage(kindSystem, "⚠️ 本地媒体目录没挂上", rootProbText)
 	}
 	return rootProbText
 }
