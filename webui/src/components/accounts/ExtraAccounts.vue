@@ -7,6 +7,7 @@ import HChip from '@/components/hero/HChip.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import { storageApi } from '@/api'
 import type { Account115 } from '@/api/storage'
+import { DEFAULT_DEVICE } from '@/types/storage'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 /**
@@ -134,7 +135,7 @@ async function remove(a: Account115) {
     </ul>
     <p v-else class="muted small empty">还没有附加账号。别的 115 账号登录进来后，在「媒体库」里建库时就能选它。</p>
 
-    <QrLoginModal v-model:show="qr.show" channel="cookie" device="web" app-id="" :account="qr.id" @success="onScanned" />
+    <QrLoginModal v-model:show="qr.show" channel="cookie" :device="DEFAULT_DEVICE" app-id="" :account="qr.id" @success="onScanned" />
   </SectionCard>
 </template>
 

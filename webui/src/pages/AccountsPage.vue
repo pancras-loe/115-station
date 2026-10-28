@@ -20,7 +20,7 @@ import { libraryApi, storageApi } from '@/api'
 import type { LibLeftover, MediaLibsView } from '@/api/library'
 import { useQueueStore } from '@/stores/queue'
 import { plainProps } from '@/utils/autofill'
-import { DEVICE_OPTIONS } from '@/types/storage'
+import { DEFAULT_DEVICE, DEVICE_OPTIONS } from '@/types/storage'
 import type { StorageCheck } from '@/types/storage'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useTabQuery } from '@/composables/useTabQuery'
@@ -107,7 +107,7 @@ async function cleanLeftover(l: LibLeftover) {
 const DEFAULT_INTERVAL = 3.0
 
 const form = ref({
-  device: 'web',
+  device: DEFAULT_DEVICE,
   interval: DEFAULT_INTERVAL,
   openapi_enabled: false,
   app_id: '',
@@ -131,8 +131,8 @@ async function load() {
     const acc = (res.data ?? []).find((s) => s.type === '115')
     if (acc) {
       form.value = {
-        // 保存过的设备值不在选项里时保持默认网页端
-        device: DEVICE_OPTIONS.some((o) => o.value === acc.device) ? acc.device : 'web',
+        // 保存过的设备值不在选项里时用默认设备
+        device: DEVICE_OPTIONS.some((o) => o.value === acc.device) ? acc.device : DEFAULT_DEVICE,
         interval: acc.interval || DEFAULT_INTERVAL,
         openapi_enabled: !!acc.openapi_enabled,
         app_id: acc.app_id || '',
@@ -195,7 +195,7 @@ async function saveAndScan() {
 
 function reset() {
   form.value = {
-      device: 'web',
+    device: DEFAULT_DEVICE,
     interval: DEFAULT_INTERVAL,
     openapi_enabled: false,
     app_id: '',
@@ -244,7 +244,7 @@ onMounted(() => {
           <SectionCard title="主账号连接" hint="登录设备与开放平台；改完先保存，再扫码才按新设置登录">
             <FieldRow
               label="Cookie 设备"
-              tip="网页端 Cookie 与 115Browser UA 配套，兼容性最好（默认推荐）。App 端 Cookie 有设备槽位校验，与桌面 UA 不匹配会报“服务器开小差”。避免选常用设备导致被挤下线。"
+              tip="115 每种设备同时只能登录一处，扫码登录会顶掉这种设备上已经登录的会话。推荐支付宝小程序：平时几乎用不到，不会把你自己挤下线。网页端会顶掉电脑浏览器里的 115，也最容易触发「IP 登录异常」。已经登录的不用重新扫码。"
             >
               <div class="h-field-row">
                 <HSelect v-model="form.device" :options="DEVICE_OPTIONS" />

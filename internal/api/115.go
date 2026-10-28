@@ -75,7 +75,8 @@ func mapDeviceToApp(device string) string {
 	case "qandroid":
 		return "qandroid"
 	default:
-		return "web"
+		// 没选 / 认不出时用支付宝小程序：几乎没人日常用，不会顶掉用户自己在浏览器里登录的网页端
+		return "alipaymini"
 	}
 }
 

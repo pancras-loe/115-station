@@ -62,12 +62,18 @@ export interface QrStatusResult {
   error?: string
 }
 
-/** 115 Cookie 的设备通道。网页端与 115Browser UA 配套，兼容性最好 */
+/**
+ * 115 Cookie 的设备通道。115 每种设备同时只留一个会话，扫哪种就会顶掉那种设备上已登录的。
+ * 默认支付宝小程序：几乎没人日常用，不会把用户自己挤下线（p115strmhelper / MediaSync115 同款默认）；
+ * 网页端最容易被挤，也最容易触发「IP登录异常」（p115client 文档）。
+ * Cookie 通道的 UA 不随设备变（115.go 的 deviceToUA），选哪种都能访问 webapi。
+ */
+export const DEFAULT_DEVICE = 'alipaymini'
 export const DEVICE_OPTIONS = [
-  { label: '115浏览器_网页端（推荐）', value: 'web' },
+  { label: '115生活_支付宝小程序（推荐）', value: 'alipaymini' },
+  { label: '115浏览器_网页端', value: 'web' },
   { label: '115生活_iOS端', value: '115ios' },
   { label: '115生活_Android端', value: '115android' },
-  { label: '115生活_支付宝小程序', value: 'alipaymini' },
   { label: '115生活_微信小程序', value: 'wechatmini' },
   { label: '115生活_TV端', value: 'tv' },
   { label: '115浏览器_Android端', value: 'qandroid' },
