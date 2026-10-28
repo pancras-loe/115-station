@@ -16,7 +16,7 @@ import (
 // helper/mediasyncdel 的 deep.delete 定位方式，独立实现仅限本次事件的台账筛选。
 // 原生 library.deleted 也可能来自扫库，仍须检查挂载并复核本地确实已缺失。
 func (h *Handler) deepDelOnEmbyDelete(payload map[string]interface{}, deep bool) deepDelOutcome {
-	// Jellyfin 插件的删除事件还没核实能不能带准路径（mediaserver.go），宁可不删
+	// Jellyfin 插件的删除事件不带文件路径（mediaserver.go），宁可不删
 	if why := mediaServerBlock(msFeatDeepDelete); why != "" {
 		log.Printf("[深度删除] ○ 跳过：%s", why)
 		return deepDelOutcome{}

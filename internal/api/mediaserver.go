@@ -135,8 +135,9 @@ func mediaServerUnsupported(kind string) map[string]string {
 		// FullRefresh + 远程探测，提前探过播放时照样再探
 		msFeatPreProbe: "Jellyfin 每次播放 STRM 都会自己重新探测一次，提前探测没有用，只会多取一次 115 直链",
 		msFeatProbeLog: "Jellyfin 的日志接口与 Emby 不同，读不了 ffprobe 的报错",
-		// Jellyfin 没有内置 Webhook，插件的删除事件能不能带文件路径还没核实
-		msFeatDeepDelete: "Jellyfin 没有内置的删除事件，还不支持",
+		// Jellyfin 核心没有 Webhook；官方插件的 ItemDeleted 只带条目 id、名称、类型、TMDB 编号，
+		// 没有文件路径（jellyfin-plugin-webhook DataObjectHelpers.AddBaseItemData），对不上台账
+		msFeatDeepDelete: "Jellyfin Webhook 插件的删除事件不带文件路径，认不出删的是哪个文件",
 		// 要删人物条目，没在 Jellyfin 上验证过
 		msFeatPeopleMerge: "还没在 Jellyfin 上验证过，暂不开放",
 	}

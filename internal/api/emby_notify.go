@@ -56,6 +56,11 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 JSON"})
 		return
 	}
+	// Jellyfin Webhook 插件的扁平载荷换成 Emby 的形状（jellyfin.go），后面一套解析
+	payload, jf := jellyfinWebhookPayload(payload)
+	if jf {
+		vlog("[Emby Webhook] Jellyfin 插件事件 %v", payload["JellyfinType"])
+	}
 	getStr := func(keys ...string) string {
 		for _, k := range keys {
 			if v, ok := payload[k].(string); ok && v != "" {
@@ -90,6 +95,9 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 	}
 
 	category, title := embyEventCategory(event)
+	if jf {
+		title = strings.Replace(title, "Emby", "Jellyfin", 1)
+	}
 	switch category {
 	case "test", "deleted":
 		h.noteEmbyWebhook(map[string]string{"test": "test", "deleted": "delete"}[category], "")
@@ -104,6 +112,12 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		return
 	}
 	if category == "" {
+		if jf {
+			// 插件里多勾了别的事件（会话开始、计划任务完成 …），用不上
+			vlog("[Emby Webhook] Jellyfin 事件 %v 用不上，已忽略", payload["JellyfinType"])
+			c.JSON(http.StatusOK, gin.H{"message": "ok"})
+			return
+		}
 		log.Printf("[Emby Webhook] 未识别的事件类型 %q，已忽略", event)
 		c.JSON(http.StatusOK, gin.H{"message": "ok"})
 		return
@@ -118,6 +132,12 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		}
 		log.Printf("[Emby Webhook] Emby 入库事件: %s", itemName)
 		c.JSON(http.StatusOK, gin.H{"message": "ok（已进入入库通知队列）"})
+		return
+	}
+	if category == "deleted" && jf {
+		// 插件的删除事件不带文件路径：分不清是用户删的还是本站删 STRM 的回声，推出去会刷屏；深删也做不了
+		log.Printf("[Emby Webhook] ○ Jellyfin 删除事件（%s），不带文件路径，只记日志", itemName)
+		c.JSON(http.StatusOK, gin.H{"message": "ok（Jellyfin 删除事件只记日志）"})
 		return
 	}
 	if category == "deleted" {
@@ -305,7 +325,7 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 		return
 	}
 	typeLabel := "电影"
-	if t := str(item, "Type"); t == "Episode" || t == "Series" {
+	if t := str(item, "Type"); t == "Episode" || t == "Series" || t == "Season" {
 		typeLabel = "剧集"
 	}
 	entry := mediaNotifEntry{Title: title, Year: year, Kind: typeLabel, Source: "emby"}
@@ -324,6 +344,9 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 			imgURL := base + "/Items/" + id + "/Images/Primary" + qs
 			entry.PosterAlt = imgURL
 			entry.Link = base + "/web/index.html#!/item?id=" + id
+			if isJellyfinAt(base) {
+				entry.Link = base + "/web/#/details?id=" + id
+			}
 			if data, err := fetchHTTPBytes(imgURL, 8*time.Second); err == nil && len(data) > 0 {
 				entry.PosterData = data
 			}

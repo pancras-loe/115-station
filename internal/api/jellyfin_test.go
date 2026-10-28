@@ -9,6 +9,8 @@ import (
 
 	"115-station/internal/config"
 	"115-station/internal/model"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 假 Jellyfin 的一棵树：库目录 → 分类 → 电影（Movie 的路径就是 .strm，影片目录没有条目）
@@ -196,5 +198,70 @@ func TestMediaServerDetect(t *testing.T) {
 	useJellyfinSetting(t, srv.URL, msEmby)
 	if embyIsJellyfin() || mediaServerBlock(msFeatPreProbe) != "" {
 		t.Fatal("手动指定 Emby 时应按 Emby 走")
+	}
+}
+
+// 插件「Send All Properties」发来的扁平载荷（字段名照 jellyfin-plugin-webhook 的 DataObjectHelpers）
+const jfAddedEpisode = `{"ServerId":"s","ServerName":"jf","NotificationType":"ItemAdded","ItemId":"e1","ItemType":"Episode",
+"Name":"第 \\\"1\\\" 集","SeriesName":"庆余年","SeasonNumber":2,"EpisodeNumber":1,"Year":2019,"Provider_tmdb":"90761","Provider_imdb":"tt1"}`
+
+func TestJellyfinWebhookPayload(t *testing.T) {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(jfAddedEpisode), &raw); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := jellyfinWebhookPayload(raw)
+	if !ok || p["Event"] != "library.new" {
+		t.Fatalf("没认出 Jellyfin 入库事件: %v", p)
+	}
+	item := p["Item"].(map[string]interface{})
+	ids := item["ProviderIds"].(map[string]interface{})
+	if item["Name"] != `第 "1" 集` || item["SeasonName"] != "第 2 季" || item["ProductionYear"] != 2019.0 ||
+		ids["Tmdb"] != "90761" || ids["Imdb"] != "tt1" || item["Type"] != "Episode" {
+		t.Fatalf("字段换错: %v", item)
+	}
+
+	// Emby 的载荷原样放过
+	emby := map[string]interface{}{"Event": "library.new", "Item": map[string]interface{}{"Name": "x"}}
+	if _, ok := jellyfinWebhookPayload(emby); ok {
+		t.Fatal("Emby 载荷不该被改写")
+	}
+	// 用不上的类型不能被动作词猜成播放（SessionStart 带 start）
+	p, _ = jellyfinWebhookPayload(map[string]interface{}{"NotificationType": "SessionStart"})
+	if c, _ := embyEventCategory(strings.ToLower(p["Event"].(string))); c != "" {
+		t.Fatalf("SessionStart 被归成了 %q", c)
+	}
+	for nt, want := range map[string]string{"PlaybackStart": "play", "PlaybackStop": "pause", "ItemDeleted": "deleted"} {
+		p, _ = jellyfinWebhookPayload(map[string]interface{}{"NotificationType": nt})
+		if c, _ := embyEventCategory(strings.ToLower(p["Event"].(string))); c != want {
+			t.Errorf("%s → %q，想要 %q", nt, c, want)
+		}
+	}
+}
+
+// 走一遍接口：删除事件不带路径，只记日志、不深删不推；入库事件进入库通知队列
+func TestJellyfinWebhookHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newTestDB(t, "jfhook.db")
+	resetWebhookSeen()
+	t.Cleanup(resetWebhookSeen)
+	cfg := &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
+	_ = cfg.SaveSetting("emby-notify", `{"token":"tk"}`)
+	h := &Handler{DB: model.DB, Config: cfg}
+	post := func(body string) string {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/emby/webhook?token=tk", strings.NewReader(body))
+		h.EmbyWebhook(c)
+		return w.Body.String()
+	}
+	if b := post(`{"NotificationType":"ItemDeleted","ItemId":"m1","ItemType":"Movie","Name":"钢铁侠"}`); !strings.Contains(b, "只记日志") {
+		t.Fatalf("Jellyfin 删除事件: %s", b)
+	}
+	if b := post(jfAddedEpisode); !strings.Contains(b, "入库通知队列") {
+		t.Fatalf("Jellyfin 入库事件: %s", b)
+	}
+	if b := post(`{"NotificationType":"PendingRestart"}`); !strings.Contains(b, "ok") {
+		t.Fatalf("用不上的事件: %s", b)
 	}
 }

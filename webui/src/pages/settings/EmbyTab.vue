@@ -342,7 +342,7 @@ watch(
           <ul class="jf-notes">
             <li>客户端直连 Jellyfin 播放 STRM 时，由 Jellyfin 自己去拉流，流量经过它所在的机器；要 302 直连，客户端要连本站的反代端口</li>
             <li>Jellyfin 每次播放 STRM 都会重新探测一次，多取一次 115 直链；所以提前探测在 Jellyfin 下关闭</li>
-            <li>Webhook 要装官方插件「Webhook」；Emby 删条目联动删网盘（深度删除）暂不支持</li>
+            <li>Webhook 要装官方插件「Webhook」（设置步骤在右边）；它的删除事件不带文件路径，Emby 删条目联动删网盘（深度删除）用不了</li>
             <li>建媒体库时记得关掉「缩略进度图（Trickplay）」，它要对整部片抽帧</li>
           </ul>
         </HAlert>
@@ -361,6 +361,17 @@ watch(
         >
           <CopyBox :value="webhookUrl" />
         </FieldRow>
+
+        <ol v-if="effectiveKind === 'jellyfin'" class="jf-steps">
+          <li>Jellyfin「控制台 → 插件 → 目录」安装「Webhook」，装完重启 Jellyfin</li>
+          <li>打开插件设置，点「Add Generic Destination」</li>
+          <li>Webhook Url 填上面的接收地址</li>
+          <li>Notification Type 勾「Item Added」「Playback Start」「Playback Stop」</li>
+          <li>Item Type 勾「Movies」「Episodes」（剧集按整部报就勾「Series」）</li>
+          <li>勾上「Send All Properties (ignores template)」，模板留空，保存</li>
+          <li>插件没有测试按钮：播一个视频，深度删除页会显示收到过事件</li>
+          <li class="muted">删除事件（Item Deleted）不带文件路径，分不清是不是本站自己删的，本站只记日志、不推通知</li>
+        </ol>
 
         <FieldRow
           stacked
@@ -438,6 +449,19 @@ watch(
 </template>
 
 <style scoped>
+.jf-steps {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  list-style: decimal;
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.jf-steps .muted {
+  list-style: none;
+  margin-left: -20px;
+  margin-top: 4px;
+}
 .jf-notes {
   margin: 4px 0 0;
   padding-left: 18px;

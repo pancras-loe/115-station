@@ -3,6 +3,7 @@ package api
 import (
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -142,4 +143,66 @@ func jellyfinTitlesByTmdb(base, key string, t personTarget, typ string) ([]embyT
 		return nil, err
 	}
 	return page.Items, nil
+}
+
+// ---- Jellyfin Webhook 插件 ----
+//
+// Jellyfin 核心没有 Webhook，靠官方插件 jellyfin-plugin-webhook（读的是 D:\Code\115strm\jellyfin-plugin-webhook）。
+// 用「Generic」目的地、勾上「Send All Properties」时，插件不套模板，把数据对象整个发成扁平 JSON
+// （DataObjectHelpers：NotificationType、ItemId、ItemType、Name、Year、SeriesName、SeasonNumber、
+// EpisodeNumber、Provider_tmdb、NotificationUsername、DeviceName …），这里换成 Emby 的形状交给同一个解析器。
+//
+// 删除事件（ItemDeleted）**不带文件路径**（AddBaseItemData 里没有 Path），所以：
+// 深度删除做不了（mediaserver.go 的不支持清单）；也认不出是不是本站自己删 STRM 的回声，推出去会刷屏，只记日志
+
+// jfWebhookEvent 插件的 NotificationType → Emby 事件名。别的类型（SessionStart、PendingRestart …）
+// 一律换成认不出的名字：embyEventCategory 按动作词猜，SessionStart 会被当成「播放」
+var jfWebhookEvent = map[string]string{
+	"ItemAdded":     "library.new",
+	"ItemDeleted":   "library.deleted",
+	"PlaybackStart": "playback.start",
+	"PlaybackStop":  "playback.stop",
+}
+
+// jellyfinWebhookPayload 是不是插件「Send All Properties」发来的扁平载荷；是的话换成 Emby 形状
+func jellyfinWebhookPayload(p map[string]interface{}) (map[string]interface{}, bool) {
+	nt, _ := p["NotificationType"].(string)
+	if nt == "" || p["Item"] != nil || p["Event"] != nil {
+		return p, false
+	}
+	str := func(k string) string {
+		v, _ := p[k].(string)
+		// 插件给字符串值的双引号加了反斜杠（DataObjectHelpers.Escape，本意是给手写的 JSON 模板用），整包序列化后还留着
+		return strings.ReplaceAll(v, `\"`, `"`)
+	}
+	event := jfWebhookEvent[nt]
+	if event == "" {
+		event = "jellyfin.unhandled"
+	}
+	item := map[string]interface{}{
+		"Id": str("ItemId"), "Name": str("Name"), "Type": str("ItemType"), "SeriesName": str("SeriesName"),
+	}
+	if y, ok := p["Year"].(float64); ok && y > 0 {
+		item["ProductionYear"] = y
+	}
+	if s, ok := p["SeasonNumber"].(float64); ok && str("ItemType") == "Episode" {
+		item["SeasonName"] = "第 " + strconv.Itoa(int(s)) + " 季"
+	}
+	ids := map[string]interface{}{}
+	for k, v := range p {
+		if name, ok := strings.CutPrefix(k, "Provider_"); ok && name != "" {
+			if s, _ := v.(string); s != "" {
+				ids[strings.ToUpper(name[:1])+name[1:]] = s
+			}
+		}
+	}
+	item["ProviderIds"] = ids
+	out := map[string]interface{}{
+		"Event": event, "Item": item, "Jellyfin": true, "JellyfinType": nt,
+		"User": map[string]interface{}{"Name": str("NotificationUsername")},
+	}
+	if d := str("DeviceName"); d != "" {
+		out["Session"] = map[string]interface{}{"DeviceName": d, "Client": str("ClientName")}
+	}
+	return out, true
 }
