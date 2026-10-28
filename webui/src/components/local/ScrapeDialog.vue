@@ -12,6 +12,7 @@ import type { LocalTitle, ScrapeOptions } from '@/api/local'
 import type { TmdbCandidate } from '@/api/resources'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
+import { useMediaServer } from '@/composables/mediaServer'
 
 /**
  * 刮削本地媒体库里所选的片目。选项默认取「影视刮削」页里保存的配置，
@@ -26,6 +27,7 @@ const props = defineProps<{ targets: LocalTitle[]; preset?: 'auto' | 'pick' }>()
 const show = defineModel<boolean>('show', { required: true })
 
 const { message, dialog } = useFeedback()
+const ms = useMediaServer()
 
 /** 开着轨道探测时，所选视频超过这个数要确认两次（与后端 localProbeConfirmVideos 一致） */
 const PROBE_CONFIRM_VIDEOS = 100
@@ -73,7 +75,7 @@ watch(show, async (v) => {
       write_images: c.write_images !== false,
       force: !!c.force,
       upload: false,
-      probe: !!c.probe_streams,
+      probe: !!c.probe_streams && !ms.blocked('pre_probe'),
       skip_shared_stills: c.skip_shared_stills !== false,
     }
     uploadLibs.value = (mon?.libs ?? []).filter((l) => l.upload).map((l) => l.name)
@@ -199,11 +201,15 @@ async function submit() {
         </FieldRow>
         <FieldRow
           label="轨道探测"
-          :hint="`刮完让 Emby 给这些片目里还没有媒体信息的条目提前探测，第一次播放更快。后台逐个进行，每个条目一次 115 直链请求。所选共 ${totalVideos} 个视频${totalVideos > PROBE_CONFIRM_VIDEOS ? '，提交时需要确认两次' : ''}。`"
+          :hint="ms.blocked('pre_probe') ? `${ms.name.value} 下不可用：${ms.blocked('pre_probe')}` : `刮完让 Emby 给这些片目里还没有媒体信息的条目提前探测，第一次播放更快。后台逐个进行，每个条目一次 115 直链请求。所选共 ${totalVideos} 个视频${totalVideos > PROBE_CONFIRM_VIDEOS ? '，提交时需要确认两次' : ''}。`"
         >
-          <HSegmented v-model="opts.probe" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
+          <HSegmented
+            v-model="opts.probe"
+            :disabled="!!ms.blocked('pre_probe')"
+            :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]"
+          />
         </FieldRow>
-        <HAlert v-if="opts.probe" status="accent" class="probe-note">
+        <HAlert v-if="opts.probe && !ms.blocked('pre_probe')" status="accent" class="probe-note">
           刮削结束后会另建一个「Emby 探测」任务，进度和每集结果在任务中心，失败的可以重试。
           已有媒体信息的不会再探；这是手动探测，不受入库后自动探测的次数限制，只是同一视频 {{ PROBE_DEBOUNCE_MIN }} 分钟内不重复请求（免得重复取 115 直链）。
         </HAlert>

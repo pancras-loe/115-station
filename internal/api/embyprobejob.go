@@ -58,6 +58,9 @@ func enqueueProbeJob(db *gorm.DB, s probeJobSpec) (model.TaskJob, error) {
 	if len(s.Paths)+len(s.Items) == 0 {
 		return model.TaskJob{}, errors.New("没有要探测的条目")
 	}
+	if err := preProbeBlockErr(); err != nil {
+		return model.TaskJob{}, err
+	}
 	if s.Source == "" {
 		s.Source = "web"
 	}
@@ -117,6 +120,10 @@ func execProbeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	if _, ok := loadEmbyRefreshCfg(); !ok {
 		return jobOutcome{}, errors.New("没有配置 Emby")
+	}
+	// 换成 Jellyfin 之前排下的
+	if err := preProbeBlockErr(); err != nil {
+		return jobOutcome{}, err
 	}
 	targets := append([]string(nil), p.Paths...)
 	for _, id := range p.Items {

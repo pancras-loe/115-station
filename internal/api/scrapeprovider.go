@@ -64,7 +64,10 @@ type embyVirtualFolder struct {
 	LibraryOptions struct {
 		EnableRealtimeMonitor        bool `json:"EnableRealtimeMonitor"`
 		EnableChapterImageExtraction bool `json:"EnableChapterImageExtraction"`
-		TypeOptions []struct {
+		// Jellyfin 独有的缩略进度图（LibraryOptions.cs）：对整片抽帧，STRM 就是反复取 115 直链。Emby 没有这两项，读出来是 false
+		EnableTrickplayImageExtraction          bool `json:"EnableTrickplayImageExtraction"`
+		ExtractTrickplayImagesDuringLibraryScan bool `json:"ExtractTrickplayImagesDuringLibraryScan"`
+		TypeOptions                             []struct {
 			Type             string   `json:"Type"`
 			MetadataFetchers []string `json:"MetadataFetchers"`
 			ImageFetchers    []string `json:"ImageFetchers"`
@@ -181,6 +184,12 @@ func checkEmbyLib(lib embyVirtualFolder) embyLibCheck {
 	}
 	if !out.NfoReader {
 		out.StationIssues = append(out.StationIssues, "没勾 Nfo 元数据读取器，本站写的 NFO Emby 不读")
+	}
+	// 两种刮削方式都要报：不管谁刮，抽帧都要读视频内容
+	if o := lib.LibraryOptions; o.EnableTrickplayImageExtraction || o.ExtractTrickplayImagesDuringLibraryScan {
+		why := "开着缩略进度图（Trickplay）提取：要对整部片抽帧，每部都会反复取 115 直链，到媒体库设置里关掉"
+		out.StationIssues = append(out.StationIssues, why)
+		out.EmbyIssues = append(out.EmbyIssues, why)
 	}
 	// 只在 Emby 真的给了 Person 这一项时才说：没给就不知道它把人物下载器放在哪，不下结论。
 	// Emby 自己刮人物不记账，TMDB 上没头像的人每次刷新都再去问一遍，连不上 TMDB 时一个人卡 20 秒超时

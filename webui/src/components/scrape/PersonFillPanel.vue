@@ -17,11 +17,13 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { JOB_STATUS } from '@/utils/jobStatus'
 import { useQueueStore } from '@/stores/queue'
 import { useScrapeProvider } from '@/composables/scrapeProvider'
+import { useMediaServer } from '@/composables/mediaServer'
 
 const { message } = useFeedback()
 // 所有库都「不刮（交给 Emby）」：不会再有刮削任务，「刮削后补全」自然不生效，置灰说明
 const { embyScrapes } = useScrapeProvider()
 const router = useRouter()
+const ms = useMediaServer()
 
 const DEFAULTS: PersonFillConfig = {
   after_scrape: false,
@@ -213,8 +215,15 @@ function openLastJob() {
           tip="同一个 TMDB 人物在 Emby 里有好几个条目时（常见：老片挂着英文名的，新刮的片按中文名又建了一个），每次全库扫描开头把它们并成一个：留下中文名、有头像的那个，把挂着重复条目的片目改成挂留下的，确认没有片目再挂着重复条目后才删掉它。名字对不上这个 TMDB 人物的、重复条目同名的不合并。每次最多 50 组。刮削后补全不做这一步。"
         >
           <div class="dup-row">
-            <HSwitch v-model="form.merge_dups" aria-label="合并重复人物" />
-            <HButton variant="tertiary" size="sm" :loading="dupsLoading" @click="loadDups">检查重复</HButton>
+            <HSwitch v-model="form.merge_dups" :disabled="!!ms.blocked('people_merge')" aria-label="合并重复人物" />
+            <HButton
+              variant="tertiary"
+              size="sm"
+              :disabled="!!ms.blocked('people_merge')"
+              :loading="dupsLoading"
+              @click="loadDups"
+            >检查重复</HButton>
+            <span v-if="ms.blocked('people_merge')" class="ms-block">{{ ms.name.value }} 下不可用：{{ ms.blocked('people_merge') }}</span>
           </div>
         </FieldRow>
         <div v-if="dups" class="dups">
@@ -298,6 +307,10 @@ function openLastJob() {
 </template>
 
 <style scoped>
+.ms-block {
+  font-size: 12.5px;
+  color: var(--warning);
+}
 .stack {
   display: flex;
   flex-direction: column;

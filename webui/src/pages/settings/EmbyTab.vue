@@ -6,6 +6,7 @@ import HHelpTip from '@/components/hero/HHelpTip.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
+import HAlert from '@/components/hero/HAlert.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import SecretInput from '@/components/ui/SecretInput.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -17,11 +18,13 @@ import { plainProps } from '@/utils/autofill'
 import { useSetting } from '@/composables/useSetting'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import { useMediaServer } from '@/composables/mediaServer'
 
 const { message } = useFeedback()
 const router = useRouter()
 const route = useRoute()
 const media = useFullSetting()
+const ms = useMediaServer()
 
 const { model, loading, saving, dirty: modelDirty, saved, save } = useSetting('emby', {
   server_url: '',
@@ -29,7 +32,19 @@ const { model, loading, saving, dirty: modelDirty, saved, save } = useSetting('e
   path_mapping: '',
   style: 'unix',
   refresh_enabled: true,
+  /** 服务器类型：空 = 按 /System/Info/Public 自动识别（后端 mediaserver.go） */
+  kind: '',
 })
+
+const KIND_OPTIONS = [
+  { label: '自动识别', value: '' },
+  { label: 'Emby', value: 'emby' },
+  { label: 'Jellyfin', value: 'jellyfin' },
+]
+/** 测试连接认出来的类型，没测过就看后端当前判定 */
+const testedKind = ref('')
+const effectiveKind = computed(() => model.value.kind || testedKind.value || ms.kind.value)
+const serverName = computed(() => (effectiveKind.value === 'jellyfin' ? 'Jellyfin' : 'Emby'))
 
 const banner = ref<BannerState | null>(null)
 const testing = ref(false)
@@ -169,29 +184,35 @@ function autoDetectIfEmpty() {
 
 async function saveEmby() {
   model.value.path_mapping = currentPathMapping()
-  if (await save()) autoDetectIfEmpty()
+  if (await save()) {
+    ms.reload()
+    autoDetectIfEmpty()
+  }
 }
 
 async function testConnection() {
   const url = model.value.server_url.trim()
   if (!url) {
-    banner.value = { status: 'err', title: '请先填写 Emby 服务器地址' }
+    banner.value = { status: 'err', title: '请先填写服务器地址' }
     return
   }
   testing.value = true
-  banner.value = { status: 'pending', title: '正在连接 Emby 服务器…' }
+  banner.value = { status: 'pending', title: `正在连接 ${serverName.value} 服务器…` }
   try {
     const d = await configApi.testEmby({ server_url: url, api_key: model.value.api_key.trim() })
+    if (d.ok && d.kind) testedKind.value = d.kind
+    const product = d.product || serverName.value
+    const mismatch = d.ok && model.value.kind && d.kind && model.value.kind !== d.kind
     banner.value = d.ok
       ? {
-          status: 'ok',
-          title: 'Emby 连接成功',
-          detail: `${d.server_name || 'Emby'}${d.version ? ` · v${d.version}` : ''} · ${d.library_count ?? 0} 个媒体库`,
+          status: mismatch ? 'err' : 'ok',
+          title: mismatch ? `连上了，但这是 ${product}，和上面选的类型对不上` : `${product} 连接成功`,
+          detail: `${d.server_name || product}${d.version ? ` · v${d.version}` : ''} · ${d.library_count ?? 0} 个媒体库`,
         }
-      : { status: 'err', title: 'Emby 连接失败', detail: d.error || '未知错误' }
+      : { status: 'err', title: '连接失败', detail: d.error || '未知错误' }
     if (d.ok) autoDetectIfEmpty()
   } catch (e) {
-    banner.value = { status: 'err', title: 'Emby 连接失败', detail: e instanceof Error ? e.message : '' }
+    banner.value = { status: 'err', title: '连接失败', detail: e instanceof Error ? e.message : '' }
   } finally {
     testing.value = false
   }
@@ -265,30 +286,44 @@ async function loadNotify() {
 onMounted(loadNotify)
 
 // 改了服务器地址就把上次的测试结果清掉，避免拿旧结论当新结论
-watch(() => [model.value.server_url, model.value.api_key], () => (banner.value = null))
+watch(
+  () => [model.value.server_url, model.value.api_key],
+  () => {
+    banner.value = null
+    testedKind.value = ''
+  },
+)
 </script>
 
 <template>
   <!-- 一屏放下：连接与 Webhook 并排，路径映射与转换测试同一张网格上下对齐，保存条收在最后 -->
   <div class="tab">
     <div class="grid">
-      <SectionCard title="Emby 连接" hint="入库刷新、提前探测、对账都用这里的地址与密钥">
+      <SectionCard title="媒体服务器连接" hint="入库刷新、对账、海报墙的媒体信息都用这里的地址与密钥">
+        <FieldRow
+          stacked
+          label="服务器类型"
+          tip="Emby 与 Jellyfin 同源，大部分功能两边都能用；少数几项 Jellyfin 做不了，会在对应页面灰掉并写明原因。自动识别读的是服务器的公开信息，一般不用改。"
+        >
+          <HSegmented v-model="model.kind" :options="KIND_OPTIONS" />
+        </FieldRow>
+
         <FieldRow
           stacked
           label="服务器地址"
           required
-          tip="Emby 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
+          tip="Emby / Jellyfin 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
         >
           <HInput v-model="model.server_url" placeholder="如 http://192.168.1.100:8096" :input-attrs="plainProps('emby-server-url')" />
         </FieldRow>
 
-        <FieldRow stacked label="API 密钥" tip="Emby 后台「设置 → API 密钥」生成，用于按库刷新与连接测试。">
+        <FieldRow stacked label="API 密钥" tip="Emby 后台「设置 → API 密钥」、Jellyfin 后台「控制台 → API 密钥」生成，用于按库刷新与连接测试。">
           <div class="h-field-row">
             <SecretInput
               v-model="model.api_key"
               name="emby-api-key"
               :reveal="{ key: 'emby', field: 'api_key' }"
-              placeholder="Emby 设置 → API 密钥 中生成"
+              placeholder="在服务器后台的 API 密钥里生成"
             />
             <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>
           </div>
@@ -300,15 +335,28 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
           label="入库时刷新"
           tip="非必须：Emby 开着实时监控也能入库，这里只是让入库更快。"
         >
-          <HSwitch v-model="model.refresh_enabled">STRM 生成后通知 Emby 刷新对应媒体库</HSwitch>
+          <HSwitch v-model="model.refresh_enabled">STRM 生成后通知 {{ serverName }} 刷新对应媒体库</HSwitch>
         </FieldRow>
+
+        <HAlert v-if="effectiveKind === 'jellyfin'" status="warning" title="Jellyfin 与 Emby 的几处不同">
+          <ul class="jf-notes">
+            <li>客户端直连 Jellyfin 播放 STRM 时，由 Jellyfin 自己去拉流，流量经过它所在的机器；要 302 直连，客户端要连本站的反代端口</li>
+            <li>Jellyfin 每次播放 STRM 都会重新探测一次，多取一次 115 直链；所以提前探测在 Jellyfin 下关闭</li>
+            <li>Webhook 要装官方插件「Webhook」；Emby 删条目联动删网盘（深度删除）暂不支持</li>
+            <li>建媒体库时记得关掉「缩略进度图（Trickplay）」，它要对整部片抽帧</li>
+          </ul>
+        </HAlert>
       </SectionCard>
 
-      <SectionCard title="Emby Webhook" hint="入库 / 删除 / 播放时的消息通知，改动即时生效">
+      <SectionCard :title="`${serverName} Webhook`" hint="入库 / 删除 / 播放时的消息通知，改动即时生效">
         <FieldRow
           stacked
           label="接收地址"
-          tip="填到 Emby 的 Webhooks，请求方式 POST、内容类型 application/json；推送哪些事件在 Emby 里勾选。"
+          :tip="
+            effectiveKind === 'jellyfin'
+              ? '在 Jellyfin 插件目录装「Webhook」，添加一个 Generic Destination 填这个地址；推送哪些事件在插件里勾选。'
+              : '填到 Emby 的 Webhooks，请求方式 POST、内容类型 application/json；推送哪些事件在 Emby 里勾选。'
+          "
           hint="主机部分换成 Emby 访问得到的地址：同宿主机容器用 172.17.0.1，局域网用内网 IP，跨网用公网域名；路径与 token 不变。"
         >
           <CopyBox :value="webhookUrl" />
@@ -352,7 +400,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         </div>
         <span class="arrow">→</span>
         <label class="cell">
-          <span class="cell-label">Emby 媒体库目录</span>
+          <span class="cell-label">{{ serverName }} 媒体库目录</span>
           <HInput v-model="embyMediaRoot" placeholder="如 /media" />
         </label>
         <div class="cell">
@@ -369,7 +417,7 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
         </label>
         <span class="arrow">→</span>
         <div class="cell span-rest">
-          <span class="cell-label">Emby 里的路径</span>
+          <span class="cell-label">{{ serverName }} 里的路径</span>
           <CopyBox v-if="pathResult" :value="pathResult" tone="success" />
           <div v-else class="probe-empty">输入左边的路径后显示，与 Emby 里的一致即映射正确</div>
         </div>
@@ -390,6 +438,13 @@ watch(() => [model.value.server_url, model.value.api_key], () => (banner.value =
 </template>
 
 <style scoped>
+.jf-notes {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
 .root-ro {
   display: flex;
   align-items: center;

@@ -407,14 +407,13 @@ func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 				go func(idx int, id, name, typ string) {
 					defer wg.Done()
 					out := libOut{idx: idx, name: name, typ: typ}
-					if lr, err := getJSON("/Items", url.Values{
+					// 剧集库里「已排播但没有文件」的占位集也会被算进去（embyRealOnly）
+					if lr, err := getJSON("/Items", embyRealOnly(base, url.Values{
 						"ParentId": {id}, "Recursive": {"true"}, "Limit": {"4"},
 						"SortBy": {"DateCreated"}, "SortOrder": {"Descending"},
 						// 见 embyCountTypes：少了这一行电影库的数字会翻倍
 						"IncludeItemTypes": {embyCountTypes(typ)},
-						// 剧集库里「已排播但没有文件」的占位集也会被算进去
-						"IsVirtualItem": {"false"},
-					}); err == nil {
+					})); err == nil {
 						if tc, ok := lr["TotalRecordCount"].(float64); ok {
 							out.count = int(tc)
 						}

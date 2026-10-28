@@ -111,14 +111,19 @@ func embyTitlesByTmdb(base, key string, t personTarget) ([]embyTitleItem, error)
 		typ = "Series"
 	}
 	id := strconv.Itoa(t.TmdbID)
-	q := url.Values{
-		"Recursive": {"true"}, "IncludeItemTypes": {typ}, "AnyProviderIdEquals": {"tmdb." + id},
-		"Fields": {"ProviderIds,People,Path"}, "EnableUserData": {"false"}, "Limit": {"20"},
-	}
 	var page struct {
 		Items []embyTitleItem `json:"Items"`
 	}
-	if err := embyGetJSON(base, key, "/Items", q, &page); err != nil {
+	if isJellyfinAt(base) {
+		items, err := jellyfinTitlesByTmdb(base, key, t, typ)
+		if err != nil {
+			return nil, err
+		}
+		page.Items = items
+	} else if err := embyGetJSON(base, key, "/Items", url.Values{
+		"Recursive": {"true"}, "IncludeItemTypes": {typ}, "AnyProviderIdEquals": {"tmdb." + id},
+		"Fields": {"ProviderIds,People,Path"}, "EnableUserData": {"false"}, "Limit": {"20"},
+	}, &page); err != nil {
 		return nil, err
 	}
 	// 再核一遍编号：参数拼错或老版本 Emby 不认这个参数时会返回整库

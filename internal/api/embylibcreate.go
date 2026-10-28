@@ -424,6 +424,9 @@ func buildEmbyLibOptions(avail *embyAvailOpts, typ, scrape string, paths []strin
 	opts["ExtractChapterImagesDuringLibraryScan"] = false
 	opts["EnableMarkerDetection"] = false
 	opts["EnableMarkerDetectionDuringLibraryScan"] = false
+	// Jellyfin 的缩略进度图（Emby 没有这两项，多给的字段它不认）：同样要读整部片
+	opts["EnableTrickplayImageExtraction"] = false
+	opts["ExtractTrickplayImagesDuringLibraryScan"] = false
 	opts["SaveLocalThumbnailSets"] = false
 	opts["DownloadImagesInAdvance"] = false
 	opts["EnableMultiVersionByFiles"] = true

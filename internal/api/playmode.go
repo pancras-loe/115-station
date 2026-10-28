@@ -214,18 +214,18 @@ func (h *Handler) PlaybackEmbyUsers(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"configured": false, "users": []playbackEmbyUser{}})
 		return
 	}
-	var page struct {
-		Items []struct {
-			ID               string `json:"Id"`
-			Name             string `json:"Name"`
-			LastActivityDate string `json:"LastActivityDate"`
-			Policy           struct {
-				IsAdministrator bool `json:"IsAdministrator"`
-				IsDisabled      bool `json:"IsDisabled"`
-			} `json:"Policy"`
-		} `json:"Items"`
+	type embyUser struct {
+		ID               string `json:"Id"`
+		Name             string `json:"Name"`
+		LastActivityDate string `json:"LastActivityDate"`
+		Policy           struct {
+			IsAdministrator bool `json:"IsAdministrator"`
+			IsDisabled      bool `json:"IsDisabled"`
+		} `json:"Policy"`
 	}
-	if err := embyGetJSON(base, key, "/Users/Query", url.Values{}, &page); err != nil {
+	var page struct{ Items []embyUser }
+	var err error
+	if page.Items, err = embyUserList[embyUser](base, key, url.Values{}); err != nil {
 		c.JSON(http.StatusOK, gin.H{"configured": true, "error": err.Error(), "users": []playbackEmbyUser{}})
 		return
 	}

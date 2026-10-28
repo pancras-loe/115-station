@@ -75,6 +75,21 @@ export interface EmbyTestResult extends TestResult {
   server_name?: string
   version?: string
   library_count?: number
+  /** 认出来的类型（emby / jellyfin） */
+  kind?: string
+  product?: string
 }
 export const testEmby = (body: { server_url: string; api_key: string }) =>
   http.post<EmbyTestResult>('/config/test-emby', body)
+
+/** 当前媒体服务器是哪家、哪些功能用不了（后端 mediaserver.go） */
+export interface MediaServerCaps {
+  /** 没配地址时为空 */
+  kind: string
+  name: string
+  /** 用户手动指定的类型，空 = 自动识别 */
+  configured?: string
+  /** 功能 key → 不支持的原因，key 见 composables/mediaServer.ts 的 MsFeature */
+  unsupported: Record<string, string>
+}
+export const mediaServerCaps = () => http.get<MediaServerCaps>('/mediaserver/caps')

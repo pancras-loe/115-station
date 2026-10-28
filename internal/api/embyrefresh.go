@@ -1096,7 +1096,13 @@ type embyMediaFolder struct {
 }
 
 func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
-	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, "/Library/VirtualFolders/Query", nil, nil)
+	// /Library/VirtualFolders/Query 是 Emby 专有的，Jellyfin 只有 /Library/VirtualFolders（直接回数组，字段一样）
+	jf := isJellyfinAt(cfg.ServerURL)
+	path := "/Library/VirtualFolders/Query"
+	if jf {
+		path = "/Library/VirtualFolders"
+	}
+	resp, err := embyRequest(http.MethodGet, cfg.ServerURL, cfg.APIKey, path, nil, nil)
 	if err != nil {
 		log.Printf("[Emby] ✗ 取媒体库列表失败: %v", err)
 		return nil
@@ -1110,8 +1116,14 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 	var libs struct {
 		Items []embyMediaFolder `json:"Items"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&libs); err != nil {
-		log.Printf("[Emby] ✗ 解析媒体库目录失败: %v", err)
+	var err2 error
+	if jf {
+		err2 = json.NewDecoder(resp.Body).Decode(&libs.Items)
+	} else {
+		err2 = json.NewDecoder(resp.Body).Decode(&libs)
+	}
+	if err2 != nil {
+		log.Printf("[Emby] ✗ 解析媒体库目录失败: %v", err2)
 		return nil
 	}
 	valid := make([]embyMediaFolder, 0, len(libs.Items))
@@ -1138,6 +1150,9 @@ func embyMediaFolders(cfg embyRefreshCfg) []embyMediaFolder {
 type embyItemHit struct{ ID, Name, Type string }
 
 func embyItemsByPath(cfg embyRefreshCfg, embyPath string) (hits []embyItemHit) {
+	if isJellyfinAt(cfg.ServerURL) {
+		return jellyfinItemsByPath(cfg, embyPath)
+	}
 	q := url.Values{
 		"Path":      {embyPath},
 		"Recursive": {"true"},

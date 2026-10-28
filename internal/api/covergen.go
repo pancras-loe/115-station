@@ -199,8 +199,8 @@ func (h *Handler) coverEmbyLibs(cfg coverGenCfg) ([]coverLib, error) {
 		case "rating":
 			sortBy = "CommunityRating"
 		}
-		q := url.Values{"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {embyCountTypes(f.CollectionType)}, "IsVirtualItem": {"false"}, "ImageTypes": {"Primary"}, "SortBy": {sortBy}, "SortOrder": {order}, "Limit": {strconv.Itoa(cfg.PosterCount)}}
-		r, err := embyRequest(http.MethodGet, base, key, "/Items", q, nil)
+		q := url.Values{"ParentId": {f.ItemID}, "Recursive": {"true"}, "IncludeItemTypes": {embyCountTypes(f.CollectionType)}, "ImageTypes": {"Primary"}, "SortBy": {sortBy}, "SortOrder": {order}, "Limit": {strconv.Itoa(cfg.PosterCount)}}
+		r, err := embyRequest(http.MethodGet, base, key, "/Items", embyRealOnly(base, q), nil)
 		if err != nil {
 			return nil, fmt.Errorf("获取媒体库《%s》项目失败", f.Name)
 		}

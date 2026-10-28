@@ -21,6 +21,7 @@ import type { DeepDelSetting } from './deepDelSetting'
 import { toastError } from '@/composables/useFeedback'
 import { fullTime, relTime } from '@/utils/time'
 import { num } from '@/utils/format'
+import { useMediaServer } from '@/composables/mediaServer'
 
 /**
  * 深度删除页签（2026-10-23 按「状态 → 记录 → 设置」重排，参考 p115strmhelper 的同步删除历史）：
@@ -48,6 +49,7 @@ async function load() {
 }
 // ---- Emby Webhook 收到过什么：Emby 查不到它的 Webhook 配置，只能看本站收到过什么（embywebhookseen.go）----
 const hook = ref<EmbyWebhookStatus | null>(null)
+const ms = useMediaServer()
 async function loadHook() {
   try {
     hook.value = await syncApi.embyWebhookStatus()
@@ -257,8 +259,11 @@ const RULES = {
       <div class="side">
         <SectionCard title="事件联动" hint="Emby 里删片后，联动删除对应的网盘源文件">
           <FieldRow label="启用事件联动" tip="开启后接收原生 library.deleted 和神医助手 deep.delete。整理记录的深度删除按钮独立可用，不受这个开关影响。">
-            <HSwitch v-model="cfg.enabled" aria-label="启用事件联动" />
+            <HSwitch v-model="cfg.enabled" :disabled="!!ms.blocked('deep_delete') && !cfg.enabled" aria-label="启用事件联动" />
           </FieldRow>
+          <HAlert v-if="ms.blocked('deep_delete')" status="warning" class="warn">
+            {{ ms.name.value }} 下不可用：{{ ms.blocked('deep_delete') }}。开关开着也不会删任何东西；整理记录里的深度删除照常可用。
+          </HAlert>
           <FieldRow label="清理网盘空目录" tip="影片/季目录空了就跟着删，再往上只删完全为空的目录，不会进入其他影片。也适用于整理记录删除。">
             <HSwitch v-model="cfg.prune_pan_dirs" aria-label="清理网盘空目录" />
           </FieldRow>

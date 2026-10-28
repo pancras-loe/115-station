@@ -108,7 +108,10 @@ var embyExtractQ = struct {
 }{queued: map[string]*embyExtractEntry{}, wake: make(chan struct{}, 1)}
 
 // embyExtractEnabled 入库确认后要不要提前探测（全局开关：影视刮削「轨道探测」）
-func embyExtractEnabled() bool { return loadScrapeCfg().ProbeStreams }
+func embyExtractEnabled() bool {
+	// Jellyfin 播放 STRM 时每次都自己再探一次（mediaserver.go），提前探只会多取一次 115 直链
+	return loadScrapeCfg().ProbeStreams && mediaServerBlock(msFeatPreProbe) == ""
+}
 
 // queueEmbyExtract 自动入口：把一批 Emby 路径排进提前探测队列（去重），worker 第一次用到时才起
 func queueEmbyExtract(embyPaths ...string) { queueEmbyExtractFor(0, embyPaths...) }

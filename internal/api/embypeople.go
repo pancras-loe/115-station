@@ -1013,7 +1013,11 @@ func execPersonJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	// 先合并重复人物：合并后留下的那个才是补全的对象，删掉的不用再补
 	var merge personMergeStat
 	if cfg.MergeDups {
-		merge = r.mergeDuplicates()
+		if why := mediaServerBlock(msFeatPeopleMerge); why != "" {
+			log.Printf("[演职人员] ○ 不合并重复人物：%s", why)
+		} else {
+			merge = r.mergeDuplicates()
+		}
 	}
 
 	// 从断点扫到末尾，再从头扫到断点，绕满一圈。中途因单次上限 / 停止 / 出错退出时，

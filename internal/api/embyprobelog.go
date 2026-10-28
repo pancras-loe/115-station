@@ -35,7 +35,7 @@ var embyProbeLogClient = &http.Client{Timeout: time.Minute}
 // embyProbeLogCause 在 Emby 日志里找这个版本最近一次 ffprobe 失败的原因；找不到返回空
 func embyProbeLogCause(cfg embyRefreshCfg, src embyMediaSource) string {
 	key := embyProbeLogKey(src.Path)
-	if key == "" {
+	if key == "" || isJellyfinAt(cfg.ServerURL) {
 		return ""
 	}
 	u := cfg.ServerURL + "/System/Logs/" + url.PathEscape(embyServerLogName) + "?" + embyAuthQuery(nil, cfg.APIKey).Encode()

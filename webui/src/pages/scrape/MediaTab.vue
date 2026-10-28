@@ -9,6 +9,7 @@ import MetaFillPanel from '@/components/scrape/MetaFillPanel.vue'
 import { useFullSetting } from '@/pages/strm/fullSetting'
 import SaveBar from './SaveBar.vue'
 import { useScrapeConfig } from './scrapeConfig'
+import { useMediaServer } from '@/composables/mediaServer'
 
 /**
  * 媒体信息：入库后让 Emby 提前探测（`scrape.probe_streams`，存在刮削配置里，但不是刮削）
@@ -16,6 +17,7 @@ import { useScrapeConfig } from './scrapeConfig'
  */
 const media = useFullSetting()
 const { cfg, saving, dirty, load, save } = useScrapeConfig()
+const ms = useMediaServer()
 
 onMounted(load)
 </script>
@@ -33,8 +35,13 @@ onMounted(load)
         label="轨道探测"
         tip="入库后让 Emby 提前探测媒体信息（分辨率、音轨、内嵌字幕），第一次播放就不用现场探测，起播和第二次一样快。整理、同步入库确认后自动进行；在「海报墙」手动刮削时也可以给所选片目补上（所选视频超过 100 个要确认两次）。Emby 已有媒体信息的条目不碰。后台一次探一个、间隔 3 秒，每个条目会产生一次 115 直链请求。需要先在「系统配置 → Emby」配好服务器地址与 API 密钥。"
       >
-        <HSegmented v-model="cfg.probe_streams" :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]" />
+        <HSegmented
+          v-model="cfg.probe_streams"
+          :disabled="!!ms.blocked('pre_probe')"
+          :options="[{ label: '关闭', value: false }, { label: '开启', value: true }]"
+        />
       </FieldRow>
+      <p v-if="ms.blocked('pre_probe')" class="ms-block">{{ ms.name.value }} 下不可用：{{ ms.blocked('pre_probe') }}</p>
 
       <ul class="rules">
         <li>整理、同步入库确认后自动进行，只探本轮新入库的集</li>
@@ -61,6 +68,11 @@ onMounted(load)
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   align-items: start;
+}
+.ms-block {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--warning);
 }
 .rules {
   margin: 6px 0 0;

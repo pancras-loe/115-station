@@ -391,10 +391,16 @@ func (h *Handler) TestEmbyConnection(c *gin.Context) {
 		return
 	}
 	var info struct {
-		ServerName string `json:"ServerName"`
-		Version    string `json:"Version"`
+		ServerName  string `json:"ServerName"`
+		Version     string `json:"Version"`
+		ProductName string `json:"ProductName"` // Jellyfin 是「Jellyfin Server」，类型据此认（mediaserver.go）
 	}
 	_ = json.Unmarshal(body, &info)
+	kind := kindOfProduct(info.ProductName)
+	// 认出来了就记下，后面按这个地址办事不用再问一次 /System/Info/Public
+	if info.ProductName != "" {
+		msDetectCache.Store(base, msDetected{kind: kind, at: time.Now(), ok: true})
+	}
 
 	// 获取媒体库数量
 	libraryCount := 0
@@ -416,6 +422,8 @@ func (h *Handler) TestEmbyConnection(c *gin.Context) {
 		"server_name":   info.ServerName,
 		"version":       info.Version,
 		"library_count": libraryCount,
+		"kind":          kind,
+		"product":       mediaServerName(kind),
 	})
 }
 

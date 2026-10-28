@@ -13,6 +13,7 @@ import { toastError, useFeedback } from '@/composables/useFeedback'
 import { untilText, useNow } from '@/composables/useNow'
 import { useQueueStore } from '@/stores/queue'
 import { bytes } from '@/utils/format'
+import { useMediaServer } from '@/composables/mediaServer'
 import {
   PROBE_TEXT,
   PROBE_TONE,
@@ -66,6 +67,7 @@ const STATE_ORDER: ProbeState[] = ['done', 'running', 'queued', 'none', 'retry',
 const stateChips = computed(() => STATE_ORDER.filter((s) => n(s) > 0).map((s) => ({ s, count: n(s) })))
 
 const showRules = ref(false)
+const ms = useMediaServer()
 const probing = ref(false)
 
 async function probe() {
@@ -230,7 +232,14 @@ function itemLabel(it: EmbyDetailItem) {
           <HChip v-for="c in stateChips" :key="c.s" :color="PROBE_TONE[c.s]" size="sm">{{ PROBE_TEXT[c.s] }} {{ c.count }}</HChip>
         </div>
         <div class="panel-actions">
-          <HButton variant="primary" size="sm" :disabled="!todo || !!data.job_id" :loading="probing" @click="probe">
+          <HButton
+            variant="primary"
+            size="sm"
+            :disabled="!todo || !!data.job_id || !!ms.blocked('pre_probe')"
+            :title="ms.blocked('pre_probe') || undefined"
+            :loading="probing"
+            @click="probe"
+          >
             <Radar :size="14" />
             <template v-if="todo">提前探测 {{ todo }} 个视频</template>
             <template v-else-if="held && heldWait">{{ heldWait }}后可再探测</template>

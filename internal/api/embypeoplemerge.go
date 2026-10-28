@@ -226,16 +226,16 @@ func personPathSafe(drop embyPersonBrief, all []embyPersonBrief) bool {
 
 // embyAdminUser 读片目完整 DTO 要一个用户：取第一个没禁用的管理员
 func embyAdminUser(base, key string) (string, error) {
-	var page struct {
-		Items []struct {
-			ID     string `json:"Id"`
-			Policy struct {
-				IsAdministrator bool `json:"IsAdministrator"`
-				IsDisabled      bool `json:"IsDisabled"`
-			} `json:"Policy"`
-		} `json:"Items"`
+	type embyUser struct {
+		ID     string `json:"Id"`
+		Policy struct {
+			IsAdministrator bool `json:"IsAdministrator"`
+			IsDisabled      bool `json:"IsDisabled"`
+		} `json:"Policy"`
 	}
-	if err := embyGetJSON(base, key, "/Users/Query", url.Values{"IsDisabled": {"false"}}, &page); err != nil {
+	var page struct{ Items []embyUser }
+	var err error
+	if page.Items, err = embyUserList[embyUser](base, key, url.Values{"IsDisabled": {"false"}}); err != nil {
 		return "", err
 	}
 	for _, u := range page.Items {
@@ -463,6 +463,10 @@ func (h *Handler) PersonFillDups(c *gin.Context) {
 	base, key, ok := h.embyServerInfo()
 	if !ok || key == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "未配置 Emby 地址或 API 密钥（系统配置 → Emby）"})
+		return
+	}
+	if why := mediaServerBlock(msFeatPeopleMerge); why != "" {
+		c.JSON(http.StatusConflict, gin.H{"error": why})
 		return
 	}
 	all, err := embyAllPersons(base, key)

@@ -225,6 +225,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// Emby 连接测试
 		protected.POST("/config/test-emby", h.TestEmbyConnection)
+		protected.GET("/mediaserver/caps", h.MediaServerCaps)
 
 		// 消息通知
 		protected.POST("/message/test", h.TestMessage)
