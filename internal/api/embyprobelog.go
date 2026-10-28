@@ -38,7 +38,7 @@ func embyProbeLogCause(cfg embyRefreshCfg, src embyMediaSource) string {
 	if key == "" {
 		return ""
 	}
-	u := cfg.ServerURL + "/System/Logs/" + url.PathEscape(embyServerLogName) + "?" + url.Values{"api_key": {cfg.APIKey}}.Encode()
+	u := cfg.ServerURL + "/System/Logs/" + url.PathEscape(embyServerLogName) + "?" + embyAuthQuery(nil, cfg.APIKey).Encode()
 	resp, err := embyProbeLogClient.Get(u)
 	if err != nil {
 		vlog("[Emby探测] 读 Emby 日志失败: %v", err)

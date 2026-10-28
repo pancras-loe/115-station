@@ -346,12 +346,13 @@ func embyPersonNameTaken(base, key, name, selfID string) (bool, error) {
 }
 
 func embyUploadPrimary(base, key, id string, data []byte) error {
-	u := base + "/Items/" + url.PathEscape(id) + "/Images/Primary?api_key=" + url.QueryEscape(key)
+	u := base + "/Items/" + url.PathEscape(id) + "/Images/Primary?" + embyAuthQuery(nil, key).Encode()
 	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader([]byte(base64.StdEncoding.EncodeToString(data))))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", http.DetectContentType(data))
+	embyAuthHeader(req, key)
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
 		return fmt.Errorf("连接 Emby 失败: %v", err)

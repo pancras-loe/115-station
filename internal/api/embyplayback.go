@@ -49,7 +49,8 @@ func embyClientToken(req *http.Request) string {
 			return match[1]
 		}
 	}
-	for _, name := range []string{"api_key", "X-Emby-Token"} {
+	// ApiKey：Jellyfin 10.11 起的写法
+	for _, name := range []string{"api_key", "ApiKey", "X-Emby-Token"} {
 		if token := queryFold(req.URL.Query(), name); token != "" {
 			return token
 		}
@@ -63,7 +64,7 @@ func embyStreamURL(req *http.Request, itemID, sourceID string) string {
 		q.Set("MediaSourceId", sourceID)
 	}
 	if token := embyClientToken(req); token != "" {
-		q.Set("api_key", token)
+		q = embyAuthQuery(q, token)
 	}
 	if id := embyPlaybackUserID(req); id != "" {
 		q.Set("UserId", id)
@@ -173,7 +174,7 @@ func embyPlaybackJSON(req *http.Request, target *url.URL, apiPath, token string,
 	if err != nil {
 		return http.StatusBadGateway
 	}
-	r.Header.Set("X-Emby-Token", token)
+	embyAuthHeader(r, token)
 	r.Header.Set("User-Agent", req.UserAgent())
 	r.Header.Set("Accept", "application/json")
 	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

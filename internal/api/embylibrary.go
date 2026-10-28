@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,13 +155,35 @@ func (h *Handler) embyServerInfo() (base, apiKey string, ok bool) {
 	return base, apiKey, true
 }
 
-// embyRequest 带 api_key 的请求构造
+// embyAuthQuery 把密钥写进查询参数，api_key 与 ApiKey 两个都带：Emby 认 api_key；
+// Jellyfin 10.11 起默认关掉旧式鉴权（EnableLegacyAuthorization），只认 ApiKey。
+// 另一家不认的那个自己忽略（LitePan embyproxy 的 mediaServerQuery 同款）。
+// 图片地址这类交给通用下载器、加不了请求头的，只能靠它
+func embyAuthQuery(q url.Values, key string) url.Values {
+	if q == nil {
+		q = url.Values{}
+	}
+	if key != "" {
+		q.Set("api_key", key)
+		q.Set("ApiKey", key)
+	}
+	return q
+}
+
+// embyAuthHeader 请求头再带一份：Jellyfin 新版认 Authorization: MediaBrowser Token="…"，
+// Emby 认 X-Emby-Token（LitePan setMediaServerAuth 同款）
+func embyAuthHeader(req *http.Request, key string) {
+	if req == nil || key == "" {
+		return
+	}
+	req.Header.Set("Authorization", "MediaBrowser Token="+strconv.Quote(key))
+	req.Header.Set("X-Emby-Token", key)
+}
+
+// embyRequest 带密钥的请求构造（Emby / Jellyfin 两种鉴权都带上）
 func embyRequest(method, base, apiKey, path string, query url.Values, body []byte) (*http.Response, error) {
 	if apiKey != "" {
-		if query == nil {
-			query = url.Values{}
-		}
-		query.Set("api_key", apiKey)
+		query = embyAuthQuery(query, apiKey)
 	}
 	u := base + path
 	if qs := query.Encode(); qs != "" {
@@ -177,6 +200,7 @@ func embyRequest(method, base, apiKey, path string, query url.Values, body []byt
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	embyAuthHeader(req, apiKey)
 	return (&http.Client{Timeout: 20 * time.Second}).Do(req)
 }
 

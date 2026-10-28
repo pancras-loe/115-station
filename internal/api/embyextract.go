@@ -1185,7 +1185,7 @@ var embyExtractClient = &http.Client{Timeout: embyExtractTimeout}
 func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource) (ok bool, errMsg string, fileFault bool) {
 	start := time.Now()
 	linksBefore := playbackLinksServed.Load()
-	q := url.Values{"api_key": {cfg.APIKey}}
+	q := embyAuthQuery(nil, cfg.APIKey)
 	if src.ID != "" {
 		q.Set("MediaSourceId", src.ID)
 	}
@@ -1194,6 +1194,7 @@ func embyExtractOne(cfg embyRefreshCfg, it embyExtractItem, src embyMediaSource)
 	if err != nil {
 		return false, err.Error(), false
 	}
+	embyAuthHeader(req, cfg.APIKey)
 	resp, err := embyExtractClient.Do(req)
 	if err != nil {
 		var ne net.Error

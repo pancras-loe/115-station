@@ -302,11 +302,13 @@ func fetchEmbyDashboard(h *Handler, force bool) gin.H {
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
 	getJSON := func(path string, query url.Values) (map[string]interface{}, error) {
-		if query == nil {
-			query = url.Values{}
+		query = embyAuthQuery(query, apiKey)
+		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+path+"?"+query.Encode(), nil)
+		if err != nil {
+			return nil, err
 		}
-		query.Set("api_key", apiKey)
-		resp, err := client.Get(strings.TrimRight(base, "/") + path + "?" + query.Encode())
+		embyAuthHeader(req, apiKey)
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -484,7 +486,7 @@ func (h *Handler) EmbyImageProxy(c *gin.Context) {
 	// Emby 默认按 90 质量出 JPEG；界面上的小图 80 看不出差别，体积小三成
 	q.Set("quality", "80")
 	key := base + "|" + path + "?" + q.Encode()
-	q.Set("api_key", apiKey)
+	q = embyAuthQuery(q, apiKey)
 	u := strings.TrimRight(base, "/") + "/" + path + "?" + q.Encode()
 	// Emby 多在内网，不走代理
 	data, err := cachedImage(h.Config.DataDir, "emby", key, embyImgTTL, func() ([]byte, error) {

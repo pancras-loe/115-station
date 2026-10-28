@@ -913,11 +913,12 @@ func (h *Handler) coverPushEmby(name, itemID string, data []byte) error {
 	if itemID == "" {
 		return fmt.Errorf("未找到同名 Emby 媒体库")
 	}
-	req, err := http.NewRequest(http.MethodPost, base+"/Items/"+url.PathEscape(itemID)+"/Images/Primary?api_key="+url.QueryEscape(key), bytes.NewReader([]byte(base64.StdEncoding.EncodeToString(data))))
+	req, err := http.NewRequest(http.MethodPost, base+"/Items/"+url.PathEscape(itemID)+"/Images/Primary?"+embyAuthQuery(nil, key).Encode(), bytes.NewReader([]byte(base64.StdEncoding.EncodeToString(data))))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "image/png")
+	embyAuthHeader(req, key)
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
 		return fmt.Errorf("连接 Emby 失败")

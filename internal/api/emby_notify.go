@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,7 +319,7 @@ func (h *Handler) queueEmbyAddedNotif(payload map[string]interface{}) {
 		if id := str(item, "Id"); id != "" {
 			qs := ""
 			if apiKey != "" {
-				qs = "?api_key=" + url.QueryEscape(apiKey)
+				qs = "?" + embyAuthQuery(nil, apiKey).Encode()
 			}
 			imgURL := base + "/Items/" + id + "/Images/Primary" + qs
 			entry.PosterAlt = imgURL
@@ -371,7 +370,7 @@ func (h *Handler) TestEmbyConnection(c *gin.Context) {
 	base := strings.TrimRight(req.ServerURL, "/")
 	q := ""
 	if req.APIKey != "" {
-		q = "?api_key=" + url.QueryEscape(req.APIKey)
+		q = "?" + embyAuthQuery(nil, req.APIKey).Encode()
 	}
 
 	// 获取服务器信息
