@@ -39,7 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
   }
 
-  /** api 层拿到鉴权中间件的 401 时回调，把登录态清掉（路由守卫随即跳登录页） */
+  /** api 层拿到鉴权中间件的 401 时回调，把登录态清掉（App.vue 盯着登录态，当场跳登录页） */
   setUnauthorizedHandler(() => {
     token.value = null
   })
