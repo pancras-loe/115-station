@@ -6,6 +6,7 @@ import {
   FileText,
   Image as ImageIcon,
   Images,
+  Layers,
   Radar,
   RefreshCw,
   Replace,
@@ -24,7 +25,7 @@ import DetailFiles from './DetailFiles.vue'
 import DetailEmby from './DetailEmby.vue'
 import { localApi } from '@/api'
 import type { LocalTitle, LocalTitleDetail, TitleEmby } from '@/api/local'
-import { toastError } from '@/composables/useFeedback'
+import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 import { relTime, fullTime } from '@/utils/time'
 import { STATUS_TONE, statusText as statusWord, statusTitle } from '@/utils/localStatus'
@@ -47,7 +48,10 @@ const show = defineModel<boolean>('show', { required: true })
 const emit = defineEmits<{
   scrape: [t: LocalTitle, preset: 'auto' | 'pick']
   embyRefresh: [t: LocalTitle, replace: boolean]
+  /** 标记 / 取消了合集目录：片目变了，列表要重读 */
+  changed: []
 }>()
+const { message, dialog } = useFeedback()
 
 const queue = useQueueStore()
 
@@ -252,6 +256,65 @@ const tabs = computed(() => [
   { value: 'emby' as const, label: '媒体信息', count: embyBadge.value, countTone: 'warning' as const },
 ])
 
+// ---- 合集目录（后端 collection.go）----
+
+const canSplit = computed(() => !!d.value && !d.value.collection && !d.value.key.toLowerCase().endsWith('.strm'))
+const collectionName = computed(() => d.value?.collection?.split('/').pop() || '')
+const collectionBusy = ref(false)
+
+async function markCollection() {
+  const x = d.value
+  if (!x) return
+  const ok = await dialog.confirm({
+    title: '标记为合集目录',
+    content: `「${x.dir.split('/').pop()}」里放着好几部片时用：标记后里面每个子目录各算一部，直接放着的视频也各算一部（带集号的散文件不算），海报墙、刮削、深度删除都按拆开后的认。这个目录这一层以前当成一部刮出来的 NFO 与图片会删掉（网盘上也有的不动），免得 Emby 照它把整个文件夹认成一部。随时可以在拆出来的片目里取消。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '标记为合集', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  collectionBusy.value = true
+  try {
+    const r = await localApi.setCollection(x.key, true)
+    const parts = [`已拆成 ${r.titles ?? 0} 部`]
+    if (r.removed?.length) parts.push(`删掉了合集这一层的 ${r.removed.length} 个旧文件`)
+    if (r.kept) parts.push(`${r.kept} 个是网盘镜像没删`)
+    message.success(parts.join('，') + '。Emby 里要重新扫一次库才会跟着变')
+    show.value = false
+    emit('changed')
+  } catch (e) {
+    toastError(e, '标记失败')
+  } finally {
+    collectionBusy.value = false
+  }
+}
+
+async function unmarkCollection() {
+  const c = d.value?.collection
+  if (!c) return
+  const ok = await dialog.confirm({
+    title: '取消合集目录',
+    content: `「${collectionName.value}」整个变回一部片，里面拆出来的各部都并回去。`,
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '取消合集', value: true, variant: 'danger' },
+    ],
+  })
+  if (!ok) return
+  collectionBusy.value = true
+  try {
+    await localApi.setCollection(c, false)
+    message.success(`「${collectionName.value}」已变回一部片`)
+    show.value = false
+    emit('changed')
+  } catch (e) {
+    toastError(e, '取消失败')
+  } finally {
+    collectionBusy.value = false
+  }
+}
+
 function scrape(preset: 'auto' | 'pick') {
   if (d.value) emit('scrape', d.value, preset)
 }
@@ -304,10 +367,16 @@ function onStat(key: string) {
                 <HButton variant="secondary" size="sm" :disabled="!d.emby?.item_id" @click="embyRefresh(true)">
                   <Replace :size="14" />替换全部元数据
                 </HButton>
+                <HButton v-if="canSplit" variant="ghost" size="sm" :disabled="collectionBusy" @click="markCollection">
+                  <Layers :size="14" />标记为合集
+                </HButton>
               </div>
               <div v-else class="hero-actions">
                 <HButton variant="primary" size="sm" @click="scrape('auto')"><Images :size="14" />刮削</HButton>
                 <HButton variant="secondary" size="sm" @click="scrape('pick')"><Search :size="14" />改指定 TMDB 条目</HButton>
+                <HButton v-if="canSplit" variant="ghost" size="sm" :disabled="collectionBusy" @click="markCollection">
+                  <Layers :size="14" />标记为合集
+                </HButton>
               </div>
             </template>
             <template v-else-if="loading">
@@ -325,6 +394,18 @@ function onStat(key: string) {
         </HAlert>
 
         <template v-if="d">
+          <HAlert v-if="d.collection" status="default">
+            在合集「{{ collectionName }}」里：这个文件夹标记过合集目录，里面每个子目录、每个视频各算一部。
+            <template #actions>
+              <HButton variant="tertiary" size="sm" :disabled="collectionBusy" @click="unmarkCollection">取消合集</HButton>
+            </template>
+          </HAlert>
+          <HAlert v-else-if="canSplit && d.collection_hint" status="accent">
+            目录名像合集。如果里面放着好几部片（几部剧、一串剧场版），可以标记为合集目录，拆成各自一部。
+            <template #actions>
+              <HButton variant="tertiary" size="sm" :disabled="collectionBusy" @click="markCollection">标记为合集</HButton>
+            </template>
+          </HAlert>
           <HAlert v-if="d.missing" status="warning">
             本地找不到这个片目的目录（被手工删掉，或挂载还没就绪）。台账里还有它{{ embyMode ? '' : '，刮削会跳过没有 STRM 的片目' }}。
           </HAlert>

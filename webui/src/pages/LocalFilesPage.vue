@@ -842,6 +842,7 @@ onBeforeUnmount(() => {
       :snapshot-at="emby?.ready ? emby.at : undefined"
       @scrape="(t, p) => openScrape([t], p)"
       @emby-refresh="(t, replace) => embyRefresh([t], replace)"
+      @changed="load(true)"
     />
     <!-- 必须写在详情后面：两者 z-index 相同、按 Portal 落点先后叠放，从详情里点「刮削」弹窗要在上面 -->
     <ScrapeDialog v-model:show="showScrape" :targets="dialogTargets" :preset="dialogPreset" />

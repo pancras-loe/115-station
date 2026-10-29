@@ -85,6 +85,9 @@ func libTitleOf(chain []browseCrumb, roles map[string]string, layout libCategory
 	if _, self := layout.selfDepth(libName); self {
 		return libName, rel, false // 自己整理的库：本站不整理、不移动（libopts.go）
 	}
+	if layout.isCollectionKey(libName + "/" + rel) {
+		return libName, rel, false // 合集目录（collection.go）：整个重新整理会把几部片当成一部
+	}
 	return libName, rel, layout.isTitleRel(rel)
 }
 

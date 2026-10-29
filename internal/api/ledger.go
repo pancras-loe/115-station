@@ -149,6 +149,7 @@ type layoutLib struct {
 	local string            // 本地目录（媒体根下，归一过）
 	cats  map[string]string // 分类方案的分类目录（库内相对路径）→ 媒体类型；nil = 不分类
 	depth int               // 不分类时片目在第几层（≥1）
+	colls map[string]bool   // 合集目录（库内相对路径，model.Library.Collections）
 }
 
 // catLayout 只有分类表的布局（测试与不涉及自己整理的库的地方用）
@@ -199,6 +200,12 @@ func layoutLibsOf(libs []model.Library, byScheme map[uint][]model.CategoryRule) 
 		}
 		if lib.SchemeID != 0 && len(byScheme[lib.SchemeID]) > 0 {
 			ll.cats = buildLibCategoryLayout(byScheme[lib.SchemeID]).cats
+		}
+		for _, c := range libCollections(lib) {
+			if ll.colls == nil {
+				ll.colls = map[string]bool{}
+			}
+			ll.colls[c] = true
 		}
 		out = append(out, ll)
 	}
@@ -263,14 +270,60 @@ func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, med
 			return "", "", "", "", false
 		}
 		if lib.cats == nil {
-			return selfTitleOfAt(segs, n, lib.depth)
+			key, titleDir, category, mediaType, ok = selfTitleOfAt(segs, n, lib.depth)
+		} else {
+			key, titleDir, category, mediaType, ok = catTitleOf(segs, []int{n}, func(rel string) (string, bool) { t, ok := lib.cats[rel]; return t, ok })
 		}
-		return catTitleOf(segs, []int{n}, func(rel string) (string, bool) { t, ok := lib.cats[rel]; return t, ok })
+		if ok && len(lib.colls) > 0 {
+			return descendCollections(segs, n, lib.colls, key, titleDir, category, mediaType)
+		}
+		return key, titleDir, category, mediaType, ok
 	}
 	if depth, self := l.selfDepth(segs[0]); self && len(segs) > 1 {
 		return selfTitleOf(segs, depth)
 	}
 	return catTitleOf(segs, []int{1, 0}, l.catType)
+}
+
+// descendCollections 按层级 / 分类认出的片目是用户标记的合集目录时，往下再认一层（可以套好几层）：
+// 合集里的子目录各算一部（下面的 Season 目录照常归它），直接放在合集里的视频各算一部平铺片目（带集号的不算，同 selfTitleOfAt），
+// 合集里的其他文件（以前当成一部刮出来的 NFO / 图片）不属于任何片目。
+// 子目录的媒体类型不知道（返回空，scanLedgerTitles 按文件判），分类沿用合集所在的分类。
+// 思路来自 Jellyfin 的混放目录（一个目录里认出好几部就各算各的）与 [boxset] 标记，只是改成用户标记、不推断
+func descendCollections(segs []string, libSegs int, colls map[string]bool, key, titleDir, category, mediaType string) (string, string, string, string, bool) {
+	for !isSoloTitleKey(key) {
+		ks := strings.Count(key, "/") + 1
+		if ks <= libSegs || !colls[strings.Join(segs[libSegs:ks], "/")] {
+			break
+		}
+		switch rest := len(segs) - ks; {
+		case rest >= 2:
+			key, titleDir, mediaType = strings.Join(segs[:ks+1], "/"), segs[ks], ""
+		case rest == 1 && isSoloTitleKey(segs[ks]) && soloAllowed("", segs[ks]):
+			return strings.Join(segs, "/"), soloTitleStem(segs[ks]), category, "movie", true
+		default:
+			return "", "", "", "", false
+		}
+	}
+	return key, titleDir, category, mediaType, true
+}
+
+// isCollectionKey 这个片目 key（含库目录）是不是标记过的合集目录
+func (l libCategoryLayout) isCollectionKey(key string) bool {
+	lib, n, hit := l.libOf(key)
+	if !hit || len(lib.colls) == 0 {
+		return false
+	}
+	segs := strings.Split(strings.Trim(key, "/"), "/")
+	return len(segs) > n && lib.colls[strings.Join(segs[n:], "/")]
+}
+
+// collectionOf 片目所在的合集目录（key 口径，含库目录）；不在合集里返回空
+func (l libCategoryLayout) collectionOf(key string) string {
+	if dir := path.Dir(strings.Trim(key, "/")); dir != "." && l.isCollectionKey(dir) {
+		return dir
+	}
+	return ""
 }
 
 // catTitleOf 按分类目录认片目：offs 是分类目录从第几段开始（库目录占的段数；老台账不带库名时是 0）

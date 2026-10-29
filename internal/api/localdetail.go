@@ -88,8 +88,12 @@ type localTitleDetail struct {
 	Summary localDetailSummary `json:"summary"`
 	// EmbyBackdrop 用 Emby 的背景图（片目级条目 id）：规则同卡片的 EmbyPoster
 	EmbyBackdrop string `json:"emby_backdrop,omitempty"`
-	fanartV      int64
-	posterV      int64
+	// Collection 这部片在用户标记的合集目录里（合集目录的 key，界面据此给「取消合集」）；
+	// CollectionHint 片目目录名像合集（collection.go），界面提示可以标记拆开
+	Collection     string `json:"collection,omitempty"`
+	CollectionHint bool   `json:"collection_hint,omitempty"`
+	fanartV        int64
+	posterV        int64
 }
 
 // localDirIndex 一个目录里的文件（小写名 → 信息），同一次详情里每个目录只读一遍。
@@ -489,6 +493,8 @@ func (h *Handler) LocalTitleDetail(c *gin.Context) {
 		return
 	}
 	d := inspectLocalTitleDetail(root, e, scrapeDirVideoRows(e.Key))
+	d.Collection = loadLibCategoryLayout().collectionOf(e.Key)
+	d.CollectionHint = !isSoloTitleKey(e.Key) && collectionNameHint(path.Base(e.Key))
 	if d.HasPoster {
 		for _, f := range d.Files {
 			if f.Label == "海报" && f.Exists {

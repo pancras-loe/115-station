@@ -670,10 +670,14 @@ type Library struct {
 	Scrape string `json:"scrape" gorm:"size:16"`
 	// Upload 把本地新产生的 NFO / 图片回传这个库的 115 目录（2026-10-24 起每库一个开关，取代全局的 monitor.enabled）。
 	// 上传是 115 风控敏感操作，新建的库默认关
-	Upload    bool      `json:"upload" gorm:"default:false"`
-	Sort      int       `json:"sort" gorm:"default:0"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Upload bool `json:"upload" gorm:"default:false"`
+	// Collections 合集目录（2026-10-29）：JSON 数组，库内相对路径。用户在海报墙上标记的「一个文件夹里放着好几部片」，
+	// 认片目时往下再认一层：里面的子目录各算一部、直接放着的视频各算一部（ledger.go 的 descendCollections）。
+	// 只能标记，不按名字推断（Jellyfin 的 [boxset] 同理：交给用户说）
+	Collections string    `json:"collections" gorm:"type:text"`
+	Sort        int       `json:"sort" gorm:"default:0"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CategoryScheme 一套二级分类方案（2026-10-20）：自动整理页可以存多套，每个媒体库选一套用。

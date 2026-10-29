@@ -359,6 +359,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.GET("/local/titles/tv-progress", h.LocalTVProgress) // 剧集卡片的集数进度（localtvprog.go）
 		protected.GET("/local/titles/reconcile", h.LocalTitlesReconcile)
 		protected.POST("/local/titles/probe", h.LocalTitleProbe)
+		protected.POST("/local/titles/collection", h.LocalTitleCollection) // 标记 / 取消合集目录（collection.go）
 		protected.POST("/local/titles/emby-refresh", h.LocalTitlesEmbyRefresh)
 		protected.POST("/files/organize", h.OrganizeFiles)
 		protected.POST("/files/move", h.MoveFiles)

@@ -248,6 +248,10 @@ export interface LocalTitleDetail extends LocalTitle {
   fanart?: string
   /** 用 Emby 的背景图（片目级条目 id），有就优先 */
   emby_backdrop?: string
+  /** 这部片在用户标记的合集目录里：合集目录的 key（取消合集用） */
+  collection?: string
+  /** 目录名像合集（「系列」「三部曲」「合集」…），提示可以标记拆开 */
+  collection_hint?: boolean
   files: LocalFile[]
   seasons?: LocalSeason[]
   entries: LocalEntry[]
@@ -263,6 +267,19 @@ export interface LocalTitleDetail extends LocalTitle {
 }
 
 export const titleDetail = (key: string) => http.get<LocalTitleDetail>('/local/titles/detail', { params: { key } })
+
+export interface CollectionReply {
+  /** 标记后拆成了几部 */
+  titles?: number
+  /** 合集那一层删掉的旧 NFO / 图片 */
+  removed?: string[]
+  /** 合集那一层是网盘镜像、没删的 NFO / 图片个数 */
+  kept?: number
+}
+
+/** 标记 / 取消合集目录：标记时 key 是要拆开的片目，取消时是合集目录（详情里的 collection） */
+export const setCollection = (key: string, on: boolean) =>
+  http.post<CollectionReply>('/local/titles/collection', { key, on })
 
 export const fanartUrl = (d: { fanart?: string; emby_backdrop?: string }) => {
   if (d.emby_backdrop) return embyImageUrl(`Items/${d.emby_backdrop}/Images/Backdrop`, 960)

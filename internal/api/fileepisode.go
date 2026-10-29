@@ -95,6 +95,9 @@ func libTitleAround(chain []browseCrumb, roles map[string]string, layout libCate
 	for j := idx + 1; j < len(chain); j++ {
 		parts = append(parts, chain[j].Name)
 		rel := strings.Join(parts, "/")
+		if layout.isCollectionKey(chain[idx].Name + "/" + rel) {
+			return libFileTitle{}, false // 合集目录（collection.go）：里面的文件不归它这一部
+		}
 		if !layout.isTitleRel(rel) {
 			continue
 		}

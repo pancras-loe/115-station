@@ -255,6 +255,9 @@ func rowActionsOf(chain []browseCrumb, roles map[string]string, layout libCatego
 		if _, self := layout.selfDepth(chain[idx].Name); self {
 			return fileRowActions{Block: "「" + chain[idx].Name + "」是自己整理的库：本站只同步和刮削，不在这里整理或移动"}
 		}
+		if libName, rel, _ := libTitleOf(chain, roles, layout, it); it.IsDir && layout.isCollectionKey(libName+"/"+rel) {
+			return fileRowActions{Block: "这是标记过的合集目录：几部片放在一起，不能整个整理或移动"}
+		}
 		if libName, rel, ok := libTitleOf(chain, roles, layout, it); ok {
 			return fileRowActions{Organize: true, Move: true, Title: true, TitleKey: strings.Trim(libName+"/"+rel, "/"), TitleRel: rel}
 		}
