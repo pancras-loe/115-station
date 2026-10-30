@@ -166,8 +166,34 @@ func execIncrJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		return jobOutcome{}, err
 	}
 	markIncrRun() // 手动跑的也算一轮，让路窗口别再为它等
-	return jobOutcome{Message: fmt.Sprintf("事件 %d，视频 %d，新增 STRM %d（已存在 %d），附属下载 %d（%s）",
-		sum.EventsTotal, sum.Videos, sum.StrmCreated, sum.StrmExisting, sum.AssetsDownloaded, sum.Elapsed)}, nil
+	msg := fmt.Sprintf("事件 %d，视频 %d，新增 STRM %d（已存在 %d），附属下载 %d（%s）",
+		sum.EventsTotal, sum.Videos, sum.StrmCreated, sum.StrmExisting, sum.AssetsDownloaded, sum.Elapsed)
+	if sum.EventsTotal == 0 {
+		msg += incrQueuedRoundsNote(roundHist.busySince(job.CreatedAt), sum.Round)
+	}
+	return jobOutcome{Message: msg}, nil
+}
+
+// incrQueuedRoundsNote 手动增量排队期间，30 秒一轮的自动轮询多半已经把事件拉走处理完了，
+// 轮到手动这一轮只剩空转、回报全是 0，和日志里那一轮对不上（2026-10-29 现场：
+// 机器人「同步」入队后 #29 新增 1 个 STRM，机器人回「事件 0」）。把那几轮的结果补进回报
+func incrQueuedRoundsNote(rounds []incrSummary, self uint64) string {
+	var ids []string
+	var events, created, assets int
+	for _, r := range rounds {
+		if r.Round == self || r.EventsPending == 0 {
+			continue
+		}
+		ids = append(ids, fmt.Sprintf("#%d", r.Round))
+		events += r.EventsPending
+		created += r.StrmCreated
+		assets += r.AssetsDownloaded
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("；排队期间自动轮询（同步%s）已处理：事件 %d，新增 STRM %d，附属下载 %d",
+		strings.Join(ids, " "), events, created, assets)
 }
 
 // jobRecord 单条记录类任务取记录（执行时重读，不信入队时的快照）

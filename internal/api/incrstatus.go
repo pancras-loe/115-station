@@ -99,6 +99,22 @@ func (r *incrRoundHist) note(at time.Time, sum *incrSummary, errMsg string) {
 	}
 }
 
+// busySince since 之后（含）记下的有事的几轮，旧的在前
+func (r *incrRoundHist) busySince(since time.Time) []incrSummary {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []incrSummary
+	for i := len(r.rows) - 1; i >= 0; i-- {
+		row := r.rows[i]
+		at, err := time.Parse(time.RFC3339, row.At)
+		if err != nil || row.Sum == nil || at.Before(since.Truncate(time.Second)) {
+			continue
+		}
+		out = append(out, *row.Sum)
+	}
+	return out
+}
+
 func (r *incrRoundHist) snapshot() ([]incrRoundRow, int, int, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
