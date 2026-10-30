@@ -88,6 +88,7 @@ var (
 	re0Br         *rod.Browser
 	re0BrLastUse  time.Time
 	re0BrJanitor  sync.Once
+	re0BrProxy    string // 浏览器这次启动走的线路（「直连」/「代理 …」），过不了 Cloudflare 时写进日志
 )
 
 // re0StartBrowser 起浏览器（已经起着就复用）。调用方持有 re0OpMu
@@ -165,7 +166,7 @@ func re0StartBrowser() (*rod.Browser, error) {
 	if v, err := (proto.BrowserGetVersion{}).Call(b); err == nil {
 		log.Printf("[RE0浏览器] ✓ 浏览器已启动（%s，pid %d，用时 %s）", v.Product, l.PID(), time.Since(start).Round(time.Millisecond))
 	}
-	re0BrLauncher, re0Br = l, b
+	re0BrLauncher, re0Br, re0BrProxy = l, b, proxyNote
 	re0BrJanitor.Do(func() { go re0BrowserJanitor() })
 	return b, nil
 }
@@ -450,6 +451,8 @@ func re0Goto(p *rod.Page, u string) error {
 	if pu, err := url.Parse(u); err == nil {
 		re0Step("打开页面 %s", pu.Path)
 	}
+	cf := re0WatchCFNet(p)
+	defer cf.stop()
 	if err := p.Navigate(u); err != nil {
 		return fmt.Errorf("打开 %s 失败: %v", u, err)
 	}
@@ -458,10 +461,83 @@ func re0Goto(p *rod.Page, u string) error {
 	_ = p.Context(wctx).WaitLoad()
 	cancel()
 	if err := re0WaitCloudflare(p); err != nil {
+		re0BrMu.Lock()
+		route := re0BrProxy
+		re0BrMu.Unlock()
+		log.Printf("[RE0网页]   浏览器线路：%s；challenges.cloudflare.com 的请求：%s", route, cf.summary())
 		return err
 	}
 	log.Printf("[RE0网页]   打开 %s → %s（%s）", u, re0URL(p), time.Since(start).Round(time.Millisecond))
 	return nil
+}
+
+// re0CFNet 记下浏览器对 challenges.cloudflare.com 的请求结果。
+// 2026-10-30 现场：验证页从 re0.me 加载正常、Turnstile 的 api.js 也插进了页面，验证框却始终没出来，
+// 看不出是这个域名不通、被代理拒了还是 Cloudflare 回了错误；有了这份记录，失败日志里一眼分清
+type re0CFNet struct {
+	mu    sync.Mutex
+	urls  map[proto.NetworkRequestID]string
+	notes []string
+	stop  func()
+}
+
+func re0WatchCFNet(p *rod.Page) *re0CFNet {
+	n := &re0CFNet{urls: map[proto.NetworkRequestID]string{}, stop: func() {}}
+	if (proto.NetworkEnable{}).Call(p) != nil {
+		return n
+	}
+	ctx, cancel := context.WithCancel(p.GetContext())
+	n.stop = cancel
+	add := func(id proto.NetworkRequestID, note string) {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		u, ok := n.urls[id]
+		if !ok {
+			return
+		}
+		delete(n.urls, id)
+		if len(n.notes) < 12 {
+			n.notes = append(n.notes, u+" "+note)
+		}
+	}
+	go p.Context(ctx).EachEvent(func(e *proto.NetworkRequestWillBeSent) {
+		if e.Request != nil && re0IsCFURL(e.Request.URL) {
+			path := e.Request.URL
+			if pu, err := url.Parse(path); err == nil {
+				path = pu.Path
+				if len(path) > 60 {
+					path = path[:60] + "…"
+				}
+			}
+			n.mu.Lock()
+			n.urls[e.RequestID] = path
+			n.mu.Unlock()
+		}
+	}, func(e *proto.NetworkResponseReceived) {
+		if e.Response != nil {
+			add(e.RequestID, strconv.Itoa(e.Response.Status))
+		}
+	}, func(e *proto.NetworkLoadingFailed) {
+		add(e.RequestID, "失败 "+e.ErrorText)
+	})()
+	return n
+}
+
+// summary 一行写清：发出的请求各自什么结果，还挂着没回的有几个
+func (n *re0CFNet) summary() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.notes) == 0 && len(n.urls) == 0 {
+		return "一个都没发出去（页面里的 Cloudflare 脚本没跑起来）"
+	}
+	out := strings.Join(n.notes, "；")
+	if len(n.urls) > 0 {
+		if out != "" {
+			out += "；"
+		}
+		out += fmt.Sprintf("另有 %d 个一直没回应（连不上或被代理挂住）", len(n.urls))
+	}
+	return out
 }
 
 const re0ChallengeJS = `() => Boolean(
