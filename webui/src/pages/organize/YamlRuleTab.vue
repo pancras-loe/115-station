@@ -59,12 +59,18 @@ async function read() {
   }
 }
 
+/** 保存的返回：后端可能改过 YAML（分类：兜底挪到最后），提示也以它的为准 */
+function afterSave(r: unknown) {
+  const d = (r ?? {}) as { message?: string; yaml?: string }
+  if (typeof d.yaml === 'string' && d.yaml) yaml.value = d.yaml
+  message.success(d.message || '保存成功')
+}
+
 async function save() {
   saving.value = true
   try {
     // 后端会解析 YAML，格式错误时返回带行号的错误信息，直接透传给用户
-    await props.persist(yaml.value)
-    message.success('保存成功')
+    afterSave(await props.persist(yaml.value))
   } catch (e) {
     const changes = e instanceof ApiError && e.status === 409 ? (e.data.lib_changes as LibChange[] | undefined) : undefined
     const dirs = e instanceof ApiError && e.status === 409 ? (e.data.cat_changes as CatDirChange[] | undefined) : undefined
@@ -101,8 +107,7 @@ async function confirmLibChange(changes: LibChange[]) {
   })
   if (!ok) return
   try {
-    await props.persist(yaml.value, { confirmLibChange: true })
-    message.success('保存成功')
+    afterSave(await props.persist(yaml.value, { confirmLibChange: true }))
   } catch (e) {
     toastError(e, '保存失败')
   }
@@ -129,8 +134,7 @@ async function confirmCatChange(changes: CatDirChange[]) {
   })
   if (!ok) return
   try {
-    await props.persist(yaml.value, { confirmCatChange: true })
-    message.success('保存成功')
+    afterSave(await props.persist(yaml.value, { confirmCatChange: true }))
   } catch (e) {
     toastError(e, '保存失败')
   }

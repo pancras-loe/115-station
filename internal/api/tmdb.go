@@ -46,6 +46,11 @@ type TmdbMedia struct {
 	OrigCountry []string          `json:"origin_country"`
 	ProdCountry []string          `json:"production_countries"` // 制片国家代码，只供二级分类用；搜索接口没有，来自详情
 	VoteAverage float64           `json:"vote_average"`
+	// 以下只供二级分类用（catrule.go），来自详情的 alternative_titles / translations / keywords / credits
+	Names     []string `json:"names,omitempty"`     // 别名与各语言译名（keywords / series_keywords 的片名干草堆）
+	Keywords  []string `json:"keywords,omitempty"`  // TMDB 标签名（include_keywords）
+	Cast      []string `json:"cast,omitempty"`      // 演员，按 TMDB 的顺序（series_actors 只看前 6 位）
+	Directors []string `json:"directors,omitempty"` // 导演（剧集另加主创 created_by；series_directors 只看前 6 位）
 	// TV 专属
 	SeasonNum   int                `json:"season_number,omitempty"`
 	EpisodeNum  int                `json:"episode_number,omitempty"`
@@ -217,7 +222,8 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 	if isTV {
 		kind = "tv"
 	}
-	body, err := tc.get(fmt.Sprintf("/%s/%d", kind, id), nil)
+	// keywords / credits / 别名给二级分类用（catrule.go），挂在同一次请求上
+	body, err := tc.get(fmt.Sprintf("/%s/%d", kind, id), map[string]string{"append_to_response": "alternative_titles,keywords,credits"})
 	if err != nil {
 		if isTmdbNotFound(err) {
 			return nil, nil // 条目不存在是确定的「没有」，调用方按 nil 处理
@@ -270,6 +276,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 	if isTV {
 		mediaType = "tv"
 	}
+	extra := parseTmdbClassExtra(body)
 	genreIDs := make([]int, 0, len(d.Genres))
 	for _, g := range d.Genres {
 		genreIDs = append(genreIDs, g.ID)
@@ -281,6 +288,7 @@ func (tc *TmdbClient) getByTmdbID(id int, isTV bool) (*TmdbMedia, error) {
 		OrigLanguage: d.OriginalLanguage, OrigCountry: d.OriginCountry,
 		ProdCountry: isoCountries(d.ProductionCountries),
 		VoteAverage: d.VoteAverage,
+		Names: extra.Names, Keywords: extra.Keywords, Cast: extra.Cast, Directors: extra.Directors,
 	}, nil
 }
 

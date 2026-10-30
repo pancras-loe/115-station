@@ -189,6 +189,12 @@ export const CATEGORY_FIELDS: [string, string][] = [
   ['origin_country', '出品国家代码（CN、HK、JP、KR、US），逗号分隔'],
   ['production_countries', '制片国家代码，写法同上；老电影常缺 origin_country，按国家分电影时用它更稳'],
   ['release_year', '发行年份（剧集取首播年份），如 2020 或范围 2000-2009'],
+  ['keywords', '片名关键词：标题、原名、别名、各语言译名里含其一就算（子串，不分大小写），如 演唱会,concert'],
+  ['include_keywords', 'TMDB 标签（keywords）含其一就算（子串，不分大小写，标签多是英文），如 live concert；条目没打标签时不会命中'],
+  ['series_keywords', '系列（按片名）：命中时在分类下加一层「X系列」，X 是命中的那个词，如 碟中谍,速度与激情'],
+  ['series_actors', '系列（按演员）：只看前 6 位演员，如 周星驰 → 分类/周星驰系列'],
+  ['series_directors', '系列（按导演）：只看前 6 位导演（剧集含主创），如 诺兰'],
+  ['?字段', '字段名前加 ?（或 ？）是可选条件：可选的之间「或」、至少命中一个，没加 ? 的仍然全部要满足'],
   ['custom_regex', '正则匹配片名 / 原名，命中即归此类（不要求其他条件同时成立）'],
   ['ext', '文件后缀；当前版本不参与匹配：只写了 ext 的规则不会匹配任何条目'],
   ['library', '这一类整理进哪个媒体库：写库的本地目录名（「账号与媒体库 → 媒体库」卡片上那个，或 cid），不写就进「默认放这里」的那个库。它不是匹配条件，只写了它的规则照样是兜底。有多个媒体库时，右边的规则大纲会标出每条规则落进哪个库'],
@@ -196,13 +202,16 @@ export const CATEGORY_FIELDS: [string, string][] = [
 
 export const CATEGORY_RULES: [string, string][] = [
   ['顺序匹配', '从上到下，先匹配到的先停止'],
-  ['多条件', '同一分类下多个条件为「且」关系，同一条件内逗号为「或」'],
-  ['排除', '值前加 ! 表示排除，如 origin_country: "!CN"；可与正选混写：genre_ids: "16,!10762"'],
-  ['范围', '数字可写范围：release_year: "2000-2009"、genre_ids: "10764-10767"'],
+  ['多条件', '同一分类下多个条件为「且」关系（写成 ?字段 的可选条件之间为「或」）'],
+  ['分隔符', '一个条件写几个值用 , ， ; ； 或换行隔开'],
+  ['候选 / 必须 / 排除', '不带前缀的是候选，命中其一即可；+ 表示必须含；- 或 ! 表示排除，如 origin_country: "!CN"'],
+  ['写了候选', '只要写了不带前缀的值就得命中其中一个：「动作且非恐怖」写 +28,-27，写成 +28,12,-27 还要求是冒险片'],
+  ['范围', '数字可写范围：release_year: "2000-2009"、genre_ids: "10764-10767"（片名、标签这类文本不支持）'],
   ['大小写', '代码不区分大小写，us 与 US 相同'],
   ['字段为空', '写了某个条件、条目上这项却没有数据（如 TMDB 没填国家）时不匹配，只写排除也一样'],
-  ['写错字段', '认不出的条件名（如拼成 genre_id）会让这条规则不匹配任何条目，而不是变成兜底'],
-  ['兜底分类', '不写条件的那条匹配一切，它之后的规则永远轮不到'],
+  ['写错字段', '认不出的条件名（如拼成 genre_id）、空值、年份写错保存时直接拒收'],
+  ['兜底分类', '不写条件的那条匹配一切；保存时自动挪到这一段最后'],
+  ['系列', '写了 series_* 的规则：只写系列时命中系列才归这一类；和别的条件一起写时系列只决定加不加「X系列」这一层'],
   ['没有兜底时', '全都不匹配就归入「电影/未分类」「剧集/未分类」'],
   ['不自动加层', '分类名不会被补前缀：要 电影/动画电影 就写全，要平铺就直接写 动漫番剧'],
   ['movie / tv', '两类独立配置，互不干扰；其他顶层键会被忽略'],
@@ -219,9 +228,17 @@ export const CATEGORY_FIELD_KEYS = [
   'origin_country',
   'production_countries',
   'release_year',
+  'keywords',
+  'include_keywords',
+  'series_keywords',
+  'series_actors',
+  'series_directors',
   'custom_regex',
   'ext',
 ] as const
+
+/** 系列字段：命中时加子目录，不参与必填 / 可选（后端 catFields 的 series） */
+export const CATEGORY_SERIES_KEYS = ['series_keywords', 'series_actors', 'series_directors'] as const
 
 export const WASH_MODES: [string, string][] = [
   ['coexist', '共存，两个版本都留着，新版照常入库'],

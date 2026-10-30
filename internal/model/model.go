@@ -119,6 +119,14 @@ type CategoryRule struct {
 	// 以下两项对齐 MoviePilot 的 category.yaml
 	ProductionCountries string `json:"production_countries" gorm:"size:100"` // 制片国家（TMDB production_countries 的 iso_3166_1）
 	ReleaseYear         string `json:"release_year" gorm:"size:100"`         // 发行年份，支持 2000-2010 范围
+	// 以下五项 2026-10-30 起（api/catrule.go）：片名 / TMDB 标签按子串匹配；series_* 命中时在分类下加「X系列」子目录
+	Keywords        string `json:"keywords" gorm:"size:500"`
+	IncludeKeywords string `json:"include_keywords" gorm:"size:500"`
+	SeriesKeywords  string `json:"series_keywords" gorm:"size:500"`
+	SeriesActors    string `json:"series_actors" gorm:"size:500"`
+	SeriesDirectors string `json:"series_directors" gorm:"size:500"`
+	// Optional YAML 里写成 ?字段 的可选条件（字段键，逗号分隔）：可选条件之间「或」，至少命中一个
+	Optional string `json:"optional" gorm:"size:200"`
 	// YAML 里认不出的条件键（或值写成了映射等认不出的形态），逗号分隔。非空时这条规则永不匹配：
 	// 此前它们被静默丢掉，一条只写了这些条件的规则会变成兜底，把后面的规则全吞掉
 	Unsupported string `json:"unsupported" gorm:"size:200"`

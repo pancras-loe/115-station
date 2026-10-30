@@ -158,9 +158,9 @@ func catLayout(cats map[string]string) libCategoryLayout {
 }
 
 // catType 分类目录的媒体类型；不是分类目录 ok=false
+// 写了系列字段的分类下面的「X系列」也算分类目录（catLookup）
 func (l libCategoryLayout) catType(rel string) (string, bool) {
-	t, ok := l.cats[rel]
-	return t, ok
+	return catLookup(l.cats, rel)
 }
 
 // selfDepth 自己整理的库的片目层级；不是自己整理的库 ok=false
@@ -244,6 +244,15 @@ func buildLibCategoryLayout(rules []model.CategoryRule) libCategoryLayout {
 	for _, r := range rules {
 		add(r.Name, r.MediaType)
 		has[r.MediaType] = true
+		if catRuleHasSeries(&r) {
+			// 系列子目录是整理时按命中的值现起的名字，列不全：记一个标记，查的时候认「分类/X系列」（catLookup）
+			k := catSeriesMarkKey(r.Name)
+			if prev, ok := out[k]; ok && prev != r.MediaType {
+				out[k] = ""
+			} else {
+				out[k] = r.MediaType
+			}
+		}
 	}
 	for _, mt := range []string{"movie", "tv"} {
 		if !has[mt] {
@@ -272,7 +281,7 @@ func (l libCategoryLayout) titleOf(relPath string) (key, titleDir, category, med
 		if lib.cats == nil {
 			key, titleDir, category, mediaType, ok = selfTitleOfAt(segs, n, lib.depth)
 		} else {
-			key, titleDir, category, mediaType, ok = catTitleOf(segs, []int{n}, func(rel string) (string, bool) { t, ok := lib.cats[rel]; return t, ok })
+			key, titleDir, category, mediaType, ok = catTitleOf(segs, []int{n}, func(rel string) (string, bool) { return catLookup(lib.cats, rel) })
 		}
 		if ok && len(lib.colls) > 0 {
 			return descendCollections(segs, n, lib.colls, key, titleDir, category, mediaType)

@@ -8,7 +8,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -859,8 +858,8 @@ func classifyTargetIn(scheme uint, media *TmdbMedia) (category, library string) 
 	categories := classifyRulesOf(scheme, mediaType)
 
 	for _, cat := range categories {
-		if matchCategory(&cat, media) {
-			return libSubPath(cat.Name), cat.Library
+		if ok, series := matchCategoryDir(&cat, media); ok {
+			return catRuleDir(&cat, series), cat.Library
 		}
 	}
 
@@ -900,75 +899,18 @@ func libSubPath(parts ...string) string {
 	return strings.Join(out, "/")
 }
 
-// matchCategory 判断媒体是否匹配某个分类规则。
+// matchCategory 判断媒体是否匹配某个分类规则（不关心系列子目录时用；写法与语义见 catrule.go）。
 //
-// 条件的写法与语义对齐 MoviePilot 的 category.yaml（app/modules/themoviedb/category.py
-// 的 get_category），用户的配置多半是从那边抄来的：
-//   - 多个条件「且」，同一条件内逗号「或」；不区分大小写；
-//   - `!值` 排除；`a-b` 范围（两端都是数字按数值区间，否则只认两个端点）；
-//   - 条件写了、条目上这个字段却是空的 → 不匹配（只写了排除也一样，MP 同款）。
+// 条件的写法在 MoviePilot 的 category.yaml（app/modules/themoviedb/category.py 的 get_category）之上
+// 对齐 nanl wiki：多个条件「且」，同一条件内候选「或」、`+` 必须、`-` / `!` 排除；`?字段` 可选；
+// 不区分大小写；`a-b` 范围（两端都是数字按数值区间，否则只认两个端点）；
+// 条件写了、条目上这个字段却是空的 → 不匹配（只写了排除也一样，MP 同款）。
 //
 // custom_regex 是本站自己的：命中即归此类，不要求其他条件同时成立。
 // ext 当前不参与匹配：只写了 ext 的规则不匹配任何条目（此前它会匹配一切）。
 func matchCategory(cat *model.CategoryRule, media *TmdbMedia) bool {
-	if cat.Unsupported != "" {
-		return false // 写了认不出的条件，宁可不匹配也不当兜底
-	}
-	if cat.CustomRegex != "" {
-		if re, err := regexp.Compile(cat.CustomRegex); err == nil {
-			if re.MatchString(media.Title) || re.MatchString(media.OriginalTitle) {
-				return true
-			}
-		}
-	}
-	conds := []struct {
-		expr  string
-		value []string
-	}{
-		{cat.GenreIds, intStrings(media.GenreIDs)},
-		{cat.OriginalLanguage, nonEmpty(media.OrigLanguage)},
-		{cat.OriginCountry, media.OrigCountry},
-		{cat.ProductionCountries, media.ProdCountry},
-		{cat.ReleaseYear, nonEmpty(media.Year)},
-	}
-	checked := false
-	for _, c := range conds {
-		if strings.TrimSpace(c.expr) == "" {
-			continue
-		}
-		checked = true
-		if !matchCategoryValues(c.expr, c.value) {
-			return false
-		}
-	}
-	// 只写了正则（没命中）或只写了 ext：没有任何条件成立
-	return checked || (cat.CustomRegex == "" && cat.Ext == "")
-}
-
-// matchCategoryValues 一个条件的取值表达式是否命中条目上的值（见 matchCategory 的语义说明）
-func matchCategoryValues(expr string, have []string) bool {
-	if len(have) == 0 {
-		return false
-	}
-	var hit, want, deny bool
-	for _, term := range strings.Split(expr, ",") {
-		term = strings.ToUpper(strings.TrimSpace(term))
-		neg := strings.HasPrefix(term, "!")
-		if neg {
-			term = strings.TrimSpace(term[1:])
-		}
-		if term == "" {
-			continue
-		}
-		in := slices.ContainsFunc(have, func(v string) bool { return categoryTermHas(term, strings.ToUpper(v)) })
-		if neg {
-			deny = deny || in
-		} else {
-			want = true
-			hit = hit || in
-		}
-	}
-	return !deny && (!want || hit)
+	ok, _ := matchCategoryDir(cat, media)
+	return ok
 }
 
 // categoryTermHas 单个取值（可能是范围）是否包含 v

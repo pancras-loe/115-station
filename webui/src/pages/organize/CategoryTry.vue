@@ -104,6 +104,11 @@ const facts = computed(() => {
   if (genres.length) parts.push(`类型 ${genres.join(' / ')}`)
   const prod = (m.production_countries ?? []).map((c) => countryName(c) || c)
   if (prod.length) parts.push(`制片国家 ${prod.join(' / ')}`)
+  const short = (l: string[] | null | undefined, n: number) =>
+    (l ?? []).slice(0, n).join(' / ') + ((l?.length ?? 0) > n ? ' …' : '')
+  if (m.keywords?.length) parts.push(`TMDB 标签 ${short(m.keywords, 8)}`)
+  if (m.cast?.length) parts.push(`演员 ${short(m.cast, 6)}`)
+  if (m.directors?.length) parts.push(`导演 ${short(m.directors, 6)}`)
   return parts.join(' · ')
 })
 

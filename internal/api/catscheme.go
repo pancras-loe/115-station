@@ -163,11 +163,14 @@ func renderCategoryYAML(rows []model.CategoryRule) string {
 					&yaml.Node{Kind: yaml.ScalarNode, Value: k},
 					&yaml.Node{Kind: yaml.ScalarNode, Value: v, Style: yaml.SingleQuotedStyle})
 			}
-			add("genre_ids", r.GenreIds)
-			add("original_language", r.OriginalLanguage)
-			add("origin_country", r.OriginCountry)
-			add("production_countries", r.ProductionCountries)
-			add("release_year", r.ReleaseYear)
+			opt := catOptional(&r)
+			for _, f := range catFields {
+				k := f.key
+				if opt[k] {
+					k = "?" + k
+				}
+				add(k, *f.ptr(&r))
+			}
 			add("ext", r.Ext)
 			add("custom_regex", r.CustomRegex)
 			val := fields

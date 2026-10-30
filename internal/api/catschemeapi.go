@@ -154,6 +154,16 @@ func (h *Handler) UpdateScheme(c *gin.Context) {
 		src := req.Simple.yaml()
 		req.Yaml = &src
 	}
+	// 写错的拦下，写在中间的兜底挪到最后（catrule.go）
+	note := ""
+	if req.Yaml != nil {
+		src, n, err := prepCategoryYAML(*req.Yaml)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		req.Yaml, note = &src, n
+	}
 	if req.Yaml != nil && !req.ConfirmCatChange {
 		if _, rows, err := schemeYAMLRows(*req.Yaml); err == nil {
 			if changes := h.catDirChangesNow(s.ID, rows); len(changes) > 0 {
@@ -190,6 +200,9 @@ func (h *Handler) UpdateScheme(c *gin.Context) {
 			return
 		}
 		msg = fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))
+		if note != "" {
+			msg += "；" + note
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -198,7 +211,12 @@ func (h *Handler) UpdateScheme(c *gin.Context) {
 	forgetSchemes()
 	forgetClassifyRules()
 	log.Printf("[分类] ✓ 分类方案「%s」%s", s.Name, msg)
-	c.JSON(http.StatusOK, gin.H{"message": msg, "schemes": h.mediaLibsNow().Schemes})
+	resp := gin.H{"message": msg, "schemes": h.mediaLibsNow().Schemes}
+	if note != "" {
+		resp["moved_fallback"] = true // YAML 被改过了，界面换成这一份
+		resp["yaml"] = *req.Yaml
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // DeleteScheme DELETE /category/schemes/:id —— 被库用着的、最后一套都不能删

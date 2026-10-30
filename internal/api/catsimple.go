@@ -34,6 +34,12 @@ type catSimpleRule struct {
 	ReleaseYear         string `json:"release_year"`
 	CustomRegex         string `json:"custom_regex"`
 	Ext                 string `json:"ext"`
+	// 2026-10-30 起（catrule.go）。可选条件（?字段）简单模式表示不了，写了的只能在专家模式改
+	Keywords        string `json:"keywords"`
+	IncludeKeywords string `json:"include_keywords"`
+	SeriesKeywords  string `json:"series_keywords"`
+	SeriesActors    string `json:"series_actors"`
+	SeriesDirectors string `json:"series_directors"`
 }
 
 // catSimpleForm 简单模式的整张表
@@ -47,7 +53,8 @@ type catSimpleForm struct {
 }
 
 func (r catSimpleRule) noCond() bool {
-	return strings.TrimSpace(r.GenreIds+r.OriginCountry+r.OriginalLanguage+r.ProductionCountries+r.ReleaseYear+r.CustomRegex+r.Ext) == ""
+	row := r.row("")
+	return catRuleEmpty(&row)
 }
 
 func (r catSimpleRule) row(mediaType string) model.CategoryRule {
@@ -57,6 +64,8 @@ func (r catSimpleRule) row(mediaType string) model.CategoryRule {
 		GenreIds: t(r.GenreIds), OriginCountry: t(r.OriginCountry), OriginalLanguage: t(r.OriginalLanguage),
 		ProductionCountries: t(r.ProductionCountries), ReleaseYear: t(r.ReleaseYear),
 		CustomRegex: t(r.CustomRegex), Ext: t(r.Ext),
+		Keywords: t(r.Keywords), IncludeKeywords: t(r.IncludeKeywords),
+		SeriesKeywords: t(r.SeriesKeywords), SeriesActors: t(r.SeriesActors), SeriesDirectors: t(r.SeriesDirectors),
 	}
 }
 
@@ -80,6 +89,10 @@ func (f catSimpleForm) validate() error {
 			}
 			if j, ok := seen[strings.ToLower(name)]; ok {
 				return fmt.Errorf("%s第 %d 条和第 %d 条是同一个目录「%s」，合成一条（条件写在一起是「或」）", mt.label, j+1, i+1, name)
+			}
+			// 没写条件的保存时会被挪到最后当兜底（catMoveFallbacks），「其余都放这里」就永远用不上了：让用户自己定
+			if r.noCond() {
+				return fmt.Errorf("%s第 %d 条「%s」没写条件，会接走所有片：补上条件，或者删掉它、把目录填进「其余都放这里」", mt.label, i+1, name)
 			}
 			seen[strings.ToLower(name)] = i
 		}
@@ -153,6 +166,9 @@ func catSimpleOf(src string) (*catSimpleForm, []string) {
 		if r.Unsupported != "" {
 			why = append(why, fmt.Sprintf("%s的「%s」写了认不出的条件 %s（这条规则永远不会命中）", mediaLabel(r.MediaType), r.Name, r.Unsupported))
 		}
+		if r.Optional != "" {
+			why = append(why, fmt.Sprintf("%s的「%s」用了可选条件（?%s），简单模式表示不了", mediaLabel(r.MediaType), r.Name, strings.ReplaceAll(r.Optional, ",", "、?")))
+		}
 	}
 	if len(why) > 0 {
 		return nil, why
@@ -165,6 +181,8 @@ func catSimpleOf(src string) (*catSimpleForm, []string) {
 				list = append(list, catSimpleRule{
 					Name: r.Name, GenreIds: r.GenreIds, OriginCountry: r.OriginCountry, OriginalLanguage: r.OriginalLanguage,
 					ProductionCountries: r.ProductionCountries, ReleaseYear: r.ReleaseYear, CustomRegex: r.CustomRegex, Ext: r.Ext,
+					Keywords: r.Keywords, IncludeKeywords: r.IncludeKeywords,
+					SeriesKeywords: r.SeriesKeywords, SeriesActors: r.SeriesActors, SeriesDirectors: r.SeriesDirectors,
 				})
 			}
 		}
@@ -230,12 +248,29 @@ func catSameRules(a, b []model.CategoryRule) bool {
 		}
 		for i := range x {
 			p, q := x[i], y[i]
-			t := strings.TrimSpace
-			if p.Name != q.Name || t(p.GenreIds) != t(q.GenreIds) || t(p.OriginCountry) != t(q.OriginCountry) ||
-				t(p.OriginalLanguage) != t(q.OriginalLanguage) || t(p.ProductionCountries) != t(q.ProductionCountries) ||
-				t(p.ReleaseYear) != t(q.ReleaseYear) || t(p.CustomRegex) != t(q.CustomRegex) || t(p.Ext) != t(q.Ext) {
+			if !catSameRule(&p, &q) {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// catSameRule 两条规则名字与条件都一样（可选标记按集合比）
+func catSameRule(p, q *model.CategoryRule) bool {
+	t := strings.TrimSpace
+	if p.Name != q.Name || t(p.CustomRegex) != t(q.CustomRegex) || t(p.Ext) != t(q.Ext) {
+		return false
+	}
+	for _, f := range catFields {
+		if t(*f.ptr(p)) != t(*f.ptr(q)) {
+			return false
+		}
+	}
+	po, qo := catOptional(p), catOptional(q)
+	for _, f := range catFields {
+		if !f.series && t(*f.ptr(p)) != "" && po[f.key] != qo[f.key] {
+			return false
 		}
 	}
 	return true
@@ -293,11 +328,11 @@ func catTry(rows []model.CategoryRule, media *TmdbMedia) catTryResult {
 		}
 	}
 	for i := range list {
-		if matchCategory(&list[i], media) {
+		if ok, series := matchCategoryDir(&list[i], media); ok {
 			if list[i].IsDefault && i == len(list)-1 {
 				break // 兜底：和简单模式的「其余都放这里」一样报成 -1
 			}
-			res.Dest, res.Index = libSubPath(list[i].Name), i
+			res.Dest, res.Index = catRuleDir(&list[i], series), i
 			return res
 		}
 		res.Skips = append(res.Skips, catTrySkip{Index: i, Name: list[i].Name, Reason: categoryMissReason(&list[i], media)})
@@ -317,35 +352,49 @@ func categoryMissReason(cat *model.CategoryRule, media *TmdbMedia) string {
 	if cat.Unsupported != "" {
 		return "写了认不出的条件 " + cat.Unsupported
 	}
-	conds := []struct {
-		label, expr string
-		value       []string
-	}{
-		{"类型", cat.GenreIds, intStrings(media.GenreIDs)},
-		{"原语言", cat.OriginalLanguage, nonEmpty(media.OrigLanguage)},
-		{"地区", cat.OriginCountry, media.OrigCountry},
-		{"制片国家", cat.ProductionCountries, media.ProdCountry},
-		{"年份", cat.ReleaseYear, nonEmpty(media.Year)},
-	}
-	checked := false
-	for _, c := range conds {
-		if strings.TrimSpace(c.expr) == "" {
+	opt := catOptional(cat)
+	normal, hasSeries := false, false
+	var optMiss []string
+	for _, f := range catFields {
+		expr := strings.TrimSpace(*f.ptr(cat))
+		if expr == "" {
 			continue
 		}
-		checked = true
-		if !matchCategoryValues(c.expr, c.value) {
-			if len(c.value) == 0 {
-				return c.label + "：TMDB 上这部片没写"
-			}
-			return fmt.Sprintf("%s不符（要 %s，这部是 %s）", c.label, c.expr, strings.Join(c.value, ","))
+		if f.series {
+			hasSeries = true
+			continue
 		}
+		normal = true
+		have := f.have(media)
+		if ok, _ := catEval(expr, have, f.text); ok {
+			continue
+		}
+		why := f.label + "：TMDB 上这部片没写"
+		if len(have) > 0 {
+			why = fmt.Sprintf("%s不符（要 %s，这部是 %s）", f.label, expr, catShortList(have))
+		}
+		if !opt[f.key] {
+			return why
+		}
+		optMiss = append(optMiss, why)
 	}
 	switch {
-	case !checked && cat.CustomRegex != "":
+	case len(optMiss) > 0:
+		return "可选条件一个都没命中：" + strings.Join(optMiss, "；")
+	case !normal && hasSeries:
+		return "只写了系列条件，一个系列都没命中"
+	case !normal && cat.CustomRegex != "":
 		return "片名不符合正则"
-	case !checked && cat.Ext != "":
+	case !normal && cat.Ext != "":
 		return "只写了文件后缀，目前不参与匹配"
 	}
 	return "没命中"
 }
 
+// catShortList 给人看的值列表（片名、演员可能很长，只列前几个）
+func catShortList(have []string) string {
+	if len(have) > 6 {
+		return strings.Join(have[:6], ",") + fmt.Sprintf(" 等 %d 个", len(have))
+	}
+	return strings.Join(have, ",")
+}

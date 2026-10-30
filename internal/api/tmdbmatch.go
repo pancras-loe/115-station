@@ -120,13 +120,16 @@ func (tc *TmdbClient) searchCands(kind string, params map[string]string) ([]tmdb
 // 产地与制片国家都从它取，不为二级分类另发请求
 func (c tmdbCand) media(kind string, d *tmdbDetail) *TmdbMedia {
 	var origCountry, prodCountry []string
+	var extra tmdbClassExtra
+	var names []string
 	if d != nil {
-		origCountry, prodCountry = d.OriginCountry, d.ProductionCountries
+		origCountry, prodCountry, extra, names = d.OriginCountry, d.ProductionCountries, d.tmdbClassExtra, d.Names
 	}
 	return &TmdbMedia{
 		TmdbID: c.ID, Title: c.Title, OriginalTitle: c.Original, Year: c.year(), MediaType: kind,
 		GenreIDs: c.GenreIDs, Overview: c.Overview, PosterPath: c.Poster, BackdropPath: c.Backdrop,
 		OrigLanguage: c.OrigLang, OrigCountry: origCountry, ProdCountry: prodCountry, VoteAverage: c.Vote,
+		Names: names, Keywords: extra.Keywords, Cast: extra.Cast, Directors: extra.Directors,
 		Twins: c.twins,
 	}
 }
@@ -160,6 +163,7 @@ type tmdbDetail struct {
 	SeasonNames         map[int]string // 季号 → 季名（仅剧集；重命名的 {season_name}）
 	Status              string         // Ended / Canceled / Returning Series / Released …（订阅判完结用）
 	ReleaseDate         string         // 电影上映日期（订阅在没有发行日期表时兜底）
+	tmdbClassExtra                     // 标签与演职员（二级分类的 include_keywords / series_*，catrule.go）
 }
 
 var (
@@ -182,7 +186,8 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 	}
 	tmdbDetailMu.Unlock()
 
-	body, err := tc.get("/"+key, map[string]string{"append_to_response": "alternative_titles,translations"})
+	// keywords / credits 给二级分类用（catrule.go），挂在同一次请求上，不另发
+	body, err := tc.get("/"+key, map[string]string{"append_to_response": "alternative_titles,translations,keywords,credits"})
 	if err != nil {
 		if isTmdbNotFound(err) {
 			return nil, nil
@@ -223,6 +228,7 @@ func (tc *TmdbClient) detailOf(kind string, id int) (*tmdbDetail, error) {
 		return nil, err
 	}
 	d := &tmdbDetail{Status: raw.Status, ReleaseDate: raw.ReleaseDate, OriginCountry: raw.OriginCountry, ProductionCountries: isoCountries(raw.ProductionCountries), Seasons: map[int]string{}, SeasonEps: map[int]int{}, SeasonNames: map[int]string{}}
+	d.tmdbClassExtra = parseTmdbClassExtra(body)
 	for _, t := range raw.AlternativeTitles.Titles {
 		d.Names = append(d.Names, t.Title)
 	}

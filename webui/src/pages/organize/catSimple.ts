@@ -53,9 +53,10 @@ export const LANG_CHIPS: CondChip[] = [
   { label: '英语', codes: ['en'] },
 ]
 
+/** 与后端 catTerms 同一组分隔符：, ， ; ； 换行 */
 export const splitTokens = (v: string) =>
   v
-    .split(/[,，]/)
+    .split(/[,，;；\r\n]/)
     .map((s) => s.trim())
     .filter(Boolean)
 
@@ -98,21 +99,40 @@ export const emptyRule = (name = ''): CatSimpleRule => ({
   release_year: '',
   custom_regex: '',
   ext: '',
+  keywords: '',
+  include_keywords: '',
+  series_keywords: '',
+  series_actors: '',
+  series_directors: '',
 })
 
-export const ruleHasCond = (r: CatSimpleRule) =>
-  [r.genre_ids, r.origin_country, r.original_language, r.production_countries, r.release_year, r.custom_regex, r.ext].some(
-    (v) => v.trim() !== '',
-  )
+/** 一条分类的全部条件值（ext 排在第 7 个，lintRules 认「只写了后缀」要跳过它） */
+const condValues = (r: CatSimpleRule) => [
+  r.genre_ids,
+  r.origin_country,
+  r.original_language,
+  r.production_countries,
+  r.release_year,
+  r.custom_regex,
+  r.ext,
+  r.keywords ?? '',
+  r.include_keywords ?? '',
+  r.series_keywords ?? '',
+  r.series_actors ?? '',
+  r.series_directors ?? '',
+]
+
+export const ruleHasCond = (r: CatSimpleRule) => condValues(r).some((v) => v.trim() !== '')
 
 /** 给人看的一个值：TMDB 代码翻成中文，!X 写成「排除 X」 */
 function tokenText(field: 'genre' | 'country' | 'lang', media: Media, tok: string): string {
-  const neg = tok.startsWith('!')
-  const code = neg ? tok.slice(1).trim() : tok
+  const neg = tok.startsWith('!') || tok.startsWith('-')
+  const must = tok.startsWith('+')
+  const code = neg || must ? tok.slice(1).trim() : tok
   const name =
     field === 'genre' ? genreName(media, code) : field === 'country' ? countryName(code.toUpperCase()) : languageName(code)
   const text = name ? name.replace(/（.*）$/, '') : code
-  return neg ? `排除${text}` : text
+  return neg ? `排除${text}` : must ? `必须${text}` : text
 }
 
 function describe(value: string, chips: CondChip[], field: 'genre' | 'country' | 'lang', media: Media): string {
@@ -131,6 +151,14 @@ export function ruleSummary(r: CatSimpleRule, media: Media): string[] {
   if (r.release_year.trim()) out.push(`年份 ${r.release_year.trim()}`)
   if (r.custom_regex.trim()) out.push(`片名正则 ${r.custom_regex.trim()}`)
   if (r.ext.trim()) out.push(`文件后缀 ${r.ext.trim()}`)
+  if (r.keywords?.trim()) out.push(`片名含 ${splitTokens(r.keywords).join(' / ')}`)
+  if (r.include_keywords?.trim()) out.push(`TMDB 标签含 ${splitTokens(r.include_keywords).join(' / ')}`)
+  const series = [
+    ['片名', r.series_keywords],
+    ['演员', r.series_actors],
+    ['导演', r.series_directors],
+  ].filter(([, v]) => v?.trim())
+  for (const [k, v] of series) out.push(`系列（${k}）${splitTokens(v!).join(' / ')}`)
   return out
 }
 
@@ -154,14 +182,10 @@ export function lintRules(list: CatSimpleRule[], fallback: string): { rules: Rul
     else seen.set(name, i)
     if (catchAll >= 0) lint.warn = `不会生效：第 ${catchAll + 1} 条没写条件，已经接走了所有片`
     else if (!ruleHasCond(r)) {
-      lint.warn = '没写条件：会接走所有片，下面的分类和「其余」都不会生效'
+      // 后端 validate 拒收：保存时它会被挪到最后当兜底，「其余都放这里」就用不上了
+      lint.error ??= '没写条件：补上条件，或者删掉它、把目录填进「其余都放这里」'
       catchAll = i
-    } else if (
-      r.ext.trim() &&
-      ![r.genre_ids, r.origin_country, r.original_language, r.production_countries, r.release_year, r.custom_regex].some(
-        (v) => v.trim(),
-      )
-    )
+    } else if (r.ext.trim() && !condValues(r).some((v, k) => k !== 6 && v.trim()))
       lint.warn = '只写了文件后缀：后缀目前不参与匹配，这条永远不会命中'
     return lint
   })

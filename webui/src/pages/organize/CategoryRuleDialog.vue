@@ -58,10 +58,39 @@ const leftover = (field: ChipField, chips: CondChip[]) => leftoverOf(draft.value
 const setRest = (field: ChipField, chips: CondChip[], rest: string[]) =>
   (draft.value[field] = setLeftover(draft.value[field], chips, rest))
 
+/** 逗号串 ⇄ 标签输入（production_countries、片名 / 标签关键词、系列） */
+type ListField =
+  | 'production_countries'
+  | 'keywords'
+  | 'include_keywords'
+  | 'series_keywords'
+  | 'series_actors'
+  | 'series_directors'
+const listOf = (f: ListField) => splitTokens(draft.value[f] ?? '')
+const setList = (f: ListField, v: string[]) => (draft.value[f] = v.join(','))
 const prodCountries = computed({
-  get: () => splitTokens(draft.value.production_countries),
-  set: (v: string[]) => (draft.value.production_countries = v.join(',')),
+  get: () => listOf('production_countries'),
+  set: (v: string[]) => setList('production_countries', v),
 })
+const textConds: { field: ListField; label: string; ph: string; hint: string }[] = [
+  {
+    field: 'keywords',
+    label: '片名关键词',
+    ph: '回车添加，如 演唱会',
+    hint: '标题、原名、别名、译名里含其一就算（不分大小写）。前面加 + 表示必须含，加 - 表示不能含。',
+  },
+  {
+    field: 'include_keywords',
+    label: 'TMDB 标签',
+    ph: '回车添加，如 concert',
+    hint: 'TMDB 条目上的标签（多是英文）含其一就算。条目没打标签时不会命中。',
+  },
+]
+const seriesConds: { field: ListField; label: string; ph: string }[] = [
+  { field: 'series_keywords', label: '按片名', ph: '如 碟中谍、速度与激情' },
+  { field: 'series_actors', label: '按演员', ph: '如 周星驰（只看前 6 位演员）' },
+  { field: 'series_directors', label: '按导演', ph: '如 诺兰（只看前 6 位导演）' },
+]
 
 const lint = computed(() => props.lintOf(draft.value))
 const summary = computed(() => ruleSummary(draft.value, props.media))
@@ -138,10 +167,35 @@ function done() {
           <HInput v-model="draft.custom_regex" mono placeholder="可不填" :input-attrs="{ id: `${idp}-re` }" />
           <p class="hint">片名或原名命中就归这一类，不看上面的条件。</p>
         </div>
+        <div v-for="c in textConds" :key="c.field" class="field wide">
+          <span class="lbl">{{ c.label }}</span>
+          <HTagsInput
+            :model-value="listOf(c.field)"
+            :placeholder="c.ph"
+            :aria-label="c.label"
+            @update:model-value="(v: string[]) => setList(c.field, v)"
+          />
+          <p class="hint">{{ c.hint }}</p>
+        </div>
         <div v-if="draft.ext" class="field wide">
           <label class="lbl" :for="`${idp}-ext`">文件后缀</label>
           <HInput v-model="draft.ext" mono :input-attrs="{ id: `${idp}-ext` }" />
           <p class="hint">后缀目前不参与匹配，清空它不影响分类结果。</p>
+        </div>
+      </section>
+
+      <section class="box more" aria-label="系列子目录">
+        <p class="tip wide">
+          命中时在这个目录下再建一层「X系列」，X 是命中的那个词（已经以「系列」结尾不重复加）。只写了系列、没写上面的条件时，命中系列才归这一类。
+        </p>
+        <div v-for="c in seriesConds" :key="c.field" class="field" :class="{ wide: c.field === 'series_keywords' }">
+          <span class="lbl">{{ c.label }}</span>
+          <HTagsInput
+            :model-value="listOf(c.field)"
+            :placeholder="c.ph"
+            :aria-label="`系列${c.label}`"
+            @update:model-value="(v: string[]) => setList(c.field, v)"
+          />
         </div>
       </section>
 
@@ -150,7 +204,7 @@ function done() {
         <template v-if="summary.length">
           <span v-for="s in summary" :key="s" class="cond">{{ s }}</span>
         </template>
-        <span v-else class="muted small">还没写条件（会把后面的全接走）</span>
+        <span v-else class="muted small">还没写条件（要放进「其余都放这里」就删掉这条）</span>
       </p>
     </div>
 
@@ -260,7 +314,8 @@ function done() {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 14px;
 }
-.more .wide {
+.more .wide,
+.more .tip {
   grid-column: 1 / -1;
 }
 .hint {

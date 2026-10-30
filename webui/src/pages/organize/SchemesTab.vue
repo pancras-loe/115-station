@@ -103,6 +103,7 @@ const persistYaml = async (yaml: string, opts?: { confirmCatChange?: boolean }) 
   const d = await libraryApi.updateScheme(current.value, { yaml, confirm_cat_change: opts?.confirmCatChange || undefined })
   schemes.value = d.schemes
   await loadDetail(true) // 改成了简单模式认得回来的写法，切回去就能接着用表单
+  return d // 带着 message 与（兜底被挪过时）改过的 yaml，YamlRuleTab 换上
 }
 async function onSimpleSaved() {
   await load()

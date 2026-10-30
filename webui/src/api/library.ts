@@ -275,6 +275,14 @@ export interface CatSimpleRule {
   release_year: string
   custom_regex: string
   ext: string
+  /** 片名关键词（子串，含别名 / 译名） */
+  keywords: string
+  /** TMDB 标签（子串） */
+  include_keywords: string
+  /** 命中时在分类下加「X系列」子目录 */
+  series_keywords: string
+  series_actors: string
+  series_directors: string
 }
 export interface CatSimpleForm {
   movie: CatSimpleRule[]
@@ -314,6 +322,13 @@ export interface CatTryMedia {
   original_language: string
   origin_country: string[] | null
   production_countries: string[] | null
+  /** 别名 / 译名（keywords 也看它们） */
+  names?: string[] | null
+  /** TMDB 标签（include_keywords） */
+  keywords?: string[] | null
+  /** 前 6 位演员 / 导演（series_actors / series_directors） */
+  cast?: string[] | null
+  directors?: string[] | null
 }
 
 export const getScheme = (id: number) => http.get<SchemeDetail>(`/category/schemes/${id}`)
@@ -326,7 +341,7 @@ export const updateScheme = (
   id: number,
   body: { name?: string; yaml?: string; simple?: CatSimpleForm; confirm_cat_change?: boolean },
 ) =>
-  http.put<{ message: string; schemes: SchemeView[] }>(`/category/schemes/${id}`, body)
+  http.put<{ message: string; schemes: SchemeView[]; moved_fallback?: boolean; yaml?: string }>(`/category/schemes/${id}`, body)
 export const deleteScheme = (id: number) => http.del<{ schemes: SchemeView[] }>(`/category/schemes/${id}`)
 
 // ---- 在 Emby 里批量建媒体库（后端 embylibcreate.go） ----

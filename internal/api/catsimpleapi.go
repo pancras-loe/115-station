@@ -115,7 +115,9 @@ func (h *Handler) PreviewScheme(c *gin.Context) {
 		rows = req.Simple.rows()
 		// 目录名空的那条在界面上已经标红；试一试照样能算（空名的会被 validate 挡在保存那一步）
 	} else {
-		r, err := parseCategoryYAML(req.Yaml)
+		// 试一试按保存后的样子算：兜底挪到最后（写错的照样能试，保存那一步才拦）
+		src, _ := catMoveFallbacks(req.Yaml)
+		r, err := parseCategoryYAML(src)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "YAML 格式错误：" + err.Error()})
 			return
@@ -136,6 +138,8 @@ func (h *Handler) PreviewScheme(c *gin.Context) {
 			"title": media.Title, "year": media.Year, "media_type": media.MediaType,
 			"genre_ids": media.GenreIDs, "original_language": media.OrigLanguage,
 			"origin_country": media.OrigCountry, "production_countries": media.ProdCountry,
+			"names": media.Names, "keywords": media.Keywords,
+			"cast": firstN(media.Cast, catSeriesPeople), "directors": firstN(media.Directors, catSeriesPeople),
 		}
 		resp["try"] = catTry(rows, media)
 	}

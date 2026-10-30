@@ -238,13 +238,20 @@ func TestCatSimpleHTTP(t *testing.T) {
 	if code, body = libHTTPDo(t, r, "PUT", "/category/schemes/"+itoa(id), `{"simple":`+bad+`}`); code != http.StatusBadRequest {
 		t.Fatalf("重名要拒绝：%d %v", code, body)
 	}
-	// 专家模式写了认不出的条件：读回来 simple 为空、带原因
-	if code, body = libHTTPDo(t, r, "PUT", "/category/schemes/"+itoa(id), `{"yaml":"movie:\n  电影/高分:\n    vote_average: '8'\n  电影:\n"}`); code != http.StatusOK {
+	// 专家模式写了认不出的条件：保存时就拦下（catValidateYAML）
+	if code, body = libHTTPDo(t, r, "PUT", "/category/schemes/"+itoa(id), `{"yaml":"movie:\n  电影/高分:\n    vote_average: '8'\n  电影:\n"}`); code != http.StatusBadRequest {
+		t.Fatalf("认不出的条件要拒绝：%d %v", code, body)
+	}
+	// 可选条件简单模式表示不了：能存，读回来 simple 为空、带原因；写在前面的兜底挪到最后
+	if code, body = libHTTPDo(t, r, "PUT", "/category/schemes/"+itoa(id), `{"yaml":"movie:\n  电影:\n  电影/动画:\n    ?genre_ids: '16'\n    ?keywords: '动画'\n"}`); code != http.StatusOK || body["moved_fallback"] != true {
 		t.Fatalf("专家模式保存：%d %v", code, body)
 	}
 	forgetSchemes()
 	_, body = libHTTPDo(t, r, "GET", "/category/schemes/"+itoa(id), "")
 	if body["simple"] != nil || len(body["simple_why"].([]any)) == 0 {
-		t.Fatalf("认不出的条件应该挡住简单模式：%v", body)
+		t.Fatalf("可选条件应该挡住简单模式：%v", body)
+	}
+	if rs := classifyRulesOf(id, "movie"); len(rs) != 2 || rs[0].Name != "电影/动画" || rs[0].Optional != "genre_ids,keywords" || !rs[1].IsDefault {
+		t.Fatalf("兜底没挪到最后 / 可选没记下：%+v", rs)
 	}
 }

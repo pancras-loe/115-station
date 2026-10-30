@@ -1321,6 +1321,13 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
+	// 写错的拦下，写在中间的兜底挪到最后（catrule.go）
+	src, note, verr := prepCategoryYAML(req.Yaml)
+	if verr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": verr.Error()})
+		return
+	}
+	req.Yaml = src
 	// 解析 YAML → CategoryRule 规则表（classifyMedia 真正读取的存储；
 	// 此前只存 YAML 文本、规则表永远是首次种子的默认值，界面编辑从未生效）
 	rows, perr := parseCategoryYAML(req.Yaml)
@@ -1369,7 +1376,11 @@ func (h *Handler) SaveCategories(c *gin.Context) {
 		}
 	}
 	log.Printf("[配置] 二级分类已生效：%d 条规则（电影 %d / 剧集 %d）", len(rows), movieN, tvN)
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))})
+	msg := fmt.Sprintf("保存成功（%d 条分类规则已生效）", len(rows))
+	if note != "" {
+		msg += "；" + note
+	}
+	c.JSON(http.StatusOK, gin.H{"message": msg})
 }
 
 // replaceCategoryRules 事务重建方案「默认」的 movie/tv 规则与 YAML（整套替换，不做增量合并）
@@ -1485,41 +1496,36 @@ func parseCategoryYAML(src string) ([]model.CategoryRule, error) {
 			fields := val.Content[j+1]
 			if fields != nil && fields.Kind == yaml.MappingNode {
 				for k := 0; k+1 < len(fields.Content); k += 2 {
-					fk := fields.Content[k].Value
-					fv, ok := categoryYAMLValue(fields.Content[k+1])
-					if !ok {
-						r.Unsupported = joinNonEmpty(r.Unsupported, fk)
-						continue
+				// ?字段 是可选条件（catrule.go）；系列字段带 ? 没有效果，照样记下，写回 YAML 时原样带上
+				fk, optional := catSplitKey(fields.Content[k].Value)
+				fv, ok := categoryYAMLValue(fields.Content[k+1])
+				if !ok {
+					r.Unsupported = joinNonEmpty(r.Unsupported, fk)
+					continue
+				}
+				if f, known := catFieldOf(fk); known {
+					*f.ptr(&r) = fv
+					if optional {
+						r.Optional = joinNonEmpty(r.Optional, fk)
 					}
-					switch fk {
-					case "genre_ids":
-						r.GenreIds = fv
-					case "original_language":
-						r.OriginalLanguage = fv
-					case "origin_country":
-						r.OriginCountry = fv
-					case "custom_regex":
-						r.CustomRegex = fv
-					case "production_countries":
-						r.ProductionCountries = fv
-					case "release_year":
-						r.ReleaseYear = fv
-					case "ext":
-						r.Ext = fv
-					case "library":
-						// 落到哪个媒体库，不是匹配条件（下面判兜底时不看它）
-						r.Library = strings.TrimSpace(fv)
-					default:
-						r.Unsupported = joinNonEmpty(r.Unsupported, fk)
-					}
+					continue
+				}
+				switch fk {
+				case "custom_regex":
+					r.CustomRegex = fv
+				case "ext":
+					r.Ext = fv
+				case "library":
+					// 落到哪个媒体库，不是匹配条件（下面判兜底时不看它）
+					r.Library = strings.TrimSpace(fv)
+				default:
+					r.Unsupported = joinNonEmpty(r.Unsupported, fk)
 				}
 			}
-			prio++
-			r.Priority = prio
-			if r.GenreIds == "" && r.OriginalLanguage == "" && r.OriginCountry == "" && r.ProductionCountries == "" &&
-				r.ReleaseYear == "" && r.CustomRegex == "" && r.Ext == "" && r.Unsupported == "" {
-				r.IsDefault = true
-			}
+		}
+		prio++
+		r.Priority = prio
+		r.IsDefault = catRuleEmpty(&r)
 			rows = append(rows, r)
 		}
 	}

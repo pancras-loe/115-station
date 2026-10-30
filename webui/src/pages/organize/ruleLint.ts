@@ -9,6 +9,7 @@
  */
 import {
   CATEGORY_FIELD_KEYS,
+  CATEGORY_SERIES_KEYS,
   CATEGORY_SETTING_KEYS,
   WASH_LEVEL_FIELD_KEYS,
   countryName,
@@ -29,6 +30,14 @@ export interface Cond {
   key: string
   value: string
   line: number
+  /** 写成 ?字段 的可选条件（只有分类规则有；key 里已去掉 ?） */
+  optional?: boolean
+}
+
+/** 分类字段名去掉可选前缀 ? / ？（后端 catSplitKey） */
+function splitOptKey(raw: string): { key: string; optional: boolean } {
+  const m = raw.trim().match(/^[?？]\s*(.*)$/)
+  return m ? { key: m[1], optional: true } : { key: raw.trim(), optional: false }
 }
 
 // ---------------- 逐行扫描 ----------------
@@ -174,15 +183,16 @@ export function parseCategory(src: string): CategoryModel {
       continue
     }
     if (section.condIndent < 0) section.condIndent = e.indent
-    if ((CATEGORY_SETTING_KEYS as readonly string[]).includes(e.key)) {
-      rule.library = { key: e.key, value: e.value, line: e.line } // 不是条件：不影响兜底判断
+    const { key, optional } = splitOptKey(e.key)
+    if ((CATEGORY_SETTING_KEYS as readonly string[]).includes(key)) {
+      rule.library = { key, value: e.value, line: e.line } // 不是条件：不影响兜底判断
       rule.endLine = e.line
       continue
     }
-    rule.conds.push({ key: e.key, value: e.value, line: e.line })
+    rule.conds.push({ key, value: e.value, line: e.line, optional })
     rule.endLine = e.line
     // 认不出的条件后端也不当兜底（这条规则不匹配任何条目），这里同口径
-    if (e.value.trim() || !(CATEGORY_FIELD_KEYS as readonly string[]).includes(e.key)) rule.fallback = false
+    if (e.value.trim() || !(CATEGORY_FIELD_KEYS as readonly string[]).includes(key)) rule.fallback = false
   }
 
   for (const s of sections) {
@@ -230,7 +240,11 @@ export function lintCategory(src: string): RuleIssue[] {
       continue
     }
     let fallbackAt = -1
-    for (const r of s.rules) {
+    let lastReal = -1
+    s.rules.forEach((r, i) => {
+      if (!r.fallback) lastReal = i
+    })
+    for (const [ri, r] of s.rules.entries()) {
       if (!categoryDirName(r.name)) {
         issues.push({
           line: r.line,
@@ -238,26 +252,44 @@ export function lintCategory(src: string): RuleIssue[] {
           text: `分类名为空，这条会整理到 ${label}/ 这一层`,
         })
       }
-      if (fallbackAt >= 0) {
-        issues.push({ line: r.line, level: 'warn', text: `排在第 ${fallbackAt} 行的兜底分类之后，永远匹配不到` })
-      } else if (r.fallback) {
-        fallbackAt = r.line
+      if (r.fallback) {
+        if (fallbackAt < 0) fallbackAt = r.line
+        // 后端 catMoveFallbacks：保存时没写条件的挪到这一段最后，不会再吞掉后面的规则
+        if (ri < lastReal) issues.push({ line: r.line, level: 'info', text: '没写条件的兜底，保存时会自动挪到这一段最后' })
       }
 
       if (r.library && !r.library.value.trim()) {
         issues.push({ line: r.library.line, level: 'warn', text: 'library 没有值，这一类照常进主媒体库' })
       }
+      const seenKeys = new Set<string>()
       for (const c of r.conds) {
+        // 以下 error 级别的都与后端 catValidateYAML 同口径：保存会被拒收
+        if (c.key === 'year') {
+          issues.push({ line: c.line, level: 'error', text: 'year 已不用了，改成 release_year（写法 2020 或 2000-2009）' })
+          continue
+        }
         if (!(CATEGORY_FIELD_KEYS as readonly string[]).includes(c.key)) {
           issues.push({
             line: c.line,
-            level: 'warn',
-            text: `「${c.key}」不是分类条件字段，这条规则将不匹配任何条目（可用：${CATEGORY_FIELD_KEYS.join(' / ')}）`,
+            level: 'error',
+            text: `「${c.key}」不是分类条件字段，保存会被拒收（可用：${CATEGORY_FIELD_KEYS.join(' / ')}）`,
           })
           continue
         }
+        if (seenKeys.has(c.key)) {
+          issues.push({ line: c.line, level: 'error', text: `${c.key} 写了两次（带不带 ? 都算同一个），合成一行` })
+          continue
+        }
+        seenKeys.add(c.key)
         if (!c.value.trim()) {
-          issues.push({ line: c.line, level: 'warn', text: `${c.key} 没有值，等于没写这个条件` })
+          issues.push({ line: c.line, level: 'error', text: `${c.key} 没有值，不要这个条件就把这一行删掉` })
+          continue
+        }
+        if (c.optional && (CATEGORY_SERIES_KEYS as readonly string[]).includes(c.key)) {
+          issues.push({ line: c.line, level: 'info', text: '系列字段带 ? 没有效果，照常按系列算' })
+        }
+        if (c.key !== 'custom_regex' && c.key !== 'ext' && splitTerms(c.value, true).some((t) => !t.v)) {
+          issues.push({ line: c.line, level: 'error', text: `${c.key} 里「+」「-」「!」后面要跟值` })
           continue
         }
         if (c.key === 'ext') {
@@ -295,7 +327,7 @@ export function lintCategory(src: string): RuleIssue[] {
         if (c.key === 'release_year') {
           for (const { v } of splitTerms(c.value)) {
             if (!/^\d{4}(\s*-\s*\d{4})?$/.test(v)) {
-              issues.push({ line: c.line, level: 'warn', text: `release_year 要写四位年份或范围（2000-2009），「${v}」不是` })
+              issues.push({ line: c.line, level: 'error', text: `release_year 要写四位年份或范围（2000-2009），「${v}」不是` })
             }
           }
         }
@@ -534,16 +566,23 @@ export interface OutlineGroup {
 function splitList(v: string): string[] {
   return v
     .replace(/^\s*\[|\]\s*$/g, '') // 行内列表 [16, 99]，后端同样按逗号拼
-    .split(',')
+    .split(/[,，;；]/) // 与后端 catTerms 同一组分隔符
     .map(s => s.trim().replace(/^(['"])(.*)\1$/, '$2'))
     .filter(Boolean)
 }
 
-/** 拆成单个取值并剥掉排除前缀 !（范围 a-b 原样保留） */
-function splitTerms(v: string): { v: string; neg: boolean }[] {
+/**
+ * 拆成单个取值并剥掉前缀：- / ! 排除、+ 必须（范围 a-b 原样保留，开头的 - 才是排除）。
+ * keepEmpty：前缀后面没值的也留着（体检要报出来）
+ */
+function splitTerms(v: string, keepEmpty = false): { v: string; neg: boolean; must: boolean }[] {
   return splitList(v)
-    .map(t => (t.startsWith('!') ? { v: t.slice(1).trim(), neg: true } : { v: t, neg: false }))
-    .filter(t => t.v)
+    .map((t) => {
+      const neg = /^[-!！]/.test(t)
+      const must = t.startsWith('+')
+      return { v: neg || must ? t.replace(/^[-!！+]/, '').trim() : t, neg, must }
+    })
+    .filter((t) => keepEmpty || t.v)
 }
 
 /** 把 ID / 代码翻成「人话(原值)」，认不出就只留原值 */
@@ -558,10 +597,10 @@ function decode(key: string, value: string, media: string): string {
   const fn = names[key]
   if (!fn) return value
   return splitTerms(value)
-    .map(({ v, neg }) => {
+    .map(({ v, neg, must }) => {
       const name = v.includes('-') ? '' : fn(v)
       const text = name ? `${name}(${v})` : v
-      return neg ? `非 ${text}` : text
+      return neg ? `非 ${text}` : must ? `必须 ${text}` : text
     })
     .join('、')
 }
@@ -572,6 +611,11 @@ const CATEGORY_COND_LABEL: Record<string, string> = {
   origin_country: '国家',
   production_countries: '制片国家',
   release_year: '年份',
+  keywords: '片名含',
+  include_keywords: 'TMDB 标签',
+  series_keywords: '系列（片名）',
+  series_actors: '系列（演员）',
+  series_directors: '系列（导演）',
   custom_regex: '片名正则',
   ext: '后缀',
 }
@@ -579,14 +623,15 @@ const CATEGORY_COND_LABEL: Record<string, string> = {
 export function outlineCategory(src: string): OutlineGroup[] {
   return parseCategory(src).sections.map(s => {
     const top = s.media === 'movie' ? '电影' : '剧集'
-    let seenFallback = false
+    let lastReal = -1
+    s.rules.forEach((r, i) => {
+      if (!r.fallback) lastReal = i
+    })
     return {
       title: top,
       subtitle: `${s.rules.length} 条规则，从上往下匹配`,
       line: s.line,
-      items: s.rules.map(r => {
-        const muted = seenFallback
-        if (r.fallback) seenFallback = true
+      items: s.rules.map((r, ri) => {
         const name = categoryDirName(r.name)
         // 与后端 matchCategory 同口径：有认不出的条件，或者只写了 ext
         const set = r.conds.filter(c => c.value.trim())
@@ -597,15 +642,19 @@ export function outlineCategory(src: string): OutlineGroup[] {
           line: r.line,
           label: name ? `${name}/` : `${top}/`,
           tags: [
-            ...(r.fallback ? ['兜底'] : []),
+            // 兜底保存时会挪到最后（后端 catMoveFallbacks），不再把后面的规则灰掉
+            ...(r.fallback ? [ri < lastReal ? '兜底（保存时挪到最后）' : '兜底'] : []),
+            ...(r.conds.some((c) => (CATEGORY_SERIES_KEYS as readonly string[]).includes(c.key) && c.value.trim())
+              ? ['加系列子目录']
+              : []),
             ...(name ? [] : ['无分类目录']),
             ...(dead ? ['不会匹配'] : []),
             ...(r.library?.value.trim() ? [`→ ${r.library.value.trim().replace(/^['"]|['"]$/g, '')} 库`] : []),
           ],
           chips: r.conds
             .filter(c => c.value.trim())
-            .map(c => `${CATEGORY_COND_LABEL[c.key] ?? c.key}：${decode(c.key, c.value, s.media)}`),
-          muted: muted || dead,
+            .map(c => `${c.optional ? '可选·' : ''}${CATEGORY_COND_LABEL[c.key] ?? c.key}：${decode(c.key, c.value, s.media)}`),
+          muted: dead,
         }
       }),
     }

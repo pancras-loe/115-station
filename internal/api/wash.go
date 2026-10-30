@@ -185,7 +185,12 @@ func matchWashStrategy(mediaType, category string) *washStrategy {
 // containsCategory 洗版策略的 category 列表是否覆盖该分类。
 // 分类现在是库内相对目录（"电视剧/日番"），而策略里用户习惯只写末级名（"日番"），
 // 所以全路径和末级名都算命中
+//
+// 分类规则写了系列字段时整理进「分类/X系列」（catrule.go）：策略写的是分类本身，也算覆盖它下面的系列目录
 func containsCategory(list, cat string) bool {
+	if dir := path.Dir(cat); strings.HasSuffix(cat, "系列") && dir != "." && containsCategory(list, dir) {
+		return true
+	}
 	leaf := path.Base(cat)
 	for _, c := range strings.Split(list, ",") {
 		c = strings.TrimSpace(c)
