@@ -472,8 +472,9 @@ const re0ChallengeJS = `() => Boolean(
 
 // re0WaitCloudflare 有 Cloudflare 验证页就等它过（最长 90 秒），每 5 秒试着点一次复选框，最多 3 次
 func re0WaitCloudflare(p *rod.Page) error {
-	deadline := time.Now().Add(90 * time.Second)
-	detected, clicks := false, 0
+	start := time.Now()
+	deadline := start.Add(90 * time.Second)
+	detected, clicks, sawFrame, reloaded := false, 0, false, false
 	var nextClick time.Time
 	for time.Now().Before(deadline) {
 		res, err := p.Eval(re0ChallengeJS)
@@ -503,10 +504,27 @@ func re0WaitCloudflare(p *rod.Page) error {
 			}
 			nextClick = time.Now().Add(5 * time.Second)
 		}
+		if !sawFrame {
+			sawFrame = re0CFFramePresent(p)
+		}
+		// 验证框一直没加载出来（2026-10-30 现场：页面只有「Performing security verification」一行字，90 秒没出框）：
+		// 同样的浏览器在别的网络下几秒就出框、点一次就过，卡住的多半是那一次 challenges.cloudflare.com 没取到，刷新一次再给它机会
+		if !sawFrame && !reloaded && time.Since(start) > 30*time.Second {
+			reloaded = true
+			log.Printf("[RE0网页]   30 秒没等到 Cloudflare 验证框，刷新页面重试一次")
+			if err := p.Reload(); err == nil {
+				wctx, cancel := context.WithTimeout(p.GetContext(), 20*time.Second)
+				_ = p.Context(wctx).WaitLoad()
+				cancel()
+			}
+		}
 		time.Sleep(500 * time.Millisecond)
 	}
+	if detected && !sawFrame {
+		return fmt.Errorf("Cloudflare 验证框 90 秒内没加载出来（%s）：容器到 challenges.cloudflare.com 不通，或 Cloudflare 不给这个出口 IP 出验证框，试试 RE0 设置里的「通过代理访问」或换个出口", re0URL(p))
+	}
 	if detected {
-		return fmt.Errorf("Cloudflare 验证 90 秒内没通过（%s），检查网络 / 代理到 challenges.cloudflare.com 是否通畅", re0URL(p))
+		return fmt.Errorf("Cloudflare 验证 90 秒内没通过（%s，点了 %d 次验证框），可能是出口 IP 被 Cloudflare 判成高风险，试试换个代理 / 出口", re0URL(p), clicks)
 	}
 	return fmt.Errorf("页面一直在跳转，读不出来（%s）", re0URL(p))
 }
@@ -561,6 +579,37 @@ func re0ClickCFCheckbox(p *rod.Page) bool {
 		}
 	}
 	return false
+}
+
+// re0CFFramePresent 页面上有没有 Cloudflare 验证框的 iframe（独立进程的看 target，同进程的看 frame 树）
+func re0CFFramePresent(p *rod.Page) bool {
+	if tg, err := (proto.TargetGetTargets{}).Call(p.Browser()); err == nil {
+		for _, ti := range tg.TargetInfos {
+			if ti.Type == "iframe" && re0IsCFURL(ti.URL) {
+				return true
+			}
+		}
+	}
+	tree, err := proto.PageGetFrameTree{}.Call(p)
+	if err != nil {
+		return false
+	}
+	var walk func(t *proto.PageFrameTree) bool
+	walk = func(t *proto.PageFrameTree) bool {
+		if t == nil {
+			return false
+		}
+		if re0IsCFURL(t.Frame.URL) {
+			return true
+		}
+		for _, c := range t.ChildFrames {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(tree.FrameTree)
 }
 
 func re0IsCFURL(raw string) bool {
