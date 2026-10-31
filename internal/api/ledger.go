@@ -388,6 +388,11 @@ func scanLedgerTitles() map[string]*ledgerTitleEntry {
 	layout := loadLibCategoryLayout()
 	var sfs []model.SyncedFile
 	model.DB.Where("kind = ?", "video").Find(&sfs)
+	return aggregateLedgerTitles(layout, sfs)
+}
+
+// aggregateLedgerTitles 台账视频行按片目聚合（分享 STRM 进海报墙也走它，sharestrmposter.go）
+func aggregateLedgerTitles(layout libCategoryLayout, sfs []model.SyncedFile) map[string]*ledgerTitleEntry {
 	out := map[string]*ledgerTitleEntry{}
 	// 同名分类两边都有时按文件判断：片目里有一集带集号就是剧集
 	undecided := map[string]bool{}

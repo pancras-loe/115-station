@@ -805,6 +805,10 @@ func scrapeDirVideoRows(key string) []model.SyncedFile {
 	if base == "" {
 		return nil
 	}
+	if isShareTitleKey(base) {
+		// 分享 STRM 的片目：视频不在台账里，按分享文件现拼（sharestrmposter.go）
+		return shareVideoRowsOf(base)
+	}
 	if isSoloTitleKey(base) {
 		// 平铺片目就是这一个 STRM
 		var sfs []model.SyncedFile

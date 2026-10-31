@@ -224,11 +224,21 @@ func loadLegacyLibScrape() string {
 type libScrapePolicy struct {
 	byName  map[string]string
 	primary string // 首个媒体库的方式：第一段认不出库名时用它（只有一个库的老台账不带库名）
+	// shareRoot / shareMode 分享 STRM 根下的片目（sharestrmposter.go）：本站刮削开着按「只手动刮」，
+	// 关着按「不刮」（交给 Emby、海报墙按 Emby 分级）。不按「自动刮」：媒体信息补全会去补刮、提前探测，
+	// 每次探测都要取一次分享直链
+	shareRoot, shareMode string
 }
 
 // loadLibScrapePolicy 当前配置。库名认不出（缓存里还没有）的库按首个库算 —— 和老台账同一个退路
 func loadLibScrapePolicy() libScrapePolicy {
-	return buildLibScrapePolicy(libNameSources(settingValueCompat("full")), loadLibOpts(), loadLegacyLibScrape())
+	p := buildLibScrapePolicy(libNameSources(settingValueCompat("full")), loadLibOpts(), loadLegacyLibScrape())
+	cfg := loadShareStrmCfg()
+	p.shareRoot, p.shareMode = cfg.Root, libScrapeOff
+	if cfg.Scrape {
+		p.shareMode = libScrapeManual
+	}
+	return p
 }
 
 // buildLibScrapePolicy legacy 是没设过刮削的库用的方式（loadLegacyLibScrape）
@@ -254,6 +264,11 @@ func buildLibScrapePolicy(sources []libNameSource, opts libOpts, legacy string) 
 
 // of 片目 key（或任何以库名开头的本地相对路径）所在库的刮削方式。零值策略（测试里没设）按自动算
 func (p libScrapePolicy) of(key string) string {
+	if p.shareRoot != "" {
+		if k := strings.Trim(key, "/"); k == p.shareRoot || strings.HasPrefix(k, p.shareRoot+"/") {
+			return p.shareMode
+		}
+	}
 	lib, _ := splitLibRel(key)
 	if m, ok := p.byName[lib]; ok {
 		return m

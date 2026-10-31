@@ -120,11 +120,14 @@ func (h *Handler) localTitlesSnapshot(refresh bool) []localTitle {
 // buildLocalTitles 重建卡片快照：读台账、读每个片目的目录。refresh = 台账也不用缓存
 func (h *Handler) buildLocalTitles(refresh bool) []localTitle {
 	root := localMediaRoot()
-	ledger := scanLedgerTitlesCached()
-	if refresh {
-		ledger = scanLedgerTitles()
-	}
+	// 分享 STRM 本地整理的片目也进海报墙（sharestrmposter.go）；只并在海报墙这里，不进台账聚合
+	ledger := posterLedgerTitles(refresh)
 	rows := ledgerVideoRowsByTitle()
+	for k, v := range shareVideoRowsByTitle() {
+		if _, dup := rows[k]; !dup {
+			rows[k] = v
+		}
+	}
 	out := make([]localTitle, 0, len(ledger))
 	// 平铺片目（几十上百部共用一个分类目录）共用一份目录索引：每部各读一遍的话，
 	// 一个放了一千部的目录要读一千遍。普通片目各用各的，读完就放掉，不把整库的目录都压在内存里

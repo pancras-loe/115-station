@@ -478,7 +478,7 @@ func localDetailEntry(c *gin.Context, key string) (*ledgerTitleEntry, string, bo
 		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少片目"})
 		return nil, "", false
 	}
-	e := scanLedgerTitlesCached()[key]
+	e := posterLedgerTitles(false)[key]
 	if e == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "台账里没有这个片目（可能刚被移走或删除），请刷新列表"})
 		return nil, "", false

@@ -130,7 +130,7 @@ func kickLocalEmby(cfg embyRefreshCfg, root string, force bool) bool {
 	go func() {
 		for {
 			began := time.Now()
-			stats, scanned, err := fetchLocalEmby(cfg, root, scanLedgerTitlesCached())
+			stats, scanned, err := fetchLocalEmby(cfg, root, posterLedgerTitles(false))
 			s.mu.Lock()
 			s.at = time.Now()
 			if err != nil {

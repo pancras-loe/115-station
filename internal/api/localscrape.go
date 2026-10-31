@@ -125,7 +125,7 @@ func (h *Handler) ScrapeLocalTitles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	ledger := scanLedgerTitlesCached()
+	ledger := posterLedgerTitles(false) // 海报墙里的分享片目也能勾选刮削
 	for _, k := range keys {
 		if ledger[k] == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "台账里没有「" + k + "」，请刷新列表后重选"})
@@ -629,7 +629,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		defer resetFileListCache()
 	}
 
-	targets, problems := scrapeTargets(lp, scanLedgerTitles())
+	targets, problems := scrapeTargets(lp, posterLedgerTitles(true))
 
 	w := newFileScrapeWriter(cloud, o.Force, o.Upload)
 	w.localRoot = localRoot
@@ -665,7 +665,8 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 			e.MediaType, e.Title, e.Year, e.TmdbID = tg.hint.Kind, tg.hint.Title, tg.hint.Year, tg.hint.TmdbID
 		}
 		libCid := ""
-		if o.Upload {
+		// 分享 STRM 的片目没有网盘落点（分享不是自己的）：只写本地，libCid 留空 = 不传
+		if o.Upload && !isShareTitleKey(e.Key) {
 			root, ok := libRootNamed(libRoots, e.LibName)
 			if !ok {
 				problems = append(problems, fmt.Sprintf("%s：认不出它在哪个网盘媒体库（库目录「%s」），没有刮削", name, e.LibName))
@@ -694,7 +695,7 @@ func execScrapeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		log.Printf("[影视刮削] ▶ 《%s》(%s) [tmdb=%d] %s，视频 %d 个 → %s",
 			t.Title, t.Year, t.TmdbID, map[string]string{"tv": "剧集", "movie": "电影"}[t.Kind], len(t.Videos), t.Dir.Local)
 		st := sess.scrapeTitleMeta(t)
-		if o.Probe && !isAutoScrapeKey(job.DedupeKey) {
+		if o.Probe && !isAutoScrapeKey(job.DedupeKey) && !isShareTitleKey(t.Key) { // 分享片目不顺手探测：每次探测都要取一次分享直链
 			if cfg, ok := loadEmbyRefreshCfg(); ok {
 				extract = append(extract, embyPathOf(cfg, t.localPath()))
 			}
