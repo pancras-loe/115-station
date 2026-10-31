@@ -21,7 +21,7 @@ import { relTime } from '@/utils/time'
 /**
  * 分享 STRM（后端 sharestrm.go，设计见 docs/115-station-notes/SHARE-STRM-PLAN.md）：
  * 不转存、不占网盘空间，本地 STRM 直接指向 115 分享，播放时按分享换直链。
- * 总开关在「设置」页签；关着时侧栏不显示这一页，从扩展功能的卡片进来。
+ * 总开关在「设置」页签；关着时侧栏不显示这一页，从扩展功能的卡片或 Strm 管理状态条的「分享 STRM」进来。
  */
 const tab = useTabQuery('sources')
 const router = useRouter()

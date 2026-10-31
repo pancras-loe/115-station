@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Component } from 'vue'
-import { DatabaseBackup, FileWarning, MonitorPlay, Trash2, Zap } from '@lucide/vue'
+import { DatabaseBackup, FileWarning, Link2, MonitorPlay, Trash2, Zap } from '@lucide/vue'
+import { useRouter } from 'vue-router'
 import StatusStrip from '@/components/ui/StatusStrip.vue'
 import type { StripItem, StripTone } from '@/components/ui/StatusStrip.vue'
-import { playbackApi, syncApi, tasksApi } from '@/api'
+import { playbackApi, shareStrmApi, syncApi, tasksApi } from '@/api'
 import type { PlaybackConfig, ProxyStatus } from '@/api/playback'
+import type { ShareSource } from '@/api/sharestrm'
 import type { DeepDeleteRecord, OrphanReport } from '@/api/sync'
 import type { TaskJob } from '@/api/tasks'
 import type { FullSetting } from './fullSetting'
 import type { DeepDelSetting } from './deepDelSetting'
 import type { StrmRuns } from './useStrmRuns'
 import { useQueueStore } from '@/stores/queue'
+import { useShareStrm } from '@/composables/shareStrm'
+import { cleanupList } from '@/pages/sharestrm/cleanup'
 import { fullTime, relCronNext, relTime } from '@/utils/time'
 import { num } from '@/utils/format'
 
@@ -20,12 +24,17 @@ import { num } from '@/utils/format'
  * 只看不做：「立即同步」「开始全量」放回各自页签（维护者嫌状态条上放执行按钮太挤）。
  *
  * 数据全是已有的只读接口（增量状态 / 失效 STRM / 任务历史 / 删除记录），零 115 请求。
+ *
+ * 最后一段「分享 STRM」只是入口：那是另一套（不进台账、全量增量深删都不碰），页面单独放在 /share-strm，
+ * 别并成这里的页签——摆在一页会让人以为全量会扫分享、Emby 里删了会深删。用户想到 STRM 先来这页找，
+ * 所以在这里给一段跳过去，没开时也显示，指向开关。
  * 增量状态 15 秒拉一次（后端只读内存），其余在相关任务跑完时刷新。
  */
 const props = defineProps<{ full: FullSetting; runs: StrmRuns; deepdel: DeepDelSetting }>()
 const emit = defineEmits<{ goto: [tab: string, anchor?: string] }>()
 
 const queue = useQueueStore()
+const router = useRouter()
 
 // ---- 数据 ----
 const incr = ref<syncApi.IncrStatus | null>(null)
@@ -74,6 +83,19 @@ async function loadPlay() {
   }
 }
 
+// 分享 STRM：开关读模块级配置（侧栏也读它），开着才列分享（只读本地两张表）
+const share = useShareStrm()
+const shares = ref<ShareSource[] | null>(null)
+async function loadShares() {
+  if (!share.enabled.value) return
+  try {
+    shares.value = (await shareStrmApi.sources()).sources ?? []
+  } catch {
+    // 读不到维持上一次的
+  }
+}
+watch(share.enabled, (on) => on && void loadShares())
+
 let timer: number | undefined
 onMounted(() => {
   void loadIncr()
@@ -81,6 +103,7 @@ onMounted(() => {
   void loadLastFull()
   void loadLastDel()
   void loadPlay()
+  void loadShares()
   timer = window.setInterval(() => {
     if (document.hidden) return
     void loadIncr()
@@ -93,6 +116,7 @@ const offFinished = queue.onFinished((j) => {
     void loadLastFull()
   }
   if (j.kind === 'incr') void loadIncr()
+  if (j.kind === 'sharestrm') void loadShares()
 })
 onUnmounted(() => {
   clearInterval(timer)
@@ -306,10 +330,42 @@ const playTile = computed<Tile>(() => {
   }
 })
 
-const tiles = computed(() => [incrTile.value, fullTile.value, orphanTile.value, delTile.value, playTile.value])
+const shareTile = computed<Tile>(() => {
+  const base = { key: 'share', title: '分享 STRM', icon: Link2 }
+  const d = share.resp.value
+  if (!d) return { ...base, ...LOADING }
+  if (!d.config.enabled) {
+    return {
+      ...base,
+      tone: 'off',
+      badge: '未开启',
+      value: '未开启',
+      lines: [{ text: '不转存，STRM 直接指向 115 分享；和上面几项是两套，同步与深度删除都不碰它' }],
+      short: '未开启',
+    }
+  }
+  const list = shares.value
+  if (!list) return { ...base, ...LOADING }
+  const clean = cleanupList(list).length
+  const files = list.reduce((n, s) => n + (s.files || 0), 0)
+  const lines: Tile['lines'] = [{ text: `${list.length} 个分享 · ${num(files)} 个 STRM` }]
+  if (clean) lines.push({ text: `${clean} 个分享已失效，待清理`, tone: 'danger' })
+  if (share.blocked.value) lines.push({ text: share.blocked.value, tone: 'warn' })
+  return {
+    ...base,
+    tone: clean ? 'danger' : share.blocked.value ? 'warn' : list.length ? 'ok' : 'off',
+    badge: '已开启',
+    value: `${list.length}`,
+    unit: '个',
+    lines,
+    short: [list.length ? `${list.length} 个分享` : '还没有分享', clean ? `${clean} 个待清理` : ''].filter(Boolean).join(' · '),
+  }
+})
+
+const tiles = computed(() => [incrTile.value, fullTile.value, orphanTile.value, delTile.value, playTile.value, shareTile.value])
 
 // 状态条上不放执行按钮（维护者要求）：「立即同步」「开始全量」在各自页签里
-const ACTION: Record<string, string> = { incr: '详情', full: '设置', orphan: '清理', deepdel: '记录', play: '设置' }
+const ACTION: Record<string, string> = { incr: '详情', full: '设置', orphan: '清理', deepdel: '记录', play: '设置', share: '打开' }
 const items = computed<StripItem[]>(() =>
   tiles.value.map((t) => ({
     key: t.key,
@@ -317,12 +373,22 @@ const items = computed<StripItem[]>(() =>
     tone: t.tone,
     text: t.short,
     tip: t.lines.map((l) => l.title || l.text).join('\n'),
-    action: t.key === 'orphan' && !(orphan.value?.total ?? 0) ? undefined : ACTION[t.key],
+    action:
+      t.key === 'orphan' && !(orphan.value?.total ?? 0)
+        ? undefined
+        : t.key === 'share' && !share.enabled.value
+          ? '去开启'
+          : ACTION[t.key],
   })),
 )
 function act(key: string) {
   if (key === 'orphan') emit('goto', 'full', 'orphans')
   else if (key === 'play') emit('goto', 'config', 'playback')
+  else if (key === 'share') {
+    const clean = shares.value ? cleanupList(shares.value).length : 0
+    const tab = !share.enabled.value ? 'settings' : clean ? 'cleanup' : undefined
+    void router.push({ name: 'share-strm', query: tab ? { tab } : {} })
+  }
   else emit('goto', key)
 }
 </script>
