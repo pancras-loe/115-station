@@ -1015,7 +1015,8 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	w, _ := r.walkShare(shareCode, rl.Code) // 预看过的直接用，不列第二次
 	entries, title, truncated, err := w.entries, w.title, w.truncated, w.err
 	if err != nil {
-		return fail(err.Error(), true)
+		// 取消 / 过期的分享不会好：别隔一阵又拿它试
+		return fail(err.Error(), !errors.Is(err, errShareGone))
 	}
 	opts := r.sharePickOpts(sub, c.Item, missing)
 	opts.MaxEps = maxEps

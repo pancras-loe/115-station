@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -368,38 +369,81 @@ func shareList(shareCode, receiveCode, cid, cookie string) ([]shareEntry, string
 		if err != nil {
 			return nil, "", fmt.Errorf("获取分享文件列表失败: %s", err.Error())
 		}
-		var snap struct {
-			State bool   `json:"state"`
-			Error string `json:"error"`
-			Data  struct {
-				List      []map[string]any `json:"list"`
-				ShareInfo struct {
-					ShareTitle string `json:"share_title"`
-				} `json:"shareinfo"`
-			} `json:"data"`
-		}
-		dec := json.NewDecoder(strings.NewReader(string(body)))
-		dec.UseNumber()
-		if dec.Decode(&snap) != nil || !snap.State {
+		list, t, err := parseShareSnap(body)
+		if err != nil {
 			log.Printf("[上传] ✗ 文件列表获取失败: %s", truncateStr(string(body), 120))
-			if is115BusyResp(body) {
-				return nil, "", fmt.Errorf("读取分享内容失败：115 提示「%s」，请过一会儿再试", share115ErrText(body))
-			}
-			return nil, "", fmt.Errorf("读取分享内容失败（链接失效或提取码错误）：%s", share115ErrText(body))
+			return nil, "", err
 		}
 		if title == "" {
-			title = snap.Data.ShareInfo.ShareTitle
+			title = t
 		}
-		for _, m := range snap.Data.List {
+		for _, m := range list {
 			if e := shareEntryOf(m); e.ID != "" {
 				out = append(out, e)
 			}
 		}
-		if len(snap.Data.List) < 1150 {
+		if len(list) < 1150 {
 			break // 最后一页
 		}
 	}
 	return out, title, nil
+}
+
+// errShareGone 分享已取消 / 已过期 / 被屏蔽：永久失效，订阅不再重试这条
+var errShareGone = errors.New("分享已失效")
+
+// shareGoneErr 带上 115 给的状态与原因，errors.Is(err, errShareGone) 认它
+type shareGoneErr struct {
+	state  string // shareinfo.share_state 原值
+	reason string // shareinfo.forbid_reason
+}
+
+func (e *shareGoneErr) Error() string {
+	what := "分享已失效（状态 " + e.state + "）"
+	switch e.state {
+	case "4":
+		what = "分享已取消"
+	case "7":
+		what = "分享已过期"
+	}
+	if e.reason != "" && !strings.Contains(what, e.reason) {
+		what += "（115：" + e.reason + "）"
+	}
+	return "读取分享内容失败：" + what
+}
+
+func (e *shareGoneErr) Is(target error) bool { return target == errShareGone }
+
+// parseShareSnap 解析 /share/snap 的一页：条目、分享标题，或失败原因。
+// 失效的分享 115 照样回 state=true、文件也照样列得出来（2026-10-31 实测：已过期 share_state=7、
+// forbid_reason「链接已过期」，已取消 share_state=4），只看 state 会一路走到 share/receive 才失败、
+// 订阅还会反复重试。所以 shareinfo.share_state 有值且不是 1 就按失效报；没有这个字段的按正常
+func parseShareSnap(body []byte) ([]map[string]any, string, error) {
+	var snap struct {
+		State bool   `json:"state"`
+		Error string `json:"error"`
+		Data  struct {
+			List      []map[string]any `json:"list"`
+			ShareInfo struct {
+				ShareTitle   string `json:"share_title"`
+				ShareState   any    `json:"share_state"`
+				ForbidReason string `json:"forbid_reason"`
+			} `json:"shareinfo"`
+		} `json:"data"`
+	}
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec.UseNumber()
+	if dec.Decode(&snap) != nil || !snap.State {
+		if is115BusyResp(body) {
+			return nil, "", fmt.Errorf("读取分享内容失败：115 提示「%s」，请过一会儿再试", share115ErrText(body))
+		}
+		return nil, "", fmt.Errorf("读取分享内容失败（链接失效或提取码错误）：%s", share115ErrText(body))
+	}
+	si := snap.Data.ShareInfo
+	if st := strings.TrimSpace(fmt.Sprint(si.ShareState)); si.ShareState != nil && st != "" && st != "1" {
+		return nil, "", &shareGoneErr{state: st, reason: strings.TrimSpace(si.ForbidReason)}
+	}
+	return snap.Data.List, si.ShareTitle, nil
 }
 
 // shareWalkMaxDepth 列分享最多往下几层：剧名/Season 1/字幕/xx.ass 已经是三层
