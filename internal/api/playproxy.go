@@ -443,12 +443,6 @@ func servePickcodeProxy(c *gin.Context, db *gorm.DB, cfg *config.Config, id, who
 		c.String(http.StatusBadRequest, err.Error())
 		return
 	}
-	// 分享 STRM 的中转还没接（SHARE-STRM-PLAN.md §6.3 阶段 3）：明确报错，不悄悄改成 302 或别的通道
-	if isSharePlayID(pc) {
-		plogShareStrm.Printf("✗ %s 选的是本机中转，分享 STRM 还不支持中转（%s）", firstNonEmpty(who, c.ClientIP()), pc)
-		c.String(http.StatusNotImplemented, "分享 STRM 暂不支持本机中转：到「Strm 管理 → 配置 → 播放方式」把这个用户改成 302 直连")
-		return
-	}
 	// 和 302 同一道取链限流：只在要真去 115 取链时扣（池里有能用的直链就不扣）
 	if !proxyLinks.usable(pc) && !proxyRateAllow(c.ClientIP()) {
 		c.String(http.StatusTooManyRequests, "too many requests")
@@ -456,6 +450,11 @@ func servePickcodeProxy(c *gin.Context, db *gorm.DB, cfg *config.Config, id, who
 	}
 	pcfg := loadPlaybackCfg()
 	acct, _ := decodePlayID(pc)
+	if isSharePlayID(pc) {
+		// 分享 STRM：取链用的是分享登记的那个账号（sharestrm.go），连接名额也算在它头上。
+		// 链接池按标识取链，proxyDownloadURLFull 认得 s~ 前缀，分段、换链、续传都照旧
+		acct = shareAcctOf(db, pc)
+	}
 	ctx := c.Request.Context()
 	if err := proxyLimiter.acquire(ctx, acct, pcfg.MaxConns, proxyAcquireWait); err != nil {
 		if errors.Is(err, errProxyFull) {
@@ -498,6 +497,16 @@ func proxyFileName(db *gorm.DB, c *gin.Context, pc string) string {
 		if v, err := url.PathUnescape(q); err == nil {
 			return path.Base(v)
 		}
+	}
+	if db != nil && isSharePlayID(pc) {
+		// 分享 STRM：按分享里的 fid 查名字（decodePlayID 对 s~ 拆出空 pickcode，下面那句会撞上空 pick_code 的行）
+		if _, fid, ok := parseSharePlayID(pc); ok {
+			var f model.ShareFile
+			if db.Select("name").Where("file_id = ?", fid).First(&f).Error == nil && f.Name != "" {
+				return f.Name
+			}
+		}
+		return pc
 	}
 	if db != nil {
 		_, raw := decodePlayID(pc)

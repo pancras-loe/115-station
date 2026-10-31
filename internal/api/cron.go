@@ -214,6 +214,7 @@ func StartSyncScheduler(h *Handler) {
 			h.backupTick(now)      // 定时备份（backup.go），后台跑，不占这一分钟
 			h.shareOutTick()       // 贴链接转存的分享，整理完发到 RE0 / 癫影（shareout.go），后台跑
 			h.shareStrmTick(now)   // 分享 STRM 追更：到期的分享排进队列（sharestrmgen.go）
+			h.shareTransferSweep() // 分享 STRM「转存这份」：整理进库的收掉对应 STRM（sharestrmxfer.go）
 			h.acctLibSyncTick(now) // 附加账号的库隔一段时间补一次只同步它们的全量，给增量兜底（acctlibs.go / incracct.go）
 
 			if cron := h.loadFullCron(); cron != "" && CronMatch(cron, now) {

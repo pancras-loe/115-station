@@ -499,6 +499,8 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/sharestrm/sources/:id/check", h.ShareStrmCheck)
 		protected.PUT("/sharestrm/sources/:id", h.ShareStrmUpdate)
 		protected.DELETE("/sharestrm/sources/:id", h.ShareStrmDelete)
+		protected.POST("/sharestrm/sources/:id/transfer", h.ShareStrmTransfer)
+		protected.POST("/sharestrm/sources/:id/scrape", h.ShareStrmScrape)
 		protected.GET("/115checkin/config", h.Checkin115GetConfig)
 		protected.POST("/115checkin/config", h.Checkin115SaveConfig)
 		protected.POST("/115checkin/run", h.Checkin115Run)

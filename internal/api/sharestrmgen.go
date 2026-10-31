@@ -24,6 +24,8 @@ func init() { jobExecutors[jobKindShareStrm] = execShareStrmJob }
 
 type shareStrmJobParams struct {
 	SourceID uint `json:"source_id"`
+	// Scrape 用户点了「刮削」：这一轮生成完给认出的片目刮一次（只补缺失），不管设置里开没开
+	Scrape bool `json:"scrape,omitempty"`
 }
 
 // ---- 算本地位置（纯函数）----
@@ -146,6 +148,7 @@ type shareStrmResult struct {
 	Deleted   int           `json:"deleted"` // 连续两轮都没有，本地删掉的
 	Blocked   int           `json:"blocked"` // 在 Emby 里删过、不再生成的
 	Taken     int           `json:"taken"`   // 同一个位置别的分享已经占着（本地整理时两个分享是同一集）
+	Scraped   int           `json:"scraped"` // 本站刮削写了几个文件（NFO / 图片）
 	Skipped   sharePlanSkip `json:"skipped"`
 	Errors    []string      `json:"errors,omitempty"`
 }
@@ -182,6 +185,9 @@ func (r *shareStrmResult) summary() string {
 	if r.Taken > 0 {
 		parts = append(parts, fmt.Sprintf("别的分享已占着同一位置 %d", r.Taken))
 	}
+	if r.Scraped > 0 {
+		parts = append(parts, fmt.Sprintf("刮削写了 %d 个文件", r.Scraped))
+	}
 	if n := len(r.Errors); n > 0 {
 		parts = append(parts, fmt.Sprintf("出错 %d", n))
 	}
@@ -210,6 +216,9 @@ type shareStrmRun struct {
 	auto bool
 	// org 本地整理要用的（识别、分类）；nil = 只能按原样放（没配 TMDB 时）
 	org *shareOrgDeps
+	// media / titleDir 这一轮本地整理认出的条目与标题目录（相对分享根）：刮削用；没认出为空
+	media    *TmdbMedia
+	titleDir string
 }
 
 func (r *shareStrmRun) abs(rel string) string { return filepath.Join(r.root, filepath.FromSlash(rel)) }
@@ -654,13 +663,21 @@ func execShareStrmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if err != nil {
 		return jobOutcome{Result: res}, err
 	}
+	// 刮削：设置里开着时只在这一轮新写了 STRM 才刮（追更空转不刮）；用户点了「刮削」时总刮一次
+	if !canceled && r.media != nil && r.org != nil && ((cfg.Scrape && res.Written > 0) || p.Scrape) {
+		if tc, err := loadTmdbClient(); err == nil && tc != nil {
+			n, errs := r.scrapeShareTitle(tc, cfg)
+			res.Scraped = n
+			res.Errors = append(res.Errors, errs...)
+		}
+	}
 	msg := res.summary()
 	plogShareStrm.Printf("✓ %s", msg)
 	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("title", truncateStr("分享 STRM："+res.Title, 250))
 	out := jobOutcome{Message: msg, Result: res, Canceled: canceled}
 	out.Partial = !canceled && len(res.Errors) > 0
 	// 定时追更多半什么都没变：跑完删行，不刷满任务历史（同定时整理的空转）
-	out.Idle = r.auto && !canceled && res.Written+res.Moved+res.Deleted+res.Assets+len(res.Errors) == 0
+	out.Idle = r.auto && !canceled && res.Written+res.Moved+res.Deleted+res.Assets+res.Scraped+len(res.Errors) == 0
 	return out, nil
 }
 
@@ -680,6 +697,16 @@ func deleteShareSource(db *gorm.DB, root string, src model.ShareSource) (int, er
 	if rel, ok := shareRelUnder(src.LocalDir); ok {
 		pruneEmptyTree(filepath.Join(root, filepath.FromSlash(rel)))
 		pruneShareDirs(root, filepath.Join(root, filepath.FromSlash(rel)))
+	}
+	// 本地整理刮削写下的 NFO / 图片：标题目录里已经没有 STRM、也没有别的分享占着，整个收掉
+	if rel, ok := shareRelUnder(src.TitleDir); ok && src.TitleDir != "" {
+		var others int64
+		db.Model(&model.ShareFile{}).Where(`source_id <> ? AND rel_path LIKE ? ESCAPE '\'`, src.ID, likeEscape(rel)+"/%").Count(&others)
+		dir := filepath.Join(root, filepath.FromSlash(rel))
+		if others == 0 && !localHasStrm(dir) {
+			_ = os.RemoveAll(dir)
+			pruneShareDirs(root, filepath.Dir(dir))
+		}
 	}
 	if err := db.Where("source_id = ?", src.ID).Delete(&model.ShareFile{}).Error; err != nil {
 		return 0, err

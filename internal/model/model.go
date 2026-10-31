@@ -340,14 +340,18 @@ type ShareSource struct {
 	Ignored bool `json:"ignored"`
 	// 本地整理（Layout = organize）认出的条目。TmdbID 认出后存下来，之后的检查按编号取、不再按名字搜（不会漂）；
 	// Manual = 用户手动指定的。认不出时文件按原样放在 LocalDir 下，RecogNote 写原因
-	TmdbID     int       `json:"tmdb_id"`
-	MediaType  string    `json:"media_type" gorm:"size:8"`
-	MediaTitle string    `json:"media_title" gorm:"size:300"`
-	Category   string    `json:"category" gorm:"size:200"`
-	Manual     bool      `json:"manual"`
-	RecogNote  string    `json:"recog_note" gorm:"size:300"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	TmdbID     int    `json:"tmdb_id"`
+	MediaType  string `json:"media_type" gorm:"size:8"`
+	MediaTitle string `json:"media_title" gorm:"size:300"`
+	Category   string `json:"category" gorm:"size:200"`
+	Manual     bool   `json:"manual"`
+	RecogNote  string `json:"recog_note" gorm:"size:300"`
+	// TitleDir 本地整理算出的标题目录（相对分享根）：刮削写在这里，删除分享时只剩元数据就整个收掉
+	TitleDir string `json:"title_dir" gorm:"size:500"`
+	// Transferred 用户点了「转存这份」：分享已转进某个库的转存文件夹，等整理入库后按 sha1 收掉这里的 STRM
+	Transferred *time.Time `json:"transferred"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // ShareFile 分享里本站写过 STRM（或下载过附属文件）的一个文件

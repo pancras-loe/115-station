@@ -26,7 +26,7 @@ func TestPlanShareOrganizeTV(t *testing.T) {
 	newTestDB(t, "shareorg.db") // 命名模板读设置；别的测试可能改过缓存的模板，下面只核结构、不核具体写法
 	plans, _ := planShareFiles(shareOrgEntries(), sharePlanOpts{LocalDir: "某剧 2025 全集", Assets: true})
 	media := &TmdbMedia{TmdbID: 1, Title: "某剧", Year: "2025", MediaType: "tv"}
-	out, err := planShareOrganize(plans, media, "", nil)
+	out, _, err := planShareOrganize(plans, media, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestPlanShareOrganizeDup(t *testing.T) {
 		{ID: "2", Name: "某剧.S01E01.粤语.mkv", Size: 800 * mb, Sha1: "X2"},
 	}
 	plans, _ := planShareFiles(entries, sharePlanOpts{LocalDir: "x"})
-	out, err := planShareOrganize(plans, &TmdbMedia{TmdbID: 1, Title: "某剧", Year: "2025", MediaType: "tv"}, "", nil)
+	out, _, err := planShareOrganize(plans, &TmdbMedia{TmdbID: 1, Title: "某剧", Year: "2025", MediaType: "tv"}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

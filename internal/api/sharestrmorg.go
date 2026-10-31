@@ -84,7 +84,7 @@ func recognizeShareEntries(entries []shareEntry, title string, rules []ReplaceRu
 
 // planShareOrganize 已经过滤好的文件（planShareFiles 的结果）→ 按识别结果算出的本地位置。
 // 算不出位置的文件（模板对它给不出名字）不建
-func planShareOrganize(plans []shareFilePlan, media *TmdbMedia, category string, rules []ReplaceRule) ([]shareFilePlan, error) {
+func planShareOrganize(plans []shareFilePlan, media *TmdbMedia, category string, rules []ReplaceRule) ([]shareFilePlan, string, error) {
 	byFid := map[string]shareFilePlan{}
 	files := make([]orgRecordFile, 0, len(plans))
 	var top []string
@@ -128,7 +128,7 @@ func planShareOrganize(plans []shareFilePlan, media *TmdbMedia, category string,
 		layout, err = planRedoLayoutOpt(media, category, files, srcName, rules, nil, redoPlanOpts{choice: choice})
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var out []shareFilePlan
 	put := func(dir string, f orgRecordFile) {
@@ -155,7 +155,7 @@ func planShareOrganize(plans []shareFilePlan, media *TmdbMedia, category string,
 	for _, f := range layout.metaFiles {
 		put(layout.rootRel, f)
 	}
-	return out, nil
+	return out, layout.rootRel, nil
 }
 
 // organizePlans 本地整理：认片（有编号按编号取）→ 分类 → 算位置，并把认出的条目记在分享上。
@@ -193,7 +193,7 @@ func (r *shareStrmRun) organizePlans(entries []shareEntry, title string, plans [
 		return plans, nil
 	}
 	category := r.org.classify(media)
-	org, err := planShareOrganize(plans, media, category, r.org.rules)
+	org, titleDir, err := planShareOrganize(plans, media, category, r.org.rules)
 	if err != nil {
 		note = "按命名模板算位置失败：" + err.Error()
 		r.recordRecog(media, "", note)
@@ -201,6 +201,8 @@ func (r *shareStrmRun) organizePlans(entries []shareEntry, title string, plans [
 		return plans, nil
 	}
 	r.recordRecog(media, categoryDir(media.MediaType, category), "")
+	r.media, r.titleDir = media, titleDir
+	r.db.Model(&model.ShareSource{}).Where("id = ?", r.src.ID).Update("title_dir", titleDir)
 	return org, nil
 }
 

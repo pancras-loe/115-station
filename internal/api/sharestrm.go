@@ -65,6 +65,8 @@ type shareStrmCfg struct {
 	Layout string `json:"layout"`
 	// SchemeID 本地整理用哪套分类方案（CategoryScheme.ID）；0 = 只分电影 / 剧集
 	SchemeID uint `json:"scheme_id"`
+	// Scrape 本地整理认出的分享，生成后用本站刮削写 NFO 与图片（只补缺失、只写本地）；关着交给 Emby 刮
+	Scrape bool `json:"scrape"`
 }
 
 // shareFollowMin 追更最短间隔：每轮要把整个分享列一遍
@@ -400,4 +402,17 @@ func shareRelUnder(parts ...string) (string, bool) {
 		return "", false
 	}
 	return rel, true
+}
+
+// shareAcctOf 分享直链标识用哪个 115 账号取链（本机中转按账号占连接名额）；认不出按主号
+func shareAcctOf(db *gorm.DB, id string) uint {
+	code, _, ok := parseSharePlayID(id)
+	if !ok || db == nil {
+		return acctMain
+	}
+	var src model.ShareSource
+	if db.Select("account").Where("share_code = ?", code).First(&src).Error != nil {
+		return acctMain
+	}
+	return src.Account
 }
