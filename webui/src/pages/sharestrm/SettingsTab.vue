@@ -9,8 +9,8 @@ import HSelect from '@/components/hero/HSelect.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
-import { shareStrmApi } from '@/api'
-import { FOLLOW_OPTIONS, type ShareLinkAction, type ShareStrmConfig, type ShareStrmConfigResp } from '@/api/sharestrm'
+import { libraryApi, shareStrmApi } from '@/api'
+import { FOLLOW_OPTIONS, LAYOUT_OPTIONS, type ShareLinkAction, type ShareStrmConfig, type ShareStrmConfigResp } from '@/api/sharestrm'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const props = defineProps<{ sources: number }>()
@@ -25,9 +25,12 @@ const form = ref<ShareStrmConfig>({
   skip_owned: true,
   assets: true,
   follow_hours: 0,
+  layout: 'keep',
+  scheme_id: 0,
 })
 const info = ref<ShareStrmConfigResp | null>(null)
 const saving = ref(false)
+const schemes = ref<{ label: string; value: number }[]>([{ label: '只分电影 / 剧集', value: 0 }])
 
 async function load() {
   try {
@@ -36,6 +39,13 @@ async function load() {
     form.value = { ...d.config }
   } catch (e) {
     toastError(e, '读取失败')
+  }
+  try {
+    // 分类方案在「自动整理 → 二级分类」里建，这里只选
+    const libs = await libraryApi.getMediaLibs()
+    schemes.value = [{ label: '只分电影 / 剧集', value: 0 }, ...(libs.schemes ?? []).map((s) => ({ label: s.name, value: s.id }))]
+  } catch {
+    // 读不到方案清单时只留「只分电影 / 剧集」
   }
 }
 onMounted(load)
@@ -65,6 +75,7 @@ async function save() {
       ...form.value,
       min_size_mb: Number(form.value.min_size_mb) || 0,
       follow_hours: Number(form.value.follow_hours) || 0,
+      scheme_id: Number(form.value.scheme_id) || 0,
     })
     message.success(d.message)
     await load()
@@ -112,6 +123,20 @@ async function save() {
       tip="隔一段时间重新列一遍分享：分享者补了新集就补上 STRM，删了的文件隔一轮确认后删掉本地。每个分享可以在列表里单独改。剧集分享建议开，电影一般不用。"
     >
       <HSelect v-model="form.follow_hours" :options="FOLLOW_OPTIONS" class="follow" aria-label="新分享默认追更" />
+    </FieldRow>
+
+    <FieldRow
+      label="新分享默认放法"
+      tip="原样：按分享里的目录放在分享目录下。本地整理：认出是哪部片，按「自动整理」的命名模板改名、按分类方案放（电影 / 剧集 / 分类 / 片名 (年份) / Season 01），只改本地，115 不动。认不出的先按原样放，可以手动指定。每个分享可以在列表里单独改。"
+    >
+      <HSegmented v-model="form.layout" :options="LAYOUT_OPTIONS" size="sm" />
+    </FieldRow>
+
+    <FieldRow
+      label="本地整理的分类"
+      tip="用哪套分类方案（「自动整理 → 二级分类」里建的）。选「只分电影 / 剧集」就只按类型分两个目录。"
+    >
+      <HSelect v-model="form.scheme_id" :options="schemes" class="follow" aria-label="本地整理的分类" />
     </FieldRow>
 
     <FieldRow label="最小体积" tip="比这小的视频不生成 STRM，挡掉样片和广告。0 = 不限。">

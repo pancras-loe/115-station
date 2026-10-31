@@ -145,6 +145,7 @@ type shareStrmResult struct {
 	Missing   int           `json:"missing"` // 分享里没了、等下一轮确认的
 	Deleted   int           `json:"deleted"` // 连续两轮都没有，本地删掉的
 	Blocked   int           `json:"blocked"` // 在 Emby 里删过、不再生成的
+	Taken     int           `json:"taken"`   // 同一个位置别的分享已经占着（本地整理时两个分享是同一集）
 	Skipped   sharePlanSkip `json:"skipped"`
 	Errors    []string      `json:"errors,omitempty"`
 }
@@ -178,6 +179,9 @@ func (r *shareStrmResult) summary() string {
 	if r.Blocked > 0 {
 		parts = append(parts, fmt.Sprintf("在 Emby 里删过的 %d 不再生成", r.Blocked))
 	}
+	if r.Taken > 0 {
+		parts = append(parts, fmt.Sprintf("别的分享已占着同一位置 %d", r.Taken))
+	}
 	if n := len(r.Errors); n > 0 {
 		parts = append(parts, fmt.Sprintf("出错 %d", n))
 	}
@@ -204,6 +208,8 @@ type shareStrmRun struct {
 	now      func() time.Time
 	// auto 定时追更排的（不是用户点的）：有新写的 STRM 推一条通知
 	auto bool
+	// org 本地整理要用的（识别、分类）；nil = 只能按原样放（没配 TMDB 时）
+	org *shareOrgDeps
 }
 
 func (r *shareStrmRun) abs(rel string) string { return filepath.Join(r.root, filepath.FromSlash(rel)) }
@@ -227,6 +233,15 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 	minSize := int64(r.cfg.MinSizeMB) << 20
 	plans, skip := planShareFiles(entries, sharePlanOpts{LocalDir: src.LocalDir, MinSize: minSize, Assets: r.cfg.Assets, Owned: r.owned})
 	res.Skipped = skip
+	if normShareLayout(src.Layout) == shareLayoutOrganize && r.org != nil {
+		org, err := r.organizePlans(entries, title, plans)
+		if err != nil {
+			// TMDB 暂时连不上：什么都不动（按原样放会把已经整理好的文件搬回去），按出错退避
+			r.markSource(shareStateError, err.Error(), "")
+			return res, false, err
+		}
+		plans = org
+	}
 
 	var existing []model.ShareFile
 	r.db.Where("source_id = ?", src.ID).Find(&existing)
@@ -254,6 +269,13 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 		if had && old.Blocked {
 			// 用户在 Emby 里删过它：不再生成回来
 			res.Blocked++
+			continue
+		}
+		var taken int64
+		r.db.Model(&model.ShareFile{}).Where("rel_path = ? AND source_id <> ?", p.Rel, src.ID).Count(&taken)
+		if taken > 0 {
+			// 本地整理时两个分享是同一部片的同一集：先来的占着，后来的不覆盖（覆盖了先来的那个分享就对不上账）
+			res.Taken++
 			continue
 		}
 		if had && old.RelPath != "" && old.RelPath != p.Rel {
@@ -619,6 +641,14 @@ func execShareStrmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	if !cfg.SkipOwned {
 		r.owned = nil
 	}
+	if normShareLayout(src.Layout) == shareLayoutOrganize {
+		if tc, err := loadTmdbClient(); err == nil && tc != nil {
+			r.org = &shareOrgDeps{recognize: tc.recognize, byID: tc.getByTmdbID, classify: shareCategoryOf(cfg.SchemeID), rules: loadReplaceRules()}
+		} else {
+			// 没配 TMDB：认不了片，按原样放并写清楚原因
+			h.DB.Model(&model.ShareSource{}).Where("id = ?", src.ID).Update("recog_note", "没配 TMDB，认不了片，按原样放")
+		}
+	}
 	plogShareStrm.Printf("▶ %s（%s）", firstNonEmpty(src.Title, src.ShareCode), src.ShareCode)
 	res, canceled, err := r.run()
 	if err != nil {
@@ -696,4 +726,3 @@ func enqueueShareStrmAs(db *gorm.DB, src model.ShareSource, label string, prio i
 		DedupeKey: shareJobKey(src.ID), Source: firstNonEmpty(label, "web"), Priority: prio,
 		Params: jobParams{ShareStrm: &shareStrmJobParams{SourceID: src.ID}}})
 }
-

@@ -49,8 +49,8 @@ func TestParseShareSnap(t *testing.T) {
 			gone: true, errHas: "状态 9", wantErr: true,
 		},
 		{
-			name: "提取码错",
-			body: `{"state":false,"errno":4100008,"error":"访问码错误","data":{"count":0}}`,
+			name:   "提取码错",
+			body:   `{"state":false,"errno":4100008,"error":"访问码错误","data":{"count":0}}`,
 			errHas: "访问码错误", wantErr: true,
 		},
 	}

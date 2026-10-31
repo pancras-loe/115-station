@@ -346,7 +346,9 @@ func TestShareStrmGoneAndBlocked(t *testing.T) {
 	clock := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{}, root: root, domain: "http://nas", cookie: "ck",
-		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) { return entries, "剧", false, nil },
+		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) {
+			return entries, "剧", false, nil
+		},
 		stop: func() bool { return false }, set: func(string, int, int, string) {},
 		now: func() time.Time { return clock },
 	}

@@ -74,7 +74,7 @@ func (h *Handler) addShareStrm(text, code, label string) (model.ShareSource, mod
 	}
 	src = model.ShareSource{ShareCode: shareCode, ReceiveCode: code, Title: truncateStr(title, 480),
 		LocalDir: h.uniqueShareDir(cfg, shareLocalDirName(title, shareCode), shareCode),
-		Layout:   "keep", State: shareStatePending, Source: firstNonEmpty(label, "web"), FollowHours: cfg.FollowHours}
+		Layout:   cfg.Layout, State: shareStatePending, Source: firstNonEmpty(label, "web"), FollowHours: cfg.FollowHours}
 	if err := h.DB.Create(&src).Error; err != nil {
 		return model.ShareSource{}, model.TaskJob{}, err
 	}
@@ -156,8 +156,8 @@ func (h *Handler) ShareStrmSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v 默认追更=%d小时",
-		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets, req.FollowHours)
+	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v 默认追更=%d小时 默认放法=%s 分类方案=%d",
+		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets, req.FollowHours, req.Layout, req.SchemeID)
 	c.JSON(http.StatusOK, gin.H{"message": "已保存", "config": req})
 }
 
@@ -232,12 +232,49 @@ func (h *Handler) ShareStrmUpdate(c *gin.Context) {
 		Paused      *bool   `json:"paused"`
 		// Ignored 待清理里「先留着」：失效了也不再列进待清理
 		Ignored *bool `json:"ignored"`
+		// Layout 改放法（keep / organize）；Pick 手动指定是哪部（tmdb_id 0 = 清掉指定、重新按名字认）。
+		// 这两个改完都马上重新生成一次：文件会挪到新位置
+		Layout *string       `json:"layout"`
+		Pick   *sharePickReq `json:"pick"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
 	name := firstNonEmpty(src.Title, src.ShareCode)
+	if req.Layout != nil || req.Pick != nil {
+		if shareSourceBusy(h.DB, src.ID) {
+			c.JSON(http.StatusConflict, gin.H{"error": "这个分享正在生成，等它结束再改"})
+			return
+		}
+		upd := map[string]any{}
+		if req.Layout != nil {
+			src.Layout = normShareLayout(*req.Layout)
+			upd["layout"] = src.Layout
+		}
+		if p := req.Pick; p != nil {
+			if p.TmdbID > 0 && p.MediaType != "movie" && p.MediaType != "tv" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "要指明是电影还是剧集"})
+				return
+			}
+			upd["tmdb_id"], upd["media_type"], upd["manual"] = p.TmdbID, p.MediaType, p.TmdbID > 0
+			upd["media_title"], upd["recog_note"], upd["category"] = "", "", ""
+			if p.TmdbID > 0 && src.Layout != shareLayoutOrganize {
+				// 指定了是哪部，就是要按它整理
+				src.Layout = shareLayoutOrganize
+				upd["layout"] = src.Layout
+			}
+		}
+		h.DB.Model(&model.ShareSource{}).Where("id = ?", src.ID).Updates(upd)
+		plogShareStrm.Printf("改放法：%s（%s）%v", name, src.ShareCode, upd)
+		job, err := enqueueShareStrm(h.DB, src, "web")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已保存，正在按新的放法重新生成（任务 #%d）", job.ID)})
+		return
+	}
 	if req.ReceiveCode != nil {
 		// 改提取码：清掉失效 / 出错的计数，马上重新检查
 		code := strings.TrimSpace(*req.ReceiveCode)
@@ -415,7 +452,7 @@ func (h *Handler) botShareStrm(link string, reply func(lines ...string)) {
 		case jobSuccess:
 			reply("✓ 分享 STRM：" + j.Message)
 		case jobPartial:
-			reply("◐ 分享 STRM：" + j.Message, "出错的文件在「分享 STRM」页看。")
+			reply("◐ 分享 STRM："+j.Message, "出错的文件在「分享 STRM」页看。")
 		case jobCanceled:
 			reply("○ 分享 STRM 已停止：" + j.Message)
 		default:
@@ -423,7 +460,6 @@ func (h *Handler) botShareStrm(link string, reply func(lines ...string)) {
 		}
 	})
 }
-
 
 // ---- Emby 里删了分享 STRM ----
 
@@ -456,4 +492,10 @@ func (h *Handler) shareStrmOnEmbyDelete(localPath string) {
 	if n > 0 {
 		plogShareStrm.Printf("○ Emby 里删了 %s：%d 个文件以后不再生成", rel, n)
 	}
+}
+
+// sharePickReq 手动指定分享是哪一部
+type sharePickReq struct {
+	TmdbID    int    `json:"tmdb_id"`
+	MediaType string `json:"media_type"`
 }

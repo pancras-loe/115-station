@@ -61,6 +61,10 @@ type shareStrmCfg struct {
 	Assets bool `json:"assets"`
 	// FollowHours 新添加的分享默认隔几小时追更一次，0 = 不追更（每个分享可以单独改）
 	FollowHours int `json:"follow_hours"`
+	// Layout 新添加的分享默认怎么放：keep 原样（分享里的目录结构）/ organize 本地整理（识别后按重命名模板与分类放）
+	Layout string `json:"layout"`
+	// SchemeID 本地整理用哪套分类方案（CategoryScheme.ID）；0 = 只分电影 / 剧集
+	SchemeID uint `json:"scheme_id"`
 }
 
 // shareFollowMin 追更最短间隔：每轮要把整个分享列一遍
@@ -90,7 +94,7 @@ const (
 )
 
 func defaultShareStrmCfg() shareStrmCfg {
-	return shareStrmCfg{DefaultAction: "ask", Root: shareStrmDefaultRoot, MinSizeMB: 50, SkipOwned: true, Assets: true}
+	return shareStrmCfg{DefaultAction: "ask", Root: shareStrmDefaultRoot, MinSizeMB: 50, SkipOwned: true, Assets: true, Layout: shareLayoutKeep}
 }
 
 func loadShareStrmCfg() shareStrmCfg {
@@ -115,7 +119,20 @@ func (c shareStrmCfg) normalized() shareStrmCfg {
 		c.MinSizeMB = 0
 	}
 	c.FollowHours = normFollowHours(c.FollowHours)
+	c.Layout = normShareLayout(c.Layout)
 	return c
+}
+
+const (
+	shareLayoutKeep     = "keep"
+	shareLayoutOrganize = "organize"
+)
+
+func normShareLayout(v string) string {
+	if v == shareLayoutOrganize {
+		return v
+	}
+	return shareLayoutKeep
 }
 
 // linkAction 贴 115 分享链接时这次怎么处理（总开关关着一律转存）

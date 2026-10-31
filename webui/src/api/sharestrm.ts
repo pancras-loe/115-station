@@ -15,7 +15,18 @@ export interface ShareStrmConfig {
   assets: boolean
   /** 新添加的分享默认隔几小时追更，0 = 不追更 */
   follow_hours: number
+  /** 新添加的分享默认怎么放 */
+  layout: ShareLayout
+  /** 本地整理用的分类方案，0 = 只分电影 / 剧集 */
+  scheme_id: number
 }
+
+/** keep 按分享里的目录原样放 / organize 本地整理（识别后按命名模板与分类放） */
+export type ShareLayout = 'keep' | 'organize'
+export const LAYOUT_OPTIONS: { label: string; value: ShareLayout }[] = [
+  { label: '原样', value: 'keep' },
+  { label: '本地整理', value: 'organize' },
+]
 
 /** 追更间隔的选项（后端最短 6 小时） */
 export const FOLLOW_OPTIONS = [
@@ -66,6 +77,14 @@ export interface ShareSource {
   gone_streak: number
   /** 待清理里点了「先留着」 */
   ignored: boolean
+  /** 本地整理认出的条目（手动指定的 manual = true） */
+  tmdb_id: number
+  media_type: string
+  media_title: string
+  category: string
+  manual: boolean
+  /** 本地整理没认出的原因（这时按原样放） */
+  recog_note: string
 }
 
 /** 连续几次查到失效才认定（后端 shareGoneStreakMax） */
@@ -96,6 +115,14 @@ export const add = (url: string, code = '') =>
 export const check = (id: number) => http.post<{ message: string; job_id: number }>(`/sharestrm/sources/${id}/check`)
 export const setReceiveCode = (id: number, receive_code: string) =>
   http.put<{ message: string }>(`/sharestrm/sources/${id}`, { receive_code })
-export const update = (id: number, body: { follow_hours?: number; paused?: boolean; ignored?: boolean }) =>
+export interface ShareUpdate {
+  follow_hours?: number
+  paused?: boolean
+  ignored?: boolean
+  layout?: ShareLayout
+  /** 手动指定是哪部；tmdb_id 0 = 清掉指定、重新按名字认 */
+  pick?: { tmdb_id: number; media_type: string }
+}
+export const update = (id: number, body: ShareUpdate) =>
   http.put<{ message: string }>(`/sharestrm/sources/${id}`, body)
 export const remove = (id: number) => http.del<{ message: string }>(`/sharestrm/sources/${id}`)

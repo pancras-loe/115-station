@@ -325,8 +325,8 @@ type ShareSource struct {
 	ShareState string     `json:"share_state" gorm:"size:8"` // 115 snap 的 shareinfo.share_state 原值
 	LastError  string     `json:"last_error" gorm:"size:500"`
 	LastCheck  *time.Time `json:"last_check"`
-	Files      int        `json:"files"`  // 本地写着的 STRM 数
-	Assets     int        `json:"assets"` // 下载到本地的附属文件数
+	Files      int        `json:"files"`                 // 本地写着的 STRM 数
+	Assets     int        `json:"assets"`                // 下载到本地的附属文件数
 	Source     string     `json:"source" gorm:"size:32"` // 从哪添加的：web / 机器人
 	// FollowHours 追更：隔几小时重新列一次分享，补新增的、收掉分享里没了的。0 = 不追更（只在点「立即检查」时检查）
 	FollowHours int        `json:"follow_hours"`
@@ -337,9 +337,17 @@ type ShareSource struct {
 	GoneStreak int  `json:"gone_streak"`
 	Notified   bool `json:"-"` // 这次失效 / 提取码错误已经通知过
 	// Ignored 待清理里点了「先留着」：失效了也不再列进待清理
-	Ignored   bool      `json:"ignored"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Ignored bool `json:"ignored"`
+	// 本地整理（Layout = organize）认出的条目。TmdbID 认出后存下来，之后的检查按编号取、不再按名字搜（不会漂）；
+	// Manual = 用户手动指定的。认不出时文件按原样放在 LocalDir 下，RecogNote 写原因
+	TmdbID     int       `json:"tmdb_id"`
+	MediaType  string    `json:"media_type" gorm:"size:8"`
+	MediaTitle string    `json:"media_title" gorm:"size:300"`
+	Category   string    `json:"category" gorm:"size:200"`
+	Manual     bool      `json:"manual"`
+	RecogNote  string    `json:"recog_note" gorm:"size:300"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // ShareFile 分享里本站写过 STRM（或下载过附属文件）的一个文件
@@ -370,9 +378,9 @@ type PtSite struct {
 	Name    string `json:"name" gorm:"size:64"`
 	BaseURL string `json:"base_url" gorm:"size:255"` // https://站点/（带 attendance.php 的保留原样）
 	Cookie  string `json:"-" gorm:"type:text"`
-	Token   string `json:"-" gorm:"size:1024"` // Rousi Pro 的 API Token
-	UA      string `json:"ua" gorm:"size:512"` // 空 = 内置的 Chrome UA
-	Proxy   bool   `json:"proxy"`              // 走全局代理
+	Token   string `json:"-" gorm:"size:1024"`  // Rousi Pro 的 API Token
+	UA      string `json:"ua" gorm:"size:512"`  // 空 = 内置的 Chrome UA
+	Proxy   bool   `json:"proxy"`               // 走全局代理
 	Mode    string `json:"mode" gorm:"size:16"` // signin 签到 / keep 只保号（只访问首页）
 	Enabled bool   `json:"enabled"`
 	// NeedFix 上一次是 Cookie / Token 失效：界面描红；改了凭据清掉
