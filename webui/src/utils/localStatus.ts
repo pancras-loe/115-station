@@ -20,10 +20,16 @@ export function statusText(s: LocalTitleStatus, emby = false): string {
   return (emby ? EMBY_TEXT : STATUS_TEXT)[s]
 }
 
-type Graded = Pick<LocalTitle, 'status' | 'lack' | 'soft' | 'mismatch' | 'tmdb_id'>
+type Graded = Pick<LocalTitle, 'status' | 'lack' | 'soft' | 'mismatch' | 'tmdb_id' | 'kind_off' | 'category'>
+
+/** 放错分类的说明（卡片悬停与详情共用） */
+export function kindOffText(t: Pick<LocalTitle, 'category'>): string {
+  return `这是一部电影，却放在剧集分类「${t.category}」里（多半是分类方案改过、网盘上没跟着搬）。本站按电影刮，但 Emby 的剧集库认不成电影：在网盘上把它挪到电影分类`
+}
 
 /** 角标：不完整时直接写缺什么（卡片窄，缺好几样只写第一样 + 总数）；认错了条目比缺图要紧，先说它 */
 export function statusLabel(t: Graded, emby = false): string {
+  if (t.kind_off && t.status !== 'ok') return '放错分类'
   if (t.status === 'partial' && t.mismatch) return 'TMDB 对不上'
   const lack = t.lack ?? []
   if (t.status !== 'partial' || !lack.length) return statusText(t.status, emby)
@@ -32,11 +38,12 @@ export function statusLabel(t: Graded, emby = false): string {
 
 /** 悬停提示：缺的必需产物 + 可选图片（后者不影响状态，只在这里提一句） */
 export function statusTitle(t: Graded, emby = false): string {
-  if (emby) return embyStatusTitle(t)
+  const off = t.kind_off ? '\n' + kindOffText(t) : ''
+  if (emby) return embyStatusTitle(t) + off
   const parts = [STATUS_TEXT[t.status]]
   if (t.status === 'partial' && t.lack?.length) parts.push(`缺：${t.lack.join('、')}`)
   if (t.soft?.length) parts.push(`可选图片缺：${t.soft.join('、')}（TMDB 上不一定有，不算没刮全）`)
-  return parts.join('\n')
+  return parts.join('\n') + off
 }
 
 function embyStatusTitle(t: Graded): string {

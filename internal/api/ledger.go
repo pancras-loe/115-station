@@ -25,6 +25,8 @@ type ledgerTitleEntry struct {
 	// 取 CreatedAt 不取 UpdatedAt：全量同步对每个文件都 upsert 一遍、刷新 updated_at，
 	// 拿它排序的话手动全量一次，所有片目的「入库时间」都变成那次全量的时刻
 	LastAt time.Time
+	// KindOff 放在剧集分类里，内容却是一部电影（见 aggregateLedgerTitles 末尾），MediaType 已改成 movie
+	KindOff bool
 }
 
 // dirKey 片目所在目录（含库名前缀）：普通片目就是 Key，平铺片目是它所在的分类目录
@@ -396,6 +398,8 @@ func aggregateLedgerTitles(layout libCategoryLayout, sfs []model.SyncedFile) map
 	out := map[string]*ledgerTitleEntry{}
 	// 同名分类两边都有时按文件判断：片目里有一集带集号就是剧集
 	undecided := map[string]bool{}
+	// 剧集分类里的片目各自唯一那个视频（多于一个就删掉）：看它是不是其实是一部电影
+	tvLone := map[string]string{}
 	for _, sf := range sfs {
 		key, titleDir, category, mediaType, ok := layout.titleOf(sf.RelPath)
 		if !ok {
@@ -425,6 +429,11 @@ func aggregateLedgerTitles(layout libCategoryLayout, sfs []model.SyncedFile) map
 				e.MediaType = "movie"
 				undecided[key] = true
 			}
+			if mediaType == "tv" {
+				tvLone[key] = sf.RelPath
+			}
+		} else {
+			delete(tvLone, key)
 		}
 		if undecided[key] && parseFileName(strings.TrimSuffix(path.Base(sf.RelPath), ".strm")).Episode > 0 {
 			e.MediaType = "tv"
@@ -435,7 +444,26 @@ func aggregateLedgerTitles(layout libCategoryLayout, sfs []model.SyncedFile) map
 			e.LastAt = sf.CreatedAt
 		}
 	}
+	for key, rel := range tvLone {
+		if movieInTVCategory(key, rel) {
+			out[key].MediaType, out[key].KindOff = "movie", true
+		}
+	}
 	return out
+}
+
+// movieInTVCategory 剧集分类里的片目其实是一部电影：只有一个视频、直接放在片目目录里、文件名没有集号。
+//
+// 分类方案改过之后会这样（2026-10-30 用户反馈）：电影「纪录片」改成「电影/纪录片」，剧集仍叫「纪录片」，
+// 网盘上早先整理进「纪录片/」的纪录电影没跟着搬，这一层从此被认成剧集分类。按剧集认的话
+// 刮削拿电影的 TMDB 编号去请求 /tv/{id}（404，再按标题搜还会串到同名剧集上），海报墙一直「未刮削」。
+// 整理出来的剧集一律带 SxxEyy、放在季目录里，这三条同时成立的只会是电影
+func movieInTVCategory(key, rel string) bool {
+	if isSoloTitleKey(key) || path.Dir(rel) != key {
+		return false
+	}
+	p := parseFileName(strings.TrimSuffix(path.Base(rel), ".strm"))
+	return p.Episode == 0 && !p.IsTV
 }
 
 var (

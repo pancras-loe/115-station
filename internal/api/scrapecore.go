@@ -382,6 +382,25 @@ func (r *titleRun) season(n int) map[int]tmdbEpisodeInfo {
 	return m
 }
 
+func otherKind(kind string) string {
+	if kind == "tv" {
+		return "movie"
+	}
+	return "tv"
+}
+
+// tmdbBodyNames 详情里的片名与原名（电影 title / original_title，剧集 name / original_name）
+func tmdbBodyNames(body []byte) []string {
+	var d struct {
+		Title         string `json:"title"`
+		OriginalTitle string `json:"original_title"`
+		Name          string `json:"name"`
+		OriginalName  string `json:"original_name"`
+	}
+	_ = json.Unmarshal(body, &d)
+	return []string{d.Title, d.OriginalTitle, d.Name, d.OriginalName}
+}
+
 func (r *titleRun) run() {
 	t, s := r.t, r.s
 	kind := t.Kind
@@ -398,8 +417,19 @@ func (r *titleRun) run() {
 	start := time.Now()
 	body, err := s.tc.get("/"+kind+"/"+strconv.Itoa(r.tmdbID), params)
 	if err != nil {
+		// 编号是另一种类型的（剧集分类里放着电影，或反过来）：按标题搜只会串到同名的别的条目上，
+		// 2026-10-30 现场「何以当归」（电影 1263063）按剧集搜到了 294730。说清楚，让用户挪目录
+		if other := otherKind(kind); isTmdbNotFound(err) && t.Title != "" {
+			if ob, oerr := s.tc.get("/"+other+"/"+strconv.Itoa(r.tmdbID), map[string]string{"language": "zh-CN"}); oerr == nil &&
+				titleLevelOf(t.Title, tmdbBodyNames(ob)...) == titleExact {
+				r.fail("TMDB 编号 %d 是%s，不是%s：片目放错了分类，在网盘上挪到%s分类后再刮",
+					r.tmdbID, mediaLabel(other), mediaLabel(kind), mediaLabel(other))
+				return
+			}
+		}
 		// 详情 404 = 目录名标记的 tmdb id 查无条目（整理时匹配错/条目已删）：
-		// 回退按标题+年份搜一次，自愈错误 ID
+		// 回退按标题+年份搜一次，自愈错误 ID。只认片名完全相同的：搜索按别名、译名也会命中，
+		// 名字不一样的条目拿来写 NFO 就是悄悄串号
 		var alt *TmdbMedia
 		if kind == "tv" {
 			alt, _ = s.tc.SearchTV(t.Title, t.Year)
@@ -410,7 +440,12 @@ func (r *titleRun) run() {
 			r.fail("TMDB 详情失败 %v（id=%d，按标题搜索也未命中）", err, r.tmdbID)
 			return
 		}
-		log.Printf("[影视刮削] ○ %s: 标记 id=%d 查无详情，按标题匹配到 id=%d，已自愈", t.Title, r.tmdbID, alt.TmdbID)
+		if titleLevelOf(t.Title, alt.Title, alt.OriginalTitle) != titleExact {
+			r.fail("TMDB 详情失败 %v（id=%d）；按标题搜到的是《%s》(id=%d)，片名不同，不替换：请在详情里指定正确的编号",
+				err, r.tmdbID, alt.Title, alt.TmdbID)
+			return
+		}
+		log.Printf("[影视刮削] ⚠ %s: 标记 id=%d 查无详情，按标题匹配到同名的 id=%d，改用它（目录名里的编号没改）", t.Title, r.tmdbID, alt.TmdbID)
 		body, err = s.tc.get("/"+kind+"/"+strconv.Itoa(alt.TmdbID), params)
 		if err != nil {
 			r.fail("TMDB 详情失败 %v", err)

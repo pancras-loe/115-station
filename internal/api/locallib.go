@@ -68,6 +68,8 @@ type localTitle struct {
 	EmbyGraded bool `json:"emby_graded,omitempty"`
 	// Mismatch 刮削方式为 Emby 时，Emby 认成的 TMDB 编号与台账不一致（填 Emby 那个编号）
 	Mismatch string `json:"mismatch,omitempty"`
+	// KindOff 放在剧集分类里的电影（ledgerTitleEntry.KindOff）：按电影刮，但 Emby 的剧集库认不成，要用户在网盘上挪到电影分类
+	KindOff bool `json:"kind_off,omitempty"`
 }
 
 // 卡片列表缓存：一次列表要把每个片目的目录（标题 / 季）全读一遍，上千部时每翻一页都重读太浪费。
@@ -192,7 +194,7 @@ func inspectLocalTitle(root string, e *ledgerTitleEntry) inspectedTitle {
 func inspectLocalTitleIn(root string, e *ledgerTitleEntry, idx localDirIndex) inspectedTitle {
 	t := inspectedTitle{localTitle: localTitle{
 		Key: e.Key, Title: e.Title, Year: e.Year, TmdbID: e.TmdbID, MediaType: e.MediaType,
-		Category: e.Category, Videos: e.Videos, LastAt: e.LastAt,
+		Category: e.Category, Videos: e.Videos, LastAt: e.LastAt, KindOff: e.KindOff,
 	}}
 	if t.Title == "" {
 		t.Title = titleKeyName(e.Key)
@@ -398,7 +400,7 @@ func filterLocalTitles(all []localTitle, q localTitleQuery) ([]localTitle, local
 // titleDoubtful 片目认得没把握（海报墙「存疑」档，2026-10-20 参考 LitePan 的「匹配存疑」）：
 // 目录名里没有 TMDB 编号（刮削 / Emby 都只能按片名猜），或 Emby 认成的编号与台账不一致
 func titleDoubtful(t localTitle) bool {
-	return t.TmdbID == 0 || t.Mismatch != ""
+	return t.TmdbID == 0 || t.Mismatch != "" || t.KindOff
 }
 
 // ListLocalTitles GET /local/titles?q=&type=&status=&probe=&sort=&offset=&limit=&refresh=&all=

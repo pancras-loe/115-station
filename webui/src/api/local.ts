@@ -40,6 +40,8 @@ export interface LocalTitle {
   emby_poster?: string
   /** Emby 刮削时：Emby 认成的 TMDB 编号与台账不一致 */
   mismatch?: string
+  /** 放在剧集分类里的电影（分类方案改过、网盘没跟着搬）：按电影刮，Emby 的剧集库认不成，要在网盘上挪到电影分类 */
+  kind_off?: boolean
   /** 所在库「不刮（交给 Emby）」：status 是按 Emby 分的级，文案与操作跟着换（后端 libopts.go） */
   emby_graded?: boolean
 }

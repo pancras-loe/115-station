@@ -28,7 +28,7 @@ import type { LocalTitle, LocalTitleDetail, TitleEmby } from '@/api/local'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
 import { relTime, fullTime } from '@/utils/time'
-import { STATUS_TONE, statusText as statusWord, statusTitle } from '@/utils/localStatus'
+import { kindOffText, STATUS_TONE, statusText as statusWord, statusTitle } from '@/utils/localStatus'
 
 /**
  * 海报墙的片目详情（右侧抽屉，手机上全屏）。卡片墙只放要紧的，细节都在这里：
@@ -406,6 +406,7 @@ function onStat(key: string) {
               <HButton variant="tertiary" size="sm" :disabled="collectionBusy" @click="markCollection">标记为合集</HButton>
             </template>
           </HAlert>
+          <HAlert v-if="d.kind_off" status="warning">{{ kindOffText(d) }}</HAlert>
           <HAlert v-if="d.missing" status="warning">
             本地找不到这个片目的目录（被手工删掉，或挂载还没就绪）。台账里还有它{{ embyMode ? '' : '，刮削会跳过没有 STRM 的片目' }}。
           </HAlert>
