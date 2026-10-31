@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,6 +49,28 @@ func TestPansouNormalize(t *testing.T) {
 	}
 	if items[3].Action != "offline" {
 		t.Fatalf("magnet action: %+v", items[3])
+	}
+}
+
+// 自建实例现场：code=0 / success 却报「响应异常」。备注里没转义的换行、尾部多余内容、
+// 某一类不是数组，都不该让整次搜索失败。
+func TestPansouDecodeTolerant(t *testing.T) {
+	body := "{\"code\":0,\"message\":\"success\",\"data\":{\"total\":2,\"merged_by_type\":{" +
+		"\"quark\":[{\"url\":\"https://pan.quark.cn/s/x\",\"note\":\"a\nb\"}]," +
+		"\"weird\":{\"url\":\"x\"}," +
+		"\"115\":[{\"url\":\"https://115.com/s/ok\",\"note\":\"第一行\n\t第二行\"}]}}}\n{\"tail\":1}"
+	out, err := pansouDecode([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Data.MergedByType) != 3 {
+		t.Fatalf("types: %v", out.Data.MergedByType)
+	}
+	if _, err := pansouDecode([]byte(`{"code":1,"message":"关键词为空"}`)); err == nil || !strings.Contains(err.Error(), "关键词为空") {
+		t.Fatalf("code!=0: %v", err)
+	}
+	if _, err := pansouDecode([]byte(`{"code":0,"data":`)); err == nil || !strings.Contains(err.Error(), "解析失败") {
+		t.Fatalf("truncated: %v", err)
 	}
 }
 

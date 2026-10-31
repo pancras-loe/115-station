@@ -14,6 +14,7 @@ package api
 // 手动转存到对应网盘。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,7 +168,7 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 			lastErr = "连接盘搜失败: " + sanitizeWecomErr(err)
 			continue
 		}
-		body, _ = io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		body, _ = io.ReadAll(io.LimitReader(resp.Body, pansouMaxBody))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			lastErr = ""
@@ -181,26 +182,20 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 		}
 		return nil, fmt.Errorf("%s", lastErr)
 	}
-	var out struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Total        int                          `json:"total"`
-			MergedByType map[string][]json.RawMessage `json:"merged_by_type"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(body, &out) != nil || out.Code != 0 {
-		msg := out.Message
-		if msg == "" {
-			msg = truncateStr(string(body), 120)
-		}
-		return nil, fmt.Errorf("盘搜响应异常: %s", msg)
+	out, err := pansouDecode(body)
+	if err != nil {
+		return nil, err
 	}
 
 	items := make([]PansouItem, 0, out.Data.Total)
 	seen := map[string]bool{}
-	for ctype, arr := range out.Data.MergedByType {
+	for ctype, rawArr := range out.Data.MergedByType {
 		if removedCloudResource(ctype, "") {
+			continue
+		}
+		// 一种网盘一个数组；某一类格式不对只丢这一类，别让整次搜索失败
+		var arr []json.RawMessage
+		if json.Unmarshal(rawArr, &arr) != nil {
 			continue
 		}
 		for _, raw := range arr {
@@ -240,6 +235,60 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 		return items[i].Datetime > items[j].Datetime
 	})
 	return items, nil
+}
+
+// pansouMaxBody 响应上限；读满了就是被截断，报错里说清楚，别报成「响应异常」
+const pansouMaxBody = 32 << 20
+
+type pansouResp struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Total        int                        `json:"total"`
+		MergedByType map[string]json.RawMessage `json:"merged_by_type"`
+	} `json:"data"`
+}
+
+// pansouDecode 容错解析盘搜响应。
+// 自建实例现场：code=0、message=success 仍被判成「响应异常」——json.Unmarshal 在语法层就失败了
+// （备注里夹着没转义的换行 / 制表符等控制字符，或响应末尾多出内容），原来的报错把真实原因吞了。
+// 所以：先用 Decoder 只读第一个 JSON 值（不管尾部），失败再把控制字符换成空格重试一次
+// （JSON 结构里的空白换成空格不改语义，字符串里的换行本来就只是备注排版）。
+func pansouDecode(body []byte) (*pansouResp, error) {
+	if len(body) >= pansouMaxBody {
+		return nil, fmt.Errorf("盘搜响应超过 %d MB 被截断，换个更精确的关键词再搜", pansouMaxBody>>20)
+	}
+	decode := func(b []byte) (*pansouResp, error) {
+		var out pansouResp
+		if err := json.NewDecoder(bytes.NewReader(b)).Decode(&out); err != nil {
+			return nil, err
+		}
+		return &out, nil
+	}
+	out, err := decode(body)
+	if err != nil {
+		clean := bytes.Map(func(r rune) rune {
+			if r < 0x20 {
+				return ' '
+			}
+			return r
+		}, body)
+		if o2, err2 := decode(clean); err2 == nil {
+			out, err = o2, nil
+		}
+	}
+	if err != nil {
+		log.Printf("[盘搜] ✗ 响应解析失败: %v；长度 %d，开头 %s", err, len(body), truncateStr(string(body), 300))
+		return nil, fmt.Errorf("盘搜响应解析失败: %v", err)
+	}
+	if out.Code != 0 {
+		msg := out.Message
+		if msg == "" {
+			msg = truncateStr(string(body), 120)
+		}
+		return nil, fmt.Errorf("盘搜响应异常: %s", msg)
+	}
+	return out, nil
 }
 
 // pansouActionFor 按链接协议决定行内动作
