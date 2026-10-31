@@ -379,6 +379,10 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 		protected.POST("/category/schemes/preview", h.PreviewScheme)
 		protected.PUT("/category/schemes/:id", h.UpdateScheme)
 		protected.DELETE("/category/schemes/:id", h.DeleteScheme)
+		// 改过分类方案之后，网盘上还在旧分类目录里的片目按新方案搬过去（catmove.go）
+		protected.GET("/category/move/status", h.CatMoveStatus)
+		protected.POST("/category/move/preview", h.CatMovePreview)
+		protected.POST("/category/move", h.CatMoveApply)
 		protected.GET("/libraries", h.GetLibraries)
 		protected.GET("/libraries/preview", h.PreviewLibrary)
 		protected.PUT("/libraries", h.SaveLibraries)

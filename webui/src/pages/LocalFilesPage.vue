@@ -16,6 +16,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ScrapeDialog from '@/components/local/ScrapeDialog.vue'
 import TitleDetail from '@/components/local/TitleDetail.vue'
 import ReconcileDialog from '@/components/local/ReconcileDialog.vue'
+import CatMoveAlert from '@/components/organize/CatMoveAlert.vue'
 import { localApi } from '@/api'
 import type { LocalEmbyStats, LocalTitle, LocalTitleDir, LocalTitleList, LocalTitleSort, LocalTitleStats, LocalTitleFilter, LocalTVProgress } from '@/api/local'
 import { STATUS_TONE, probeLabel, probeTitle, statusLabel, statusText, statusTitle } from '@/utils/localStatus'
@@ -633,6 +634,7 @@ onBeforeUnmount(() => {
       <div v-else class="body">
         <!-- 固定区：筛选 -->
         <div class="lf-head">
+          <CatMoveAlert />
           <div class="toolbar">
             <HSearchField v-model="keyword" class="filter" placeholder="搜索片名 / 路径 / TMDB 编号" />
             <div class="segs">

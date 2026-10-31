@@ -17,6 +17,7 @@ import HSegmented from '@/components/hero/HSegmented.vue'
 import { libraryApi } from '@/api'
 import type { SchemeDetail, SchemeView } from '@/api/library'
 import { toastError, useFeedback } from '@/composables/useFeedback'
+import CatMoveAlert from '@/components/organize/CatMoveAlert.vue'
 import CategorySimple from './CategorySimple.vue'
 import CategoryTry from './CategoryTry.vue'
 import YamlRuleTab from './YamlRuleTab.vue'
@@ -103,11 +104,20 @@ const persistYaml = async (yaml: string, opts?: { confirmCatChange?: boolean }) 
   const d = await libraryApi.updateScheme(current.value, { yaml, confirm_cat_change: opts?.confirmCatChange || undefined })
   schemes.value = d.schemes
   await loadDetail(true) // 改成了简单模式认得回来的写法，切回去就能接着用表单
+  afterCatSaved(d.cat_move)
   return d // 带着 message 与（兜底被挪过时）改过的 yaml，YamlRuleTab 换上
 }
-async function onSimpleSaved() {
+async function onSimpleSaved(catMove?: number) {
   await load()
   await loadDetail(true)
+  afterCatSaved(catMove)
+}
+
+// 保存时确认过「改名 / 删掉的分类里已有片」：网盘上的片还在旧目录里，直接打开按新方案搬移的预演（catmove.go）
+const moveAlert = ref<InstanceType<typeof CatMoveAlert> | null>(null)
+function afterCatSaved(catMove?: number) {
+  void moveAlert.value?.reload()
+  if (catMove) moveAlert.value?.open()
 }
 
 // ---- 新建 / 复制 / 改名 ----
@@ -196,6 +206,8 @@ async function remove() {
       <template v-else>还没有库用它：在「账号与媒体库 → 媒体库」的库卡片上选。</template>
       规则只管分目录；进哪个库看内容放进了哪个库的转存/待整理文件夹。
     </p>
+
+    <CatMoveAlert v-if="cur" ref="moveAlert" :scheme-id="cur.id" />
 
     <template v-if="cur && detail">
       <div class="mode">

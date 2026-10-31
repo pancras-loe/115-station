@@ -341,8 +341,44 @@ export const updateScheme = (
   id: number,
   body: { name?: string; yaml?: string; simple?: CatSimpleForm; confirm_cat_change?: boolean },
 ) =>
-  http.put<{ message: string; schemes: SchemeView[]; moved_fallback?: boolean; yaml?: string }>(`/category/schemes/${id}`, body)
+  http.put<{ message: string; schemes: SchemeView[]; moved_fallback?: boolean; yaml?: string; cat_move?: number }>(
+    `/category/schemes/${id}`,
+    body,
+  )
 export const deleteScheme = (id: number) => http.del<{ schemes: SchemeView[] }>(`/category/schemes/${id}`)
+
+// ---- 改过分类方案之后，网盘上还在旧分类目录里的片目按新方案搬（后端 catmove.go） ----
+
+export interface CatMoveGroup {
+  lib_name: string
+  media_type: 'movie' | 'tv'
+  old_cat: string
+  titles: number
+}
+
+export interface CatMoveItem {
+  key: string
+  lib_id: number
+  lib_name: string
+  tmdb_id: number
+  media_type: 'movie' | 'tv'
+  title: string
+  year: string
+  old_cat: string
+  title_dir: string
+  videos: number
+  new_cat?: string
+  move: boolean
+  reason?: string
+}
+
+/** 只读整理记录与台账，零 115 / TMDB 请求；scheme 不传 = 所有库 */
+export const catMoveStatus = (scheme?: number) =>
+  http.get<{ count: number; groups: CatMoveGroup[] }>('/category/move/status', { params: { scheme_id: scheme } })
+/** 每部一次 TMDB 详情，不碰 115 */
+export const catMovePreview = (scheme?: number) =>
+  http.post<{ items: CatMoveItem[]; moves: number }>('/category/move/preview', { scheme_id: scheme || 0 }, { timeoutMs: 300_000 })
+export const catMoveApply = (body: { scheme_id?: number; keys?: string[] }) => http.post<QueuedReply>('/category/move', body)
 
 // ---- 在 Emby 里批量建媒体库（后端 embylibcreate.go） ----
 

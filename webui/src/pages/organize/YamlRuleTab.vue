@@ -125,8 +125,8 @@ async function confirmCatChange(changes: CatDirChange[]) {
     title: '有分类改了名或删掉了',
     content:
       changes.map((c) => `${c.media_type === 'tv' ? '剧集' : '电影'}「${c.name}」：里面已经有 ${c.titles} 部`).join('\n') +
-      '\n\n已经入库的片留在原来的目录里，不会自动搬；之后新来的按新规则放，同一类片可能分在两个目录里。' +
-      '想把已有的也挪过去，保存后到「网盘文件」对这些片目点「整理」。',
+      '\n\n已经入库的片还在网盘上原来的目录里；之后新来的按新规则放。' +
+      '保存后可以按新方案把已有的这些片在网盘上搬过去（先预演，确认了才搬）。',
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
       { label: '保存', value: true, variant: 'primary' },

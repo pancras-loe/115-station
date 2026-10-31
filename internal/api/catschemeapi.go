@@ -128,7 +128,8 @@ func (h *Handler) CreateScheme(c *gin.Context) {
 // UpdateScheme PUT /category/schemes/:id {name?, yaml?, simple?, confirm_cat_change?}
 //
 // simple（简单模式的表单）给出时由它生成 YAML，yaml 不看。删掉 / 改名的分类原来那个目录里已经有片时
-// 返回 409 + cat_changes，用户确认后带 confirm_cat_change 重发（已入库的不会跟着搬）
+// 返回 409 + cat_changes，用户确认后带 confirm_cat_change 重发。已入库的不会自己跟着搬：
+// 确认后的响应带 cat_move（网盘上还在旧目录里的片数），界面据此提供按新方案搬移（catmove.go）
 func (h *Handler) UpdateScheme(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	s, ok := schemeByID(uint(id))
@@ -215,6 +216,12 @@ func (h *Handler) UpdateScheme(c *gin.Context) {
 	if note != "" {
 		resp["moved_fallback"] = true // YAML 被改过了，界面换成这一份
 		resp["yaml"] = *req.Yaml
+	}
+	if req.Yaml != nil && req.ConfirmCatChange {
+		// 确认过「原目录里已有片」：网盘上的片还在旧目录里，告诉界面有几部可以按新方案搬（catmove.go）
+		if cands, _, _ := catMoveCandidatesNow(s.ID); len(cands) > 0 {
+			resp["cat_move"] = len(cands)
+		}
 	}
 	c.JSON(http.StatusOK, resp)
 }

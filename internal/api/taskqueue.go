@@ -100,6 +100,8 @@ type jobParams struct {
 	RebaseFrom []string `json:"rebase_from,omitempty"`
 	// RebasePairs 批量替换 STRM 地址：旧地址开头 → 新地址开头（strmrebase.go）
 	RebasePairs []strmRebasePair `json:"rebase_pairs,omitempty"`
+	// CatMove 分类方案改过之后按新方案搬移网盘上的片目（catmove.go）
+	CatMove *catMoveJobParams `json:"cat_move,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

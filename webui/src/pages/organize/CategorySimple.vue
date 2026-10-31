@@ -25,7 +25,7 @@ import CategoryTry from './CategoryTry.vue'
 import { CAT_TEMPLATES, emptyRule, formKey, lintRules, type CatTemplate, type Media, type RuleLint } from './catSimple'
 
 const props = defineProps<{ schemeId: number; detail: SchemeDetail }>()
-const emit = defineEmits<{ saved: []; dirty: [boolean] }>()
+const emit = defineEmits<{ saved: [catMove?: number]; dirty: [boolean] }>()
 
 const { message, dialog } = useFeedback()
 
@@ -173,9 +173,9 @@ async function save() {
 
 async function persist(confirmed: boolean) {
   try {
-    await libraryApi.updateScheme(props.schemeId, { simple: form.value, confirm_cat_change: confirmed || undefined })
+    const d = await libraryApi.updateScheme(props.schemeId, { simple: form.value, confirm_cat_change: confirmed || undefined })
     message.success('保存成功')
-    emit('saved')
+    emit('saved', d.cat_move)
   } catch (e) {
     const changes = e instanceof ApiError && e.status === 409 ? (e.data.cat_changes as CatDirChange[] | undefined) : undefined
     if (!changes?.length || confirmed) {
@@ -191,8 +191,8 @@ async function confirmDirChanges(changes: CatDirChange[]) {
     title: '有分类改了名或删掉了',
     content:
       changes.map((c) => `${c.media_type === 'tv' ? '剧集' : '电影'}「${c.name}」：里面已经有 ${c.titles} 部`).join('\n') +
-      '\n\n已经入库的片留在原来的目录里，不会自动搬；之后新来的按新规则放，同一类片可能分在两个目录里。' +
-      '想把已有的也挪过去，保存后到「网盘文件」对这些片目点「整理」。',
+      '\n\n已经入库的片还在网盘上原来的目录里；之后新来的按新规则放。' +
+      '保存后可以按新方案把已有的这些片在网盘上搬过去（先预演，确认了才搬）。',
     actions: [
       { label: '取消', value: false, variant: 'tertiary' },
       { label: '保存', value: true, variant: 'primary' },

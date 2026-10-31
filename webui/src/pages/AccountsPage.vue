@@ -13,6 +13,7 @@ import FieldRow from '@/components/ui/FieldRow.vue'
 import FormActions from '@/components/ui/FormActions.vue'
 import AccountHero from '@/components/accounts/AccountHero.vue'
 import StagingLegacyAlert from '@/components/accounts/StagingLegacyAlert.vue'
+import CatMoveAlert from '@/components/organize/CatMoveAlert.vue'
 import MediaLibs from '@/components/accounts/MediaLibs.vue'
 import QrLoginModal from '@/components/QrLoginModal.vue'
 import ExtraAccounts from '@/components/accounts/ExtraAccounts.vue'
@@ -312,6 +313,7 @@ onMounted(() => {
         </HAlert>
 
         <StagingLegacyAlert />
+        <CatMoveAlert />
 
         <MediaLibs :view="libView" :loading="libLoading" @update="onLibsUpdate" />
       </div>
