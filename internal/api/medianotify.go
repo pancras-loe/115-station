@@ -42,6 +42,14 @@ type mediaNotifEntry struct {
 	PosterAlt  string // Emby 直链封面（内网，企微 picurl 可尝试）
 	PosterData []byte // 封面字节（Emby 下载，TG 上传用）
 	Link       string
+
+	// 整理侧的原始数据：同一部剧一轮里可能分几个条目整理（散文件一集一个、多季合集一季一个），
+	// 每个条目各排一张卡片，合并时要累加，Files / Episodes 在冲刷时按累加后的重算。
+	// 只取第一张的话，8 个散文件的分享通知成「S01E01（缺 E02-E08）· 1 个文件」（2026-10-31 现场）
+	orgMedia  *TmdbMedia
+	orgVideos []remoteFile
+	orgCount  int
+	orgBytes  int64
 }
 
 // mergeKey 同一部影视的合并键。
@@ -158,6 +166,30 @@ func (e *mediaNotifEntry) mergeFrom(o mediaNotifEntry) {
 	for _, n := range o.Notes {
 		if !containsStr(e.Notes, n) {
 			e.Notes = append(e.Notes, n)
+		}
+	}
+	if o.orgMedia != nil {
+		if e.orgMedia == nil {
+			e.orgMedia = o.orgMedia
+		}
+		e.orgVideos = append(e.orgVideos, o.orgVideos...)
+		e.orgCount += o.orgCount
+		e.orgBytes += o.orgBytes
+	}
+}
+
+// finalizeOrg 按累加后的整理数据重算文件数与集数（缺集要拿整批算，见 orgMedia 的注释）
+func (e *mediaNotifEntry) finalizeOrg() {
+	if e.orgMedia == nil {
+		return
+	}
+	if e.orgCount > 0 {
+		e.Files = fmt.Sprintf("%d 个文件 · %s", e.orgCount, humanSizeBytes(e.orgBytes))
+	}
+	if ep, miss := episodeRangeWithMissing(e.orgVideos, e.orgMedia); ep != "" {
+		e.Episodes = ep + "（全）"
+		if miss != "" {
+			e.Episodes = ep + "（缺 " + miss + "）"
 		}
 	}
 }
@@ -289,6 +321,9 @@ func FlushMediaNotif() {
 		}
 	}
 	mediaNotif.mu.Unlock()
+	for i := range items {
+		items[i].finalizeOrg()
+	}
 	if len(items) == 1 {
 		e := items[0]
 		sendMediaNotifSingle(cfg, e)

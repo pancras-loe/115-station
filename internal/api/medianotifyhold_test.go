@@ -37,3 +37,24 @@ func TestHoldMediaNotifDefersFlush(t *testing.T) {
 		t.Fatalf("收尾后应排上冲刷，实际 timer=%v holds=%d", timer != nil, holds)
 	}
 }
+
+// 同一部剧分几个条目整理（分享里 8 个散文件一集一个），合并后的卡片要算全部的集数与文件数，
+// 不能只留第一个条目的（2026-10-31 现场：8 集的分享通知成「S01E01（缺 E02-E08）· 1 个文件」）
+func TestMediaNotifMergeAccumulatesOrganize(t *testing.T) {
+	media := &TmdbMedia{Title: "末路兼职", Year: "2026", MediaType: "tv"} // 没有 TMDB 编号：不查缺集
+	mk := func(name string) mediaNotifEntry {
+		return mediaNotifEntry{Title: media.Title, Kind: "剧集", Source: "organize",
+			orgMedia: media, orgVideos: []remoteFile{{Name: name}}, orgCount: 1, orgBytes: 1 << 30}
+	}
+	e := mk("末路兼职 - S01E02 - 第02集.mkv")
+	for _, n := range []string{"末路兼职 - S01E01 - 第01集.mkv", "末路兼职 - S01E04 - 第04集.mkv", "末路兼职 - S01E03 - 第03集.mkv"} {
+		e.mergeFrom(mk(n))
+	}
+	e.finalizeOrg()
+	if e.Episodes != "S01E01-E04（全）" {
+		t.Fatalf("集数应合并成 S01E01-E04，实际 %q", e.Episodes)
+	}
+	if e.Files != "4 个文件 · 4.0 GB" {
+		t.Fatalf("文件数应累加，实际 %q", e.Files)
+	}
+}

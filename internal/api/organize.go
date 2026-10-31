@@ -3885,15 +3885,9 @@ func notifyMediaStoredFull(media *TmdbMedia, category string, videoFiles []remot
 	entry := mediaNotifEntry{
 		Title: media.Title, Year: media.Year, Kind: typeLabel, Source: "organize",
 		Category: category, Quality: qualityLabel(mainVideoName), Rating: media.VoteAverage,
-	}
-	if movedCount > 0 {
-		entry.Files = fmt.Sprintf("%d 个文件 · %s", movedCount, humanSizeBytes(movedBytes))
-	}
-	if ep, miss := episodeRangeWithMissing(videoFiles, media); ep != "" {
-		entry.Episodes = ep + "（全）"
-		if miss != "" {
-			entry.Episodes = ep + "（缺 " + miss + "）"
-		}
+		// 文件数与集数在冲刷时按同一部的所有条目合起来算（finalizeOrg）
+		orgMedia: media, orgVideos: append([]remoteFile(nil), videoFiles...),
+		orgCount: movedCount, orgBytes: movedBytes,
 	}
 	// 洗版替换的说明挂到这部片的卡片上，不再单独推一条
 	entry.Notes = washNotesFor(entry.mergeKey())
