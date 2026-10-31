@@ -123,7 +123,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 打 v* tag 时建 GitHub Release（更新说明按上一个 tag 以来的提交自动生成）。
+  # 打 v* tag 时建 GitHub Release（更新说明按上一个 tag 以来的提交标题生成）。
   # 界面的更新检测读的就是 releases/latest，所以发版 = 推一个 tag，不用再去网页上手点。
   # 排在 docker 之后：Release 出现时镜像已经能拉，用户照提示 pull 不会扑空
   release:
@@ -133,10 +133,30 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 更新说明 = 上一个 tag 以来的 feat / fix / perf 提交标题，按类型分组。
+          # 不用 --generate-notes：它只列 PR，直接提交到 master 时只剩一行「Full Changelog」，
+          # 机器人推的更新通知里就看不出更了什么。docs / test / chore / refactor 不列
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          range="${GITHUB_REF_NAME}"
+          [ -n "$prev" ] && range="${prev}..${GITHUB_REF_NAME}"
+          : > notes.md
+          for t in feat:新功能 fix:修复 perf:优化; do
+            ty=${t%%:*}; hd=${t#*:}
+            lines=$(git log --no-merges --pretty='%s' "$range" | sed -nE "s/^$ty\(([^)]*)\)!?: *(.*)$/- \1：\2/p; t; s/^$ty!?: *(.*)$/- \1/p")
+            # 用 if 不用 &&：Actions 的 bash 带 -e，最后一类没提交时 && 链的非零状态会让整步失败
+            if [ -n "$lines" ]; then printf '%s\n%s\n\n' "${hd}：" "$lines" >> notes.md; fi
+          done
+          [ -s notes.md ] || echo "内部调整（文档 / 测试 / 重构），功能无变化。" > notes.md
+          cat notes.md
           # 版本号按日期写：v26.10.9，同一天再发 v26.10.9-2、-3……，序号版也是正式版，照常推给用户。
           # 只有 - 后面带字母的（v26.10.9-rc1）才按预发布发，不会被当成 latest。
           # 与 update.go 的 parseVersion 同口径，改一边要改另一边
@@ -144,4 +164,4 @@ jobs:
           case "${GITHUB_REF_NAME}" in
             *-*[!0-9]*) pre="--prerelease" ;;
           esac
-          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --generate-notes --verify-tag $pre
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag $pre

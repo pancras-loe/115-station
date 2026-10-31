@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"115-station/internal/model"
 )
 
 // fakeRegistry 假 ghcr：多架构索引 → 本机架构清单 → 配置 + 若干层
@@ -239,14 +241,26 @@ func TestStartSelfUpdateBlocked(t *testing.T) {
 }
 
 func TestUpdateTGCallback(t *testing.T) {
-	text, btns := updateTGCallback("u:a:v26.10.27", nil)
-	if !strings.Contains(text, "v26.10.27") || len(btns) != 1 || btns[0][0].Data != "u:g:v26.10.27" {
+	t.Setenv(runtimeEnvKey, "")
+	newTestDB(t, "botupdate.db")
+	h := &Handler{DB: model.DB}
+
+	// 没任务在跑：点「更新」直接开始，不再弹确认（测试环境不在本站镜像里，开始即报原因）
+	text, btns := h.updateTGCallback("u:a:v26.10.27", nil)
+	if len(btns) != 0 || !strings.Contains(text, "官方镜像") {
+		t.Fatalf("没任务在跑应当直接开始：%q %+v", text, btns)
+	}
+
+	// 有任务在跑：先确认，写明会中断哪个
+	h.DB.Create(&model.TaskJob{Kind: "full", Title: "全量同步", Status: jobRunning})
+	text, btns = h.updateTGCallback("u:a:v26.10.27", nil)
+	if !strings.Contains(text, "v26.10.27") || !strings.Contains(text, "全量同步") || len(btns) != 1 || btns[0][0].Data != "u:g:v26.10.27" {
 		t.Fatalf("确认屏不对：%q %+v", text, btns)
 	}
-	if text, _ := updateTGCallback("u:c", nil); !strings.Contains(text, "取消") {
+	if text, _ := h.updateTGCallback("u:c", nil); !strings.Contains(text, "取消") {
 		t.Fatalf("取消不对：%q", text)
 	}
-	if text, _ := updateTGCallback("u:zz", nil); !strings.Contains(text, "失效") {
+	if text, _ := h.updateTGCallback("u:zz", nil); !strings.Contains(text, "失效") {
 		t.Fatalf("坏按钮不对：%q", text)
 	}
 }

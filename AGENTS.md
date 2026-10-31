@@ -286,14 +286,17 @@ git tag v26.10.9 && git push origin v26.10.9
      就拒绝一键更新、让用户 `docker compose pull`。**改了运行阶段（基础镜像、apt 装的包、目录布局、COPY 的位置）一定要把它加一**，
      否则新程序会跑在缺库的旧环境里。程序与前端的 COPY 必须留在 Dockerfile 最后几层。
    - 入口：网页「系统配置 → 版本更新」的「立即更新」（`POST /system/update/apply`，带要更新到的版本号，与最新的不一致拒绝）、
-     TG `/update`（按钮 `u:a:<版本>` → 确认 `u:g:<版本>`）、企微「检查更新」→「更新」→「确认更新」。三处都走 `startSelfUpdate`，
-     都要先确认（重启会中断正在跑的任务）。不在本站镜像里跑（没有 `STATION_RUNTIME`）、非 Linux、本地构建时 `applyBlock` 说明原因，照旧给 compose 命令。
+     TG `/update`（按钮 `u:a:<版本>`）、企微「检查更新」→「更新」。三处都走 `startSelfUpdate`。
+     机器人点「更新」本身就是确认（2026-10-31 维护者嫌二次确认多余），只有任务队列里有 `running` 的任务时才再问一次、写明会中断哪些
+     （`updateBusyJobs`，TG `u:g:<版本>` / 企微「确认更新」）。不在本站镜像里跑（没有 `STATION_RUNTIME`）、非 Linux、本地构建时 `applyBlock` 说明原因，照旧给 compose 命令。
      **没有自动更新**：只在用户点了之后才下，别加定时自动更新。测试 `selfupdate_test.go`（假 ghcr）。
    2026-09-30 起有**更新检测**（`update.go`）：版本号 = CI 里 `git describe --tags`
    注入的 `main.Version`（正式版 `v26.10.9`，同日序号版 `v26.10.9-2`，两版之间的 master 构建 `v26.10.9-3-gabc1234`，本地构建 `dev`；`parseVersion` 先比「年.月.日」三段，同一天再比序号，`v26.10.9-4` 比 `v26.10.9` 新，别按 semver 把 `-4` 当预发布），
    后台每 12 小时读一次 GitHub `releases/latest`（走全局代理），界面「系统配置 → 版本更新」与侧栏小点提示，
    可选推一次通知（`update_notified` 记账，同一版本只推一次）。dev / 裸提交号构建不做新旧比较。
-   **发版 = 推一个 `v*` tag**：CI 出镜像后 `release` job 自动建 Release（`--generate-notes`）；同日序号版（`-2` `-3`）是正式版，`-` 后带字母的（`-rc1`）才按预发布发、不会提示给用户。
+   通知与机器人回复带更新内容：隔了几版时读 Release 列表，把当前版本到最新版之间每一版的说明合起来（`combineReleaseNotes`），去掉「Full Changelog」行。
+   **发版 = 推一个 `v*` tag**：CI 出镜像后 `release` job 自动建 Release，说明是上一个 tag 以来的 feat / fix / perf 提交标题按类型分组
+   （**别改回 `--generate-notes`**：直接提交 master 没有 PR，它只剩一行对比链接，用户看不出更了什么；所以提交标题就是给用户看的更新说明）；同日序号版（`-2` `-3`）是正式版，`-` 后带字母的（`-rc1`）才按预发布发、不会提示给用户。
 8. **整理与增量同步不再重叠**：整理是一条自带落盘的完整流水线（识别 → 搬移 → 写 STRM →
    刷 Emby → 本轮片目入刮削队列），产物**不经过**生活事件。整理用的 `pan115Ops` 打开了 `suppress`，
    自己做的每一次 move/rename/delete 以及新建目录（`mkdir` / `ensurePath`，否则 `new_folder` 会触发整目录递归遍历）都登记进 `EventSuppress`，绕回来时被增量同步 pop 掉跳过

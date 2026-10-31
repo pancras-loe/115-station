@@ -35,7 +35,7 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
 	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n" +
 	"/ptsignin PT 站签到：立即跑一轮，跑完回复汇总\n" +
-	"/update 检查更新：有新版本时点「更新」，确认后下载新程序并重启\n\n" +
+	"/update 检查更新：有新版本时点「更新」下载新程序并重启（有任务在跑会先问一句）\n\n" +
 	"不想打斜杠也行，直接发中文：「搜索 片名」「订阅 片名」「我的订阅」「观影 片名」「网盘 片名」「整理」「同步」「状态」。\n\n" +
 	"找资源：TMDB 只有一部时直接出资源；点按钮或回复序号选择，可以连续挑多条（一部剧好几季）。" +
 	"也可以回复 0 自动择优、n / p 翻页、b 重新选片、r 重搜、q 关闭；片名在 TMDB 上查不到时直接按关键词搜。" +
@@ -132,8 +132,8 @@ func (b *tgConversation) handle(u tgUpdate) {
 		return
 	}
 	if u.Callback != nil && strings.HasPrefix(u.Callback.Data, "u:") {
-		// 一键更新的按钮（botupdate.go）：不靠会话，确认那一步再核一次版本号
-		text, buttons := updateTGCallback(u.Callback.Data, b.replyForCurrentChat())
+		// 一键更新的按钮（botupdate.go）：不靠会话，开始前再核一次版本号
+		text, buttons := b.h.updateTGCallback(u.Callback.Data, b.replyForCurrentChat())
 		if err := b.api.edit(b.ctx, b.chat, m.ID, text, buttons); err != nil && b.ctx.Err() == nil {
 			b.send(text, buttons)
 		}

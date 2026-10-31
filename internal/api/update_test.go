@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -43,20 +44,40 @@ func TestVersionNewer(t *testing.T) {
 }
 
 func TestUpdateStatus(t *testing.T) {
-	oldFetch, oldVer := fetchLatestRelease, buildVersion
+	oldFetch, oldList, oldVer := fetchLatestRelease, fetchReleaseList, buildVersion
 	defer func() {
-		fetchLatestRelease, buildVersion = oldFetch, oldVer
-		updateLatest, updateErr = nil, ""
+		fetchLatestRelease, fetchReleaseList, buildVersion = oldFetch, oldList, oldVer
+		updateLatest, updateErr, updateNotes = nil, "", ""
 	}()
 
 	buildVersion = "v1.0.0"
 	fetchLatestRelease = func() (*githubRelease, error) {
-		return &githubRelease{TagName: "v1.1.0", Body: "修了点东西", HTMLURL: "https://example/r"}, nil
+		return &githubRelease{TagName: "v1.1.0", Body: "修了点东西\n\n**Full Changelog**: https://x/compare", HTMLURL: "https://example/r"}, nil
 	}
+	fetchReleaseList = func() ([]githubRelease, error) { return nil, errors.New("限流") }
 	checkUpdate()
 	st := currentUpdateStatus()
 	if !st.HasUpdate || st.Latest != "v1.1.0" || st.Notes != "修了点东西" || !st.Comparable {
 		t.Fatalf("有新版本时状态不对：%+v", st)
+	}
+
+	// 隔了几版：中间每一版的说明都带上，新的在前；预发布、当前及更旧的不算
+	fetchReleaseList = func() ([]githubRelease, error) {
+		return []githubRelease{
+			{TagName: "v1.1.0", Body: "修了点东西"},
+			{TagName: "v1.0.1-rc1", Body: "预发布", Prerelease: true},
+			{TagName: "v1.0.1", Body: "新功能：\n- 甲"},
+			{TagName: "v1.0.0", Body: "旧的"},
+			{TagName: "v0.9.0", Body: "**Full Changelog**: https://x"},
+		}, nil
+	}
+	checkUpdate()
+	want := "【v1.1.0】\n修了点东西\n\n【v1.0.1】\n新功能：\n- 甲"
+	if st = currentUpdateStatus(); st.Notes != want {
+		t.Fatalf("合并说明不对：%q", st.Notes)
+	}
+	if lines := strings.Join(updateNotifyLines(st), "\n"); !strings.Contains(lines, "- 甲") {
+		t.Fatalf("通知应带更新内容：%s", lines)
 	}
 
 	// 检查失败：保留上次拉到的版本，只报错误

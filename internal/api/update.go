@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,6 +91,8 @@ type githubRelease struct {
 	Body        string `json:"body"`
 	HTMLURL     string `json:"html_url"`
 	PublishedAt string `json:"published_at"`
+	Draft       bool   `json:"draft"`
+	Prerelease  bool   `json:"prerelease"`
 }
 
 var (
@@ -97,9 +100,75 @@ var (
 	updateLatest  *githubRelease
 	updateChecked time.Time
 	updateErr     string
+	// updateNotes 当前版本到最新版之间每一版的更新说明合在一起（隔了几版没更新时不只看最新那版）
+	updateNotes string
 	// 测试替换：默认去 GitHub 拉
 	fetchLatestRelease = fetchGithubLatestRelease
+	fetchReleaseList   = fetchGithubReleaseList
 )
+
+// fetchGithubReleaseList 读最近的 Release 列表，合并几版的更新说明用
+func fetchGithubReleaseList() ([]githubRelease, error) {
+	client := githubHTTPClient(15 * time.Second)
+	req, _ := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+updateRepo+"/releases?per_page=30", nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	githubAuth(req)
+	req.Header.Set("User-Agent", "115-station/"+buildVersion)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub 返回 HTTP %d", resp.StatusCode)
+	}
+	var rels []githubRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rels); err != nil {
+		return nil, err
+	}
+	return rels, nil
+}
+
+// cleanReleaseNotes 去掉聊天里没用的行：老版本 --generate-notes 留下的
+// 「**Full Changelog**: 对比链接」与「## What's Changed」标题
+func cleanReleaseNotes(body string) string {
+	var out []string
+	for _, line := range strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n") {
+		t := strings.TrimSpace(line)
+		if strings.Contains(t, "Full Changelog") || strings.EqualFold(strings.TrimLeft(t, "# "), "What's Changed") {
+			continue
+		}
+		out = append(out, strings.TrimRight(line, " \t"))
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+// combineReleaseNotes 把 (current, latest] 之间每个正式版的说明按新到旧拼起来；
+// 只有一版有内容时不加版本号小标题。都没内容返回空
+func combineReleaseNotes(rels []githubRelease, current, latest string) string {
+	type part struct{ tag, notes string }
+	var parts []part
+	for _, r := range rels {
+		if r.Draft || r.Prerelease || !versionNewer(r.TagName, current) || versionNewer(r.TagName, latest) {
+			continue
+		}
+		if n := cleanReleaseNotes(r.Body); n != "" {
+			parts = append(parts, part{r.TagName, n})
+		}
+	}
+	sort.SliceStable(parts, func(i, j int) bool { return versionNewer(parts[i].tag, parts[j].tag) })
+	if len(parts) == 1 {
+		return parts[0].notes
+	}
+	var b strings.Builder
+	for i, p := range parts {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("【" + p.tag + "】\n" + p.notes)
+	}
+	return b.String()
+}
 
 // fetchGithubLatestRelease 读 GitHub 的 latest release（不含预发布与草稿）。
 // 走全局代理：国内直连 api.github.com 经常超时，和 TMDB 同一个处境（github.go）
@@ -135,6 +204,18 @@ func fetchGithubLatestRelease() (*githubRelease, error) {
 // checkUpdate 拉一次最新版本并更新缓存
 func checkUpdate() {
 	rel, err := fetchLatestRelease()
+	notes := ""
+	if err == nil && rel != nil {
+		notes = cleanReleaseNotes(rel.Body)
+		if versionNewer(rel.TagName, buildVersion) {
+			// 列表读不到就只用最新那版的说明，不算检查失败
+			if rels, lerr := fetchReleaseList(); lerr == nil {
+				if all := combineReleaseNotes(rels, buildVersion, rel.TagName); all != "" {
+					notes = all
+				}
+			}
+		}
+	}
 	updateMu.Lock()
 	updateChecked = time.Now()
 	if err != nil {
@@ -142,6 +223,7 @@ func checkUpdate() {
 	} else {
 		updateErr = ""
 		updateLatest = rel
+		updateNotes = notes
 	}
 	updateMu.Unlock()
 	if err != nil {
@@ -165,7 +247,7 @@ func currentUpdateStatus() UpdateStatus {
 	}
 	if rel := updateLatest; rel != nil {
 		st.Latest = rel.TagName
-		st.Notes = rel.Body
+		st.Notes = updateNotes
 		st.URL = rel.HTMLURL
 		st.PublishedAt = rel.PublishedAt
 		st.HasUpdate = versionNewer(rel.TagName, buildVersion)
@@ -195,11 +277,34 @@ func notifyUpdate(st UpdateStatus) {
 		log.Printf("[更新] ✗ 记录已通知版本失败：%v", err)
 		return
 	}
-	content := fmt.Sprintf("当前 %s → 最新 %s\n更新：docker compose pull && docker compose up -d", st.Current, st.Latest)
-	if st.URL != "" {
-		content += "\n更新说明：" + st.URL
+	NotifyMessage(kindSystem, "🆕 115-Station 有新版本", strings.Join(updateNotifyLines(st), "\n"))
+}
+
+// updateNotifyLines 新版本通知：版本、更了什么、怎么更新。
+// 能一键更新时写机器人指令，不写 compose 命令
+func updateNotifyLines(st UpdateStatus) []string {
+	lines := []string{fmt.Sprintf("当前 %s → 最新 %s", st.Current, st.Latest)}
+	if notes := truncRunes(strings.TrimSpace(st.Notes), botUpdateNotesMax); notes != "" {
+		lines = append(lines, "", notes)
 	}
-	NotifyMessage(kindSystem, "🆕 115-Station 有新版本", content)
+	lines = append(lines, "")
+	if st.CanApply {
+		lines = append(lines, "一键更新：企微回「更新」，TG 发 /update，或网页「系统配置 → 版本更新」")
+	} else {
+		lines = append(lines, "更新：docker compose pull && docker compose up -d")
+	}
+	if st.URL != "" {
+		lines = append(lines, "更新说明："+st.URL)
+	}
+	return lines
+}
+
+// truncRunes 超过 n 个字时截断、加省略号
+func truncRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
 }
 
 // StartUpdateChecker 后台定时检查更新：启动后 1 分钟一次，之后每 12 小时一次。

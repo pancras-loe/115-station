@@ -3,11 +3,14 @@ package api
 import (
 	"fmt"
 	"strings"
+
+	"115-station/internal/model"
 )
 
 // 机器人的「检查更新」「更新」（TG /update 带按钮，企微发文字）。
 // 更新本身走 startSelfUpdate，和网页同一条路（selfupdate.go）；
-// 更新前必须再确认一次：重启会中断正在跑的任务
+// 「更新」/ 按钮本身就是确认（检查更新的回复里已写明版本与更新内容），直接开始；
+// 只有任务队列里有任务在跑时才再问一次，写明会中断哪些任务
 
 const botUpdateNotesMax = 600
 
@@ -34,10 +37,7 @@ func botUpdateCheck() (lines []string, target string) {
 	}
 	lines = append(lines, "🆕 最新版本："+st.Latest)
 	if notes := strings.TrimSpace(st.Notes); notes != "" {
-		if r := []rune(notes); len(r) > botUpdateNotesMax {
-			notes = string(r[:botUpdateNotesMax]) + "…"
-		}
-		lines = append(lines, "", notes)
+		lines = append(lines, "", truncRunes(notes, botUpdateNotesMax))
 	}
 	if st.URL != "" {
 		lines = append(lines, "", "更新说明："+st.URL)
@@ -51,13 +51,34 @@ func botUpdateCheck() (lines []string, target string) {
 	return lines, st.Latest
 }
 
-// botUpdateConfirmLines 更新前的确认
-func botUpdateConfirmLines(target string) []string {
+// updateBusyJobs 任务队列里正在跑的任务（重启会中断它们）。增量轮询只短暂持锁、中断了下一轮重来，不算
+func (h *Handler) updateBusyJobs() []string {
+	if h == nil || h.DB == nil {
+		return nil
+	}
+	var jobs []model.TaskJob
+	h.DB.Where("status = ?", jobRunning).Order("id").Limit(5).Find(&jobs)
+	names := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		names = append(names, shortTitle(j.Title))
+	}
+	return names
+}
+
+// botUpdateConfirmLines 有任务在跑时的确认
+func botUpdateConfirmLines(target string, busy []string) []string {
 	return []string{
 		fmt.Sprintf("确认更新到 %s？", target),
-		"会从 ghcr 下载新程序（约几十 MB），校验后重启容器；正在跑的任务会被中断，重启后标为中断。",
-		"更新好了大约一分钟后推「已更新」。",
+		"正在跑的任务会被中断（重启后标为中断，可在任务中心重试）：" + strings.Join(busy, "、"),
 	}
+}
+
+// botUpdateRequest 用户要更新：没任务在跑就直接开始；有就返回确认的话（ask = true）
+func (h *Handler) botUpdateRequest(target, by string, reply func(...string)) (lines []string, ask bool) {
+	if busy := h.updateBusyJobs(); len(busy) > 0 {
+		return botUpdateConfirmLines(target, busy), true
+	}
+	return botUpdateGo(target, by, reply), false
 }
 
 // botUpdateGo 开始更新，返回立即回复的话；下载结果由 reply 推回
@@ -65,11 +86,15 @@ func botUpdateGo(target, by string, reply func(...string)) []string {
 	if err := startSelfUpdate(target, by, reply); err != nil {
 		return []string{"✗ " + err.Error()}
 	}
-	return []string{fmt.Sprintf("⏳ 开始下载 %s，校验后自动重启。", target)}
+	if target == "" {
+		target = "最新版" // 企微「确认更新」不带版本号
+	}
+	return []string{fmt.Sprintf("⏳ 开始下载 %s（约几十 MB），校验后自动重启，大约一分钟后推「已更新」。", target)}
 }
 
-// updateTGCallback TG 按钮：u:a:<版本> 要更新 → 确认；u:g:<版本> 确认更新；u:c 取消
-func updateTGCallback(data string, reply func(...string)) (string, [][]tgButton) {
+// updateTGCallback TG 按钮：u:a:<版本> 更新（没任务在跑直接开始，否则先确认）；
+// u:g:<版本> 确认更新；u:c 取消
+func (h *Handler) updateTGCallback(data string, reply func(...string)) (string, [][]tgButton) {
 	parts := strings.SplitN(data, ":", 3)
 	if len(parts) < 2 {
 		return "按钮已失效，请重新发 /update。", nil
@@ -79,7 +104,11 @@ func updateTGCallback(data string, reply func(...string)) (string, [][]tgButton)
 		if len(parts) != 3 {
 			break
 		}
-		return strings.Join(botUpdateConfirmLines(parts[2]), "\n"), [][]tgButton{{
+		lines, ask := h.botUpdateRequest(parts[2], "TG 机器人", reply)
+		if !ask {
+			return strings.Join(lines, "\n"), nil
+		}
+		return strings.Join(lines, "\n"), [][]tgButton{{
 			{Text: "确认更新", Data: "u:g:" + parts[2]},
 			{Text: "取消", Data: "u:c"},
 		}}
