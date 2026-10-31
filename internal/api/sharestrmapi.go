@@ -156,8 +156,8 @@ func (h *Handler) ShareStrmSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v 默认追更=%d小时 默认放法=%s 分类方案=%d",
-		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets, req.FollowHours, req.Layout, req.SchemeID)
+	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v 默认追更=%d小时 默认放法=%s 分类方案=%d 本站刮削=%v",
+		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets, req.FollowHours, req.Layout, req.SchemeID, req.Scrape)
 	c.JSON(http.StatusOK, gin.H{"message": "已保存", "config": req})
 }
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { FolderOpen, FolderTree, Pause, Play, Plus, RefreshCw, Trash2, KeyRound } from '@lucide/vue'
+import { Clapperboard, FolderOpen, FolderTree, HardDriveDownload, Pause, Play, Plus, RefreshCw, Trash2, KeyRound } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
@@ -10,6 +10,7 @@ import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceFiles from './SourceFiles.vue'
 import LayoutDialog from './LayoutDialog.vue'
+import TransferDialog from './TransferDialog.vue'
 import { shareStrmApi } from '@/api'
 import { FOLLOW_OPTIONS, GONE_CONFIRM, type ShareSource, type ShareSourceState } from '@/api/sharestrm'
 import { useShareStrm } from '@/composables/shareStrm'
@@ -177,6 +178,32 @@ function openLayout(s: ShareSource) {
   layoutShow.value = true
 }
 
+// 转存这份
+const xferShow = ref(false)
+const xferOf = ref<ShareSource | null>(null)
+function openTransfer(s: ShareSource) {
+  xferOf.value = s
+  xferShow.value = true
+}
+
+// 刮削：本地整理认出是哪部的才能刮（原样放的交给 Emby）
+function canScrape(s: ShareSource) {
+  return s.layout === 'organize' && s.tmdb_id > 0
+}
+async function scrape(s: ShareSource) {
+  busyId.value = s.id
+  try {
+    const d = await shareStrmApi.scrape(s.id)
+    message.success(d.message)
+    void queue.submitted(d.job_id)
+    emit('changed')
+  } catch (e) {
+    toastError(e, '排不上队')
+  } finally {
+    busyId.value = 0
+  }
+}
+
 const sorted = computed(() => props.list)
 </script>
 
@@ -205,6 +232,7 @@ const sorted = computed(() => props.list)
             <div class="title-line">
               <span class="title" :title="s.title">{{ s.title || s.share_code }}</span>
               <HChip :color="stateOf(s).color">{{ stateOf(s).text }}</HChip>
+              <HChip v-if="s.transferred" color="accent" title="已转存进网盘，整理入库后这里对应的 STRM 会自动收掉">已转存，等入库</HChip>
             </div>
             <div class="meta">
               <span>{{ s.files }} 个 STRM<template v-if="s.assets"> · {{ s.assets }} 个附属文件</template></span>
@@ -249,6 +277,14 @@ const sorted = computed(() => props.list)
               <template #icon><FolderTree :size="14" /></template>
               放法
             </HButton>
+            <HButton v-if="canScrape(s)" size="sm" variant="tertiary" :disabled="s.busy" @click="scrape(s)">
+              <template #icon><Clapperboard :size="14" /></template>
+              刮削
+            </HButton>
+            <HButton v-if="!s.transferred" size="sm" variant="tertiary" :disabled="s.busy || s.state === 'gone'" @click="openTransfer(s)">
+              <template #icon><HardDriveDownload :size="14" /></template>
+              转存这份
+            </HButton>
             <HButton size="sm" variant="tertiary" @click="editCode(s)">
               <template #icon><KeyRound :size="14" /></template>
               提取码
@@ -275,6 +311,7 @@ const sorted = computed(() => props.list)
 
     <SourceFiles v-model:show="filesShow" :source="filesOf" />
     <LayoutDialog v-model:show="layoutShow" :source="layoutOf" @saved="emit('changed')" />
+    <TransferDialog v-model:show="xferShow" :source="xferOf" @done="emit('changed')" />
   </div>
 </template>
 

@@ -348,6 +348,8 @@ type ShareSource struct {
 	RecogNote  string `json:"recog_note" gorm:"size:300"`
 	// TitleDir 本地整理算出的标题目录（相对分享根）：刮削写在这里，删除分享时只剩元数据就整个收掉
 	TitleDir string `json:"title_dir" gorm:"size:500"`
+	// Adopted 从别的项目（p115strmhelper）接管来的：原样放时已有文件留在原来的位置（路径一变 Emby 观看记录就没了）
+	Adopted bool `json:"adopted"`
 	// Transferred 用户点了「转存这份」：分享已转进某个库的转存文件夹，等整理入库后按 sha1 收掉这里的 STRM
 	Transferred *time.Time `json:"transferred"`
 	CreatedAt   time.Time  `json:"created_at"`

@@ -16,6 +16,8 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+
+	"115-station/internal/model"
 )
 
 // ==================== 批量在 Emby 里建媒体库 ====================
@@ -194,6 +196,62 @@ func gatherEmbyLibDirs() (dirs []embyLibDir, warnings []string) {
 			d.Key, d.Name, d.Type, d.Local = fmt.Sprintf("lib:%d", l.ID), l.Name, guessEmbyLibType(l.Name), abs
 			dirs = append(dirs, d)
 		}
+	}
+	sd, sw := shareStrmEmbyDirs(root)
+	return append(dirs, sd...), append(warnings, sw...)
+}
+
+// shareStrmEmbyDirs 分享 STRM（sharestrm.go）要进 Emby 的目录：本地整理的分享按分类目录放，
+// 和库的分类目录同一个 key（"cat:"+分类）——同名分类合成一个 Emby 库，分享进来的片和库里的片在一起；
+// 只列本地已经有的分类目录（还没整理进任何一部的不建空库）。原样放的分享各在自己的目录里，
+// 合不成一个库，只提示用户自己加路径
+func shareStrmEmbyDirs(root string) (dirs []embyLibDir, warnings []string) {
+	if model.DB == nil {
+		return nil, nil
+	}
+	var srcs []model.ShareSource
+	model.DB.Select("layout").Find(&srcs)
+	if len(srcs) == 0 {
+		return nil, nil
+	}
+	cfg := loadShareStrmCfg()
+	if shareRootProblem(cfg.Root, loadLibraries()) != "" {
+		return nil, nil
+	}
+	shareAbs := root + "/" + cfg.Root
+	scrape := embyScrapeOff
+	if cfg.Scrape {
+		scrape = "auto"
+	}
+	keep := 0
+	for _, s := range srcs {
+		if normShareLayout(s.Layout) != shareLayoutOrganize {
+			keep++
+		}
+	}
+	if keep < len(srcs) {
+		for _, mt := range []string{"movie", "tv"} {
+			var rels []string
+			if cfg.SchemeID == 0 {
+				rels = []string{mediaTypeCategory(mt)}
+			} else {
+				for _, r := range classifyRulesOf(cfg.SchemeID, mt) {
+					rels = append(rels, categoryDir(mt, r.Name))
+				}
+				rels = append(rels, libSubPath(mediaTypeCategory(mt), "未分类"))
+			}
+			for _, rel := range rels {
+				local := shareAbs + "/" + rel
+				if st, err := os.Stat(filepath.FromSlash(local)); err != nil || !st.IsDir() {
+					continue
+				}
+				dirs = append(dirs, embyLibDir{Key: "cat:" + rel, Name: path.Base(rel), Type: embyTypeOfMedia(mt), Fixed: true,
+					LibName: "分享 STRM", Local: local, Scrape: scrape})
+			}
+		}
+	}
+	if keep > 0 {
+		warnings = append(warnings, fmt.Sprintf("有 %d 个分享是「原样」放的，各在 %s 下自己的目录里，合不进一个 Emby 库：想进 Emby 就把它们改成「本地整理」，或者自己在 Emby 里加路径", keep, shareAbs))
 	}
 	return dirs, warnings
 }

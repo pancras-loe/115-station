@@ -19,6 +19,8 @@ export interface ShareStrmConfig {
   layout: ShareLayout
   /** 本地整理用的分类方案，0 = 只分电影 / 剧集 */
   scheme_id: number
+  /** 本地整理认出的分享生成后用本站刮削（只补缺失、只写本地）；关着交给 Emby */
+  scrape: boolean
 }
 
 /** keep 按分享里的目录原样放 / organize 本地整理（识别后按命名模板与分类放） */
@@ -85,6 +87,10 @@ export interface ShareSource {
   manual: boolean
   /** 本地整理没认出的原因（这时按原样放） */
   recog_note: string
+  /** 本地整理算出的标题目录（相对分享根） */
+  title_dir: string
+  /** 点过「转存这份」的时间：整理入库后对应的分享 STRM 会自动收掉 */
+  transferred: string | null
 }
 
 /** 连续几次查到失效才认定（后端 shareGoneStreakMax） */
@@ -126,3 +132,27 @@ export interface ShareUpdate {
 export const update = (id: number, body: ShareUpdate) =>
   http.put<{ message: string }>(`/sharestrm/sources/${id}`, body)
 export const remove = (id: number) => http.del<{ message: string }>(`/sharestrm/sources/${id}`)
+export const transfer = (id: number, subdir = '') =>
+  http.post<{ message: string }>(`/sharestrm/sources/${id}/transfer`, { subdir }, { timeoutMs: 5 * 60_000 })
+export const scrape = (id: number) => http.post<{ message: string; job_id: number }>(`/sharestrm/sources/${id}/scrape`)
+
+// ---- 接管别的项目写的分享 STRM（后端 sharestrmadopt.go） ----
+export interface ShareAdoptGroup {
+  share_code: string
+  dir: string
+  files: number
+  known: number
+  has_code: boolean
+  listed: boolean
+  problem?: string
+}
+export interface ShareAdoptReport {
+  root: string
+  scanned: number
+  other: number
+  groups: ShareAdoptGroup[]
+  adopted?: number
+  errors?: string[]
+}
+export const adopt = (apply: boolean) =>
+  http.post<ShareAdoptReport>('/sharestrm/adopt', { apply }, { timeoutMs: 10 * 60_000 })

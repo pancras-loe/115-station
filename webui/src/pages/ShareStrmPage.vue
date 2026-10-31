@@ -9,6 +9,7 @@ import PluginLogPanel from '@/components/plugins/PluginLogPanel.vue'
 import SourcesTab from './sharestrm/SourcesTab.vue'
 import SettingsTab from './sharestrm/SettingsTab.vue'
 import CleanupTab from './sharestrm/CleanupTab.vue'
+import AdoptCard from './sharestrm/AdoptCard.vue'
 import { cleanupList } from './sharestrm/cleanup'
 import { shareStrmApi } from '@/api'
 import type { ShareSource } from '@/api/sharestrm'
@@ -105,7 +106,10 @@ function onStrip(key: string) {
 
     <SourcesTab v-if="tab === 'sources'" :list="list" :loading="loading" @changed="load" @settings="tab = 'settings'" />
     <CleanupTab v-else-if="tab === 'cleanup'" :list="list" @changed="load" />
-    <SettingsTab v-else-if="tab === 'settings'" :sources="list.length" @saved="ss.reload()" @go-strm="router.push({ name: 'sync' })" />
+    <template v-else-if="tab === 'settings'">
+      <SettingsTab :sources="list.length" @saved="ss.reload()" @go-strm="router.push({ name: 'sync' })" />
+      <AdoptCard @done="load" />
+    </template>
     <section v-else class="card card--default log-card">
       <PluginLogPanel plugin-key="sharestrm" />
     </section>

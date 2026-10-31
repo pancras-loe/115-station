@@ -280,6 +280,11 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 			res.Blocked++
 			continue
 		}
+		if had && src.Adopted && old.RelPath != "" && normShareLayout(src.Layout) == shareLayoutKeep {
+			// 接管来的：已有的文件留在原来的位置（路径一变 Emby 观看记录就没了），只换内容；
+			// 用户改成「本地整理」才按整理挪
+			p.Rel = old.RelPath
+		}
 		var taken int64
 		r.db.Model(&model.ShareFile{}).Where("rel_path = ? AND source_id <> ?", p.Rel, src.ID).Count(&taken)
 		if taken > 0 {

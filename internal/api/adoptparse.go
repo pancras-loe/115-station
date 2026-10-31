@@ -32,6 +32,10 @@ type foreignRef struct {
 	FileID   string `json:"file_id,omitempty"`
 	// PanPath 内容里带的网盘路径（已解码，以 / 开头）；qmediasync 的 &path= 与 pickcode 同时存在
 	PanPath string `json:"pan_path,omitempty"`
+	// 分享 STRM（Kind = share）：分享码、提取码、分享里的文件 id（本站的 /d/s~ 没有提取码）
+	ShareCode   string `json:"share_code,omitempty"`
+	ReceiveCode string `json:"receive_code,omitempty"`
+	ShareFid    string `json:"share_fid,omitempty"`
 }
 
 const (
@@ -82,7 +86,15 @@ func parseForeignStrm(content string) foreignRef {
 	q := u.Query()
 	if q.Get("share_code") != "" {
 		ref.Kind = "share"
+		ref.ShareCode, ref.ReceiveCode, ref.ShareFid = q.Get("share_code"), q.Get("receive_code"), q.Get("id")
 		return ref
+	}
+	// 本站分享 STRM 的 /d/s~{分享码}~{fid}（sharestrm.go）：也是分享，不是本账号的 pickcode
+	if seg, ok := strings.CutPrefix(u.Path, "/d/"); ok && isSharePlayID(seg) {
+		if code, fid, ok := parseSharePlayID(strings.SplitN(seg, "/", 2)[0]); ok {
+			ref.Kind, ref.Format, ref.ShareCode, ref.ShareFid = "share", strmFmtStation, code, fid
+			return ref
+		}
 	}
 
 	// pickcode：查询串，或本站的 /d/{pickcode}[.ext]

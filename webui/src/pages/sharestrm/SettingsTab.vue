@@ -27,6 +27,7 @@ const form = ref<ShareStrmConfig>({
   follow_hours: 0,
   layout: 'keep',
   scheme_id: 0,
+  scrape: false,
 })
 const info = ref<ShareStrmConfigResp | null>(null)
 const saving = ref(false)
@@ -137,6 +138,13 @@ async function save() {
       tip="用哪套分类方案（「自动整理 → 二级分类」里建的）。选「只分电影 / 剧集」就只按类型分两个目录。"
     >
       <HSelect v-model="form.scheme_id" :options="schemes" class="follow" aria-label="本地整理的分类" />
+    </FieldRow>
+
+    <FieldRow
+      label="本站刮削"
+      tip="本地整理认出是哪部的分享，生成完用本站刮削写 NFO 与图片（只补缺失、只写本地，不传网盘、不让 Emby 提前探测）。只在这一轮新写了 STRM 时刮；想补刮点列表里的「刮削」。关着交给 Emby 刮。原样放的分享认不出是哪部，一律交给 Emby。"
+    >
+      <HSwitch v-model="form.scrape" aria-label="本站刮削" />
     </FieldRow>
 
     <FieldRow label="最小体积" tip="比这小的视频不生成 STRM，挡掉样片和广告。0 = 不限。">
