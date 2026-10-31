@@ -54,6 +54,8 @@ const shown = computed(() => {
           <div class="line">
             <HChip :color="f.kind === 'video' ? 'accent' : 'default'">{{ f.kind === 'video' ? 'STRM' : '附属' }}</HChip>
             <span class="rel mono" :title="f.rel_path">{{ f.rel_path }}</span>
+            <HChip v-if="f.blocked" color="default" title="在 Emby 里删过，之后的检查不再生成">不再生成</HChip>
+            <HChip v-else-if="f.gone_at" color="warning" title="分享里已经没有了，下次检查还没有就删掉本地">分享里没了</HChip>
           </div>
           <div class="from">分享里：{{ f.share_path }}<template v-if="f.size"> · {{ bytes(f.size) }}</template></div>
         </li>

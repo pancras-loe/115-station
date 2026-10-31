@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { FolderOpen, Plus, RefreshCw, Trash2, KeyRound } from '@lucide/vue'
+import { FolderOpen, Pause, Play, Plus, RefreshCw, Trash2, KeyRound } from '@lucide/vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
 import HInput from '@/components/hero/HInput.vue'
 import HModal from '@/components/hero/HModal.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import SourceFiles from './SourceFiles.vue'
 import { shareStrmApi } from '@/api'
-import type { ShareSource, ShareSourceState } from '@/api/sharestrm'
+import { FOLLOW_OPTIONS, GONE_CONFIRM, type ShareSource, type ShareSourceState } from '@/api/sharestrm'
 import { useShareStrm } from '@/composables/shareStrm'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 import { useQueueStore } from '@/stores/queue'
@@ -54,7 +55,39 @@ const STATE: Record<ShareSourceState, { text: string; color: 'success' | 'warnin
 }
 function stateOf(s: ShareSource) {
   if (s.busy) return { text: '生成中', color: 'accent' as const }
+  // 失效要连续查到 3 次才认定（115 偶尔对正常分享也回怪状态），之前只说「疑似」
+  if (s.state === 'gone' && s.gone_streak < GONE_CONFIRM) {
+    return { text: `疑似失效 ${s.gone_streak}/${GONE_CONFIRM}`, color: 'warning' as const }
+  }
   return STATE[s.state] ?? { text: s.state, color: 'default' as const }
+}
+
+/** 追更那一行：间隔、暂停、下一次什么时候 */
+function followText(s: ShareSource) {
+  if (!s.follow_hours) return '不追更'
+  if (s.paused) return '追更已暂停'
+  if (s.state === 'gone' && s.gone_streak >= GONE_CONFIRM) return '已失效，不再自动检查'
+  if (s.state === 'badcode') return '提取码不对，改好后恢复'
+  return s.next_check ? `下次检查 ${relTime(s.next_check)}` : '等这次检查完排下一次'
+}
+
+async function setFollow(s: ShareSource, hours: number | null) {
+  try {
+    await shareStrmApi.update(s.id, { follow_hours: hours ?? 0 })
+    emit('changed')
+  } catch (e) {
+    toastError(e, '保存失败')
+  }
+}
+
+async function togglePause(s: ShareSource) {
+  try {
+    await shareStrmApi.update(s.id, { paused: !s.paused })
+    message.success(s.paused ? '已恢复追更' : '已暂停追更')
+    emit('changed')
+  } catch (e) {
+    toastError(e, '保存失败')
+  }
 }
 function goneWhy(s: ShareSource) {
   if (s.share_state === '4') return '分享已取消'
@@ -170,6 +203,20 @@ const sorted = computed(() => props.list)
               <span class="mono">分享码 {{ s.share_code }}<template v-if="s.receive_code"> · 提取码 {{ s.receive_code }}</template></span>
               <span :title="fullTime(s.last_check)">检查：{{ s.last_check ? relTime(s.last_check) : '还没跑完' }}</span>
             </div>
+            <div class="follow">
+              <HSelect
+                :model-value="s.follow_hours"
+                :options="FOLLOW_OPTIONS"
+                aria-label="追更间隔"
+                class="follow-sel"
+                @update:model-value="(v) => setFollow(s, v as number | null)"
+              />
+              <span class="follow-text" :title="fullTime(s.next_check)">{{ followText(s) }}</span>
+              <HButton v-if="s.follow_hours" size="sm" variant="ghost" @click="togglePause(s)">
+                <template #icon><component :is="s.paused ? Play : Pause" :size="13" /></template>
+                {{ s.paused ? '恢复' : '暂停' }}
+              </HButton>
+            </div>
             <p v-if="s.state !== 'ok' && (s.last_error || goneWhy(s))" class="err">{{ goneWhy(s) || s.last_error }}</p>
           </div>
           <div class="acts">
@@ -275,6 +322,17 @@ const sorted = computed(() => props.list)
 }
 .mono {
   font-family: var(--font-mono, ui-monospace, monospace);
+}
+.follow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.follow-sel {
+  width: 130px;
 }
 .err {
   margin: 6px 0 0;

@@ -5,18 +5,27 @@ import HInput from '@/components/hero/HInput.vue'
 import HNumberInput from '@/components/hero/HNumberInput.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HSwitch from '@/components/hero/HSwitch.vue'
+import HSelect from '@/components/hero/HSelect.vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
 import { shareStrmApi } from '@/api'
-import type { ShareLinkAction, ShareStrmConfig, ShareStrmConfigResp } from '@/api/sharestrm'
+import { FOLLOW_OPTIONS, type ShareLinkAction, type ShareStrmConfig, type ShareStrmConfigResp } from '@/api/sharestrm'
 import { toastError, useFeedback } from '@/composables/useFeedback'
 
 const props = defineProps<{ sources: number }>()
 const emit = defineEmits<{ saved: []; goStrm: [] }>()
 const { message, dialog } = useFeedback()
 
-const form = ref<ShareStrmConfig>({ enabled: false, default_action: 'ask', root: '分享', min_size_mb: 50, skip_owned: true, assets: true })
+const form = ref<ShareStrmConfig>({
+  enabled: false,
+  default_action: 'ask',
+  root: '分享',
+  min_size_mb: 50,
+  skip_owned: true,
+  assets: true,
+  follow_hours: 0,
+})
 const info = ref<ShareStrmConfigResp | null>(null)
 const saving = ref(false)
 
@@ -52,7 +61,11 @@ async function save() {
   }
   saving.value = true
   try {
-    const d = await shareStrmApi.saveConfig({ ...form.value, min_size_mb: Number(form.value.min_size_mb) || 0 })
+    const d = await shareStrmApi.saveConfig({
+      ...form.value,
+      min_size_mb: Number(form.value.min_size_mb) || 0,
+      follow_hours: Number(form.value.follow_hours) || 0,
+    })
     message.success(d.message)
     await load()
     emit('saved')
@@ -94,6 +107,13 @@ async function save() {
       <HInput v-model="form.root" mono :disabled="sources > 0" placeholder="分享" />
     </FieldRow>
 
+    <FieldRow
+      label="新分享默认追更"
+      tip="隔一段时间重新列一遍分享：分享者补了新集就补上 STRM，删了的文件隔一轮确认后删掉本地。每个分享可以在列表里单独改。剧集分享建议开，电影一般不用。"
+    >
+      <HSelect v-model="form.follow_hours" :options="FOLLOW_OPTIONS" class="follow" aria-label="新分享默认追更" />
+    </FieldRow>
+
     <FieldRow label="最小体积" tip="比这小的视频不生成 STRM，挡掉样片和广告。0 = 不限。">
       <div class="inline">
         <HNumberInput v-model="form.min_size_mb" :min="0" :max="102400" class="num" />
@@ -120,6 +140,9 @@ async function save() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.follow {
+  width: 160px;
 }
 .num {
   width: 140px;

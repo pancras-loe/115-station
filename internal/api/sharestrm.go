@@ -59,6 +59,24 @@ type shareStrmCfg struct {
 	SkipOwned bool `json:"skip_owned"`
 	// Assets 字幕 / NFO / 标准命名图片从分享下载到本地（Emby 要在 STRM 旁边找它们）
 	Assets bool `json:"assets"`
+	// FollowHours 新添加的分享默认隔几小时追更一次，0 = 不追更（每个分享可以单独改）
+	FollowHours int `json:"follow_hours"`
+}
+
+// shareFollowMin 追更最短间隔：每轮要把整个分享列一遍
+const shareFollowMin = 6
+
+// normFollowHours 0 = 不追更；其余至少 6 小时、最多 30 天
+func normFollowHours(h int) int {
+	switch {
+	case h <= 0:
+		return 0
+	case h < shareFollowMin:
+		return shareFollowMin
+	case h > 720:
+		return 720
+	}
+	return h
 }
 
 const (
@@ -96,6 +114,7 @@ func (c shareStrmCfg) normalized() shareStrmCfg {
 	if c.MinSizeMB < 0 {
 		c.MinSizeMB = 0
 	}
+	c.FollowHours = normFollowHours(c.FollowHours)
 	return c
 }
 

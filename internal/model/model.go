@@ -328,8 +328,18 @@ type ShareSource struct {
 	Files      int        `json:"files"`  // 本地写着的 STRM 数
 	Assets     int        `json:"assets"` // 下载到本地的附属文件数
 	Source     string     `json:"source" gorm:"size:32"` // 从哪添加的：web / 机器人
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	// FollowHours 追更：隔几小时重新列一次分享，补新增的、收掉分享里没了的。0 = 不追更（只在点「立即检查」时检查）
+	FollowHours int        `json:"follow_hours"`
+	NextCheck   *time.Time `json:"next_check" gorm:"index"`
+	Paused      bool       `json:"paused"`
+	// FailStreak 连续几次网络 / 风控出错（按它退避）；GoneStreak 连续几次查到分享已失效（满 3 次才认定、通知一次）
+	FailStreak int  `json:"fail_streak"`
+	GoneStreak int  `json:"gone_streak"`
+	Notified   bool `json:"-"` // 这次失效 / 提取码错误已经通知过
+	// Ignored 待清理里点了「先留着」：失效了也不再列进待清理
+	Ignored   bool      `json:"ignored"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ShareFile 分享里本站写过 STRM（或下载过附属文件）的一个文件
@@ -342,8 +352,12 @@ type ShareFile struct {
 	Name      string `json:"name" gorm:"size:500"`
 	SharePath string `json:"share_path" gorm:"size:1000"` // 分享内路径（含文件名）
 	// RelPath 本地文件相对分享 STRM 根的路径（视频是 .strm）
-	RelPath   string    `json:"rel_path" gorm:"size:1000;index"`
-	Kind      string    `json:"kind" gorm:"size:10"` // video / asset
+	RelPath string `json:"rel_path" gorm:"size:1000;index"`
+	Kind    string `json:"kind" gorm:"size:10"` // video / asset
+	// GoneAt 某一轮完整检查里分享中已经没有这个文件：再一轮（隔 30 分钟以上）还没有才删本地（SHARE-STRM-PLAN.md §7.2）
+	GoneAt *time.Time `json:"gone_at"`
+	// Blocked 用户在 Emby 里删了它：行留着，之后的检查不再生成回来
+	Blocked   bool      `json:"blocked"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

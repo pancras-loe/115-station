@@ -13,7 +13,18 @@ export interface ShareStrmConfig {
   min_size_mb: number
   skip_owned: boolean
   assets: boolean
+  /** 新添加的分享默认隔几小时追更，0 = 不追更 */
+  follow_hours: number
 }
+
+/** 追更间隔的选项（后端最短 6 小时） */
+export const FOLLOW_OPTIONS = [
+  { label: '不追更', value: 0 },
+  { label: '每 6 小时', value: 6 },
+  { label: '每 12 小时', value: 12 },
+  { label: '每天', value: 24 },
+  { label: '每 3 天', value: 72 },
+]
 
 export interface ShareStrmConfigResp {
   config: ShareStrmConfig
@@ -46,7 +57,19 @@ export interface ShareSource {
   created_at: string
   /** 有排着 / 正在跑的生成任务 */
   busy: boolean
+  /** 追更间隔（小时），0 = 不追更 */
+  follow_hours: number
+  next_check: string | null
+  paused: boolean
+  fail_streak: number
+  /** 连续几次查到分享失效；满 3 次认定失效，进待清理 */
+  gone_streak: number
+  /** 待清理里点了「先留着」 */
+  ignored: boolean
 }
+
+/** 连续几次查到失效才认定（后端 shareGoneStreakMax） */
+export const GONE_CONFIRM = 3
 
 export interface ShareFile {
   id: number
@@ -57,6 +80,10 @@ export interface ShareFile {
   share_path: string
   rel_path: string
   kind: 'video' | 'asset'
+  /** 分享里已经没了，等下一轮确认再删 */
+  gone_at: string | null
+  /** 在 Emby 里删过，不再生成 */
+  blocked: boolean
 }
 
 export const config = () => http.get<ShareStrmConfigResp>('/sharestrm/config')
@@ -69,4 +96,6 @@ export const add = (url: string, code = '') =>
 export const check = (id: number) => http.post<{ message: string; job_id: number }>(`/sharestrm/sources/${id}/check`)
 export const setReceiveCode = (id: number, receive_code: string) =>
   http.put<{ message: string }>(`/sharestrm/sources/${id}`, { receive_code })
+export const update = (id: number, body: { follow_hours?: number; paused?: boolean; ignored?: boolean }) =>
+  http.put<{ message: string }>(`/sharestrm/sources/${id}`, body)
 export const remove = (id: number) => http.del<{ message: string }>(`/sharestrm/sources/${id}`)

@@ -8,6 +8,8 @@ import StatusStrip, { type StripItem } from '@/components/ui/StatusStrip.vue'
 import PluginLogPanel from '@/components/plugins/PluginLogPanel.vue'
 import SourcesTab from './sharestrm/SourcesTab.vue'
 import SettingsTab from './sharestrm/SettingsTab.vue'
+import CleanupTab from './sharestrm/CleanupTab.vue'
+import { cleanupList } from './sharestrm/cleanup'
 import { shareStrmApi } from '@/api'
 import type { ShareSource } from '@/api/sharestrm'
 import { useShareStrm } from '@/composables/shareStrm'
@@ -48,8 +50,10 @@ onMounted(() => {
 })
 onUnmounted(off)
 
+const cleanupCount = computed(() => cleanupList(list.value).length)
 const tabs = computed(() => [
   { value: 'sources', label: '分享', count: list.value.length },
+  { value: 'cleanup', label: '待清理', count: cleanupCount.value, countTone: 'danger' as const },
   { value: 'settings', label: '设置' },
   { value: 'log', label: '日志' },
 ])
@@ -71,8 +75,9 @@ const strip = computed<StripItem[]>(() => {
     {
       key: 'shares',
       title: '分享',
-      tone: bad ? 'warn' : list.value.length ? 'ok' : 'off',
+      tone: cleanupCount.value ? 'danger' : bad ? 'warn' : list.value.length ? 'ok' : 'off',
       text: list.value.length ? `${list.value.length} 个，正常 ${ok}${bad ? `，有问题 ${bad}` : ''}` : '还没有',
+      action: cleanupCount.value ? `${cleanupCount.value} 个待清理` : undefined,
     },
     { key: 'strm', title: 'STRM', tone: strm ? 'ok' : 'off', text: `${strm} 个`, tip: d ? `本地目录：${d.root_abs}` : undefined },
     { key: 'last', title: '最近检查', tone: last ? 'ok' : 'off', text: last ? relTime(last) : '没有' },
@@ -81,6 +86,7 @@ const strip = computed<StripItem[]>(() => {
 
 function onStrip(key: string) {
   if (key === 'switch') tab.value = 'settings'
+  if (key === 'shares') tab.value = 'cleanup'
 }
 </script>
 
@@ -98,6 +104,7 @@ function onStrip(key: string) {
     <HTabs v-model="tab" :items="tabs" variant="secondary" />
 
     <SourcesTab v-if="tab === 'sources'" :list="list" :loading="loading" @changed="load" @settings="tab = 'settings'" />
+    <CleanupTab v-else-if="tab === 'cleanup'" :list="list" @changed="load" />
     <SettingsTab v-else-if="tab === 'settings'" :sources="list.length" @saved="ss.reload()" @go-strm="router.push({ name: 'sync' })" />
     <section v-else class="card card--default log-card">
       <PluginLogPanel plugin-key="sharestrm" />

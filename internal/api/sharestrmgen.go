@@ -142,7 +142,9 @@ type shareStrmResult struct {
 	Moved     int           `json:"moved"`     // 分享者改了名、挪到新位置的
 	Assets    int           `json:"assets"`    // 下载的附属文件
 	AssetSkip int           `json:"asset_skip"`
-	Missing   int           `json:"missing"` // 以前写过、这次分享里没有的（阶段 1 只报数，不删）
+	Missing   int           `json:"missing"` // 分享里没了、等下一轮确认的
+	Deleted   int           `json:"deleted"` // 连续两轮都没有，本地删掉的
+	Blocked   int           `json:"blocked"` // 在 Emby 里删过、不再生成的
 	Skipped   sharePlanSkip `json:"skipped"`
 	Errors    []string      `json:"errors,omitempty"`
 }
@@ -168,7 +170,13 @@ func (r *shareStrmResult) summary() string {
 		parts = append(parts, fmt.Sprintf("太小跳过 %d", r.Skipped.Small))
 	}
 	if r.Missing > 0 {
-		parts = append(parts, fmt.Sprintf("分享里已没有 %d（本地暂留）", r.Missing))
+		parts = append(parts, fmt.Sprintf("分享里已没有 %d（下次检查还没有才删）", r.Missing))
+	}
+	if r.Deleted > 0 {
+		parts = append(parts, fmt.Sprintf("分享里没了、删掉本地 %d", r.Deleted))
+	}
+	if r.Blocked > 0 {
+		parts = append(parts, fmt.Sprintf("在 Emby 里删过的 %d 不再生成", r.Blocked))
 	}
 	if n := len(r.Errors); n > 0 {
 		parts = append(parts, fmt.Sprintf("出错 %d", n))
@@ -194,6 +202,8 @@ type shareStrmRun struct {
 	stop     func() bool
 	set      func(phase string, done, total int, label string)
 	now      func() time.Time
+	// auto 定时追更排的（不是用户点的）：有新写的 STRM 推一条通知
+	auto bool
 }
 
 func (r *shareStrmRun) abs(rel string) string { return filepath.Join(r.root, filepath.FromSlash(rel)) }
@@ -224,6 +234,11 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 	for _, f := range existing {
 		byFid[f.FileID] = f
 	}
+	// 分享里还在的（不管这次建不建）：被过滤掉的（太小、库里已有）不算「分享里没了」
+	listed := map[string]bool{}
+	for _, e := range entries {
+		listed[e.ID] = true
+	}
 	seen := map[string]bool{}
 	var written, removed []string
 	canceled := false
@@ -236,6 +251,11 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 		seen[p.Entry.ID] = true
 		r.set("写 STRM", i, len(plans), p.Entry.Name)
 		old, had := byFid[p.Entry.ID]
+		if had && old.Blocked {
+			// 用户在 Emby 里删过它：不再生成回来
+			res.Blocked++
+			continue
+		}
 		if had && old.RelPath != "" && old.RelPath != p.Rel {
 			// 分享者改了名 / 挪了目录：旧位置是本站写的，挪过去
 			if rm := r.removeLocal(old.RelPath); rm != "" {
@@ -279,14 +299,34 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 			}
 		}
 		e := p.Entry
+		// gone_at 用 map 写：Assign 一个结构体时零值字段不更新，又出现的文件清不掉消失标记
 		r.db.Where(model.ShareFile{SourceID: src.ID, FileID: e.ID}).
-			Assign(model.ShareFile{Sha1: strings.ToUpper(e.Sha1), Size: e.Size, Name: e.Name, SharePath: e.path(), RelPath: p.Rel, Kind: p.Kind}).
+			Assign(map[string]any{"sha1": strings.ToUpper(e.Sha1), "size": e.Size, "name": e.Name,
+				"share_path": e.path(), "rel_path": p.Rel, "kind": p.Kind, "gone_at": nil}).
 			FirstOrCreate(&model.ShareFile{})
 	}
+	// 分享里没了的：这一轮列全了（列不全在上面就报错返回了）才算数，
+	// 头一次只记下时间，隔 shareGoneConfirm 以上再一轮还没有才删本地（SHARE-STRM-PLAN.md §7.2）
 	if !canceled {
+		now := r.now()
 		for _, f := range existing {
-			if !seen[f.FileID] {
+			if listed[f.FileID] {
+				continue
+			}
+			switch {
+			case f.Blocked:
+				r.db.Delete(&model.ShareFile{}, f.ID) // 分享里也没了，屏蔽不用再记
+			case f.GoneAt == nil:
+				r.db.Model(&model.ShareFile{}).Where("id = ?", f.ID).Update("gone_at", &now)
 				res.Missing++
+			case now.Sub(*f.GoneAt) < shareGoneConfirm:
+				res.Missing++
+			default:
+				if rm := r.removeLocal(f.RelPath); rm != "" && f.Kind == "video" {
+					removed = append(removed, rm)
+				}
+				r.db.Delete(&model.ShareFile{}, f.ID)
+				res.Deleted++
 			}
 		}
 	}
@@ -298,8 +338,15 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 		notifyEmbyDeleted(removed...)
 	}
 	r.finishSource(res.Title)
+	if r.auto && res.Written > 0 {
+		NotifyMessage(kindTask, "📺 分享 STRM：「"+res.Title+"」有更新",
+			fmt.Sprintf("追更新写了 %d 个 STRM。%s", res.Written, res.summary()))
+	}
 	return res, canceled, nil
 }
+
+// shareGoneConfirm 分享里没了的文件要隔多久再确认一次才删：连点两次「立即检查」不该把文件删掉
+const shareGoneConfirm = 30 * time.Minute
 
 // fetchAsset 下载一个附属文件。本地已有同样大小的不再下；返回 true = 这次下了
 func (r *shareStrmRun) fetchAsset(p shareFilePlan) (bool, error) {
@@ -355,23 +402,123 @@ func pruneShareDirs(root, dir string) {
 
 func (r *shareStrmRun) markSource(state, msg, shareState string) {
 	now := r.now()
-	upd := map[string]any{"state": state, "last_error": truncateStr(msg, 480), "last_check": &now}
+	st := shareAfterRun(*r.src, state, now)
+	upd := map[string]any{"state": state, "last_error": truncateStr(msg, 480), "last_check": &now,
+		"fail_streak": st.FailStreak, "gone_streak": st.GoneStreak, "next_check": st.NextCheck, "notified": st.Notified}
 	if shareState != "" {
 		upd["share_state"] = shareState
 	}
 	r.db.Model(&model.ShareSource{}).Where("id = ?", r.src.ID).Updates(upd)
-	plogShareStrm.Printf("✗ %s（%s）：%s", firstNonEmpty(r.src.Title, r.src.ShareCode), r.src.ShareCode, msg)
+	name := firstNonEmpty(r.src.Title, r.src.ShareCode)
+	plogShareStrm.Printf("✗ %s（%s）：%s", name, r.src.ShareCode, msg)
+	switch st.Notify {
+	case shareStateGone:
+		NotifyMessage(kindTask, "⚠️ 分享 STRM：「"+name+"」分享已失效",
+			fmt.Sprintf("连续 %d 次检查都是「%s」，本地 %d 个 STRM 已经播不了。到「分享 STRM → 待清理」删掉，或者先留着。", st.GoneStreak, msg, r.src.Files))
+	case shareStateBadCode:
+		NotifyMessage(kindTask, "⚠️ 分享 STRM：「"+name+"」提取码不对", "分享者可能换了提取码，到「分享 STRM」页改提取码后会重新检查。")
+	}
 }
 
 func (r *shareStrmRun) finishSource(title string) {
 	var videos, assets int64
-	r.db.Model(&model.ShareFile{}).Where("source_id = ? AND kind = ?", r.src.ID, "video").Count(&videos)
+	r.db.Model(&model.ShareFile{}).Where("source_id = ? AND kind = ? AND blocked = ?", r.src.ID, "video", false).Count(&videos)
 	r.db.Model(&model.ShareFile{}).Where("source_id = ? AND kind = ?", r.src.ID, "asset").Count(&assets)
 	now := r.now()
+	st := shareAfterRun(*r.src, shareStateOK, now)
 	r.db.Model(&model.ShareSource{}).Where("id = ?", r.src.ID).Updates(map[string]any{
 		"title": truncateStr(title, 480), "state": shareStateOK, "share_state": "1", "last_error": "",
-		"last_check": &now, "files": int(videos), "assets": int(assets)})
+		"last_check": &now, "files": int(videos), "assets": int(assets),
+		"fail_streak": 0, "gone_streak": 0, "notified": false, "ignored": false, "next_check": st.NextCheck})
 }
+
+// ---- 追更与失效的状态机（纯函数）----
+
+const (
+	// shareGoneStreakMax 连续几次查到分享失效才认定：115 偶尔对正常分享也回怪状态
+	shareGoneStreakMax = 3
+	// shareRetryMax 出错退避的上限
+	shareRetryMax = 72 * time.Hour
+)
+
+type shareRunState struct {
+	FailStreak int
+	GoneStreak int
+	NextCheck  *time.Time
+	Notified   bool
+	Notify     string // 这一轮要推的通知：gone / badcode，空 = 不推
+}
+
+// shareAfterRun 一轮跑完（或出错）之后：连续次数、下一次什么时候查、要不要通知。
+//   - 正常：清零，开了追更就隔 FollowHours 再查；
+//   - 分享失效：连续计数，满 3 次认定、通知一次、不再自动查（等用户在待清理里处理）；不满 3 次隔「追更间隔，没开就 24 小时」再确认；
+//   - 提取码错：通知一次、不再自动查（要用户改提取码）；
+//   - 别的错（网络、风控）：退避 间隔 × 2^次数，封顶 72 小时，没开追更的不自动重试
+func shareAfterRun(src model.ShareSource, outcome string, now time.Time) shareRunState {
+	base := time.Duration(src.FollowHours) * time.Hour
+	at := func(d time.Duration) *time.Time {
+		t := now.Add(d)
+		return &t
+	}
+	st := shareRunState{}
+	switch outcome {
+	case shareStateOK:
+		if base > 0 && !src.Paused {
+			st.NextCheck = at(base)
+		}
+	case shareStateGone:
+		st.GoneStreak = src.GoneStreak + 1
+		st.Notified = src.Notified
+		if st.GoneStreak >= shareGoneStreakMax {
+			if !src.Notified {
+				st.Notify, st.Notified = shareStateGone, true
+			}
+			return st // 不再自动查
+		}
+		if !src.Paused {
+			st.NextCheck = at(max(base, 24*time.Hour))
+		}
+	case shareStateBadCode:
+		st.Notified = true
+		if !src.Notified {
+			st.Notify = shareStateBadCode
+		}
+	default:
+		st.FailStreak = src.FailStreak + 1
+		st.GoneStreak = src.GoneStreak
+		if base > 0 && !src.Paused {
+			d := base
+			for i := 1; i < st.FailStreak && d < shareRetryMax; i++ {
+				d *= 2
+			}
+			st.NextCheck = at(min(d, shareRetryMax))
+		}
+	}
+	return st
+}
+
+// shareStrmTick 调度器每分钟：开着总开关时把到期的分享排进队列（一轮最多 shareTickMax 个，后台优先级）
+func (h *Handler) shareStrmTick(now time.Time) {
+	if h.DB == nil || !loadShareStrmCfg().Enabled {
+		return
+	}
+	var due []model.ShareSource
+	h.DB.Where("next_check IS NOT NULL AND next_check <= ? AND paused = ?", now, false).
+		Order("next_check ASC").Limit(shareTickMax).Find(&due)
+	for _, s := range due {
+		if shareSourceBusy(h.DB, s.ID) {
+			continue
+		}
+		// 先把下一次往后挪：任务失败到不了 markSource（比如 Cookie 没了）时，不会每分钟排一次
+		later := now.Add(time.Hour)
+		h.DB.Model(&model.ShareSource{}).Where("id = ?", s.ID).Update("next_check", &later)
+		if _, err := enqueueShareStrmAs(h.DB, s, "cron", jobPriorityBackground); err != nil {
+			plogShareStrm.Printf("✗ 追更排队失败 %s：%v", s.ShareCode, err)
+		}
+	}
+}
+
+const shareTickMax = 20
 
 // shareStateOfErrRaw 失效时 115 给的 share_state 原值（记下来给界面看）
 func shareStateOfErrRaw(err error) string {
@@ -467,6 +614,7 @@ func execShareStrmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 		stop: xferLane.stopRequested,
 		set:  func(ph string, d, t int, l string) { xferLane.set(ph, d, t, l) },
 		now:  time.Now,
+		auto: job.Source == "cron",
 	}
 	if !cfg.SkipOwned {
 		r.owned = nil
@@ -481,6 +629,8 @@ func execShareStrmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	h.DB.Model(&model.TaskJob{}).Where("id = ?", job.ID).Update("title", truncateStr("分享 STRM："+res.Title, 250))
 	out := jobOutcome{Message: msg, Result: res, Canceled: canceled}
 	out.Partial = !canceled && len(res.Errors) > 0
+	// 定时追更多半什么都没变：跑完删行，不刷满任务历史（同定时整理的空转）
+	out.Idle = r.auto && !canceled && res.Written+res.Moved+res.Deleted+res.Assets+len(res.Errors) == 0
 	return out, nil
 }
 
@@ -536,10 +686,14 @@ func shareSourceBusy(db *gorm.DB, id uint) bool {
 
 func shareJobKey(id uint) string { return fmt.Sprintf("sharestrm:%d", id) }
 
-// enqueueShareStrm 排一次生成 / 立即检查
+// enqueueShareStrm 排一次生成 / 立即检查（手动优先级）
 func enqueueShareStrm(db *gorm.DB, src model.ShareSource, label string) (model.TaskJob, error) {
+	return enqueueShareStrmAs(db, src, label, jobPriorityManual)
+}
+
+func enqueueShareStrmAs(db *gorm.DB, src model.ShareSource, label string, prio int) (model.TaskJob, error) {
 	return enqueueJob(db, jobSpec{Kind: jobKindShareStrm, Title: "分享 STRM：" + firstNonEmpty(src.Title, src.ShareCode),
-		DedupeKey: shareJobKey(src.ID), Source: firstNonEmpty(label, "web"), Priority: jobPriorityManual,
+		DedupeKey: shareJobKey(src.ID), Source: firstNonEmpty(label, "web"), Priority: prio,
 		Params: jobParams{ShareStrm: &shareStrmJobParams{SourceID: src.ID}}})
 }
 

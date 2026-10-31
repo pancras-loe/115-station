@@ -74,7 +74,7 @@ func (h *Handler) addShareStrm(text, code, label string) (model.ShareSource, mod
 	}
 	src = model.ShareSource{ShareCode: shareCode, ReceiveCode: code, Title: truncateStr(title, 480),
 		LocalDir: h.uniqueShareDir(cfg, shareLocalDirName(title, shareCode), shareCode),
-		Layout:   "keep", State: shareStatePending, Source: firstNonEmpty(label, "web")}
+		Layout:   "keep", State: shareStatePending, Source: firstNonEmpty(label, "web"), FollowHours: cfg.FollowHours}
 	if err := h.DB.Create(&src).Error; err != nil {
 		return model.ShareSource{}, model.TaskJob{}, err
 	}
@@ -156,8 +156,8 @@ func (h *Handler) ShareStrmSaveConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败: " + err.Error()})
 		return
 	}
-	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v",
-		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets)
+	plogShareStrm.Printf("保存配置：开关=%v 默认处理=%s 目录=%s 最小体积=%dMB 跳过库里已有=%v 附属文件=%v 默认追更=%d小时",
+		req.Enabled, req.DefaultAction, req.Root, req.MinSizeMB, req.SkipOwned, req.Assets, req.FollowHours)
 	c.JSON(http.StatusOK, gin.H{"message": "已保存", "config": req})
 }
 
@@ -228,21 +228,59 @@ func (h *Handler) ShareStrmUpdate(c *gin.Context) {
 	}
 	var req struct {
 		ReceiveCode *string `json:"receive_code"`
+		FollowHours *int    `json:"follow_hours"`
+		Paused      *bool   `json:"paused"`
+		// Ignored 待清理里「先留着」：失效了也不再列进待清理
+		Ignored *bool `json:"ignored"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.ReceiveCode == nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 		return
 	}
-	code := strings.TrimSpace(*req.ReceiveCode)
-	h.DB.Model(&model.ShareSource{}).Where("id = ?", src.ID).Updates(map[string]any{"receive_code": code, "state": shareStatePending, "last_error": ""})
-	src.ReceiveCode = code
-	plogShareStrm.Printf("改提取码：%s（%s）", firstNonEmpty(src.Title, src.ShareCode), src.ShareCode)
-	job, err := enqueueShareStrm(h.DB, src, "web")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	name := firstNonEmpty(src.Title, src.ShareCode)
+	if req.ReceiveCode != nil {
+		// 改提取码：清掉失效 / 出错的计数，马上重新检查
+		code := strings.TrimSpace(*req.ReceiveCode)
+		h.DB.Model(&model.ShareSource{}).Where("id = ?", src.ID).Updates(map[string]any{"receive_code": code,
+			"state": shareStatePending, "last_error": "", "gone_streak": 0, "fail_streak": 0, "notified": false})
+		src.ReceiveCode = code
+		plogShareStrm.Printf("改提取码：%s（%s）", name, src.ShareCode)
+		job, err := enqueueShareStrm(h.DB, src, "web")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已保存，正在重新检查（任务 #%d）", job.ID)})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("已保存，正在重新检查（任务 #%d）", job.ID)})
+	upd := map[string]any{}
+	if req.FollowHours != nil {
+		src.FollowHours = normFollowHours(*req.FollowHours)
+		upd["follow_hours"] = src.FollowHours
+	}
+	if req.Paused != nil {
+		src.Paused = *req.Paused
+		upd["paused"] = src.Paused
+	}
+	if req.Ignored != nil {
+		upd["ignored"] = *req.Ignored
+	}
+	if len(upd) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "没有要改的"})
+		return
+	}
+	if req.FollowHours != nil || req.Paused != nil {
+		// 下一次检查从现在算：暂停、关掉追更就不排；已经认定失效的等用户处理，不再自动查
+		var next *time.Time
+		if !src.Paused && src.FollowHours > 0 && src.GoneStreak < shareGoneStreakMax && src.State != shareStateBadCode {
+			t := time.Now().Add(time.Duration(src.FollowHours) * time.Hour)
+			next = &t
+		}
+		upd["next_check"] = next
+	}
+	h.DB.Model(&model.ShareSource{}).Where("id = ?", src.ID).Updates(upd)
+	plogShareStrm.Printf("改设置：%s（%s）%v", name, src.ShareCode, upd)
+	c.JSON(http.StatusOK, gin.H{"message": "已保存"})
 }
 
 // ShareStrmDelete DELETE /sharestrm/sources/:id —— 删本地 STRM 与记录，不碰 115
@@ -386,3 +424,36 @@ func (h *Handler) botShareStrm(link string, reply func(lines ...string)) {
 	})
 }
 
+
+// ---- Emby 里删了分享 STRM ----
+
+// shareStrmOnEmbyDelete 用户在 Emby 里删了分享 STRM（或它所在的季 / 剧）：记屏蔽，之后的检查不再生成回来。
+// 只认本地确实已经没了的文件（Emby 删条目会连 STRM 一起删）；扫库清掉的旧条目如果本地文件还在，不算。
+// 只动本地记账，任何情况下不对 115 发请求（分享不是自己的，SHARE-STRM-PLAN.md §7.3）
+func (h *Handler) shareStrmOnEmbyDelete(localPath string) {
+	if localPath == "" || h.DB == nil {
+		return
+	}
+	root := shareRootAbs(loadShareStrmCfg())
+	rel, err := filepath.Rel(root, localPath)
+	if err != nil {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return
+	}
+	var files []model.ShareFile
+	h.DB.Where(`blocked = ? AND (rel_path = ? OR rel_path LIKE ? ESCAPE '\')`, false, rel, likeEscape(rel)+"/%").Find(&files)
+	n := 0
+	for _, f := range files {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f.RelPath))); !os.IsNotExist(err) {
+			continue
+		}
+		h.DB.Model(&model.ShareFile{}).Where("id = ?", f.ID).Update("blocked", true)
+		n++
+	}
+	if n > 0 {
+		plogShareStrm.Printf("○ Emby 里删了 %s：%d 个文件以后不再生成", rel, n)
+	}
+}

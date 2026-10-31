@@ -280,3 +280,178 @@ func TestShareStrmCfgAction(t *testing.T) {
 		t.Fatal("认不出的处理方式退回每次问")
 	}
 }
+
+func TestShareAfterRun(t *testing.T) {
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	h := func(p *time.Time) string {
+		if p == nil {
+			return "不查"
+		}
+		return p.Sub(now).String()
+	}
+	follow := model.ShareSource{FollowHours: 12}
+	// 正常：开了追更隔 12 小时，没开不排
+	if got := h(shareAfterRun(follow, shareStateOK, now).NextCheck); got != "12h0m0s" {
+		t.Errorf("正常 + 追更：%s", got)
+	}
+	if got := h(shareAfterRun(model.ShareSource{}, shareStateOK, now).NextCheck); got != "不查" {
+		t.Errorf("正常 + 不追更：%s", got)
+	}
+	// 失效：前两次隔 max(间隔, 24h) 再确认，第 3 次认定、只通知一次、不再自动查
+	st := shareAfterRun(follow, shareStateGone, now)
+	if st.GoneStreak != 1 || h(st.NextCheck) != "24h0m0s" || st.Notify != "" {
+		t.Errorf("第 1 次失效：%+v %s", st, h(st.NextCheck))
+	}
+	st = shareAfterRun(model.ShareSource{GoneStreak: 2}, shareStateGone, now)
+	if st.GoneStreak != 3 || st.NextCheck != nil || st.Notify != shareStateGone || !st.Notified {
+		t.Errorf("第 3 次失效：%+v", st)
+	}
+	st = shareAfterRun(model.ShareSource{GoneStreak: 3, Notified: true}, shareStateGone, now)
+	if st.Notify != "" {
+		t.Errorf("通知过了不再推：%+v", st)
+	}
+	// 提取码错：通知一次、不自动查
+	st = shareAfterRun(follow, shareStateBadCode, now)
+	if st.Notify != shareStateBadCode || st.NextCheck != nil {
+		t.Errorf("提取码错：%+v", st)
+	}
+	// 网络错：退避 12h → 24h → 48h → 封顶 72h；不追更的不自动重试
+	for i, want := range []string{"12h0m0s", "24h0m0s", "48h0m0s", "72h0m0s", "72h0m0s"} {
+		st = shareAfterRun(model.ShareSource{FollowHours: 12, FailStreak: i}, shareStateError, now)
+		if got := h(st.NextCheck); got != want {
+			t.Errorf("第 %d 次出错：%s，应为 %s", i+1, got, want)
+		}
+	}
+	if st := shareAfterRun(model.ShareSource{}, shareStateError, now); st.NextCheck != nil {
+		t.Error("不追更的出错不自动重试")
+	}
+	// 暂停：都不排
+	if st := shareAfterRun(model.ShareSource{FollowHours: 12, Paused: true}, shareStateOK, now); st.NextCheck != nil {
+		t.Error("暂停了还排")
+	}
+}
+
+// 分享里没了的文件：头一轮只记时间，30 分钟内再查不删，过了再查还没有才删；Emby 里删过的不再生成
+func TestShareStrmGoneAndBlocked(t *testing.T) {
+	newTestDB(t, "sharestrm_gone.db")
+	db := model.DB
+	root := t.TempDir()
+	src := model.ShareSource{ShareCode: "swsgone1", LocalDir: "剧", FollowHours: 12}
+	db.Create(&src)
+	mb := int64(1 << 20)
+	entries := []shareEntry{
+		{ID: "1", Name: "E01.mkv", Size: 900 * mb},
+		{ID: "2", Name: "E02.mkv", Size: 900 * mb},
+	}
+	clock := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	r := &shareStrmRun{
+		db: db, src: &src, cfg: shareStrmCfg{}, root: root, domain: "http://nas", cookie: "ck",
+		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) { return entries, "剧", false, nil },
+		stop: func() bool { return false }, set: func(string, int, int, string) {},
+		now: func() time.Time { return clock },
+	}
+	if _, _, err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	var got model.ShareSource
+	db.First(&got, src.ID)
+	if got.NextCheck == nil || !got.NextCheck.Equal(clock.Add(12*time.Hour)) {
+		t.Fatalf("开了追更要排下一次：%v", got.NextCheck)
+	}
+	e02 := filepath.Join(root, "剧", "E02.strm")
+
+	entries = entries[:1] // E02 从分享里没了
+	res, _, _ := r.run()
+	if res.Missing != 1 || res.Deleted != 0 {
+		t.Fatalf("头一轮只记：%+v", res)
+	}
+	clock = clock.Add(10 * time.Minute)
+	res, _, _ = r.run()
+	if res.Deleted != 0 {
+		t.Fatalf("30 分钟内再查不删：%+v", res)
+	}
+	if _, err := os.Stat(e02); err != nil {
+		t.Fatal("还没确认就删了")
+	}
+	clock = clock.Add(30 * time.Minute)
+	res, _, _ = r.run()
+	if res.Deleted != 1 {
+		t.Fatalf("过了确认时间还没有就删：%+v", res)
+	}
+	if _, err := os.Stat(e02); !os.IsNotExist(err) {
+		t.Fatal("E02 应删掉")
+	}
+
+	// 又出现了的文件：清掉消失标记
+	entries = append(entries, shareEntry{ID: "3", Name: "E03.mkv", Size: 900 * mb})
+	r.run()
+	entries = entries[:1]
+	r.run() // E03 消失，记时间
+	entries = append(entries, shareEntry{ID: "3", Name: "E03.mkv", Size: 900 * mb})
+	r.run()
+	var f3 model.ShareFile
+	db.Where("file_id = ?", "3").First(&f3)
+	if f3.GoneAt != nil {
+		t.Fatal("又出现了要清掉消失标记")
+	}
+
+	// Emby 里删了 E01：本地已经没了 → 屏蔽；本地还在的不屏蔽
+	h := &Handler{DB: db}
+	os.Remove(filepath.Join(root, "剧", "E01.strm"))
+	// shareStrmOnEmbyDelete 按配置算分享根：指到这次的测试目录
+	withShareRoot(t, r.root)
+	h.shareStrmOnEmbyDelete(filepath.Join(root, "剧"))
+	var f1 model.ShareFile
+	db.Where("file_id = ?", "1").First(&f1)
+	db.Where("file_id = ?", "3").First(&f3)
+	if !f1.Blocked || f3.Blocked {
+		t.Fatalf("屏蔽：E01=%v（应 true）E03=%v（应 false）", f1.Blocked, f3.Blocked)
+	}
+	res, _, _ = r.run()
+	if res.Blocked != 1 {
+		t.Fatalf("屏蔽的不再生成：%+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(root, "剧", "E01.strm")); !os.IsNotExist(err) {
+		t.Fatal("屏蔽的被生成回来了")
+	}
+}
+
+// withShareRoot 让 shareRootAbs 指到测试目录：媒体根设成它的上级、root 设成它的名字
+func withShareRoot(t *testing.T, abs string) {
+	t.Helper()
+	t.Setenv("MEDIA_ROOT", filepath.Dir(abs))
+	b := fmt.Sprintf(`{"root":%q}`, filepath.Base(abs))
+	model.DB.Where("`key` = ?", "sharestrm").Delete(&model.Setting{})
+	model.DB.Create(&model.Setting{Key: "sharestrm", Value: b})
+}
+
+func TestShareStrmTick(t *testing.T) {
+	newTestDB(t, "sharestrm_tick.db")
+	db := model.DB
+	h := &Handler{DB: db}
+	past := time.Now().Add(-time.Minute)
+	future := time.Now().Add(time.Hour)
+	db.Create(&model.ShareSource{ShareCode: "swsdue1", LocalDir: "a", NextCheck: &past})
+	db.Create(&model.ShareSource{ShareCode: "swsdue2", LocalDir: "b", NextCheck: &future})
+	db.Create(&model.ShareSource{ShareCode: "swsdue3", LocalDir: "c", NextCheck: &past, Paused: true})
+
+	h.shareStrmTick(time.Now()) // 总开关关着：不排
+	var n int64
+	db.Model(&model.TaskJob{}).Where("kind = ?", jobKindShareStrm).Count(&n)
+	if n != 0 {
+		t.Fatalf("开关关着排了 %d 个", n)
+	}
+	db.Create(&model.Setting{Key: "sharestrm", Value: `{"enabled":true}`})
+	h.shareStrmTick(time.Now())
+	var jobs []model.TaskJob
+	db.Where("kind = ?", jobKindShareStrm).Find(&jobs)
+	if len(jobs) != 1 || jobs[0].Source != "cron" || jobs[0].Priority != jobPriorityBackground {
+		t.Fatalf("应只排到期、没暂停的那 1 个（后台优先级）：%+v", jobs)
+	}
+	// 下一次往后挪了：下一分钟不会再排一次
+	h.shareStrmTick(time.Now())
+	db.Model(&model.TaskJob{}).Where("kind = ?", jobKindShareStrm).Count(&n)
+	if n != 1 {
+		t.Fatalf("同一个分享排了 %d 次", n)
+	}
+}

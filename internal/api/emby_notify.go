@@ -157,6 +157,9 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 			return
 		}
 
+		// 分享 STRM：用户在 Emby 里删的，记屏蔽、之后不再生成回来（只动本地记账，sharestrmapi.go）
+		h.shareStrmOnEmbyDelete(h.mapFromEmbyPath(itemPath))
+
 		// 通知与深删结果合成一条（embydelnotify.go）：
 		//   - 目录条目（Folder）是 Emby 在收拾空目录，不推；
 		//   - 本站自己删的（洗版让位、增量同步清 strm、深度删除）是我们动作的回声，不推；
