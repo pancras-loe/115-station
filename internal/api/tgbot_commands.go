@@ -30,7 +30,7 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/gy 片名：只搜观影\n/wp 片名：只搜网盘\n" +
 	"/sub 片名：订阅，定时找缺的集，转存后自动入库（找资源的结果里也能点「订阅这部」）\n" +
 	"/subs 我的订阅：看进度、立即搜索、暂停、取消\n" +
-	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）\n" +
+	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）；开了「分享 STRM」时 115 分享也能不转存、直接生成 STRM（按设置直接做或先问，回「转存」或 /strm）\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
 	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n" +
@@ -68,6 +68,7 @@ func tgCommand(text string) (string, string) {
 		"/dup": "dup", "/wash": "wash", "/ptsignin": "ptsignin", "pt签到": "ptsignin",
 		"/update": "update", "检查更新": "update", "更新": "update",
 		"/sub": "sub", "/subscribe": "sub", "/subs": "subs", "我的订阅": "subs", "订阅列表": "subs",
+		"/strm": "sharepick", "strm": "sharepick", "生成strm": "sharepick", "转存": "sharepick",
 	}
 	if cmd, ok := aliases[first]; ok {
 		return cmd, args
@@ -203,6 +204,12 @@ func (b *tgConversation) handle(u tgUpdate) {
 			buttons = [][]tgButton{{{Text: "更新到 " + target, Data: "u:a:" + target}}}
 		}
 		b.send(strings.Join(lines, "\n"), buttons)
+	case "sharepick":
+		// 发过 115 分享链接、按「每次问」等着选：转存 / STRM（sharestrmapi.go）
+		lower := strings.ToLower(strings.TrimSpace(m.Text))
+		if !b.h.shareBotPick(fmt.Sprintf("tg:%d:%d", b.chat, b.user), lower, b.replyForCurrentChat()) {
+			b.reply("未识别的指令，发送 /help 查看帮助。")
+		}
 	case "status", "download", "organize", "sync":
 		if cmd == "download" && args == "" {
 			b.reply("请在命令后填写链接。")

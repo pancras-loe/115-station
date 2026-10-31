@@ -24,6 +24,7 @@ export const JOB_KIND: Record<string, string> = {
   metafill: '媒体信息补全',
   subscribe: '订阅检查',
   ali2115: '阿里云盘秒传',
+  sharestrm: '分享 STRM',
   libredo: '重新整理片目',
   libepisode: '指定季集',
   filemove: '移动',
@@ -57,7 +58,7 @@ export function laneText(kind: string) {
   if (kind === 'probe') return '探测队列'
   if (kind === 'person') return '人物队列'
   if (kind === 'subscribe') return '订阅队列'
-  if (kind === 'ali2115') return '秒传队列'
+  if (kind === 'ali2115' || kind === 'sharestrm') return '秒传与分享队列'
   return ''
 }
 

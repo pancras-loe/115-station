@@ -307,6 +307,47 @@ type PanSource struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
+// ShareSource 分享 STRM 的一个 115 分享（2026-10-31，api/sharestrm.go，设计见 docs/115-station-notes/SHARE-STRM-PLAN.md）：
+// 不转存，本地 STRM 直接指向别人的分享，播放时按分享换直链。分享里的文件不是本账号的，
+// 所以不进 SyncedFile（深删、洗版、sha1 去重都按自己网盘的文件设计）
+type ShareSource struct {
+	ID          uint   `json:"id" gorm:"primaryKey"`
+	ShareCode   string `json:"share_code" gorm:"uniqueIndex;size:32;not null"`
+	ReceiveCode string `json:"-" gorm:"size:16"` // 提取码：不写进 STRM，改了只改这一行
+	Title       string `json:"title" gorm:"size:500"`
+	// Account 用哪个 115 账号的 Cookie 取直链（0 = 主号）。直链签给这个账号，播放算在它名下
+	Account uint `json:"account" gorm:"default:0"`
+	// LocalDir 分享根在本地的位置：分享 STRM 根（setting sharestrm.root）下的相对路径
+	LocalDir string `json:"local_dir" gorm:"size:500;not null"`
+	Layout   string `json:"layout" gorm:"size:16"` // keep 原样（阶段 1 只有这一种）
+	// State ok / gone（分享已取消 / 过期）/ badcode（提取码错误）/ error / paused
+	State      string     `json:"state" gorm:"size:16;index"`
+	ShareState string     `json:"share_state" gorm:"size:8"` // 115 snap 的 shareinfo.share_state 原值
+	LastError  string     `json:"last_error" gorm:"size:500"`
+	LastCheck  *time.Time `json:"last_check"`
+	Files      int        `json:"files"`  // 本地写着的 STRM 数
+	Assets     int        `json:"assets"` // 下载到本地的附属文件数
+	Source     string     `json:"source" gorm:"size:32"` // 从哪添加的：web / 机器人
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// ShareFile 分享里本站写过 STRM（或下载过附属文件）的一个文件
+type ShareFile struct {
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	SourceID  uint   `json:"source_id" gorm:"uniqueIndex:idx_share_file;not null"`
+	FileID    string `json:"file_id" gorm:"uniqueIndex:idx_share_file;size:32;not null"` // 分享内的 fid
+	Sha1      string `json:"sha1" gorm:"index;size:40"`
+	Size      int64  `json:"size"`
+	Name      string `json:"name" gorm:"size:500"`
+	SharePath string `json:"share_path" gorm:"size:1000"` // 分享内路径（含文件名）
+	// RelPath 本地文件相对分享 STRM 根的路径（视频是 .strm）
+	RelPath   string    `json:"rel_path" gorm:"size:1000;index"`
+	Kind      string    `json:"kind" gorm:"size:10"` // video / asset
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // PtSite PT 站签到的一个站点（2026-10-26，api/ptsignin.go，设计见 docs/115-station-notes/PT-SIGNIN-PLAN.md）。
 // 和 115 没有关系，不放进 Storage。Cookie / Token 只在这张表里，接口只回有没有、日志里不打印
 type PtSite struct {
@@ -770,6 +811,8 @@ func InitDB(dbPath string) (*gorm.DB, error) {
 		&PanSource{},
 		&PtSite{},
 		&PtSigninLog{},
+		&ShareSource{},
+		&ShareFile{},
 	); err != nil {
 		return nil, err
 	}

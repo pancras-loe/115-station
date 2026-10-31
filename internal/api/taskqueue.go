@@ -94,6 +94,8 @@ type jobParams struct {
 	Adopt *adoptJobParams `json:"adopt,omitempty"`
 	// Ali 阿里云盘分享秒传进 115（ali2115.go）
 	Ali *aliJobParams `json:"ali,omitempty"`
+	// ShareStrm 分享 STRM 生成 / 立即检查（sharestrmgen.go）
+	ShareStrm *shareStrmJobParams `json:"share_strm,omitempty"`
 	// RebaseFrom 升级前排进队列的老「改写 STRM 地址」任务：这些旧地址换成已保存的直连域名（strmrebase.go）
 	RebaseFrom []string `json:"rebase_from,omitempty"`
 	// RebasePairs 批量替换 STRM 地址：旧地址开头 → 新地址开头（strmrebase.go）
@@ -171,6 +173,9 @@ func jobStoppable(job *model.TaskJob) bool {
 		return true
 	case jobKindAli2115:
 		// 逐个文件秒传，手上这个传完就停（临时文件照样收拾）
+		return true
+	case jobKindShareStrm:
+		// 逐个文件写 STRM / 下附属文件，两个之间能停（下次立即检查接着补）
 		return true
 	case "orgpick":
 		// 网盘文件页勾选的一批：整理逐个条目，两个之间能停
@@ -250,7 +255,8 @@ func laneOfKind(kind string) *jobLane {
 		return personLane
 	case jobKindSubscribe:
 		return subLane
-	case jobKindAli2115:
+	case jobKindAli2115, jobKindShareStrm:
+		// 分享 STRM 不拿 taskMu：不碰自己网盘、不碰台账，本地只写分享 STRM 根
 		return xferLane
 	}
 	return mainLane
@@ -268,9 +274,9 @@ func laneWhere(db *gorm.DB, l *jobLane) *gorm.DB {
 	case subLane:
 		return db.Where("kind = ?", jobKindSubscribe)
 	case xferLane:
-		return db.Where("kind = ?", jobKindAli2115)
+		return db.Where("kind IN ?", []string{jobKindAli2115, jobKindShareStrm})
 	}
-	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindMetaFill, jobKindProbe, jobKindPerson, jobKindSubscribe, jobKindAli2115})
+	return db.Where("kind NOT IN ?", []string{jobKindScrape, jobKindMetaFill, jobKindProbe, jobKindPerson, jobKindSubscribe, jobKindAli2115, jobKindShareStrm})
 }
 
 func wakeJobWorker() {

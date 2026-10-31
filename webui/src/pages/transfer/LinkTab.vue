@@ -14,6 +14,7 @@ import { type ParsedLink, parseLinks, pendingLinkText } from '@/composables/tran
 import { useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
 import SubdirPicker from '@/components/transfer/SubdirPicker.vue'
+import { useShareStrm } from '@/composables/shareStrm'
 
 const router = useRouter()
 const { message, dialog } = useFeedback()
@@ -58,13 +59,20 @@ const summary = computed(() => {
   return (Object.keys(n) as ParsedLink['kind'][]).map((k) => `${n[k]} 个${KIND_LABEL[k]}`).join('、')
 })
 
-async function submit() {
-  const list = parsed.value
+// ---- 分享 STRM：115 分享不转存，直接生成 STRM（扩展功能「分享 STRM」开了才能用，关着灰掉写原因）----
+const ss = useShareStrm()
+const shareCount = computed(() => parsed.value.filter((l) => l.kind === 'share').length)
+/** 默认处理方式是「生成 STRM」时它当主按钮 */
+const strmFirst = computed(() => ss.defaultAction.value === 'strm' && shareCount.value > 0)
+
+async function submit(strm = false) {
+  // 生成 STRM 只处理 115 分享：别的链接（磁力、阿里云盘）照常提交没有意义，也不能「不转存」
+  const list = strm ? parsed.value.filter((l) => l.kind === 'share') : parsed.value
   if (!list.length) {
     message.warning(text.value.trim() ? '没认出能提交的链接：支持 115 分享、阿里云盘分享、磁力、ed2k、HTTP' : '请粘贴链接')
     return
   }
-  if (list.some((l) => l.kind === 'http')) {
+  if (!strm && list.some((l) => l.kind === 'http')) {
     const ok = await dialog.confirm({
       title: '提交 HTTP 离线下载',
       content: '这是一个普通网页链接。115 会按链接下载文件；如果它是网页而不是文件，下载下来的就是那个网页。确定提交吗？',
@@ -81,7 +89,9 @@ async function submit() {
   for (const r of rows.value) {
     r.state = 'busy'
     try {
-      const d = await transferApi.submit({ url: r.url, code: r.code, subdir: subdir.value || undefined })
+      const d = await transferApi.submit(
+        strm ? { url: r.url, code: r.code, strm: true } : { url: r.url, code: r.code, subdir: subdir.value || undefined },
+      )
       r.state = 'ok'
       r.msg = d.message
     } catch (e) {
@@ -129,9 +139,14 @@ async function submit() {
         <HInput v-model="code" class="code" placeholder="提取码" :input-attrs="{ 'aria-label': '提取码', autocomplete: 'off' }" />
       </FieldRow>
       <FormActions>
-        <HButton variant="primary" :loading="running" @click="submit">
+        <HButton :variant="strmFirst ? 'secondary' : 'primary'" :loading="running" @click="submit()">
           {{ parsed.length > 1 ? `提交 ${parsed.length} 个链接` : '提交' }}
         </HButton>
+        <span v-if="shareCount" :title="ss.blocked.value || '不转存、不占网盘空间，STRM 直接指向这个分享；分享失效后就播不了'">
+          <HButton :variant="strmFirst ? 'primary' : 'secondary'" :disabled="running || !!ss.blocked.value" @click="submit(true)">
+            {{ shareCount > 1 ? `${shareCount} 个分享生成 STRM（不转存）` : '生成 STRM（不转存）' }}
+          </HButton>
+        </span>
         <span v-if="summary" class="summary">认出 {{ summary }}</span>
         <SubdirPicker class="subdir" />
       </FormActions>

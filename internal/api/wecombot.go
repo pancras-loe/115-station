@@ -223,7 +223,11 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	lower := strings.ToLower(text)
 	// 直接发链接（无需"下载"前缀）：磁力/ed2k/http/115分享 一键触发
 	if classifyLink(strings.TrimSpace(text)) != "" {
-		h.wecomHandleLink(strings.TrimSpace(text), reply)
+		h.wecomHandleLink(user, strings.TrimSpace(text), reply)
+		return
+	}
+	// 刚发过 115 分享链接、按「每次问」等着回「转存」或「STRM」（sharestrmapi.go）
+	if h.shareBotPick(user, lower, reply) {
 		return
 	}
 	// 找资源会话里的操作（序号 / 0 择优 / n p 翻页 / b r k q）。没有会话时照常当指令处理
@@ -237,7 +241,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	case lower == "帮助" || lower == "help" || lower == "?":
 		reply(
 			"可用指令：",
-			"直接发链接 — 磁力/ed2k/HTTP 提交离线下载；115 分享链接（连同提取码一起发）自动转存并整理入库",
+			"直接发链接 — 磁力/ed2k/HTTP 提交离线下载；115 分享链接（连同提取码一起发）转存并整理入库，开了「分享 STRM」时也可以不转存、直接生成 STRM（按设置直接做或先问，回「转存」/「STRM」）",
 			"状态 — 任务状态 + 转存目录 + 离线任务",
 			"搜索 <片名> — 找资源：观影 / 盘搜 / TG 频道 / 不太灵 / RE0 一起搜，TMDB 选片后回序号转存或离线（可连续挑多条；RE0 要花积分的会先问，回 y 确认、c 取消）",
 			"观影 <片名> / 网盘 <片名> — 只搜观影 / 只搜网盘",
@@ -260,7 +264,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			reply("✗ 无法识别链接类型，支持：磁力 / ed2k / HTTP / 115分享")
 			return
 		}
-		h.wecomHandleLink(link, reply)
+		h.wecomHandleLink(user, link, reply)
 
 	case lower == "状态" || lower == "status":
 		running, name, since, progress := TaskStatus()
@@ -395,29 +399,16 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	}
 }
 
-// wecomHandleLink 企微消息里的下载链接分流：
-// 115 分享链接 → shareReceiveCore 转存（自动整理）；磁力/ed2k/http → 115 离线下载
-func (h *Handler) wecomHandleLink(link string, reply func(lines ...string)) {
+// wecomHandleLink 企微 / TG 消息里的下载链接分流：
+// 115 分享链接 → 转存（自动整理）或生成分享 STRM（按「贴链接时默认怎么处理」，sharestrmapi.go）；
+// 磁力/ed2k/http → 115 离线下载
+func (h *Handler) wecomHandleLink(user, link string, reply func(lines ...string)) {
 	if isAliShareLink(link) {
 		h.botAli2115(link, reply)
 		return
 	}
 	if classifyLink(link) == "share" {
-		shareURL, code := splitShareLink(link)
-		organize := true // 机器人触发的转存默认走「整理+增量」闭环
-		reply("⏳ 开始转存 115 分享…", truncateStr(shareURL, 70))
-		go func() {
-			msg, ok, fail, err := h.shareReceiveManual(shareURL, code, "", "机器人", organize)
-			if err != nil {
-				reply("✗ 转存失败: " + err.Error())
-				return
-			}
-			if ok == 0 && fail == 0 {
-				reply("分享为空，未转存任何内容")
-				return
-			}
-			reply("✓ " + msg + "（整理入库已自动触发）")
-		}()
+		h.botShareLink(user, link, reply)
 		return
 	}
 	if err := h.submitOfflineLink(link, "机器人"); err != nil {

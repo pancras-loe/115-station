@@ -38,6 +38,14 @@ var playbackLinks = newPlaybackLinkResolver(proxyDownloadURLFull)
 
 func normalizePlaybackID(id string) string {
 	id = strings.SplitN(id, "/", 2)[0]
+	// 分享 STRM（sharestrm.go）：s~{分享码}~{fid}。分享码保留大小写，不走下面的小写化；
+	// 认不出的 s~ 开头一律无效（下面按账号段拆也会因为「s」不是数字判无效，这里说清楚）
+	if isSharePlayID(id) {
+		if code, fid, ok := parseSharePlayID(id); ok {
+			return sharePlayID(code, fid)
+		}
+		return ""
+	}
 	// 附加账号的标识是 {账号}~{pickcode}（acctlibs.go）：账号段原样留着，缓存键、台账都带着它
 	acct := ""
 	if a, rest, ok := strings.Cut(id, "~"); ok {
@@ -83,6 +91,15 @@ func playbackPickcode(db *gorm.DB, id string) (string, error) {
 	return id, nil
 }
 
+// playbackCacheKey 直链缓存键。自己网盘的直链按 UA 签发、按 UA 分开存；
+// 分享直链实测不绑 UA（SHARE-STRM-PLAN.md §2.1），几个播放器共用一条，不按 UA 再取一次
+func playbackCacheKey(pc, ua string) string {
+	if isSharePlayID(pc) {
+		return pc + "|"
+	}
+	return pc + "|" + ua
+}
+
 // peek 只查缓存、不取链。旧数字 fid 要查库才能换成 pickcode，不在这里认，照旧走限流
 func (r *playbackLinkResolver) peek(id, ua string) (string, bool) {
 	pc := normalizePlaybackID(id)
@@ -91,7 +108,7 @@ func (r *playbackLinkResolver) peek(id, ua string) (string, bool) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	cached, ok := r.cache[pc+"|"+ua]
+	cached, ok := r.cache[playbackCacheKey(pc, ua)]
 	if !ok || !time.Now().Before(cached.Expiry) {
 		return "", false
 	}
@@ -103,7 +120,7 @@ func (r *playbackLinkResolver) resolve(ctx context.Context, db *gorm.DB, cfg *co
 	if err != nil {
 		return "", err
 	}
-	key := pc + "|" + ua
+	key := playbackCacheKey(pc, ua)
 	r.mu.Lock()
 	if cached, ok := r.cache[key]; ok && time.Now().Before(cached.Expiry) {
 		r.mu.Unlock()

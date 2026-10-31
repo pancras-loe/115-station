@@ -54,6 +54,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: 'Strm 管理', desc: '同步状态 / STRM 配置 / 全量 · 增量 · 深度删除', icon: 'sync' },
       },
       {
+        path: 'share-strm',
+        name: 'share-strm',
+        component: () => import('@/pages/ShareStrmPage.vue'),
+        meta: { title: '分享 STRM', desc: '不转存，STRM 直接指向 115 分享', icon: 'sync' },
+      },
+      {
         path: 'organize',
         name: 'organize',
         component: () => import('@/pages/OrganizePage.vue'),

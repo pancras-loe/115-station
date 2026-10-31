@@ -897,6 +897,8 @@ type resSubmitReq struct {
 	Points *int `json:"points,omitempty"`
 	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身（stagingsub.go）
 	Subdir string `json:"subdir"`
+	// Strm 115 分享不转存、直接生成分享 STRM（sharestrm.go）。只收用户自己贴的链接
+	Strm bool `json:"strm,omitempty"`
 }
 
 type resSubmitResult struct {
@@ -916,6 +918,18 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 		if src := resSourceOf(req.Source); src != nil {
 			label = src.Label
 		}
+	}
+	// 分享 STRM：不转存，用不着转存目录。从资源站选的不走这条（RE0 / 癫影解锁出来的链接、别人的资源站，
+	// 设计上只收用户自己贴的分享，SHARE-STRM-PLAN.md §5.1）
+	if req.Strm {
+		if req.Source != "" || classifyLink(req.URL) != "share" {
+			return resSubmitResult{}, fmt.Errorf("只有自己贴的 115 分享链接能生成 STRM")
+		}
+		src, job, err := h.addShareStrm(req.URL, req.Code, label)
+		if err != nil {
+			return resSubmitResult{}, err
+		}
+		return resSubmitResult{Message: fmt.Sprintf("「%s」不转存，正在生成 STRM（任务 #%d）", firstNonEmpty(src.Title, src.ShareCode), job.ID)}, nil
 	}
 	// 目标目录先于解锁解析：RE0 解锁会花积分，子目录失效要在花之前报出来
 	target, err := h.stagingTarget(req.Subdir)

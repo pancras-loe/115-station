@@ -12,6 +12,7 @@ import {
   MessageSquare,
   Blocks,
   ScrollText,
+  Link2,
 } from '@lucide/vue'
 import type { Component } from 'vue'
 
@@ -21,6 +22,8 @@ export interface NavItem {
   icon: Component
   /** 分组标题，仅首项携带 */
   group?: string
+  /** 要开了某个功能才显示（关着时入口在扩展功能里）：shareStrm = 分享 STRM */
+  feature?: 'shareStrm'
 }
 
 /**
@@ -36,6 +39,8 @@ export const navItems: NavItem[] = [
   // 名字照 MoviePilot / Jellyseerr 的「发现」「订阅」：原来叫「影视转存」，说的是动作，用户要找的是片
   { name: 'media-transfer', label: '发现与订阅', icon: Compass },
   { name: 'sync', label: 'Strm 管理', icon: RefreshCcw },
+  // 不转存、STRM 直接指向 115 分享（2026-10-31）。总开关关着时不显示，开关在扩展功能里
+  { name: 'share-strm', label: '分享 STRM', icon: Link2, feature: 'shareStrm' },
   { name: 'organize', label: '自动整理', icon: Wand2 },
   // 刮削是整理流水线的下一环，紧跟自动整理
   { name: 'scrape', label: '影视刮削', icon: Clapperboard },

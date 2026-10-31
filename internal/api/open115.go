@@ -1170,6 +1170,10 @@ func proxyDownloadURL(db *gorm.DB, cfg *config.Config, pickcode, ua string) (str
 // proxyDownloadURLFull 同 proxyDownloadURL，但一并返回直链要求的请求头
 // （含必须绑定的 User-Agent，后台下载时使用，播放出口会校验能否纯重定向）
 func proxyDownloadURLFull(db *gorm.DB, cfg *config.Config, pickcode, ua string) (string, map[string]string, error) {
+	// 分享 STRM 的 s~{分享码}~{fid}：按分享取（sharestrm.go），不是自己网盘的 pickcode
+	if isSharePlayID(pickcode) {
+		return shareDownloadURLFor(db, cfg, pickcode)
+	}
 	// 附加账号的直链 {账号}~{pickcode}：只用那个账号的 Cookie 取（pickcode 带着用户的不动点，不跨账号试，MULTI-ACCOUNT-PLAN.md §14）
 	if acct, pc := decodePlayID(pickcode); acct != acctMain {
 		if pc == "" {

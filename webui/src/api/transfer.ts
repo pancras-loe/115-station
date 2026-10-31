@@ -100,6 +100,8 @@ export interface SubmitBody {
   points?: number
   /** 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 转存目录本身 */
   subdir?: string
+  /** 115 分享不转存、直接生成分享 STRM（后端 sharestrm.go），只认自己贴的链接 */
+  strm?: boolean
 }
 
 export interface SubmitResult {

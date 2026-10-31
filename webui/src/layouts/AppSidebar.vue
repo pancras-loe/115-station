@@ -5,6 +5,7 @@ import { Pin, PinOff } from '@lucide/vue'
 import { navItems } from './navItems'
 import { recordStats } from '@/stores/recordStats'
 import { hasUpdate, updateStatus } from '@/stores/update'
+import { useShareStrm } from '@/composables/shareStrm'
 import BrandMark from '@/components/BrandMark.vue'
 
 /**
@@ -55,6 +56,10 @@ const badges = computed<Record<string, number>>(() => ({ tasks: recordStats.valu
 /** 只挂小点不带数字的入口：系统配置在有新版本时挂一个（收成图标栏时底部版本号看不见） */
 const dots = computed<Record<string, boolean>>(() => ({ settings: hasUpdate.value }))
 const showPin = computed(() => !!props.docked)
+
+// 要开了才显示的入口（分享 STRM：开关在扩展功能里，关着时侧栏不多一项）
+const shareStrm = useShareStrm()
+const shownItems = computed(() => navItems.filter((i) => i.feature !== 'shareStrm' || shareStrm.enabled.value))
 </script>
 
 <template>
@@ -75,7 +80,7 @@ const showPin = computed(() => !!props.docked)
     </div>
 
     <nav class="nav">
-      <template v-for="item in navItems" :key="item.name">
+      <template v-for="item in shownItems" :key="item.name">
         <div v-if="item.group" class="nav-group">
           <span class="fade">{{ item.group }}</span>
         </div>

@@ -33,6 +33,7 @@ const (
 var pluginLogKeys = map[string]bool{
 	"checkin": true, "ptsignin": true, "covergen": true, "rbclean": true, "offclean": true,
 	"dirclean": true, "ali2115": true, "strmmigrate": true, "alidirclean": true, "alirbclean": true,
+	"sharestrm": true,
 }
 
 // pluginLogger 一个插件的一个日志前缀。同一插件可以有几个前缀（STRM 迁移的接管 / 替换地址），写进同一个文件

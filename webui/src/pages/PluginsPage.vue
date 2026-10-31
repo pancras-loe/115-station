@@ -7,7 +7,7 @@ import HModal from '@/components/hero/HModal.vue'
 import HSearchField from '@/components/hero/HSearchField.vue'
 import HSegmented from '@/components/hero/HSegmented.vue'
 import HTabs from '@/components/hero/HTabs.vue'
-import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Play, Settings2, Stamp, Trash2 } from '@lucide/vue'
+import { BrushCleaning, CalendarCheck, CloudOff, CloudUpload, FolderInput, Images, Link2, Play, Settings2, Stamp, Trash2 } from '@lucide/vue'
 import SectionCard from '@/components/ui/SectionCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import FieldRow from '@/components/ui/FieldRow.vue'
@@ -255,7 +255,7 @@ type CatKey = 'signin' | 'clean' | 'media' | 'transfer'
 const categories: { key: CatKey; name: string; hint: string }[] = [
   { key: 'signin', name: '签到保号', hint: '每天定时签到，领积分、保账号' },
   { key: 'clean', name: '网盘清理', hint: '定时清掉回收站、离线任务和指定目录，网盘不越用越满' },
-  { key: 'media', name: '媒体库工具', hint: '媒体库封面、STRM 换地址与接管' },
+  { key: 'media', name: '媒体库工具', hint: '媒体库封面、STRM 换地址与接管、分享直接生成 STRM' },
   { key: 'transfer', name: '转存搬运', hint: '把别的网盘里的资源搬进 115' },
 ]
 
@@ -358,6 +358,18 @@ const plugins: Plugin[] = [
     runLabel: '去贴链接',
     onConfig: () => (aliShow.value = true),
     onRun: () => router.push({ name: 'media-transfer', query: { tab: 'link' } }),
+  },
+  {
+    key: 'sharestrm',
+    cat: 'media',
+    scope: '115 分享',
+    keywords: 'strm 分享 不转存 share 直链 空间',
+    name: '分享 STRM',
+    icon: Link2,
+    desc: '贴 115 分享链接，不转存、不占网盘空间，直接在本地生成 STRM 播放（用你的 115 账号按分享取直链）。分享失效后就播不了，想长期留着请转存。',
+    runLabel: '打开',
+    onConfig: () => router.push({ name: 'share-strm', query: { tab: 'settings' } }),
+    onRun: () => router.push({ name: 'share-strm' }),
   },
   {
     key: 'strmmigrate',
