@@ -10,8 +10,10 @@ const props = defineProps<{
   item: ResourceItem
   /** 行内状态：一次搜索可能提交十几条，toast 会互相覆盖，而且要看得出哪几条已经提交过 */
   state?: { tone: 'busy' | 'ok' | 'err'; text: string }
+  /** 开了分享 STRM：115 分享的资源多一个「STRM」按钮（不转存，直接生成 STRM，后端 sharestrm.go） */
+  strm?: boolean
 }>()
-const emit = defineEmits<{ act: [] }>()
+const emit = defineEmits<{ act: []; strm: [] }>()
 
 const KIND_TONE = { share115: 'success', download: 'accent', pan: 'default' } as const
 
@@ -81,6 +83,17 @@ const actionLabel = computed(() => {
       </div>
       <div v-if="state?.text" class="res-state" :class="state.tone">{{ state.text }}</div>
     </div>
+    <HButton
+      v-if="strm && item.kind === 'share115' && item.action !== 'open'"
+      class="res-act"
+      size="sm"
+      variant="tertiary"
+      title="不转存、不占网盘空间，直接生成 STRM 播放；分享失效后就播不了"
+      :disabled="state?.tone === 'busy'"
+      @click="emit('strm')"
+    >
+      STRM
+    </HButton>
     <HButton
       class="res-act"
       size="sm"

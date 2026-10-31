@@ -14,6 +14,7 @@ import { transferApi } from '@/api'
 import type { ResourceItem, ResourceQuery, SourceKey, TransferSource } from '@/api/transfer'
 import { useFeedback } from '@/composables/useFeedback'
 import { useStagingSubs } from '@/composables/stagingSubs'
+import { useShareStrm } from '@/composables/shareStrm'
 import { SOURCE_LABEL, type KindGroup, type SortKey, kindGroup, pixGroup, resourceKey, sortResources } from '@/utils/transferSort'
 import { RefreshCw } from '@lucide/vue'
 
@@ -29,6 +30,8 @@ const props = defineProps<{
 const router = useRouter()
 const { message, dialog } = useFeedback()
 const { current: subdir } = useStagingSubs()
+// 开了分享 STRM：115 分享的资源多一个「STRM」按钮（不转存，直接生成）
+const shareStrm = useShareStrm()
 
 type SourceState =
   | { status: 'loading' }
@@ -210,7 +213,7 @@ function onSourceClick(s: TransferSource) {
 }
 
 // ---- 提交 ----
-async function act(it: ResourceItem) {
+async function act(it: ResourceItem, strm = false) {
   const k = resourceKey(it)
   if (rowState.value[k]?.tone === 'busy') return
   if (it.action === 'open') {
@@ -224,7 +227,9 @@ async function act(it: ResourceItem) {
     const then =
       it.kind === 'magnet' || it.kind === 'ed2k'
         ? '拿到链接后提交 115 离线下载（一批链接会逐条提交，每条占一个离线配额）'
-        : '拿到 115 分享后直接转存到转存目录'
+        : strm
+          ? '拿到 115 分享后不转存、直接生成 STRM'
+          : '拿到 115 分享后直接转存到转存目录'
     const ok = await dialog.confirm({
       title: `解锁${SOURCE_LABEL[it.source] ?? ''}资源`,
       content: it.owned
@@ -236,7 +241,7 @@ async function act(it: ResourceItem) {
       ],
     })
     if (!ok) return
-  } else if (it.submitted_at && rowState.value[k]?.tone !== 'ok') {
+  } else if (!strm && it.submitted_at && rowState.value[k]?.tone !== 'ok') {
     const ok = await dialog.confirm({
       title: '这条链接提交过',
       content: `${new Date(it.submitted_at * 1000).toLocaleString()} 提交过同一条链接。再提交一次会在转存目录里多出一份，确定吗？`,
@@ -249,7 +254,7 @@ async function act(it: ResourceItem) {
   }
   rowState.value[k] = {
     tone: 'busy',
-    text: it.action === 'transfer' ? '转存中…' : it.action === 'unlock' ? '解锁中…' : '提交 115 离线下载中…',
+    text: strm ? '生成 STRM 中…' : it.action === 'transfer' ? '转存中…' : it.action === 'unlock' ? '解锁中…' : '提交 115 离线下载中…',
   }
   try {
     const r = await transferApi.submit({
@@ -261,7 +266,8 @@ async function act(it: ResourceItem) {
       title: it.title,
       confirm: it.action === 'unlock',
       points: it.points ?? undefined,
-      subdir: subdir.value || undefined,
+      subdir: strm ? undefined : subdir.value || undefined,
+      strm: strm || undefined,
     })
     if (r.open_url) window.open(r.open_url, '_blank', 'noopener')
     const text = r.message + (r.code ? `（提取码 ${r.code}）` : '')
@@ -330,6 +336,8 @@ async function act(it: ResourceItem) {
         :item="it"
         :state="rowState[resourceKey(it)]"
         @act="act(it)"
+        :strm="shareStrm.enabled.value"
+        @strm="act(it, true)"
       />
       <div v-if="!relevantList.length && loadingCount" class="state"><HSpinner size="sm" /><span>各来源搜索中…</span></div>
       <EmptyState
@@ -347,6 +355,8 @@ async function act(it: ResourceItem) {
           :item="it"
           :state="rowState[resourceKey(it)]"
           @act="act(it)"
+          :strm="shareStrm.enabled.value"
+          @strm="act(it, true)"
         />
       </template>
     </div>

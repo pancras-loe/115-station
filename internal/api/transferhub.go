@@ -919,14 +919,27 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			label = src.Label
 		}
 	}
-	// 分享 STRM：不转存，用不着转存目录。从资源站选的不走这条（RE0 / 癫影解锁出来的链接、别人的资源站，
-	// 设计上只收用户自己贴的分享，SHARE-STRM-PLAN.md §5.1）
+	// 分享 STRM：不转存，用不着转存目录。自己贴的与找资源选的都行（阶段 4），只要换出来是 115 分享；
+	// 要花积分的照常先确认、解锁（resolveResourceLink 只认 Confirm），解锁之后生成失败把链接交回去
 	if req.Strm {
-		if req.Source != "" || classifyLink(req.URL) != "share" {
-			return resSubmitResult{}, fmt.Errorf("只有自己贴的 115 分享链接能生成 STRM")
+		if !loadShareStrmCfg().Enabled {
+			return resSubmitResult{}, fmt.Errorf("分享 STRM 没开：到「扩展功能 → 分享 STRM」打开")
 		}
-		src, job, err := h.addShareStrm(req.URL, req.Code, label)
+		rl, err := h.resolveResourceLink(req)
 		if err != nil {
+			return resSubmitResult{}, err
+		}
+		if rl.Action != "transfer" {
+			if rl.Unlocked {
+				return resSubmitResult{Message: "已解锁，但这条不是 115 分享，生成不了 STRM", OpenURL: rl.URL, Code: rl.Code}, nil
+			}
+			return resSubmitResult{}, fmt.Errorf("这条资源不是 115 分享（磁力 / 别的网盘），生成不了 STRM，只能转存或离线下载")
+		}
+		src, job, err := h.addShareStrm(rl.URL, rl.Code, label)
+		if err != nil {
+			if rl.Unlocked {
+				return resSubmitResult{Message: "已解锁，但生成 STRM 失败：" + err.Error(), OpenURL: rl.URL, Code: rl.Code}, nil
+			}
 			return resSubmitResult{}, err
 		}
 		return resSubmitResult{Message: fmt.Sprintf("「%s」不转存，正在生成 STRM（任务 #%d）", firstNonEmpty(src.Title, src.ShareCode), job.ID)}, nil

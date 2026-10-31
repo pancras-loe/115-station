@@ -141,3 +141,17 @@ func TestShareScrapeTitleAndAcct(t *testing.T) {
 		t.Fatalf("没登记按主号：%d", got)
 	}
 }
+
+// 找资源 / 链接转存「生成 STRM」：开关关着拒绝；换出来不是 115 分享（磁力）也拒绝，不退成转存或离线
+func TestSubmitResourceStrm(t *testing.T) {
+	newTestDB(t, "sharesubmit.db")
+	h := &Handler{DB: model.DB}
+	magnet := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+	if _, err := h.submitResource(resSubmitReq{URL: magnet, Strm: true}, ""); err == nil || !strings.Contains(err.Error(), "没开") {
+		t.Fatalf("开关关着：%v", err)
+	}
+	model.DB.Create(&model.Setting{Key: "sharestrm", Value: `{"enabled":true}`})
+	if _, err := h.submitResource(resSubmitReq{URL: magnet, Strm: true}, ""); err == nil || !strings.Contains(err.Error(), "不是 115 分享") {
+		t.Fatalf("磁力：%v", err)
+	}
+}
