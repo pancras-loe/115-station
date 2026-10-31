@@ -241,6 +241,16 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 	}
 	minSize := int64(r.cfg.MinSizeMB) << 20
 	plans, skip := planShareFiles(entries, sharePlanOpts{LocalDir: src.LocalDir, MinSize: minSize, Assets: r.cfg.Assets, Owned: r.owned})
+	if only := shareOnlyFidSet(src.OnlyFids); only != nil {
+		// 订阅建的只要挑中的那几集（连同跟着挑的字幕，subsharestrm.go）
+		kept := plans[:0]
+		for _, p := range plans {
+			if only[p.Entry.ID] {
+				kept = append(kept, p)
+			}
+		}
+		plans = kept
+	}
 	res.Skipped = skip
 	if normShareLayout(src.Layout) == shareLayoutOrganize && r.org != nil {
 		org, err := r.organizePlans(entries, title, plans)

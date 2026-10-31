@@ -23,6 +23,8 @@ export interface Subscription {
   include: string
   exclude: string
   offline_mode: OfflineMode
+  /** 交付方式：transfer 转存 / strm 建成分享 STRM；空 = 跟随订阅设置 */
+  delivery?: SubDelivery | ''
   /** 资源条件（中字 / 大小）；null = 跟随订阅设置 */
   cond: SubCond | null
   /** 资源优先级；null = 跟随订阅设置 */
@@ -65,6 +67,8 @@ export interface SubForm {
   include: string
   exclude: string
   offline_mode: OfflineMode
+  /** 交付方式：transfer 转存 / strm 建成分享 STRM；空 = 跟随订阅设置 */
+  delivery?: SubDelivery | ''
   /** 资源条件（中字 / 大小）；null = 跟随订阅设置 */
   cond: SubCond | null
   /** 资源优先级；null = 跟随订阅设置 */
@@ -220,6 +224,8 @@ export interface SubscribeConfig {
   exclude_default: string
   notify: string
   offline_mode: Exclude<OfflineMode, ''>
+  /** 默认交付方式（后端 subsharestrm.go） */
+  delivery?: SubDelivery
   offline_wait_hours: number
   offline_monthly: number
   offline_reserve: number
@@ -275,6 +281,7 @@ export function toForm(s: Subscription): SubForm {
     include: s.include,
     exclude: s.exclude,
     offline_mode: s.offline_mode || '',
+    delivery: s.delivery || '',
     cond: s.cond ? { ...blankCond(), ...s.cond } : null,
     priority: s.priority ? { mode: s.priority.mode, rules: [...(s.priority.rules ?? [])] } : null,
     wash: !!s.wash,
@@ -323,3 +330,6 @@ export function scopeText(s: Pick<Subscription, 'media_type' | 'scope' | 'season
   if (s.scope === 'all' && s.specials) t += '（含特别篇）'
   return t + (s.follow === 'new' ? ' · 只追新集' : ' · 补缺集')
 }
+
+/** 找到分享后怎么交付：transfer 转存进网盘、整理入库 / strm 不转存、建成分享 STRM（后端 subsharestrm.go） */
+export type SubDelivery = 'transfer' | 'strm'

@@ -496,6 +496,7 @@ func evalSubMovie(have subHave, inflight bool, searchFrom, now time.Time) subEva
 // evaluateSubscription 盘点一个订阅：台账 + TMDB + 在路上。只读，不改订阅本身
 func evaluateSubscription(db *gorm.DB, tc *TmdbClient, sub *model.Subscription, cfg subscribeCfg, now time.Time) (subEval, error) {
 	have := subHaveOf(db, scanLedgerTitlesCached(), sub.TmdbID, sub.MediaType)
+	mergeShareHave(db, sub, &have) // 订阅自己建的分享 STRM 也算已有（subsharestrm.go）
 	inflight := subInflight(db, sub.ID)
 	if sub.MediaType == "movie" {
 		if have.Found {

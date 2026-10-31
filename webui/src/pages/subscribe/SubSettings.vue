@@ -242,6 +242,18 @@ async function save() {
         <HSelect v-model="subdir" :options="subdirOptions" aria-label="默认转存到" />
       </FieldRow>
       <FieldRow
+        label="交付方式"
+        tip="找到 115 分享后：转存进网盘、整理入库；或者不转存、建成分享 STRM（要先在扩展功能里打开分享 STRM）。分享 STRM 只建缺的那几集、只用分享（磁力用不了），分享失效后那几集重新算缺。单个订阅可以另选。"
+      >
+        <HSegmented
+          v-model="cfg.delivery"
+          :options="[
+            { label: '转存', value: 'transfer' },
+            { label: '分享 STRM', value: 'strm' },
+          ]"
+        />
+      </FieldRow>
+      <FieldRow
         label="离线策略"
         :hint="OFFLINE_HINT[cfg.offline_mode]"
         tip="磁力下载前看不到里面有哪些文件，挑不了集；115 的离线配额按任务数扣，一集一个磁力的话追一部剧就是几十次。单个订阅可以在「修改订阅 → 高级」里另设。"

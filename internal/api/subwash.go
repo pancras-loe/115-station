@@ -51,6 +51,9 @@ func (r *subRunner) searchOnce(sub *model.Subscription) ([]ResourceItem, string)
 
 // washReady 这个订阅现在能不能洗版；不能时说清为什么（写进上一轮结果）
 func (r *subRunner) washReady(sub *model.Subscription) (subPriority, string) {
+	if r.cfg.deliveryOf(sub) == subDeliverStrm {
+		return subPriority{}, "交付方式是分享 STRM：文件不在自己网盘里，没法让位，不能洗版"
+	}
 	mode, _, _ := subPrioMode(r.cfg, sub)
 	if mode == subPrioCustom {
 		return subPriority{}, "资源优先级是自定义，和整理的洗版策略判得不一样，不能洗版；改成「跟随洗版策略」"

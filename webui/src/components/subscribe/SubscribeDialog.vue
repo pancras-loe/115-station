@@ -67,6 +67,7 @@ const blank = (): SubForm => ({
   include: '',
   exclude: '',
   offline_mode: '',
+  delivery: '',
   cond: null,
   priority: null,
   wash: false,
@@ -100,7 +101,7 @@ watch(show, async (open) => {
       })
       .catch(() => {})
   }
-  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.cond || !!form.value.priority)
+  advanced.value = !!props.edit && (form.value.sources.length > 0 || !!form.value.rank_limit || !!form.value.include || !!form.value.exclude || !!form.value.offline_mode || !!form.value.delivery || !!form.value.cond || !!form.value.priority)
   seasons.value = []
   ended.value = false
   if (!tv.value || !head.value) return
@@ -332,6 +333,19 @@ async function submit() {
         </FieldRow>
         <FieldRow label="排除" hint="资源标题含任何一个就不要；全局排除词（枪版等）在订阅设置里">
           <HInput v-model="form.exclude" placeholder="如：国语, 无字" />
+        </FieldRow>
+        <FieldRow
+          label="交付方式"
+          hint="转存：转进网盘、整理入库。分享 STRM：不转存、不占网盘空间，只建缺的那几集的 STRM；只用分享（磁力用不了），分享失效后那几集重新算缺、接着找"
+        >
+          <HSegmented
+            v-model="form.delivery"
+            :options="[
+              { label: '跟随设置', value: '' },
+              { label: '转存', value: 'transfer' },
+              { label: '分享 STRM', value: 'strm' },
+            ]"
+          />
         </FieldRow>
         <FieldRow label="离线下载" :hint="offlineHint">
           <HSegmented

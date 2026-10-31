@@ -94,12 +94,18 @@ func settleSubscription(db *gorm.DB, sub *model.Subscription, now time.Time) (re
 	db.Where("sub_id = ? AND status = ?", sub.ID, subAttemptInflight).Find(&rows)
 	for i := range rows {
 		a := &rows[i]
-		var recs []model.OrganizeRecord
-		// 一批离线链接一起提交的，整理记录认领到其中哪一条都不一定，连 LinkIDs 一起查
-		if ids := subAttemptLinkIDs(a); len(ids) > 0 {
-			db.Where("link_id IN ?", ids).Find(&recs)
+		var r subSettleResult
+		if a.Kind == "sharestrm" {
+			// 交付成分享 STRM 的：没有整理记录，看分享 STRM 写出了哪些集（subsharestrm.go）
+			r = settleShareStrmAttempt(db, sub, a, now)
+		} else {
+			var recs []model.OrganizeRecord
+			// 一批离线链接一起提交的，整理记录认领到其中哪一条都不一定，连 LinkIDs 一起查
+			if ids := subAttemptLinkIDs(a); len(ids) > 0 {
+				db.Where("link_id IN ?", ids).Find(&recs)
+			}
+			r = settleSubAttempt(sub, a, recs, now)
 		}
-		r := settleSubAttempt(sub, a, recs, now)
 		if r.Status == subAttemptInflight {
 			if r.Reason != a.Reason {
 				db.Model(a).Update("reason", r.Reason)

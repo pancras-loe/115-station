@@ -33,6 +33,8 @@ type subForm struct {
 	Exclude   string   `json:"exclude"`
 	// OfflineMode 空 = 跟随订阅设置
 	OfflineMode string `json:"offline_mode"`
+	// Delivery 交付方式（transfer / strm），空 = 跟随订阅设置（subsharestrm.go）
+	Delivery string `json:"delivery"`
 	// Cond 资源条件（中字 / 体积），nil = 跟随订阅设置
 	Cond *subCond `json:"cond"`
 	// Priority 资源优先级，nil = 跟随订阅设置（subpriority.go）
@@ -102,6 +104,10 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		return false, errors.New("离线策略只能是 只下合集包 / 只转存分享 / 不限")
 	}
 	sub.OfflineMode = f.OfflineMode
+	if f.Delivery != "" && !validSubDelivery(f.Delivery) {
+		return false, errors.New("交付方式只能是 转存 / 分享 STRM")
+	}
+	sub.Delivery = f.Delivery
 	sd := strings.TrimSpace(f.Subdir)
 	if id := parseXferLibValue(sd); id != 0 {
 		// 媒体库表（V2）：选的是库，只能是主号设了转存文件夹的库（xfertarget.go 的 subTargetLib）
@@ -430,6 +436,7 @@ func subEpisodeGrid(db *gorm.DB, tc *TmdbClient, sub *model.Subscription, cfg su
 		return nil, err
 	}
 	have := subHaveOf(db, scanLedgerTitlesCached(), sub.TmdbID, sub.MediaType)
+	mergeShareHave(db, sub, &have) // 订阅自己建的分享 STRM 也算已有（subsharestrm.go）
 	inflight := subInflight(db, sub.ID)
 	awaiting := map[epKey]bool{}
 	var rows []model.SubAttempt

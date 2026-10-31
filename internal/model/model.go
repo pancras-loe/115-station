@@ -350,6 +350,10 @@ type ShareSource struct {
 	TitleDir string `json:"title_dir" gorm:"size:500"`
 	// Adopted 从别的项目（p115strmhelper）接管来的：原样放时已有文件留在原来的位置（路径一变 Emby 观看记录就没了）
 	Adopted bool `json:"adopted"`
+	// SubID 订阅建的（订阅交付方式为分享 STRM，internal/api/subsharestrm.go）：这个订阅盘点时把这里的集算「已有」
+	SubID uint `json:"sub_id" gorm:"index"`
+	// OnlyFids 只建这些文件（JSON 数组，分享里的 fid）：订阅只要缺的那几集，空 = 整个分享都建
+	OnlyFids string `json:"-" gorm:"type:text"`
 	// Transferred 用户点了「转存这份」：分享已转进某个库的转存文件夹，等整理入库后按 sha1 收掉这里的 STRM
 	Transferred *time.Time `json:"transferred"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -533,6 +537,8 @@ type Subscription struct {
 	WashUntil *time.Time `json:"wash_until"`
 	// Subdir 转存到哪个绑定了媒体库的转存子目录（cid）；空 = 跟随订阅设置，"root" = 转存目录本身
 	Subdir string `json:"subdir" gorm:"size:64"`
+	// Delivery 找到分享后怎么交付：transfer 转存进网盘、整理入库 / strm 不转存、建成分享 STRM（internal/api/subsharestrm.go）；空 = 跟随订阅设置
+	Delivery string `json:"delivery" gorm:"size:16"`
 
 	// State active 追更中 / paused 已暂停 / done 已完成 / stalled 长期找不到（降频检查）
 	State       string     `json:"state" gorm:"index;size:10"`
@@ -577,9 +583,11 @@ type SubAttempt struct {
 	RetryAt *time.Time `json:"retry_at"`
 	Points  int        `json:"points"` // 为它花了多少 RE0 积分（每日预算按它累计）
 	// Wash 洗版的尝试（换掉库里没达标的集），不是补缺集：洗版只认洗版试过的，补缺试过没用的资源洗版还能再看
-	Wash       bool       `json:"wash"`
-	CreatedAt  time.Time  `json:"created_at" gorm:"index"`
-	ResolvedAt *time.Time `json:"resolved_at"`
+	Wash bool `json:"wash"`
+	// ShareSourceID 交付成分享 STRM 的尝试（Kind = sharestrm）：建到哪个分享 STRM 上，结算看它写出了哪些集
+	ShareSourceID uint       `json:"share_source_id" gorm:"index"`
+	CreatedAt     time.Time  `json:"created_at" gorm:"index"`
+	ResolvedAt    *time.Time `json:"resolved_at"`
 }
 
 // OrganizeRecord 整理记录：一条 = 一次整理动作处理的一个条目（一个待整理目录或一个散文件）。

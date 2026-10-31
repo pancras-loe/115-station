@@ -87,6 +87,9 @@ type subscribeCfg struct {
 	// 不补的话已保存过设置的用户永远收不到新加的那类（Notify 是整串存的）
 	NotifyVer int `json:"notify_ver"`
 
+	// Delivery 默认的交付方式：transfer 转存 / strm 建成分享 STRM（subsharestrm.go），订阅自己可以改
+	Delivery string `json:"delivery"`
+
 	// 离线下载的几道闸（见 subOffline* 常量的说明）
 	OfflineMode string `json:"offline_mode"` // 默认的离线策略，订阅自己可以改
 	// OfflineWaitHours 一集播出后这么久之内只等分享：新集的分享一般几小时内就有，先别花离线配额
@@ -134,6 +137,7 @@ func defaultSubscribeCfg() subscribeCfg {
 		Notify:           "created,submit,ingested,done,stalled,paid",
 		NotifyVer:        subNotifyVer,
 
+		Delivery:         subDeliverTransfer,
 		OfflineMode:      subOfflinePack,
 		OfflineWaitHours: 24,
 		OfflineMonthly:   30,
@@ -219,6 +223,9 @@ func normalizeSubscribeCfg(c subscribeCfg) subscribeCfg {
 	if !validSubOfflineMode(c.OfflineMode) {
 		c.OfflineMode = d.OfflineMode
 	}
+	if !validSubDelivery(c.Delivery) {
+		c.Delivery = d.Delivery
+	}
 	if c.OfflineWaitHours < 0 || c.OfflineWaitHours > 24*7 {
 		c.OfflineWaitHours = d.OfflineWaitHours
 	}
@@ -244,6 +251,10 @@ func (c subscribeCfg) airDelay() time.Duration {
 
 // offlineModeOf 这个订阅的离线策略：订阅自己设了用自己的，否则跟全局
 func (c subscribeCfg) offlineModeOf(sub *model.Subscription) string {
+	// 交付成分享 STRM 的订阅用不了磁力 / 离线（建不成 STRM）：只挑分享，没有分享的集等分享出现
+	if c.deliveryOf(sub) == subDeliverStrm {
+		return subOfflineShareOnly
+	}
 	if validSubOfflineMode(sub.OfflineMode) {
 		return sub.OfflineMode
 	}

@@ -1028,6 +1028,10 @@ func (r *subRunner) tryShare(sub *model.Subscription, c subCand, rl resLink, mis
 	if len(pick.Picks) == 0 {
 		return r.recordShareUseless(sub, c, att, rl.URL, pick, truncated), nil
 	}
+	if r.cfg.deliveryOf(sub) == subDeliverStrm {
+		// 交付成分享 STRM：挑集照旧，不转存（subsharestrm.go）
+		return r.tryShareStrm(sub, c, rl, title, pick, covered, att, fail)
+	}
 	wrapper, cid, err := r.makeWrapper(sub, covered)
 	if err != nil {
 		return fail("建包装目录失败："+err.Error(), true)
