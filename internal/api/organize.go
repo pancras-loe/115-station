@@ -2908,11 +2908,19 @@ func seriesSiblings(ctx *orgCtx, f remoteFile) []remoteFile {
 	return siblings
 }
 
+// seriesEpMarkRe 名字里的集号标记（S01E01 / EP01 / E01 / 第01集），前后不挨字母数字；第 1 组是标记本身
+var seriesEpMarkRe = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(s\d{1,2}e\d{1,4}|ep?\d{2,4}|第\s*\d{1,4}\s*[集话話期])(?:$|[^a-z0-9])`)
+
 // extractSeriesPrefix 提取剧集文件名的系列前缀（去掉 EP/SxxExx/集数部分）
 // "BLJXD.2026.EP01.HD1080P..." → "BLJXD.2026"
 // "Show.Name.S01E05.720p..." → "Show.Name"
 func extractSeriesPrefix(name string) string {
 	base := baseName(name)
+	// 先在整个名字里找集号标记：只按「.」切段的话，「末路兼职 - S01E01 - 第01集.4K…」这种
+	// 用空格和横线隔开的写法一段也认不出，前缀把集号带了进去，8 集各成一组、记录一集一条（2026-10-31 现场）
+	if m := seriesEpMarkRe.FindStringSubmatchIndex(base); m != nil {
+		return strings.TrimRight(base[:m[2]], " -._[(（【")
+	}
 	// 按 . 分割，找 EP/SxxExx 位置截断
 	parts := strings.Split(base, ".")
 	for i, part := range parts {

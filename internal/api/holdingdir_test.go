@@ -78,3 +78,22 @@ func TestSourceHoldingDirGroupsLooseEpisodes(t *testing.T) {
 		t.Fatalf("没有剧集前缀时应使用解析标题，实际 %q", got)
 	}
 }
+
+// 同一部剧的散文件要认出同一个前缀，才会并进一条整理记录（2026-10-31 现场：8 集一集一条）
+func TestExtractSeriesPrefix(t *testing.T) {
+	cases := map[string]string{
+		"末路兼职 - S01E01 - 第01集.4K.HEVC.24FPS.DDP5.1.WEB-DL.mkv": "末路兼职",
+		"末路兼职 - S01E08 - 第08集.4K.HEVC.24FPS.DDP5.1.WEB-DL.mkv": "末路兼职",
+		"Show.Name.S01E05.720p.mkv":                               "Show.Name",
+		"BLJXD.2026.EP01.HD1080P.mp4":                             "BLJXD.2026",
+		"1923.S01E01.2160p.mkv":                                   "1923",
+		"某剧 第12集 1080p.mp4":                                     "某剧",
+		"[字幕组] 某番 - E03 [1080p].mkv":                             "[字幕组] 某番",
+		"S01E01.mkv":                                              "",
+	}
+	for name, want := range cases {
+		if got := extractSeriesPrefix(name); got != want {
+			t.Errorf("%s → %q，期望 %q", name, got, want)
+		}
+	}
+}
