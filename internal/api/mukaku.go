@@ -16,11 +16,14 @@ package api
 // 资源 link 分类处理：115 分享→自动转存；磁力/ed2k→离线下载；其他网盘→打开。
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"sync"
@@ -92,10 +95,15 @@ func saveMukakuCfg(cfg *mukakuCfg) error {
 	return nil
 }
 
-// mukakuHTTP 包级复用客户端（连接池共享）
-var mukakuHTTP = &http.Client{Timeout: 25 * time.Second}
+// mukakuHTTP 包级复用客户端（连接池共享）。带 Cookie 罐：浏览器过了 WAF 滑块后把站点 Cookie 抄进来，
+// 之后先试普通请求，站点认这份 Cookie 就不用每次开浏览器
+var mukakuHTTP = func() *http.Client {
+	jar, _ := cookiejar.New(nil)
+	return &http.Client{Timeout: 25 * time.Second, Jar: jar}
+}()
 
-// mukakuAPI 带 app_id/identity/access_token 的站点 API 请求
+// mukakuAPI 带 app_id/identity/access_token 的站点 API 请求。
+// 2026-11-02 起站点套了 GoEdge WAF 滑块验证：普通请求被拦时改在 CloakBrowser 里过滑块、在页面里调同一个接口（mukakuweb.go）
 func mukakuAPI(cfg *mukakuCfg, method, path string, params url.Values, body any) ([]byte, error) {
 	if params == nil {
 		params = url.Values{}
@@ -104,19 +112,33 @@ func mukakuAPI(cfg *mukakuCfg, method, path string, params url.Values, body any)
 	params.Set("identity", cfg.Identity)
 	full := cfg.BaseURL + "/prod/api/v1/" + path + "?" + params.Encode()
 
-	var rd io.Reader
 	var reqBody []byte
 	if body != nil {
 		reqBody, _ = json.Marshal(body)
-		rd = strings.NewReader(string(reqBody))
 	}
-	req, err := http.NewRequest(method, full, rd)
+	status, raw, err := mukakuHTTPDo(cfg, method, full, reqBody)
+	if errors.Is(err, errMukakuWAF) {
+		status, raw, err = mukakuWebDo(cfg, method, full, reqBody)
+	}
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", chromeUA)
+	return mukakuEnvelope(status, raw)
+}
+
+// mukakuHTTPDo 普通 HTTP 请求；落在 WAF 验证页返回 errMukakuWAF
+func mukakuHTTPDo(cfg *mukakuCfg, method, full string, reqBody []byte) (int, []byte, error) {
+	var rd io.Reader
+	if reqBody != nil {
+		rd = bytes.NewReader(reqBody)
+	}
+	req, err := http.NewRequest(method, full, rd)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("User-Agent", mukakuUserAgent())
 	req.Header.Set("Accept", "application/json;charset=UTF-8")
-	if body != nil {
+	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	}
 	if cfg.AccessToken != "" {
@@ -124,12 +146,20 @@ func mukakuAPI(cfg *mukakuCfg, method, path string, params url.Values, body any)
 	}
 	resp, err := mukakuHTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("站点返回 HTTP %d: %s", resp.StatusCode, truncateStr(string(raw), 100))
+	if mukakuWAFPage(resp, raw) {
+		return resp.StatusCode, nil, errMukakuWAF
+	}
+	return resp.StatusCode, raw, nil
+}
+
+// mukakuEnvelope 解站点统一的 {code, success, message, data}
+func mukakuEnvelope(status int, raw []byte) ([]byte, error) {
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("站点返回 HTTP %d: %s", status, truncateStr(string(raw), 100))
 	}
 	var env struct {
 		Code    int             `json:"code"`
@@ -144,6 +174,21 @@ func mukakuAPI(cfg *mukakuCfg, method, path string, params url.Values, body any)
 		return nil, fmt.Errorf("%s", strings.TrimSpace(env.Message))
 	}
 	return env.Data, nil
+}
+
+// errMukakuWAF 普通请求落在了 GoEdge WAF 的滑块验证页（2026-11-02 起整站都要先拖滑块）
+var errMukakuWAF = errors.New("站点开启了人机验证（滑块）")
+
+// mukakuWAFPage 认 GoEdge WAF 验证页：跟随跳转后落在 /WAF/VERIFY/，或页面里带它的表单字段
+func mukakuWAFPage(resp *http.Response, raw []byte) bool {
+	if resp.Request != nil && resp.Request.URL != nil && strings.HasPrefix(strings.ToUpper(resp.Request.URL.Path), "/WAF/VERIFY/") {
+		return true
+	}
+	return mukakuWAFHTML(string(raw))
+}
+
+func mukakuWAFHTML(s string) bool {
+	return strings.Contains(s, "GOEDGE_WAF_CAPTCHA_ID") || strings.Contains(s, "<title>Verify Yourself</title>")
 }
 
 // MukakuGetConfig GET /mukaku/config
