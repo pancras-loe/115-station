@@ -85,6 +85,16 @@ func mergePathContext(file *ParsedName, dirs []*ParsedName, dirNames []string) (
 			}
 		}
 	}
+	if from == "" {
+		if i, ok := supersetDirTitle(&out, dirs); ok {
+			vlog("[整理] 文件名片名 %q 是目录名 %q 里的一半，改用目录上的完整片名 %q", out.Title, dirNames[i], dirs[i].Title)
+			out.Title = dirs[i].Title
+			if out.Year == "" {
+				out.Year = dirs[i].Year
+			}
+		}
+	}
+	out.Alts = altTitlesOf(&out, dirs, dirNames)
 	if out.Year == "" && from == "" {
 		key := titleKey(out.Title)
 		for _, d := range dirs {
@@ -110,6 +120,57 @@ func mergePathContext(file *ParsedName, dirs []*ParsedName, dirNames []string) (
 		}
 	}
 	return &out, from
+}
+
+// supersetDirTitle 文件名只写了中英双名的一半、目录名两半都写了时，取目录名的完整片名。
+//
+// 国内压制组的常见形态：目录「飞驰人生[国语配音+中文字幕].Pegasus.2019.2160p…」，
+// 里面的视频只叫「Pegasus.2019.2160p….mp4」。只拿英文名去搜，常见英文名一搜一大串，
+// 中文标题的那部还过不了片名关；有中文名先搜中文名（titleCandidates 的顺序）就是一下的事。
+// 只认最近的、两半都有、且另一半和文件名片名相等的那一级；年份两边都写了就得对得上。
+// 不是同一部片的目录（「欧美电影 2023 合集」）片名对不上，不会被拿来
+func supersetDirTitle(file *ParsedName, dirs []*ParsedName) (int, bool) {
+	fk := titleKey(file.Title)
+	if fk == "" {
+		return 0, false
+	}
+	for i, d := range dirs {
+		if d == nil || !usableTitle(d.Title) {
+			continue
+		}
+		cands := titleCandidates(d.Title)
+		if len(cands) < 3 { // 不是中英双名
+			continue
+		}
+		if titleKey(cands[0]) != fk && titleKey(cands[1]) != fk {
+			continue
+		}
+		if file.Year != "" && d.Year != "" && absYearDiff(file.Year, d.Year) > 1 {
+			continue
+		}
+		return i, true
+	}
+	return 0, false
+}
+
+// altTitlesOf 各级目录上和片名不一样的名字，给 recognize 在只有弱匹配时再搜（ParsedName.Alts）。
+// 订阅的包装目录不算：它的名字和年份是订阅那部的，内容可能是同名的另一部（subtwin.go），
+// 拿它当证据会把错的内容推向订阅的条目；包装目录另有 subHintOf 按更严的条件核对
+func altTitlesOf(p *ParsedName, dirs []*ParsedName, dirNames []string) []altTitle {
+	seen := map[string]bool{titleKey(p.Title): true}
+	var out []altTitle
+	for i, d := range dirs {
+		if d == nil || !usableTitle(d.Title) || isSubWrapperName(dirNames[i]) {
+			continue
+		}
+		k := titleKey(d.Title)
+		if k == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, altTitle{Title: d.Title, Year: d.Year, From: dirNames[i]})
+	}
+	return out
 }
 
 // seasonHintFromPath 文件所在各级目录里最近的一个明写的季号（没有返回 nil）。

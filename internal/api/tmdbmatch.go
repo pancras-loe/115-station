@@ -636,7 +636,7 @@ func pickYearPrefix(date string) string {
 // 原来同名也算「选出来了」，按年份过滤的那次根本轮不到（2026-11-01 现场：Oasis.2002）
 func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*TmdbMedia, error) {
 	var firstErr error
-	var twin *TmdbMedia
+	var twin, weak *TmdbMedia
 	for _, params := range attempts {
 		if twin != nil && params["year"] == "" && params["first_air_date_year"] == "" {
 			continue
@@ -662,18 +662,43 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 		if c != nil {
 			m := c.media(p.kind, d)
 			m.matchHow = how
-			if len(m.Twins) == 0 {
+			switch {
+			case len(m.Twins) > 0:
+				if twin == nil {
+					twin = m
+				}
+			case p.weakMatch(c, how):
+				// 弱匹配也接着试后面的参数：不带年份那一页里正确条目常常不在，
+				// 带 year 过滤的那一页才有（MoviePilot 搜电影一律带年份过滤，只认片名 / 别名相等）
+				m.weak = true
+				if weak == nil {
+					weak = m
+				}
+			default:
 				return m, nil
-			}
-			if twin == nil {
-				twin = m
 			}
 		}
 	}
 	if twin != nil {
 		return twin, nil
 	}
+	if weak != nil {
+		return weak, nil
+	}
 	return nil, firstErr
+}
+
+// weakMatch 选出来的这一条证据不够硬：只是片名包含（第三关、续集补救），
+// 或者名字里写了年份、这一条差了一年以上（片名相等的那几条年份都不对时 choose 也只能取它）。
+// 弱匹配照样能用，只是后面还有别的搜索时先别定下来（searchPick / recognize）
+func (p tmdbPick) weakMatch(c *tmdbCand, how string) bool {
+	if strings.Contains(how, "相近") {
+		return true
+	}
+	if p.seasonYearMode() || p.year == "" || c.year() == "" {
+		return false
+	}
+	return absYearDiff(p.year, c.year()) > 1
 }
 
 // recognizeStrict 同步后自动刮削按目录名认片：只接受 choose 第一关（标题 / 原名相等）的结果。

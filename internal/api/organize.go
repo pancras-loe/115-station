@@ -2119,6 +2119,10 @@ func processDir(ctx *orgCtx, dir dirEntry, files []remoteFile) []OrganizeResult 
 		// TMDB 识别
 		var err error
 		media, err = tc.recognize(parsed)
+		if err == nil {
+			// 订阅包装目录里的：内容自己的名字年份对得上订阅那部就按它认（subhint.go）
+			media = tc.subHint(media, parseFileName(name), dirParses, dirNames, onLog)
+		}
 		if err != nil || media == nil {
 			// 文件名识别失败 → 如果还没试过目录名，用最近一级能用的目录名再识别一次
 			// （文件名自己的片名可能是残缺的，目录名通常更规范）

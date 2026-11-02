@@ -62,6 +62,9 @@ type TmdbMedia struct {
 	AINote  string `json:"-"` // 打分依据，给人看的一句话
 	// matchHow 候选校验在哪一关通过（choose 的 how），AI 打分要看它
 	matchHow string
+	// weak 只是片名相近（包含关系）或年份和名字里写的差一年以上：拿得出更硬的证据的结果
+	// （换个搜索参数、换个名字搜到片名 / 别名相等的）就不用它，见 tmdbPick.weakMatch
+	weak bool
 	// Twins 片名同样相等、得分也一样的其他候选：分不出是哪一部，整理停下来等确认（orgCtx.twinHold）
 	Twins []tmdbTwin `json:"-"`
 }
@@ -422,6 +425,9 @@ type ParsedName struct {
 	// 解析器截错、丢掉的信息，模型能从原文里自己读出来
 	Source  string
 	Context []string
+	// Alts 各级目录上和片名不一样的名字（由近及远，mergePathContext 填）：
+	// 按片名只搜到弱匹配时拿它们再搜一遍（recognize 的最后一轮）
+	Alts []altTitle
 	// Media 整理时读到的画质信息（mediaprobe.go），改名时叠加到按文件名解析出的资源变量上；没读为 nil
 	Media *mediaOverlay
 }
@@ -1073,10 +1079,17 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 		if err != nil {
 			return nil, err
 		}
-		if media != nil {
+		if media != nil && !media.weak {
 			return media, nil
 		}
-		return tc.SearchTV(q, year)
+		tv, err := tc.SearchTV(q, year)
+		if err != nil && media != nil {
+			return media, nil // 原来电影搜中就不搜剧集，别因为多搜的这一次网络出错把结果丢了
+		}
+		if err != nil || (tv != nil && !tv.weak) || media == nil {
+			return tv, err
+		}
+		return media, nil // 两边都只有弱匹配：电影优先，同原来的顺序
 	}
 
 	// 第一轮：原始标题（剧集直接搜 TV）。中英双名先分别用中文名、英文名搜，最后才用整串：
@@ -1084,30 +1097,67 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 	// （MoviePilot _prepare_search_names 同样是中文名 → 英文名依次试）。
 	// 年份对不上的情况（跨年上映、首播差一年）已经在搜索内部处理：年份只参与候选打分，
 	// 原来单独的「去掉年份宽搜索」一轮不再需要
-	var media *TmdbMedia
-	var err error
-	for _, q := range titleCandidates(parsed.Title) {
-		if parsed.IsTV {
-			media, err = searchTV(q, parsed.Year)
-		} else {
-			media, err = movieThenTV(q, parsed.Year)
+	//
+	// 每一轮搜中的若只是弱匹配（片名相近 / 年份对不上，见 tmdbPick.weakMatch）不立即采用，
+	// 先记下、接着往下试；后面哪一轮搜到片名 / 别名相等的就用后者，都没有才用记下的第一条。
+	// 现场（2026-11-02）：「飞驰人生[…].Pegasus.2019/Pegasus.2019.2160p….mp4」只按文件名搜 Pegasus，
+	// 中文标题「飞驰人生」的那部过不了片名关，取了片名包含 Pegasus、同年的
+	// 《Pegasus: Pony With a Broken Wing》，订阅提交的四个离线全进了这部片
+	var weak *TmdbMedia
+	// settle 这一次搜索的结果能不能定下来；弱匹配记下、返回 false 让调用方接着试
+	settle := func(m *TmdbMedia, q string) bool {
+		if m == nil {
+			return false
 		}
-		if err != nil || media != nil {
-			return media, err
+		if !m.weak {
+			return true
+		}
+		if weak == nil {
+			weak = m
+			vlog("[整理] ○ 搜 %q 只搜到弱匹配「%s」（%s），接着试别的名字", q, m.Title, m.matchHow)
+		}
+		return false
+	}
+	// bail 搜索出错：已经有弱匹配就用它（原来搜中就返回、不会有后面这几次请求），否则按出错处理
+	bail := func(err error) (*TmdbMedia, error) {
+		if weak != nil {
+			return weak, nil
+		}
+		return nil, err
+	}
+	search := func(q, year string) (*TmdbMedia, error) {
+		if parsed.IsTV {
+			return searchTV(q, year)
+		}
+		return movieThenTV(q, year)
+	}
+
+	for _, q := range titleCandidates(parsed.Title) {
+		media, err := search(q, parsed.Year)
+		if err != nil {
+			return bail(err)
+		}
+		if settle(media, q) {
+			return media, nil
 		}
 	}
 
 	// 第二轮：清洗后的标题重试（去掉特殊字符/残留标记，压紧空白）
 	cleaned := cleanSearchTitle(parsed.Title)
 	if cleaned != "" && cleaned != parsed.Title {
-		log.Printf("[整理] 首次搜索无结果，用清洗标题重试: %q → %q", parsed.Title, cleaned)
+		log.Printf("[整理] 首次搜索没有可靠结果，用清洗标题重试: %q → %q", parsed.Title, cleaned)
+		var media *TmdbMedia
+		var err error
 		if parsed.IsTV {
 			media, err = tc.SearchTV(cleaned, parsed.Year)
 		} else {
 			media, err = movieThenTV(cleaned, parsed.Year)
 		}
-		if err != nil || media != nil {
-			return media, err
+		if err != nil {
+			return bail(err)
+		}
+		if settle(media, cleaned) {
+			return media, nil
 		}
 	}
 
@@ -1117,15 +1167,47 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 	if cjk, latin := splitCJKLatin(parsed.Title); cjk != "" && latin != "" {
 		for _, q := range []string{cjk, latin} {
 			log.Printf("[整理] 混合标题拆分搜索: %q（原 %q）", q, parsed.Title)
-			if parsed.IsTV {
-				media, err = searchTV(q, parsed.Year)
-			} else {
-				media, err = movieThenTV(q, parsed.Year)
+			media, err := search(q, parsed.Year)
+			if err != nil {
+				return bail(err)
 			}
-			if err != nil || media != nil {
-				return media, err
+			if settle(media, q) {
+				return media, nil
 			}
 		}
+	}
+
+	// 第二点八轮：各级目录上的别的名字（Alts）。只在前面没定下来时才搜：
+	// 目录名离内容远一层，没有更好的证据时文件名优先（MoviePilot MetaInfoPath 同序）。
+	// 年份跟着那一级目录走，没写就用片名的
+	tried := map[string]bool{}
+	for _, q := range titleCandidates(parsed.Title) {
+		tried[titleKey(q)] = true
+	}
+	for _, a := range parsed.Alts {
+		year := a.Year
+		if year == "" {
+			year = parsed.Year
+		}
+		for _, q := range titleCandidates(a.Title) {
+			if tried[titleKey(q)] {
+				continue
+			}
+			tried[titleKey(q)] = true
+			log.Printf("[整理] 按片名没有可靠结果，改用目录上的名字搜索: %q（%s）", q, a.From)
+			media, err := search(q, year)
+			if err != nil {
+				return bail(err)
+			}
+			if settle(media, q) {
+				return media, nil
+			}
+		}
+	}
+
+	if weak != nil {
+		log.Printf("[整理] ○ 没有片名 / 别名相等的结果，采用片名相近的「%s」(%s)（%s）", weak.Title, weak.Year, weak.matchHow)
+		return weak, nil
 	}
 
 	// 第三轮：AI 增强识别（开关开着才走）。给模型原始文件名与目录，改写片名再搜，
@@ -1133,7 +1215,14 @@ func (tc *TmdbClient) recognize(parsed *ParsedName) (*TmdbMedia, error) {
 	if aiCfg := loadAIRecognizeCfg(); aiCfg != nil {
 		return tc.recognizeByAI(aiCfg, parsed)
 	}
-	return media, nil
+	return nil, nil
+}
+
+// altTitle 目录上的另一个名字
+type altTitle struct {
+	Title string
+	Year  string
+	From  string // 原目录名（日志用）
 }
 
 // recognizeByTag 按名字里的 TMDB id 标签取条目。

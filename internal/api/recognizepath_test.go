@@ -42,6 +42,13 @@ func TestMergePathContext(t *testing.T) {
 			title: "Movie", year: "1999", tmdb: 603},
 		{name: "全N集目录判为剧集", file: "01.mp4", path: "狂飙.全39集.国语中字",
 			title: "狂飙", from: "狂飙.全39集.国语中字", season: 1, episode: 1, tv: true},
+		{name: "文件名只写英文名、目录中英都写：用目录的完整片名", file: "Pegasus.2019.2160p.WEB-DL.H265.AAC-BATWEB.mp4",
+			path: "飞驰人生[国语配音+中文字幕].Pegasus.2019.2160p.WEB-DL.H265.AAC-BATWEB", parent: "飞驰人生 (2019) ·订阅38-9",
+			title: "飞驰人生 Pegasus", year: "2019"},
+		{name: "文件名只写中文名也一样", file: "飞驰人生.2019.1080p.mkv", path: "飞驰人生.Pegasus.2019.1080p",
+			title: "飞驰人生 Pegasus", year: "2019"},
+		{name: "目录年份对不上的不借片名", file: "Pegasus.2019.mkv", path: "天马.Pegasus.1990",
+			title: "Pegasus", year: "2019"},
 	}
 	for _, c := range cases {
 		dirs := pathDirs(c.path, c.parent)

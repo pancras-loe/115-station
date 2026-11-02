@@ -115,6 +115,11 @@
       "name": "A.Record.Of.Mortals.Journey.To.Immortality.S01E197.2020.2160p.Bilibili.WEB-DL.HDR.H265.AAC.mp4",
       "want": "tv/106449",
       "note": "英文译名是 A Record of a Mortal's Journey to Immortality：文件名吃掉了冠词 a 与撇号，去掉冠词后与译名相等"
+    },
+    {
+      "name": "Pegasus.2019.2160p.WEB-DL.H265.AAC-BATWEB.mp4",
+      "want": "movie/575219",
+      "note": "飞驰人生英文名 Pegasus：不带年份那一页里片名相等的都不是 2019 年的，只对上片名包含、同年的《Pegasus: Pony With a Broken Wing》（弱匹配）；带年份那一页里飞驰人生靠英文译名对上，弱匹配不能抢先（2026-11-02 现场）"
     }
   ],
   "search": {
@@ -396,6 +401,34 @@
         "release_date": "2026-09-04",
         "poster_path": "/a.jpg"
       }
+    ],
+    "movie|Pegasus|": [
+      {
+        "id": 4100,
+        "title": "Pegasus",
+        "original_title": "Pegasus",
+        "release_date": "2009-03-01"
+      },
+      {
+        "id": 567939,
+        "title": "Pegasus: Pony With a Broken Wing",
+        "original_title": "Pegasus: Pony With a Broken Wing",
+        "release_date": "2019-08-06"
+      }
+    ],
+    "movie|Pegasus|2019": [
+      {
+        "id": 567939,
+        "title": "Pegasus: Pony With a Broken Wing",
+        "original_title": "Pegasus: Pony With a Broken Wing",
+        "release_date": "2019-08-06"
+      },
+      {
+        "id": 575219,
+        "title": "飞驰人生",
+        "original_title": "飞驰人生",
+        "release_date": "2019-02-05"
+      }
     ]
   },
   "detail": {
@@ -580,6 +613,29 @@
           {
             "data": {
               "title": "Hope"
+            }
+          }
+        ]
+      }
+    },
+    "movie/567939": {
+      "id": 567939,
+      "title": "Pegasus: Pony With a Broken Wing",
+      "original_title": "Pegasus: Pony With a Broken Wing",
+      "release_date": "2019-08-06"
+    },
+    "movie/575219": {
+      "id": 575219,
+      "title": "飞驰人生",
+      "original_title": "飞驰人生",
+      "release_date": "2019-02-05",
+      "translations": {
+        "translations": [
+          {
+            "iso_639_1": "en",
+            "iso_3166_1": "US",
+            "data": {
+              "title": "Pegasus"
             }
           }
         ]
