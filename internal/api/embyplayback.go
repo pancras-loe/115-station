@@ -224,11 +224,14 @@ func handleEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, target 
 	action := strings.ToLower(m[3])
 	resource := strings.ToLower(m[1])
 	isDownload := resource == "items" && action == "download"
-	if resource == "items" && !isDownload {
+	// Jellyfin 的 /Items/{id}/File（LibraryController.GetFile）直接回原文件，有的客户端拿它取流；
+	// 不算下载，权限按播放核对（LitePan fnosproxy itemFilePathRE 同样拦它）
+	isFile := resource == "items" && action == "file"
+	if resource == "items" && !isDownload && !isFile {
 		return false
 	}
 	baseAction := strings.SplitN(action, ".", 2)[0]
-	if !isDownload {
+	if !isDownload && !isFile {
 		switch baseAction {
 		case "stream", "original", "master", "main", "hls", "hls1", "live":
 		default:
@@ -291,18 +294,31 @@ func authorizeEmbyPlayback(c *gin.Context, db *gorm.DB, cfg *config.Config, targ
 	if userID != "" {
 		userPath = "/Users/" + url.PathEscape(userID)
 	}
+	// 飞牛影视的 Emby 兼容接口没有 Emby 那套用户播放策略（字段可能整个没有），也不保证有 /Users/Me：
+	// 不要求 Policy，查不到用户时退成只用客户端凭据读条目 —— 读得到就说明凭据有效、这个用户看得到它
+	// （LitePan fnosproxy 不核对用户，只拿客户端凭据读条目详情；这里至少保留读条目这一道）
+	fnos := configuredMediaKind() == msFnos
 	status := embyPlaybackJSON(c.Request, target, userPath, token, &user)
-	if status != http.StatusOK {
+	if status != http.StatusOK && !(fnos && status != http.StatusUnauthorized && status != http.StatusForbidden) {
 		c.String(status, "Emby 用户认证失败")
 		return playGrant{}, true
 	}
-	if user.ID == "" || (userID != "" && user.ID != userID) || user.Policy.EnableMediaPlayback == nil || !*user.Policy.EnableMediaPlayback ||
+	if fnos {
+		if status == http.StatusOK && user.Policy.EnableMediaPlayback != nil && !*user.Policy.EnableMediaPlayback {
+			c.String(http.StatusForbidden, "该用户不允许播放")
+			return playGrant{}, true
+		}
+	} else if user.ID == "" || (userID != "" && user.ID != userID) || user.Policy.EnableMediaPlayback == nil || !*user.Policy.EnableMediaPlayback ||
 		(isDownload && user.Policy.EnableContentDownloading != nil && !*user.Policy.EnableContentDownloading) {
 		c.String(http.StatusForbidden, "该用户不允许播放或下载")
 		return playGrant{}, true
 	}
+	itemPath := "/Users/" + url.PathEscape(user.ID) + "/Items/" + url.PathEscape(itemID) + "?Fields=Path,MediaSources"
+	if user.ID == "" {
+		itemPath = "/Items/" + url.PathEscape(itemID) + "?Fields=Path,MediaSources"
+	}
 	var item embyPlaybackItem
-	status = embyPlaybackJSON(c.Request, target, "/Users/"+url.PathEscape(user.ID)+"/Items/"+url.PathEscape(itemID)+"?Fields=Path,MediaSources", token, &item)
+	status = embyPlaybackJSON(c.Request, target, itemPath, token, &item)
 	if status != http.StatusOK {
 		c.String(status, "无法读取该用户的媒体条目")
 		return playGrant{}, true

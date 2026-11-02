@@ -100,6 +100,7 @@ const embyItemRefreshMax = 8
 // 一次读齐：此前 enabled/style 走 settingValueCompat、服务器地址与路径映射走
 // h.getSettingValue，同一份配置被两条路径分别解析，新装环境下能读出不同结果
 type embyRefreshCfg struct {
+	Kind           string `json:"kind"`
 	ServerURL      string `json:"server_url"`
 	APIKey         string `json:"api_key"`
 	PathMapping    string `json:"path_mapping"`
@@ -127,6 +128,11 @@ func loadEmbyRefreshCfg() (embyRefreshCfg, bool) {
 	}
 	cfg.ServerURL = strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	// 飞牛影视没有 Emby 的管理接口：所有走 Emby API 的功能都按「没配 Emby」处理（fnos.go），
+	// 入库刷新在 notifyEmbyPathsAs 里另走飞牛的扫库
+	if strings.EqualFold(strings.TrimSpace(cfg.Kind), msFnos) {
+		return cfg, false
+	}
 	return cfg, cfg.ServerURL != ""
 }
 
@@ -177,6 +183,10 @@ func notifyEmbyPathsWith(localPaths []string, kind embyRefreshKind, ingest bool,
 // notifyEmbyPathsAs pan 只对删除有意义：见 notifyEmbyPanDeleted
 func notifyEmbyPathsAs(localPaths []string, kind embyRefreshKind, ingest, pan bool, verifyLocal ...string) {
 	if len(localPaths) == 0 {
+		return
+	}
+	if fc, ok := loadFnosCfg(); ok {
+		fnosNotifyPaths(fc, localPaths)
 		return
 	}
 	cfg, ok := loadEmbyRefreshCfg()

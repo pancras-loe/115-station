@@ -75,11 +75,21 @@ export interface EmbyTestResult extends TestResult {
   server_name?: string
   version?: string
   library_count?: number
-  /** 认出来的类型（emby / jellyfin） */
+  /** 认出来的类型（emby / jellyfin / fnos） */
   kind?: string
   product?: string
+  /** 飞牛影视：可见的电影 / 剧集数 */
+  movies?: number
+  series?: number
 }
-export const testEmby = (body: { server_url: string; api_key: string }) =>
+export const testEmby = (body: {
+  server_url: string
+  api_key: string
+  /** 飞牛影视用管理员账号测（没有 API 密钥） */
+  kind?: string
+  fnos_username?: string
+  fnos_password?: string
+}) =>
   http.post<EmbyTestResult>('/config/test-emby', body)
 
 /** 当前媒体服务器是哪家、哪些功能用不了（后端 mediaserver.go） */

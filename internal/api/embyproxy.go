@@ -58,6 +58,7 @@ func getEmbyTarget(db *gorm.DB, cfg *config.Config) string {
 
 	target := ""
 	var cfgRaw struct {
+		Kind      string `json:"kind"`
 		ServerURL string `json:"server_url"`
 	}
 	// 1) yaml 配置文件（前端保存 emby 配置的实际位置）
@@ -80,6 +81,11 @@ func getEmbyTarget(db *gorm.DB, cfg *config.Config) string {
 				target = strings.TrimRight(strings.TrimSpace(cfgRaw.ServerURL), "/")
 			}
 		}
+	}
+	// 飞牛影视兼容 Emby 的接口在 /emby 下面，根路径是它自己的网页（POST 落到根上回的是网页 HTML，
+	// LitePan fnosproxy withEmbyAPIPrefix 同款）。客户端连 6086 时按 Emby 协议发的请求全部转进 /emby
+	if target != "" && strings.EqualFold(strings.TrimSpace(cfgRaw.Kind), msFnos) {
+		target = fnosEmbyAPIBase(target)
 	}
 
 	embyTargetMu.Lock()

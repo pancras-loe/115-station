@@ -31,6 +31,8 @@ export function useMediaServer() {
     name: computed(() => caps.value?.name || 'Emby'),
     kind: computed(() => caps.value?.kind || ''),
     isJellyfin: computed(() => caps.value?.kind === 'jellyfin'),
+    /** 飞牛影视：没有 Emby 的管理接口，读 Emby 的功能都用不了（后端 fnos.go） */
+    isFnos: computed(() => caps.value?.kind === 'fnos'),
     /** 做不了时返回原因，能做返回空串 */
     blocked: (f: MsFeature) => caps.value?.unsupported?.[f] || '',
     /** 改了服务器配置后重新读 */

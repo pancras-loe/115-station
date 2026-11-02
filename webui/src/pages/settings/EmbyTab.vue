@@ -32,19 +32,26 @@ const { model, loading, saving, dirty: modelDirty, saved, save } = useSetting('e
   path_mapping: '',
   style: 'unix',
   refresh_enabled: true,
-  /** 服务器类型：空 = 按 /System/Info/Public 自动识别（后端 mediaserver.go） */
+  /** 服务器类型：空 = 按 /System/Info/Public 自动识别（后端 mediaserver.go）；飞牛只能手动选 */
   kind: '',
+  /** 飞牛影视没有 API 密钥，入库刷新用管理员账号登录它的管理接口扫库（后端 fnos.go） */
+  fnos_username: '',
+  fnos_password: '',
 })
 
 const KIND_OPTIONS = [
   { label: '自动识别', value: '' },
   { label: 'Emby', value: 'emby' },
   { label: 'Jellyfin', value: 'jellyfin' },
+  { label: '飞牛影视', value: 'fnos' },
 ]
 /** 测试连接认出来的类型，没测过就看后端当前判定 */
 const testedKind = ref('')
 const effectiveKind = computed(() => model.value.kind || testedKind.value || ms.kind.value)
-const serverName = computed(() => (effectiveKind.value === 'jellyfin' ? 'Jellyfin' : 'Emby'))
+const isFnos = computed(() => model.value.kind === 'fnos')
+const serverName = computed(() =>
+  effectiveKind.value === 'jellyfin' ? 'Jellyfin' : effectiveKind.value === 'fnos' ? '飞牛影视' : 'Emby',
+)
 
 const banner = ref<BannerState | null>(null)
 const testing = ref(false)
@@ -175,7 +182,8 @@ const dirty = computed(() => {
  * 用户填过映射的一律不碰
  */
 function autoDetectIfEmpty() {
-  if (embyMediaRoot.value.trim() || detecting.value) return
+  // 推算读的是 Emby 媒体库的路径，飞牛没有这个接口
+  if (isFnos.value || embyMediaRoot.value.trim() || detecting.value) return
   const s = saved.value
   if (s.server_url.trim() !== model.value.server_url.trim() || s.api_key.trim() !== model.value.api_key.trim()) return
   if (!s.server_url.trim() || !s.api_key.trim()) return
@@ -199,7 +207,17 @@ async function testConnection() {
   testing.value = true
   banner.value = { status: 'pending', title: `正在连接 ${serverName.value} 服务器…` }
   try {
-    const d = await configApi.testEmby({ server_url: url, api_key: model.value.api_key.trim() })
+    const d = await configApi.testEmby(
+      isFnos.value
+        ? {
+            server_url: url,
+            api_key: '',
+            kind: 'fnos',
+            fnos_username: model.value.fnos_username.trim(),
+            fnos_password: model.value.fnos_password,
+          }
+        : { server_url: url, api_key: model.value.api_key.trim() },
+    )
     if (d.ok && d.kind) testedKind.value = d.kind
     const product = d.product || serverName.value
     const mismatch = d.ok && model.value.kind && d.kind && model.value.kind !== d.kind
@@ -207,7 +225,9 @@ async function testConnection() {
       ? {
           status: mismatch ? 'err' : 'ok',
           title: mismatch ? `连上了，但这是 ${product}，和上面选的类型对不上` : `${product} 连接成功`,
-          detail: `${d.server_name || product}${d.version ? ` · v${d.version}` : ''} · ${d.library_count ?? 0} 个媒体库`,
+          detail:
+            `${d.server_name || product}${d.version ? ` · v${d.version}` : ''} · ${d.library_count ?? 0} 个媒体库` +
+            (d.movies != null ? ` · 电影 ${d.movies} 部、剧集 ${d.series ?? 0} 部` : ''),
         }
       : { status: 'err', title: '连接失败', detail: d.error || '未知错误' }
     if (d.ok) autoDetectIfEmpty()
@@ -305,7 +325,7 @@ onMounted(loadNotify)
 
 // 改了服务器地址就把上次的测试结果清掉，避免拿旧结论当新结论
 watch(
-  () => [model.value.server_url, model.value.api_key],
+  () => [model.value.server_url, model.value.api_key, model.value.kind, model.value.fnos_username, model.value.fnos_password],
   () => {
     banner.value = null
     testedKind.value = ''
@@ -321,7 +341,7 @@ watch(
         <FieldRow
           stacked
           label="服务器类型"
-          tip="Emby 与 Jellyfin 同源，大部分功能两边都能用；少数几项 Jellyfin 做不了，会在对应页面灰掉并写明原因。自动识别读的是服务器的公开信息，一般不用改。"
+          tip="Emby 与 Jellyfin 同源，大部分功能两边都能用；少数几项 Jellyfin 做不了，会在对应页面灰掉并写明原因。自动识别读的是服务器的公开信息，一般不用改。飞牛影视认不出来，要手动选。"
         >
           <HSegmented v-model="model.kind" :options="KIND_OPTIONS" />
         </FieldRow>
@@ -330,12 +350,38 @@ watch(
           stacked
           label="服务器地址"
           required
-          tip="Emby / Jellyfin 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。"
+          :tip="
+            isFnos
+              ? '飞牛影视的网页地址（本容器内可达，如 http://172.17.0.1:5666），不带 /v。6086 反代与此处配置联动。'
+              : 'Emby / Jellyfin 访问地址（本容器内可达，如 http://172.17.0.1:8096）。6086 反代与此处配置联动。'
+          "
         >
-          <HInput v-model="model.server_url" placeholder="如 http://192.168.1.100:8096" :input-attrs="plainProps('emby-server-url')" />
+          <HInput
+            v-model="model.server_url"
+            :placeholder="isFnos ? '如 http://192.168.1.100:5666' : '如 http://192.168.1.100:8096'"
+            :input-attrs="plainProps('emby-server-url')"
+          />
         </FieldRow>
 
-        <FieldRow stacked label="API 密钥" tip="Emby 后台「设置 → API 密钥」、Jellyfin 后台「控制台 → API 密钥」生成，用于按库刷新与连接测试。">
+        <template v-if="isFnos">
+          <FieldRow stacked label="管理员账号" tip="飞牛影视没有 API 密钥：入库刷新要用管理员账号登录它的管理接口去扫媒体库。">
+            <HInput v-model="model.fnos_username" placeholder="飞牛 NAS 的管理员用户名" :input-attrs="plainProps('fnos-username')" />
+          </FieldRow>
+          <FieldRow stacked label="管理员密码">
+            <div class="h-field-row">
+              <SecretInput
+                v-model="model.fnos_password"
+                name="fnos-password"
+                :reveal="{ key: 'emby', field: 'fnos_password' }"
+                placeholder="飞牛 NAS 的管理员密码"
+              />
+              <HButton variant="tertiary" :loading="testing" @click="testConnection">测试连接</HButton>
+            </div>
+            <TestBanner :state="banner" />
+          </FieldRow>
+        </template>
+
+        <FieldRow v-else stacked label="API 密钥" tip="Emby 后台「设置 → API 密钥」、Jellyfin 后台「控制台 → API 密钥」生成，用于按库刷新与连接测试。">
           <div class="h-field-row">
             <SecretInput
               v-model="model.api_key"
@@ -356,6 +402,16 @@ watch(
           <HSwitch v-model="model.refresh_enabled">STRM 生成后通知 {{ serverName }} 刷新对应媒体库</HSwitch>
         </FieldRow>
 
+        <HAlert v-if="isFnos" status="warning" title="飞牛影视能做的与做不了的">
+          <ul class="jf-notes">
+            <li>302 直连只对 Emby 客户端（VidHub、网易爆米花、Infuse 等）有效：客户端添加服务器时填本站的反代端口 6086，类型选 Emby</li>
+            <li>飞牛自己的 App 与网页走它的私有协议，经不过本站反代；它们直接打开 STRM 里的地址播放，所以「直连域名」要填它访问得到的地址</li>
+            <li>飞牛没有按目录刷新的接口：入库时整库扫描，同一个库 30 秒内的几次变动合成一次</li>
+            <li>飞牛没有 Webhook，也没有 Emby 那套管理接口：入库 / 播放通知、深度删除、提前探测、海报墙的媒体信息、与 Emby 对账、演职人员补全、在 Emby 建库都用不了</li>
+            <li>还没在真的飞牛上测过，第一次用请看日志里的「[飞牛]」与「[播放]」</li>
+          </ul>
+        </HAlert>
+
         <HAlert v-if="effectiveKind === 'jellyfin'" status="warning" title="Jellyfin 与 Emby 的几处不同">
           <ul class="jf-notes">
             <li>客户端直连 Jellyfin 播放 STRM 时，由 Jellyfin 自己去拉流，流量经过它所在的机器；要 302 直连，客户端要连本站的反代端口</li>
@@ -366,7 +422,14 @@ watch(
         </HAlert>
       </SectionCard>
 
-      <SectionCard :title="`${serverName} Webhook`" hint="入库 / 删除 / 播放时的消息通知，改动即时生效">
+      <SectionCard v-if="isFnos" title="飞牛影视 Webhook" hint="飞牛影视没有 Webhook">
+        <p class="fnos-none">
+          飞牛影视不会把入库、删除、播放事件推出来，所以收不到这几类通知，Emby 删条目联动删网盘（深度删除）也用不了。
+          本站自己的整理、同步通知不受影响。
+        </p>
+      </SectionCard>
+
+      <SectionCard v-else :title="`${serverName} Webhook`" hint="入库 / 删除 / 播放时的消息通知，改动即时生效">
         <FieldRow
           stacked
           label="接收地址"
@@ -414,7 +477,7 @@ watch(
 
     <SectionCard title="路径映射" hint="同一个目录在本站与 Emby 里各是什么路径；两个容器挂同一个目录时，本地一侧留空即可">
       <template #extra>
-        <HButton size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
+        <HButton v-if="!isFnos" size="sm" variant="tertiary" :loading="detecting" @click="detectEmbyRoot">自动检测</HButton>
       </template>
 
       <div class="map">
@@ -475,6 +538,12 @@ watch(
 </template>
 
 <style scoped>
+.fnos-none {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
 .jf-steps {
   margin: 4px 0 0;
   padding-left: 20px;

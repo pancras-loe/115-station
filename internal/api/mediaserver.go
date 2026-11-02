@@ -25,6 +25,8 @@ import (
 const (
 	msEmby     = "emby"
 	msJellyfin = "jellyfin"
+	// 飞牛影视（fnos.go）：只能手动选，不自动认；Emby 那套管理接口一律不用
+	msFnos = "fnos"
 )
 
 // mediaServerAutoDetect 测试里关掉：几百个用例的假 Emby 不认 /System/Info/Public，
@@ -49,7 +51,7 @@ func configuredMediaKind() string {
 	}
 	_ = json.Unmarshal([]byte(settingValueCompat("emby")), &cfg)
 	switch k := strings.ToLower(strings.TrimSpace(cfg.Kind)); k {
-	case msEmby, msJellyfin:
+	case msEmby, msJellyfin, msFnos:
 		return k
 	}
 	return ""
@@ -111,8 +113,11 @@ func embyIsJellyfin() bool {
 func isJellyfinAt(base string) bool { return mediaServerKind(base) == msJellyfin }
 
 func mediaServerName(kind string) string {
-	if kind == msJellyfin {
+	switch kind {
+	case msJellyfin:
 		return "Jellyfin"
+	case msFnos:
+		return "飞牛影视"
 	}
 	return "Emby"
 }
@@ -127,6 +132,15 @@ const (
 
 // mediaServerUnsupported 这台服务器做不了的功能 → 原因（给界面与入口拒绝时用）
 func mediaServerUnsupported(kind string) map[string]string {
+	if kind == msFnos {
+		// 飞牛没有 API 密钥与 Webhook，私有接口也没有按条目查询 / 探测的入口
+		return map[string]string{
+			msFeatPreProbe:    "飞牛影视没有提前探测的接口",
+			msFeatProbeLog:    "飞牛影视没有读服务器日志的接口",
+			msFeatDeepDelete:  "飞牛影视没有 Webhook，收不到删除事件",
+			msFeatPeopleMerge: "飞牛影视没有人物管理接口",
+		}
+	}
 	if kind != msJellyfin {
 		return map[string]string{}
 	}
@@ -143,8 +157,22 @@ func mediaServerUnsupported(kind string) map[string]string {
 	}
 }
 
+// mediaServerURL 配置里的服务器地址，不分类型（反代上游、认「服务器自己来拉流」都要它，
+// 飞牛下 loadEmbyRefreshCfg 返回没配，不能借它）
+func mediaServerURL() string {
+	var cfg struct {
+		ServerURL string `json:"server_url"`
+	}
+	_ = json.Unmarshal([]byte(settingValueCompat("emby")), &cfg)
+	return strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
+}
+
 // mediaServerBlock 当前服务器做不了 feat 时返回原因
 func mediaServerBlock(feat string) string {
+	// 飞牛下 loadEmbyRefreshCfg 一律报「没配」，得先按配置里的类型判
+	if configuredMediaKind() == msFnos {
+		return mediaServerUnsupported(msFnos)[feat]
+	}
 	cfg, ok := loadEmbyRefreshCfg()
 	if !ok {
 		return ""
@@ -162,6 +190,10 @@ func preProbeBlockErr() error {
 // MediaServerCaps GET /mediaserver/caps —— 当前媒体服务器是哪家、哪些功能用不了。
 // 没配地址时 kind 为空，界面照 Emby 显示
 func (h *Handler) MediaServerCaps(c *gin.Context) {
+	if _, ok := loadFnosCfg(); ok {
+		c.JSON(http.StatusOK, gin.H{"kind": msFnos, "name": mediaServerName(msFnos), "configured": msFnos, "unsupported": mediaServerUnsupported(msFnos)})
+		return
+	}
 	base, _, ok := h.embyServerInfo()
 	if !ok {
 		c.JSON(http.StatusOK, gin.H{"kind": "", "name": "Emby", "unsupported": map[string]string{}})

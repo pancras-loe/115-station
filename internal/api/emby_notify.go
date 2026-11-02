@@ -383,11 +383,24 @@ func managedMediaPathGone(root, localPath string) bool {
 // POST /config/test-emby  body: {"server_url":"...", "api_key":"..."}
 func (h *Handler) TestEmbyConnection(c *gin.Context) {
 	var req struct {
+		Kind      string `json:"kind"`
 		ServerURL string `json:"server_url"`
 		APIKey    string `json:"api_key"`
+		Username  string `json:"fnos_username"`
+		Password  string `json:"fnos_password"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.ServerURL == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 Emby 服务器地址"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写媒体服务器地址"})
+		return
+	}
+	// 飞牛影视没有 API 密钥，用管理员账号登录私有接口测（fnos.go）
+	if strings.EqualFold(req.Kind, msFnos) {
+		if req.Password == settingMask {
+			var saved fnosCfg
+			_ = json.Unmarshal([]byte(settingValueCompat("emby")), &saved)
+			req.Password = saved.Password
+		}
+		c.JSON(http.StatusOK, testFnosConnection(fnosCfg{Kind: msFnos, ServerURL: req.ServerURL, Username: strings.TrimSpace(req.Username), Password: req.Password}))
 		return
 	}
 

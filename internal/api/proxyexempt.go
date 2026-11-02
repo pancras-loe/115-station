@@ -41,10 +41,8 @@ func proxyEmbyIPs() map[string]bool {
 	if proxyExempt.ips != nil && time.Since(proxyExempt.at) < proxyExemptTTL {
 		return proxyExempt.ips
 	}
-	server := ""
-	if cfg, ok := loadEmbyRefreshCfg(); ok {
-		server = cfg.ServerURL
-	}
+	// 不分类型：飞牛下 loadEmbyRefreshCfg 报没配，而飞牛服务器自己来读 STRM 同样该一律 302
+	server := mediaServerURL()
 	ips := embyServerIPs(server, lookupHostIPs, localIPs)
 	proxyExempt.ips, proxyExempt.at = ips, time.Now()
 	return ips

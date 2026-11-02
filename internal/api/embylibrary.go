@@ -144,10 +144,12 @@ func (h *Handler) mapFromEmbyPath(embyPath string) string {
 // embyServerInfo 取 Emby 地址与 API Key（复用 EMBY 管理卡配置）
 func (h *Handler) embyServerInfo() (base, apiKey string, ok bool) {
 	var cfg struct {
+		Kind      string `json:"kind"`
 		ServerURL string `json:"server_url"`
 		APIKey    string `json:"api_key"`
 	}
-	if json.Unmarshal([]byte(h.getSettingValue("emby")), &cfg) != nil || cfg.ServerURL == "" {
+	// 飞牛影视没有 Emby 管理接口，同 loadEmbyRefreshCfg 按没配处理
+	if json.Unmarshal([]byte(h.getSettingValue("emby")), &cfg) != nil || cfg.ServerURL == "" || strings.EqualFold(strings.TrimSpace(cfg.Kind), msFnos) {
 		return "", "", false
 	}
 	base = strings.TrimRight(cfg.ServerURL, "/")
