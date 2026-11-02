@@ -435,7 +435,7 @@ func parseShareSnap(body []byte) ([]map[string]any, string, error) {
 	dec.UseNumber()
 	if dec.Decode(&snap) != nil || !snap.State {
 		if is115BusyResp(body) {
-			return nil, "", fmt.Errorf("读取分享内容失败：115 提示「%s」，请过一会儿再试", share115ErrText(body))
+			return nil, "", fmt.Errorf("读取分享内容失败：115 提示「%s」，请过一会儿再试: %w", share115ErrText(body), errShareBusy)
 		}
 		return nil, "", fmt.Errorf("读取分享内容失败（链接失效或提取码错误）：%s", share115ErrText(body))
 	}
@@ -446,35 +446,66 @@ func parseShareSnap(body []byte) ([]map[string]any, string, error) {
 	return snap.Data.List, si.ShareTitle, nil
 }
 
-// shareWalkMaxDepth 列分享最多往下几层：剧名/Season 1/字幕/xx.ass 已经是三层
+// shareWalkMaxDepth 订阅列分享最多往下几层：剧名/Season 1/字幕/xx.ass 已经是三层
 const shareWalkMaxDepth = 4
 
-// shareWalk 广度优先列整个分享，最多进 maxDirs 个目录（每个目录至少一次节流后的请求）。
+// errShareBusy 列分享时 115 回了风控（开小差 / 稍后再试 / 频繁）：整个列取停下，不接着列剩下的目录
+var errShareBusy = errors.New("115 风控")
+
+// errShareWalkStopped 列到一半用户点了停止
+var errShareWalkStopped = errors.New("已停止")
+
+// shareWalkOpts 列分享的范围与回调。MaxDirs / MaxDepth 为 0 = 不限（分享 STRM 要列全，订阅只看前面几层）
+type shareWalkOpts struct {
+	MaxDirs  int
+	MaxDepth int
+	// Stop 每列一个目录前问一次，真 = 停下返回 errShareWalkStopped
+	Stop func() bool
+	// Progress 每列完一个目录报一次：已列目录数、还排着的目录数、已见文件数
+	Progress func(dirs, queued, files int)
+}
+
+// shareWalk 广度优先列整个分享，最多进 maxDirs 个目录、shareWalkMaxDepth 层（每个目录至少一次节流后的请求）。
 // truncated = 还有目录没列（超了目录数或层数）：挑集时据此说明「没看全」
 func shareWalk(shareCode, receiveCode, cookie string, maxDirs int) (entries []shareEntry, title string, truncated bool, err error) {
-	return shareWalkWith(func(cid string) ([]shareEntry, string, error) {
+	return shareWalkOpt(shareCode, receiveCode, cookie, shareWalkOpts{MaxDirs: maxDirs, MaxDepth: shareWalkMaxDepth})
+}
+
+// shareWalkOpt 按 opt 列分享（分享 STRM 用：不限目录数与层数、可停、报进度）
+func shareWalkOpt(shareCode, receiveCode, cookie string, opt shareWalkOpts) (entries []shareEntry, title string, truncated bool, err error) {
+	return shareWalkCtl(func(cid string) ([]shareEntry, string, error) {
 		return shareList(shareCode, receiveCode, cid, cookie)
-	}, maxDirs)
+	}, opt)
 }
 
 // shareWalkWith 可注入列目录函数的 shareWalk（测试用假分享树）
 func shareWalkWith(list func(cid string) ([]shareEntry, string, error), maxDirs int) (entries []shareEntry, title string, truncated bool, err error) {
+	return shareWalkCtl(list, shareWalkOpts{MaxDirs: maxDirs, MaxDepth: shareWalkMaxDepth})
+}
+
+// shareWalkCtl 广度优先列分享的本体。
+// 碰到风控（errShareBusy）整个停下返回错误：剩下几百个目录接着打只会让风控更久，
+// 也不能当「没看全」继续——分享 STRM 拿半份清单会把没列到的那些当成分享里没了
+func shareWalkCtl(list func(cid string) ([]shareEntry, string, error), opt shareWalkOpts) (entries []shareEntry, title string, truncated bool, err error) {
 	type node struct {
 		cid, dir string
 		depth    int
 	}
 	queue := []node{{cid: "0"}}
-	listed := 0
+	listed, files := 0, 0
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
-		if listed >= maxDirs {
+		if opt.MaxDirs > 0 && listed >= opt.MaxDirs {
 			truncated = true
 			break
 		}
+		if listed > 0 && opt.Stop != nil && opt.Stop() {
+			return entries, title, true, errShareWalkStopped
+		}
 		items, t, err := list(n.cid)
 		if err != nil {
-			if listed == 0 {
+			if listed == 0 || errors.Is(err, errShareBusy) {
 				return nil, "", false, err
 			}
 			// 根列出来了、子目录失败：已有的照样能挑，算没看全
@@ -490,13 +521,17 @@ func shareWalkWith(list func(cid string) ([]shareEntry, string, error), maxDirs 
 			it.Dir = n.dir
 			entries = append(entries, it)
 			if !it.IsDir {
+				files++
 				continue
 			}
-			if n.depth+1 >= shareWalkMaxDepth {
+			if opt.MaxDepth > 0 && n.depth+1 >= opt.MaxDepth {
 				truncated = true
 				continue
 			}
 			queue = append(queue, node{cid: it.ID, dir: it.path(), depth: n.depth + 1})
+		}
+		if opt.Progress != nil {
+			opt.Progress(listed, len(queue), files)
 		}
 	}
 	return entries, title, truncated, nil

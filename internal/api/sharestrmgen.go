@@ -205,7 +205,7 @@ type shareStrmRun struct {
 	keepExt bool
 	cookie  string
 
-	walk     func(code, receive, cookie string, maxDirs int) ([]shareEntry, string, bool, error)
+	walk     func(code, receive, cookie string, opt shareWalkOpts) ([]shareEntry, string, bool, error)
 	download func(cookie, code, receive, fid string) (shareDownInfo, error)
 	fetch    func(u string, max int64) ([]byte, error)
 	owned    func(sha1 string) bool
@@ -228,16 +228,38 @@ func (r *shareStrmRun) run() (shareStrmResult, bool, error) {
 	src := r.src
 	res := shareStrmResult{Title: firstNonEmpty(src.Title, src.ShareCode)}
 	r.set("列分享", 0, 0, res.Title)
-	entries, title, truncated, err := r.walk(src.ShareCode, src.ReceiveCode, r.cookie, shareWalkMaxDirs)
+	walkStart := r.now()
+	dirs := 0
+	entries, title, truncated, err := r.walk(src.ShareCode, src.ReceiveCode, r.cookie, shareWalkOpts{
+		// 不限目录数与层数：整库分享上千个目录、五六层都常见，列不全宁可不生成（见下）
+		Stop: r.stop,
+		Progress: func(d, queued, files int) {
+			dirs = d
+			r.set("列分享", d, d+queued, fmt.Sprintf("%s：%d 个目录、%d 个文件", res.Title, d, files))
+		},
+	})
+	if errors.Is(err, errShareWalkStopped) {
+		// 列到一半停下：什么都不动（半份清单会把没列到的当成分享里没了），下次照原计划查
+		plogShareStrm.Printf("○ %s：列到第 %d 个目录时停止", res.Title, dirs)
+		return res, true, nil
+	}
 	if err == nil && truncated {
-		err = fmt.Errorf("分享太大：超过 %d 个目录，没有生成（只按列到的一半生成，Emby 里会缺一截）", shareWalkMaxDirs)
+		// 有子目录列不出来：只按列到的生成，Emby 里会缺一截，没列到的还会被当成分享里没了
+		err = fmt.Errorf("分享有目录列不出来（已列 %d 个），这一轮没有生成，稍后重试", dirs)
 	}
 	if err != nil {
+		if errors.Is(err, errShareBusy) {
+			plogShareStrm.Printf("✗ %s：列到第 %d 个目录时 115 风控，整轮停下按出错退避", res.Title, dirs)
+		}
 		r.markSource(shareStateOfErr(err), err.Error(), shareStateOfErrRaw(err))
 		return res, false, err
 	}
 	if title != "" {
 		res.Title = title
+	}
+	r.src.WalkDirs = dirs
+	if dirs >= shareBigDirs {
+		plogShareStrm.Printf("○ %s：列了 %d 个目录、%d 个条目，用时 %s", res.Title, dirs, len(entries), r.now().Sub(walkStart).Round(time.Second))
 	}
 	minSize := int64(r.cfg.MinSizeMB) << 20
 	plans, skip := planShareFiles(entries, sharePlanOpts{LocalDir: src.LocalDir, MinSize: minSize, Assets: r.cfg.Assets, Owned: r.owned})
@@ -474,7 +496,7 @@ func (r *shareStrmRun) finishSource(title string) {
 	st := shareAfterRun(*r.src, shareStateOK, now)
 	r.db.Model(&model.ShareSource{}).Where("id = ?", r.src.ID).Updates(map[string]any{
 		"title": truncateStr(title, 480), "state": shareStateOK, "share_state": "1", "last_error": "",
-		"last_check": &now, "files": int(videos), "assets": int(assets),
+		"last_check": &now, "files": int(videos), "assets": int(assets), "walk_dirs": r.src.WalkDirs,
 		"fail_streak": 0, "gone_streak": 0, "notified": false, "ignored": false, "next_check": st.NextCheck})
 }
 
@@ -485,6 +507,9 @@ const (
 	shareGoneStreakMax = 3
 	// shareRetryMax 出错退避的上限
 	shareRetryMax = 72 * time.Hour
+	// shareBigDirs 目录数到这么多算大分享：追更间隔至少 shareBigFollow，日志记一行列取用时
+	shareBigDirs   = 300
+	shareBigFollow = 24 * time.Hour
 )
 
 type shareRunState struct {
@@ -502,6 +527,10 @@ type shareRunState struct {
 //   - 别的错（网络、风控）：退避 间隔 × 2^次数，封顶 72 小时，没开追更的不自动重试
 func shareAfterRun(src model.ShareSource, outcome string, now time.Time) shareRunState {
 	base := time.Duration(src.FollowHours) * time.Hour
+	if base > 0 && src.WalkDirs >= shareBigDirs {
+		// 大分享每轮都要把整棵树列一遍（上千次节流后的请求）：追更至少隔一天，别让它常年占着 115 的读配额
+		base = max(base, shareBigFollow)
+	}
 	at := func(d time.Duration) *time.Time {
 		t := now.Add(d)
 		return &t
@@ -649,7 +678,7 @@ func execShareStrmJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	}
 	r := &shareStrmRun{
 		db: h.DB, src: &src, cfg: cfg, root: shareRootAbs(cfg), domain: domain, format: format, keepExt: keepExt, cookie: cookie,
-		walk:     shareWalk,
+		walk:     shareWalkOpt,
 		download: shareDownurlFn,
 		fetch:    httpFetchLimited,
 		owned: func(sha1 string) bool {

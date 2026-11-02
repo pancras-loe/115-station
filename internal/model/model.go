@@ -327,6 +327,7 @@ type ShareSource struct {
 	LastCheck  *time.Time `json:"last_check"`
 	Files      int        `json:"files"`                 // 本地写着的 STRM 数
 	Assets     int        `json:"assets"`                // 下载到本地的附属文件数
+	WalkDirs   int        `json:"walk_dirs"`             // 上一次列全时有几个目录：大分享追更间隔自动拉长
 	Source     string     `json:"source" gorm:"size:32"` // 从哪添加的：web / 机器人
 	// FollowHours 追更：隔几小时重新列一次分享，补新增的、收掉分享里没了的。0 = 不追更（只在点「立即检查」时检查）
 	FollowHours int        `json:"follow_hours"`

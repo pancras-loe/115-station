@@ -91,8 +91,6 @@ const (
 	shareAssetMaxBytes = 10 << 20
 	// shareAssetMaxCount 一个分享最多下载多少个附属文件
 	shareAssetMaxCount = 200
-	// shareWalkMaxDirs 一个分享最多列多少个目录：超了报「分享太大」，不按列到的那一半生成
-	shareWalkMaxDirs = 300
 )
 
 func defaultShareStrmCfg() shareStrmCfg {

@@ -50,7 +50,7 @@ func TestSubShareStrmFlow(t *testing.T) {
 	mb := int64(1 << 20)
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{}, root: root, domain: "http://nas", cookie: "ck",
-		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) {
+		walk: func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 			return []shareEntry{
 				{ID: "1", Name: "某剧.S01E01.mkv", Size: 900 * mb},
 				{ID: "2", Name: "某剧.S01E02.mkv", Size: 900 * mb},

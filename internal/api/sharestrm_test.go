@@ -160,7 +160,7 @@ func TestShareStrmRunAndDelete(t *testing.T) {
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{Assets: true, MinSizeMB: 50}, root: root,
 		domain: "http://nas:6086", format: "", cookie: "ck",
-		walk: func(code, rc, ck string, max int) ([]shareEntry, string, bool, error) {
+		walk: func(code, rc, ck string, _ shareWalkOpts) ([]shareEntry, string, bool, error) {
 			if code != "sws9e623h88" || rc != "LGNB" {
 				t.Fatalf("列分享用错了分享码 / 提取码：%s %s", code, rc)
 			}
@@ -218,8 +218,37 @@ func TestShareStrmRunAndDelete(t *testing.T) {
 		t.Fatalf("字幕大小变了才重下：多下了 %d 次", downloads-before)
 	}
 
+	// 列到一半停止 / 碰到风控：本地一个不动（半份清单会把没列到的当成分享里没了）
+	strmCount := func() int {
+		n := 0
+		filepath.WalkDir(root, func(p string, d os.DirEntry, _ error) error {
+			if d != nil && !d.IsDir() && strings.HasSuffix(p, ".strm") {
+				n++
+			}
+			return nil
+		})
+		return n
+	}
+	had := strmCount()
+	r.walk = func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
+		return entries[:1], "", true, errShareWalkStopped
+	}
+	if _, canceled, err := r.run(); err != nil || !canceled || strmCount() != had {
+		t.Fatalf("列到一半停止：canceled=%v err=%v strm %d→%d", canceled, err, had, strmCount())
+	}
+	r.walk = func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
+		return nil, "", false, fmt.Errorf("读取分享内容失败：%w", errShareBusy)
+	}
+	if _, _, err := r.run(); !errors.Is(err, errShareBusy) || strmCount() != had {
+		t.Fatalf("风控：%v strm %d→%d", err, had, strmCount())
+	}
+	db.First(&got, src.ID)
+	if got.State != shareStateError {
+		t.Fatalf("风控后应按出错退避：%+v", got.State)
+	}
+
 	// 分享失效：状态记 gone，不动本地
-	r.walk = func(string, string, string, int) ([]shareEntry, string, bool, error) {
+	r.walk = func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 		return nil, "", false, &shareGoneErr{state: "7", reason: "链接已过期"}
 	}
 	if _, _, err := r.run(); !errors.Is(err, errShareGone) {
@@ -290,6 +319,16 @@ func TestShareAfterRun(t *testing.T) {
 		return p.Sub(now).String()
 	}
 	follow := model.ShareSource{FollowHours: 12}
+	// 大分享：追更至少隔一天；没开追更的照样不排
+	if got := h(shareAfterRun(model.ShareSource{FollowHours: 12, WalkDirs: shareBigDirs}, shareStateOK, now).NextCheck); got != "24h0m0s" {
+		t.Errorf("大分享 + 追更 12h：%s", got)
+	}
+	if got := h(shareAfterRun(model.ShareSource{FollowHours: 72, WalkDirs: 5000}, shareStateOK, now).NextCheck); got != "72h0m0s" {
+		t.Errorf("大分享 + 追更 72h：%s", got)
+	}
+	if got := h(shareAfterRun(model.ShareSource{WalkDirs: 5000}, shareStateOK, now).NextCheck); got != "不查" {
+		t.Errorf("大分享不追更：%s", got)
+	}
 	// 正常：开了追更隔 12 小时，没开不排
 	if got := h(shareAfterRun(follow, shareStateOK, now).NextCheck); got != "12h0m0s" {
 		t.Errorf("正常 + 追更：%s", got)
@@ -346,7 +385,7 @@ func TestShareStrmGoneAndBlocked(t *testing.T) {
 	clock := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{}, root: root, domain: "http://nas", cookie: "ck",
-		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) {
+		walk: func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 			return entries, "剧", false, nil
 		},
 		stop: func() bool { return false }, set: func(string, int, int, string) {},

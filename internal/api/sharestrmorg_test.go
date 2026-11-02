@@ -96,7 +96,7 @@ func TestShareStrmOrganizeRun(t *testing.T) {
 	}
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{Assets: true}, root: root, domain: "http://nas", cookie: "ck",
-		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) {
+		walk: func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 			return shareOrgEntries(), "某剧 2025 全集", false, nil
 		},
 		download: func(string, string, string, string) (shareDownInfo, error) { return shareDownInfo{URL: "u"}, nil },
@@ -140,7 +140,7 @@ func TestShareStrmOrganizeRun(t *testing.T) {
 	db.Create(&src2)
 	r.src = &src2
 	deps.recognize = func(*ParsedName) (*TmdbMedia, error) { return nil, nil }
-	r.walk = func(string, string, string, int) ([]shareEntry, string, bool, error) {
+	r.walk = func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 		return []shareEntry{{ID: "9", Name: "unknown.mkv", Size: 900 << 20}}, "unknown", false, nil
 	}
 	if _, _, err := r.run(); err != nil {

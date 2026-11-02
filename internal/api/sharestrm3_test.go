@@ -62,7 +62,7 @@ func TestShareAdopt(t *testing.T) {
 	// 之后「原样」检查：分享里的新文件照计划放，已有的留在原位（不按分享结构挪）
 	r := &shareStrmRun{
 		db: db, src: &src, cfg: shareStrmCfg{}, root: root, domain: "http://nas:6086", cookie: "ck",
-		walk: func(string, string, string, int) ([]shareEntry, string, bool, error) {
+		walk: func(string, string, string, shareWalkOpts) ([]shareEntry, string, bool, error) {
 			return []shareEntry{
 				{ID: "101", Name: "E01.mkv", Dir: "某剧/S01", Size: 1 << 30},
 				{ID: "103", Name: "E03.mkv", Dir: "某剧/S01", Size: 1 << 30},
