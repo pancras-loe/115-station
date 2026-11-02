@@ -163,13 +163,20 @@ func pansouSearchItems(kw string) ([]PansouItem, error) {
 		// 30s → 重试 15s：请求级超时（客户端为包级复用，不能设整体 Timeout）
 		ctx, cancel := context.WithTimeout(req.Context(), time.Duration(30-15*(attempt-1))*time.Second)
 		resp, err := pansouHTTP.Do(req.WithContext(ctx))
-		cancel()
 		if err != nil {
+			cancel()
 			lastErr = "连接盘搜失败: " + sanitizeWecomErr(err)
 			continue
 		}
-		body, _ = io.ReadAll(io.LimitReader(resp.Body, pansouMaxBody))
+		// 读完响应体才能 cancel：Do 拿到响应头就返回，提前取消会把连接掐断，
+		// 结果多的时候只读到缓冲里的几十 KB，解析报 unexpected EOF（现场 1593 条结果截在 128 KB）
+		body, err = io.ReadAll(io.LimitReader(resp.Body, pansouMaxBody))
 		resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastErr = fmt.Sprintf("读取盘搜响应失败（已读 %d 字节）: %s", len(body), sanitizeWecomErr(err))
+			continue
+		}
 		if resp.StatusCode == http.StatusOK {
 			lastErr = ""
 			break

@@ -52,6 +52,47 @@ func TestPansouNormalize(t *testing.T) {
 	}
 }
 
+// 现场：1593 条结果报 unexpected EOF，长度 131072。拿到响应头就 cancel 上下文，
+// 后面才到的响应体被掐断。服务端先发头、隔一会儿分块发大响应体，要整份读到。
+func TestPansouLargeStreamedBody(t *testing.T) {
+	const n = 3000
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprintf(w, `{"code":0,"message":"success","data":{"total":%d,"merged_by_type":{"115":[`, n)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				fmt.Fprint(w, ",")
+			}
+			fmt.Fprintf(w, `{"url":"https://115.com/s/x%05d","note":"%s","datetime":"2026-11-01T12:00:00Z"}`, i, strings.Repeat("标题", 20))
+			if i%500 == 0 {
+				w.(http.Flusher).Flush()
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		fmt.Fprint(w, `]}}}`)
+	}))
+	defer server.Close()
+	pansouCfgMu.Lock()
+	oldCfg, oldAt := pansouCfgV, pansouCfgAt
+	pansouCfgV, pansouCfgAt = &pansouCfg{BaseURL: server.URL}, time.Now()
+	pansouCfgMu.Unlock()
+	t.Cleanup(func() {
+		pansouCfgMu.Lock()
+		pansouCfgV, pansouCfgAt = oldCfg, oldAt
+		pansouCfgMu.Unlock()
+	})
+	items, err := pansouSearchItems("movie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != n {
+		t.Fatalf("expected %d items, got %d", n, len(items))
+	}
+}
+
 // 自建实例现场：code=0 / success 却报「响应异常」。备注里没转义的换行、尾部多余内容、
 // 某一类不是数组，都不该让整次搜索失败。
 func TestPansouDecodeTolerant(t *testing.T) {
