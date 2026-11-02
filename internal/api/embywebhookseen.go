@@ -100,6 +100,19 @@ func (h *Handler) embyWebhookToken() string {
 	return ""
 }
 
+// embyPlayNotifyOn 播放 / 暂停 / 停止事件要不要推通知（emby-notify 的 play_notify，默认关）。
+// 原来只要 Emby 里勾了播放事件就推，一部片拖一下进度就是好几条，不需要的用户嫌吵；
+// 和 token 存在同一个 key 里，前端保存时两项一起带上
+func (h *Handler) embyPlayNotifyOn() bool {
+	var cfg struct {
+		PlayNotify bool `json:"play_notify"`
+	}
+	if v := h.getSettingValue("emby-notify"); v != "" {
+		_ = json.Unmarshal([]byte(v), &cfg)
+	}
+	return cfg.PlayNotify
+}
+
 // EmbyWebhookStatus GET /emby/webhook-status：token 生成了没有、最近收到过什么
 func (h *Handler) EmbyWebhookStatus(c *gin.Context) {
 	webhookSeen.Lock()

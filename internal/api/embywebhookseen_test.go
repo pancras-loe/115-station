@@ -67,6 +67,36 @@ func TestEmbyWebhookSeen(t *testing.T) {
 	}
 }
 
+// 播放事件默认不推，开了 play_notify 才推；入库、删除不受这个开关影响
+func TestEmbyPlayNotifySwitch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newTestDB(t, "playnotify.db")
+	resetWebhookSeen()
+	t.Cleanup(resetWebhookSeen)
+	cfg := &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
+	h := &Handler{DB: model.DB, Config: cfg}
+	post := func(body string) string {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/emby/webhook?token=tk", strings.NewReader(body))
+		h.EmbyWebhook(c)
+		return w.Body.String()
+	}
+	play := `{"Event":"playback.start","Item":{"Name":"冰川时代"},"User":{"Name":"admin"}}`
+
+	_ = cfg.SaveSetting("emby-notify", `{"token":"tk"}`)
+	if got := post(play); !strings.Contains(got, "未开启") {
+		t.Fatalf("没开播放通知时应不推：%s", got)
+	}
+	if got := post(`{"Event":"playback.stop","Item":{"Name":"冰川时代"}}`); !strings.Contains(got, "未开启") {
+		t.Fatalf("停止事件同样不推：%s", got)
+	}
+	_ = cfg.SaveSetting("emby-notify", `{"token":"tk","play_notify":true}`)
+	if got := post(play); strings.Contains(got, "未开启") {
+		t.Fatalf("开了应推：%s", got)
+	}
+}
+
 func TestSaveFullLastScan(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir(), ConfigDir: t.TempDir()}
 	h := &Handler{Config: cfg}

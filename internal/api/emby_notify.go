@@ -200,6 +200,11 @@ func (h *Handler) EmbyWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "ok"})
 		return
 	}
+	if (category == "play" || category == "pause") && !h.embyPlayNotifyOn() {
+		vlog("[Emby Webhook] ○ 播放事件 %s（%s），播放通知没开，不推", event, itemName)
+		c.JSON(http.StatusOK, gin.H{"message": "ok（播放通知未开启）"})
+		return
+	}
 	content := itemName
 	if content == "" {
 		content = event

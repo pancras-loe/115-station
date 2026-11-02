@@ -231,6 +231,8 @@ const pathResult = computed(() => {
 
 // ---- Emby Webhook 接收地址 ----
 const notifyToken = ref('')
+/** 播放 / 暂停 / 停止也推通知（后端 embyPlayNotifyOn，默认关：拖一下进度就是好几条） */
+const playNotify = ref(false)
 
 function genToken() {
   const buf = new Uint8Array(8)
@@ -251,10 +253,24 @@ async function saveToken(t: string) {
     return
   }
   try {
-    await configApi.saveSetting('emby-notify', { token })
+    // token 与播放通知存在同一个 key 里，整存整取：两项一起带上，别互相冲掉
+    await configApi.saveSetting('emby-notify', { token, play_notify: playNotify.value })
     notifyToken.value = token
   } catch (e) {
     toastError(e, 'token 保存失败')
+  }
+}
+
+async function setPlayNotify(v: boolean) {
+  // token 还没读回来时不存：存进去的就是空 token，Webhook 全部 401
+  if (!notifyToken.value.trim()) return
+  const prev = playNotify.value
+  playNotify.value = v
+  try {
+    await configApi.saveSetting('emby-notify', { token: notifyToken.value.trim(), play_notify: v })
+  } catch (e) {
+    playNotify.value = prev
+    toastError(e, '保存失败')
   }
 }
 
@@ -266,10 +282,12 @@ function rotateToken() {
 }
 
 async function loadNotify() {
-  const v = await configApi.getSetting<{ token: string; webhook?: string }>('emby-notify', {
+  const v = await configApi.getSetting<{ token: string; webhook?: string; play_notify?: boolean }>('emby-notify', {
     token: '',
     webhook: '',
+    play_notify: false,
   })
+  playNotify.value = !!v.play_notify
   let t = v.token
   // 后端对 token 回的是掩码，接收地址要拼真值，否则复制出去的是 token=••••
   if (t === configApi.SECRET_MASK) t = await configApi.revealSecret('emby-notify', 'token')
@@ -366,7 +384,7 @@ watch(
           <li>Jellyfin「控制台 → 插件 → 目录」安装「Webhook」，装完重启 Jellyfin</li>
           <li>打开插件设置，点「Add Generic Destination」</li>
           <li>Webhook Url 填上面的接收地址</li>
-          <li>Notification Type 勾「Item Added」「Playback Start」「Playback Stop」</li>
+          <li>Notification Type 勾「Item Added」；要播放通知（下面的开关）再勾「Playback Start」「Playback Stop」</li>
           <li>Item Type 勾「Movies」「Episodes」（剧集按整部报就勾「Series」）</li>
           <li>勾上「Send All Properties (ignores template)」，模板留空，保存</li>
           <li>插件没有测试按钮：播一个视频，深度删除页会显示收到过事件</li>
@@ -382,6 +400,14 @@ watch(
             <HInput v-model="notifyToken" placeholder="自动生成，可自定义" @blur="saveToken(notifyToken)" />
             <HButton variant="tertiary" @click="rotateToken">换一个</HButton>
           </div>
+        </FieldRow>
+
+        <FieldRow
+          stacked
+          label="播放通知"
+          :tip="`${serverName} 里有人开始播放、暂停、停止时各推一条（写明是谁在看什么）。拖一下进度、暂停一下都会推，不需要就别开；入库与删除通知不受影响。`"
+        >
+          <HSwitch :model-value="playNotify" @update:model-value="setPlayNotify">播放 / 暂停 / 停止时推通知</HSwitch>
         </FieldRow>
       </SectionCard>
     </div>
