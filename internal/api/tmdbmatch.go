@@ -513,17 +513,8 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 		// 没有中文译名的冷门同名条目标题还是英文，反倒相等。
 		// 现场：Hope.2026（罗泓轸《希望》，标题「希望」原名「호프」）被认成 2025 年的 18 分钟同名短片（2026-10-14）
 		if !p.seasonYearMode() && p.year != "" && exact[0].c.year() != p.year {
-			for i, s := range scored {
-				if i >= 5 {
-					break
-				}
-				if s.level == titleExact || s.c.year() != p.year {
-					continue
-				}
-				if d := detail(s.c.ID); d != nil && titleLevelOf(p.query, d.Names...) == titleExact {
-					s.score += 3
-					return finish(s, "片名相等的年份不符，取别名相等且同年的")
-				}
+			if s, ok := sameYearAlias(p, scored, detail); ok {
+				return finish(s, "片名相等的年份不符，取别名相等且同年的")
 			}
 		}
 		// 片名相等但年份差得远，而另有一条片名相近、年份分毫不差的：多半是续集。
@@ -591,6 +582,46 @@ func (tc *TmdbClient) choose(p tmdbPick, cands []tmdbCand) (*tmdbCand, *tmdbDeta
 	return nil, nil, "", detailErr
 }
 
+// sameYearAlias choose 第一关的补救：片名相等的那几条年份都不对时，找一条片名不相等、
+// 别名 / 译名相等、年份分毫不差的。
+//
+// 原来只看得分前 5 名。常见片名一页里十几条同名的同分，排序沿用 TMDB 相关度，
+// 真正那部常排在 5 名以外（2026-11-01 现场：Oasis.2002 李沧东《绿洲》，中文标题「绿洲」、
+// 原名「오아시스」，过不了第一关，搜「Oasis」有十几部同名的，停成同名待确认、暂定 2024 年那部）。
+// 所以搜索结果里年份对得上的一律查，不限名次；年份对不上的只查前 5 名，
+// 按详情的上映日期再核一次 —— 搜索结果的日期有时是某地区的重映日期
+// （网页搜索里这部显示 2020-11-06 台湾上映）。详情有缓存，最多查 8 条
+func sameYearAlias(p tmdbPick, scored []scoredCand, detail func(int) *tmdbDetail) (scoredCand, bool) {
+	checked, rank := 0, 0
+	for _, s := range scored {
+		if s.level == titleExact {
+			continue
+		}
+		rank++ // 名次只数片名不相等的：同名的那一串得分高，全排在前面
+		listed := s.c.year() == p.year
+		if !listed && (rank > 5 || p.kind != "movie") {
+			continue
+		}
+		if checked >= 8 {
+			break
+		}
+		checked++
+		d := detail(s.c.ID)
+		if d == nil || titleLevelOf(p.query, d.Names...) != titleExact {
+			continue
+		}
+		if !listed {
+			if pickYearPrefix(d.ReleaseDate) != p.year {
+				continue
+			}
+			s.c.Date = d.ReleaseDate // 年份按详情的首映，不按搜索结果里的重映日期
+		}
+		s.score += 3
+		return s, true
+	}
+	return scoredCand{}, false
+}
+
 func pickYearPrefix(date string) string {
 	if len(date) >= 4 {
 		return date[:4]
@@ -598,10 +629,18 @@ func pickYearPrefix(date string) string {
 	return ""
 }
 
-// searchPick 按 attempts 依次搜索、逐页校验，第一条对得上的即返回
+// searchPick 按 attempts 依次搜索、逐页校验，第一条对得上的即返回。
+//
+// 例外是选出来的有同名同分的（Twins）：先记下，后面还有按年份过滤的搜索就再试一次，
+// 那一页里选得出没有同名的才换成它，否则还是返回记下的这条（整理停下来等人确认）。
+// 原来同名也算「选出来了」，按年份过滤的那次根本轮不到（2026-11-01 现场：Oasis.2002）
 func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*TmdbMedia, error) {
 	var firstErr error
+	var twin *TmdbMedia
 	for _, params := range attempts {
+		if twin != nil && params["year"] == "" && params["first_air_date_year"] == "" {
+			continue
+		}
 		cands, err := tc.searchCands(p.kind, params)
 		if err != nil {
 			if firstErr == nil {
@@ -623,8 +662,16 @@ func (tc *TmdbClient) searchPick(p tmdbPick, attempts []map[string]string) (*Tmd
 		if c != nil {
 			m := c.media(p.kind, d)
 			m.matchHow = how
-			return m, nil
+			if len(m.Twins) == 0 {
+				return m, nil
+			}
+			if twin == nil {
+				twin = m
+			}
 		}
+	}
+	if twin != nil {
+		return twin, nil
 	}
 	return nil, firstErr
 }

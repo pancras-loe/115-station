@@ -48,6 +48,82 @@ func TestChooseRecordsTwins(t *testing.T) {
 	}
 }
 
+// Oasis.2002（李沧东《绿洲》，中文标题「绿洲」、原名「오아시스」）：搜「Oasis」有一串片名相等的同名片，
+// 年份都不对。真正那部别名是 Oasis，排在前 5 名以外、或者搜索结果给的是重映日期，都要认出来
+func TestChooseSameYearAliasBeyondTop5(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/movie/26955":
+			fmt.Fprint(w, `{"release_date":"2002-08-15","alternative_titles":{"titles":[{"title":"Oasis"}]}}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer srv.Close()
+	resetTmdbCaches()
+	t.Cleanup(resetTmdbCaches)
+	tc := &TmdbClient{APIKey: "k", APIURL: srv.URL, Language: "zh-CN", httpClient: srv.Client()}
+
+	same := func(real tmdbCand, at int) []tmdbCand {
+		var cands []tmdbCand
+		for i, y := range []string{"2024", "2023", "1955", "2022", "2020", "2017", "2013"} {
+			cands = append(cands, tmdbCand{ID: 100 + i, Title: "Oasis", Date: y + "-01-01", Poster: "/p.jpg"})
+		}
+		return append(cands[:at], append([]tmdbCand{real}, cands[at:]...)...)
+	}
+	p := tmdbPick{kind: "movie", query: "Oasis", year: "2002"}
+
+	c, _, how, _ := tc.choose(p, same(tmdbCand{ID: 26955, Title: "绿洲", Original: "오아시스", Date: "2002-08-15"}, 6))
+	if c == nil || c.ID != 26955 || len(c.twins) != 0 {
+		t.Fatalf("排在第 7 名的同年别名相等的应采用: %+v %s", c, how)
+	}
+	c, _, _, _ = tc.choose(p, same(tmdbCand{ID: 26955, Title: "绿洲", Original: "오아시스", Date: "2020-11-06"}, 2))
+	if c == nil || c.ID != 26955 || c.year() != "2002" {
+		t.Fatalf("搜索结果是重映日期时应按详情的首映认，年份写 2002: %+v", c)
+	}
+	// 重映日期又在片名不相等的里面排 5 名以外：不再逐条查详情，照旧同名停下
+	cands := same(tmdbCand{ID: 1, Title: "x"}, 0)
+	for i := 2; i <= 5; i++ {
+		cands = append(cands, tmdbCand{ID: i, Title: fmt.Sprintf("x%d", i)})
+	}
+	cands = append(cands, tmdbCand{ID: 26955, Title: "绿洲", Original: "오아시스", Date: "2020-11-06"})
+	c, _, _, _ = tc.choose(p, cands)
+	if c == nil || c.ID == 26955 || len(c.twins) == 0 {
+		t.Fatalf("应停成同名: %+v", c)
+	}
+}
+
+// 不带年份那页只选出同名的：再按年份过滤搜一次，选得出没有同名的就用它
+func TestSearchPickTwinsTryYearFilter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/search/movie" && r.URL.Query().Get("year") == "2002":
+			fmt.Fprint(w, `{"results":[{"id":26955,"title":"绿洲","original_title":"오아시스","release_date":"2002-08-15"}]}`)
+		case r.URL.Path == "/search/movie":
+			fmt.Fprint(w, `{"results":[{"id":1,"title":"Oasis","release_date":"2024-01-01","poster_path":"/a"},`+
+				`{"id":2,"title":"Oasis","release_date":"2023-01-01","poster_path":"/b"}]}`)
+		case r.URL.Path == "/movie/26955":
+			fmt.Fprint(w, `{"release_date":"2002-08-15","alternative_titles":{"titles":[{"title":"Oasis"}]}}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer srv.Close()
+	resetTmdbCaches()
+	t.Cleanup(resetTmdbCaches)
+	tc := &TmdbClient{APIKey: "k", APIURL: srv.URL, Language: "zh-CN", httpClient: srv.Client()}
+
+	m, err := tc.SearchMovie("Oasis", "2002")
+	if err != nil || m == nil || m.TmdbID != 26955 || len(m.Twins) != 0 {
+		t.Fatalf("按年份过滤应认出 2002 那部: %+v %v", m, err)
+	}
+	// 年份过滤那页也认不出：还是同名停下，返回第一页的结果
+	m, err = tc.SearchMovie("Oasis", "1999")
+	if err != nil || m == nil || m.TmdbID != 1 || len(m.Twins) != 1 {
+		t.Fatalf("应退回同名的结果: %+v %v", m, err)
+	}
+}
+
 // 同名停下：记录标 HoldTwin、原因列出几部；「人工确认」关着也不自动接手；确认之后标记还在
 func TestTwinHoldSticky(t *testing.T) {
 	newTestDB(t, "twin_hold.db")
