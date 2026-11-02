@@ -9,6 +9,9 @@ package api
 //   - 前端的硬校验照抄一遍、先在本地拦：总大小 > 0、有分辨率、有文件格式、剧集要有具体集号、不收枪版。
 //   - tag 是前端 Y() 拼的「DT2|4K|WEB-DL|HEVC|…」：每一项归一成站点的写法、去重、按类别排序。只放认得出的项。
 //   - 重复链接回 code=share_code_duplicate；首次发布有 first_publish_reward。
+//   - 离线链接（2026-11-02 读 ResourceDetail-CNb-r4n7.js / offline-DkwSPTp2.js）：表单「磁链/ED2K」页签，同一个接口，
+//     share_kind=offline + offline_type（ed2k / magnet）+ share_code=链接原文（几条换行，最多 500 条、一批只能同一种）+ offline_title，
+//     不要访问码；其余校验（大小、分辨率、格式、集号、枪版）与 115 分享相同。
 
 import (
 	"encoding/json"
@@ -212,11 +215,13 @@ type dianResourceRef struct {
 
 // dianShareBody 发布的请求体（纯函数）；校验不过返回 errShareOutSkip
 func dianShareBody(pl shareOutPayload, cfg shareOutSiteCfg, res dianResourceRef) (map[string]any, error) {
-	if pl.ShareCode == "" {
-		return nil, shareOutSkipf("不是 115 分享链接")
-	}
-	if pl.Code == "" {
-		return nil, shareOutSkipf("癫影要求分享带访问码，这条分享没有")
+	if pl.Offline == "" {
+		if pl.ShareCode == "" {
+			return nil, shareOutSkipf("不是 115 分享链接")
+		}
+		if pl.Code == "" {
+			return nil, shareOutSkipf("癫影要求分享带访问码，这条分享没有")
+		}
 	}
 	if shareOutBadSource(pl.Info) {
 		return nil, shareOutSkipf("枪版资源，癫影不收")
@@ -251,6 +256,16 @@ func dianShareBody(pl shareOutPayload, cfg shareOutSiteCfg, res dianResourceRef)
 		"file_list":        pl.Files,
 		"tag":              dianTagString(tokens),
 		"subtitle_kind":    "",
+	}
+	if pl.Offline != "" {
+		// 「磁链/ED2K」：链接原文放 share_code（几条换行），不要访问码；列表标题在 offline_title，
+		// 前端不给离线分享填 title_override（ResourceDetail-*.js 的 is()）
+		delete(body, "receive_code")
+		delete(body, "title_override")
+		body["share_kind"] = "offline"
+		body["offline_type"] = pl.Offline
+		body["share_code"] = pl.URL
+		body["offline_title"] = shareOutHeadline(pl)
 	}
 	// external_chs 是「外挂中字」：字幕文件名认得出中文才这么标，认不出语言的不替它说是中字
 	for _, l := range pl.SubLangs {

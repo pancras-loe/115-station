@@ -500,10 +500,10 @@ func wecomShow(v botView, reply func(...string)) {
 }
 
 // submitOfflineLink 提交离线下载（磁力/ed2k/HTTP 走 web lixian 接口）。
-// source 是提交来源（机器人 / 观影…），整理记录上显示「经谁提交」
+// source 是提交来源（机器人 / 观影…），整理记录上显示「经谁提交」。只有用户贴链接走这里，所以按手动提交打分享标记
 func (h *Handler) submitOfflineLink(rawURL, source string) error {
 	// 与网页同一个出口：目标按默认转存库（V2）/ 转存目录，别的账号的库用那个账号提交（xfertarget.go）
-	if status, msg := h.offlineSubmitCore(rawURL, "", source, false); status != http.StatusOK {
+	if status, msg := h.offlineSubmitManual(rawURL, "", source, false); status != http.StatusOK {
 		return fmt.Errorf("%s", msg)
 	}
 	return nil

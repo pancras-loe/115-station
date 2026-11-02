@@ -38,6 +38,16 @@ func (h *Handler) offlineSubmitCore(rawURL, target, source string, organize bool
 	return status, msg
 }
 
+// offlineSubmitManual 用户自己贴的离线链接（链接转存页、机器人里贴链接）：提交成功后，ed2k / 磁力按开关打上
+// 「整理完分享到 RE0 / 癫影」的标记（两站都收离线链接，shareout.go）。HTTP / FTP 不分享：两站都不收
+func (h *Handler) offlineSubmitManual(rawURL, target, source string, organize bool) (int, string) {
+	status, msg, linkID := h.offlineSubmitLinked(rawURL, target, source, organize)
+	if status == http.StatusOK && shareOutOfflineKind(classifyLink(rawURL)) {
+		h.shareOutMark(linkID, "")
+	}
+	return status, msg
+}
+
 // offlineSubmitLinked 同 offlineSubmitCore，另返回登记的来源链接 id（订阅结算要按它找整理记录）
 func (h *Handler) offlineSubmitLinked(rawURL, target, source string, organize bool) (status int, msg string, linkID uint) {
 	status, msg, linkID, _ = h.offlineSubmitTask(rawURL, target, source, organize)
@@ -199,7 +209,7 @@ func (h *Handler) offlineAddTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请填写链接"})
 		return
 	}
-	status, msg := h.offlineSubmitCore(req.URL, req.Target, "web", req.Organize)
+	status, msg := h.offlineSubmitManual(req.URL, req.Target, "web", req.Organize)
 	if status != http.StatusOK {
 		c.JSON(status, gin.H{"error": msg})
 		return

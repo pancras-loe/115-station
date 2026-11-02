@@ -214,14 +214,62 @@ func (h *Handler) shareOutRetryNow(row model.ShareOut) error {
 	if v.Wait {
 		return fmt.Errorf("这条链接的整理还没稳定（在等确认或刚整理完），稍后再试")
 	}
+	u := shareOutUnit{Links: []model.DownloadLink{link}, V: v}
+	if shareOutOfflineKind(link.Kind) && v.Skip == "" {
+		u = h.shareOutRetryUnit(link, v, row.Site, now)
+	}
 	if !shareOutRunning.CompareAndSwap(false, true) {
 		return errShareOutBusy
 	}
-	row.Attempts = shareOutMaxAttempts - 1
+	ids := make([]uint, 0, len(u.Links))
+	for _, l := range u.Links {
+		ids = append(ids, l.ID)
+	}
+	have := h.shareOutRows(ids)
+	for _, l := range u.Links {
+		if r, ok := have[l.ID][row.Site]; ok {
+			r.Attempts = shareOutMaxAttempts - 1
+			have[l.ID][row.Site] = r
+		}
+	}
 	go func() {
 		defer shareOutRunning.Store(false)
 		defer func() { _ = recover() }()
-		h.shareOutLink(link, v, []string{row.Site}, map[string]model.ShareOut{row.Site: row}, now)
+		h.shareOutSend(u, []string{row.Site}, have, now)
 	}()
 	return nil
+}
+
+// shareOutRetryUnit 离线链接手动重试：当初和它合在一起发的那几条（前后脚提交、同一部、这个站还没发成）一起重发，
+// 否则点一行就单独发一条只有一集的分享
+func (h *Handler) shareOutRetryUnit(link model.DownloadLink, v shareOutVerdict, site string, now time.Time) shareOutUnit {
+	single := shareOutUnit{Links: []model.DownloadLink{link}, V: v}
+	var near []model.DownloadLink
+	h.DB.Where("share_out LIKE ? AND kind = ? AND created_at BETWEEN ? AND ?", "%"+site+"%", link.Kind,
+		link.CreatedAt.Add(-24*time.Hour), link.CreatedAt.Add(24*time.Hour)).Order("id").Limit(1000).Find(&near)
+	ids := make([]uint, 0, len(near))
+	for _, l := range near {
+		ids = append(ids, l.ID)
+	}
+	have := h.shareOutRows(ids)
+	cands := []shareOutCand{{Link: link, V: v}}
+	for _, l := range near {
+		if l.ID == link.ID {
+			continue
+		}
+		if r, ok := have[l.ID][site]; ok && (r.Status == shareOutStatusDone || r.HiddenAt != nil) {
+			continue
+		}
+		var recs []model.OrganizeRecord
+		h.DB.Where("link_id = ?", l.ID).Find(&recs)
+		cands = append(cands, shareOutCand{Link: l, V: shareOutJudge(l, recs, now)})
+	}
+	for _, u := range shareOutOfflineUnits(cands, now, true) {
+		for _, l := range u.Links {
+			if l.ID == link.ID {
+				return u
+			}
+		}
+	}
+	return single
 }

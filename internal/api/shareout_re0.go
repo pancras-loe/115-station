@@ -8,6 +8,8 @@ package api
 //     static/chunks/8539-*.js 得到的，不是 Server Action）。字段和 OpenAPI 基本一样，只是影视关联用站内 id（movie_id / tv_id），
 //     不收 TMDB 编号。登录态 JWT 在 Cookie 里，站点的请求客户端会把 Cookie `csrf_access_token` 放进 X-CSRF-TOKEN 请求头，
 //     自己 fetch 时要照做。站内 id 从 /tmdb/{类型}/{编号} 跳转后的地址里取（/movie/{id}、/tv/{id}）。
+//   - 离线链接：「分享链接」一栏可以填 ed2k / 磁力，几条换行（维护者在网页上确认过；OpenAPI 文档的网盘类型里也有 magnet、ed2k）。
+//     url 照填、不带访问码。**还没真发过一次**，站点对多条链接的校验第一次看日志 [RE0网页]。
 
 import (
 	"encoding/json"
@@ -114,7 +116,8 @@ func re0SourceOf(ri ResourceInfo, ext string) string {
 
 // re0PublishShare 发到 RE0（shareOutPublishers 里注册）
 func re0PublishShare(pl shareOutPayload, cfg shareOutSiteCfg) (string, int, error) {
-	if !strings.Contains(pl.URL, "115") || pl.ShareCode == "" {
+	// 离线链接（ed2k / 磁力）RE0 也收，几条换行放在 url 里（网页「分享资源」弹窗同样的填法）
+	if pl.Offline == "" && (!strings.Contains(pl.URL, "115") || pl.ShareCode == "") {
 		return "", 0, shareOutSkipf("不是 115 分享链接")
 	}
 	if shareOutBadSource(pl.Info) {
@@ -309,6 +312,11 @@ func re0WebPublishShare(pl shareOutPayload, body map[string]any) (string, int, e
 			}
 			if json.Unmarshal([]byte(r.Value.Get("text").Str()), &chk) == nil {
 				switch {
+				case pl.Offline != "":
+					// 离线链接不拿站点规范化过的：几条换行的链接它可能只认第一条
+					if chk.Data.Website != "" && !strings.EqualFold(chk.Data.Website, pl.Offline) {
+						log.Printf("[RE0网页]   站点把这条离线链接认成 %s（本站认的是 %s），照原样提交", chk.Data.Website, pl.Offline)
+					}
 				case chk.Data.Website != "" && chk.Data.Website != "115":
 					return shareOutSkipf("RE0 认出的网盘类型是 %s，不是 115", chk.Data.Website)
 				case chk.Data.Website == "115":

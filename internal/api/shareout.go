@@ -4,6 +4,8 @@ package api
 //
 // 用户自己贴的 115 分享链接（链接转存页、机器人里贴链接）转存成功后，按 RE0 / 癫影卡片上的开关，
 // 整理认出是哪一部之后，把这条分享链接发布到站上。设计见 docs/115-station-notes/SHARE-OUT-PLAN.md。
+// 2026-11-02 起自己贴的离线链接（ed2k / 磁力，offlineSubmitManual）也发：两站都收「磁链/ED2K」分享、一条里可以放几条链接，
+// 所以同一部、前后脚提交的几条合成一次发布（shareOutOfflineUnits），不按一集一条往站上铺。
 //
 // 几条定下来的口径：
 //   - 时机在**整理认出片目之后**，不在转存成功那一刻：两站都要关联 TMDB 条目，贴链接的时候只有一个 URL，
@@ -48,7 +50,9 @@ const (
 	shareOutSettle      = 10 * time.Minute   // 最近一条整理记录写下后再等这么久：一条链接的几条记录可能前后脚落下
 	shareOutMaxAttempts = 3
 	shareOutRetryGap    = 30 * time.Minute
-	shareOutPerTick     = 5 // 一分钟最多处理几条链接（每条可能要开浏览器）
+	shareOutPerTick     = 5                // 一分钟最多处理几次发布（每次可能要开浏览器）
+	shareOutBatchGap    = 30 * time.Minute // 自己贴的离线链接前后隔不到这么久算同一批（shareOutOfflineUnits）
+	shareOutBatchMax    = 500              // 一条分享最多放几条离线链接（癫影前端的上限）
 )
 
 var shareOutSites = []string{shareOutSiteRe0, shareOutSiteDian}
@@ -182,7 +186,8 @@ func shareOutJudge(link model.DownloadLink, recs []model.OrganizeRecord, now tim
 
 // shareOutPayload 两站共用的发布内容，各站再按自己的字段转换
 type shareOutPayload struct {
-	URL       string // 分享链接（不带访问码）
+	URL       string // 分享链接（不带访问码）；离线链接是几条链接换行连起来
+	Offline   string // 离线链接的类型 ed2k / magnet；空 = 115 分享
 	ShareCode string
 	Code      string // 访问码
 	TmdbID    int
@@ -199,6 +204,36 @@ type shareOutPayload struct {
 	SubLangs  []string      // 外挂字幕的语言（按字幕文件名认，RE0 的枚举写法：简中 / 繁中 / 简英双语…），认不出为空
 	Seasons   []int         // 剧集：涉及哪几季
 	Episodes  map[int][]int // 剧集：每季的集号
+}
+
+// shareOutPayloadOfLinks 一次发布的内容：115 分享就是那一条；离线链接把几条合成一条分享，
+// 记录只取这几条链接的（同一次合并里查重跳过的那几条不算进集号与体积）
+func shareOutPayloadOfLinks(links []model.DownloadLink, v shareOutVerdict) shareOutPayload {
+	ids := map[uint]bool{}
+	for _, l := range links {
+		ids[l.ID] = true
+	}
+	recs := make([]model.OrganizeRecord, 0, len(v.Records))
+	for _, r := range v.Records {
+		if ids[r.LinkID] {
+			recs = append(recs, r)
+		}
+	}
+	v.Records = recs
+	pl := shareOutPayloadOf(links[0], v)
+	if shareOutOfflineKind(links[0].Kind) {
+		pl.Offline, pl.Code = links[0].Kind, ""
+		urls := make([]string, 0, len(links))
+		for _, l := range links {
+			urls = append(urls, strings.TrimSpace(l.URL))
+		}
+		pl.URL = strings.Join(urls, "\n")
+		if len(links) > 1 {
+			// 一条 ed2k 的名字只是其中一集的文件名
+			pl.ShareName = pl.Title
+		}
+	}
+	return pl
 }
 
 // shareOutPayloadOf 从整理记录里算出发布内容：零网络请求
@@ -475,24 +510,21 @@ func (h *Handler) shareOutRun(now time.Time) {
 	for _, l := range links {
 		ids = append(ids, l.ID)
 	}
-	var outs []model.ShareOut
-	h.DB.Where("link_id IN ?", ids).Find(&outs)
-	have := map[uint]map[string]model.ShareOut{}
-	for _, o := range outs {
-		if have[o.LinkID] == nil {
-			have[o.LinkID] = map[string]model.ShareOut{}
-		}
-		have[o.LinkID][o.Site] = o
-	}
+	have := h.shareOutRows(ids)
 	handled := 0
+	var offline []shareOutCand
 	for _, link := range links {
-		todo := shareOutTodo(link, have[link.ID], now)
-		if len(todo) == 0 {
+		if len(shareOutTodo(link, have[link.ID], now)) == 0 {
 			continue
 		}
 		var recs []model.OrganizeRecord
 		h.DB.Where("link_id = ?", link.ID).Find(&recs)
 		v := shareOutJudge(link, recs, now)
+		if shareOutOfflineKind(link.Kind) {
+			// 离线链接常是一集一条，先攒起来按「同一部、前后脚提交」合成一次发布
+			offline = append(offline, shareOutCand{Link: link, V: v})
+			continue
+		}
 		if v.Wait {
 			continue
 		}
@@ -500,8 +532,32 @@ func (h *Handler) shareOutRun(now time.Time) {
 			return
 		}
 		handled++
-		h.shareOutLink(link, v, todo, have[link.ID], now)
+		h.shareOutSend(shareOutUnit{Links: []model.DownloadLink{link}, V: v}, nil, have, now)
 	}
+	for _, u := range shareOutOfflineUnits(offline, now, false) {
+		if handled >= shareOutPerTick {
+			return
+		}
+		handled++
+		h.shareOutSend(u, nil, have, now)
+	}
+}
+
+// shareOutRows 这些链接已有的发布记账：链接 → 站 → 那一行
+func (h *Handler) shareOutRows(ids []uint) map[uint]map[string]model.ShareOut {
+	have := map[uint]map[string]model.ShareOut{}
+	if len(ids) == 0 {
+		return have
+	}
+	var outs []model.ShareOut
+	h.DB.Where("link_id IN ?", ids).Find(&outs)
+	for _, o := range outs {
+		if have[o.LinkID] == nil {
+			have[o.LinkID] = map[string]model.ShareOut{}
+		}
+		have[o.LinkID][o.Site] = o
+	}
+	return have
 }
 
 // shareOutTodo 这条链接还有哪些站要处理：没处理过的，和失败了、到了重试时间、次数没用完的
@@ -521,59 +577,164 @@ func shareOutTodo(link model.DownloadLink, have map[string]model.ShareOut, now t
 	return todo
 }
 
-func (h *Handler) shareOutLink(link model.DownloadLink, v shareOutVerdict, todo []string, have map[string]model.ShareOut, now time.Time) {
-	cfg := loadShareOutCfg()
-	var pl shareOutPayload
-	if v.Skip == "" {
-		pl = shareOutPayloadOf(link, v)
-	}
-	for _, site := range todo {
-		row := have[site]
-		row.LinkID, row.Site = link.ID, site
-		row.ShareCode = firstNonEmpty(pl.ShareCode, link.Hash)
-		row.TmdbID, row.MediaType = v.TmdbID, v.MediaType
-		row.Attempts++
-		switch {
-		case v.Skip != "":
-			row.Status, row.Message = shareOutStatusSkipped, v.Skip
-		case h.shareOutFromSite(row.ShareCode):
-			row.Status, row.Message = shareOutStatusSkipped, "这条分享是从 RE0 / 癫影拿到的，两站都不收重复链接"
-		case h.shareOutSentBefore(site, row.ShareCode, link.ID):
-			row.Status, row.Message = shareOutStatusSkipped, "这条分享之前已经发过"
-		default:
-			pub := shareOutPublishers[site]
-			if pub == nil {
-				row.Status, row.Message = shareOutStatusSkipped, "不认识的站点"
-				break
+// shareOutOfflineKind 离线链接里两站收的那两种
+func shareOutOfflineKind(kind string) bool {
+	return kind == "ed2k" || kind == "magnet"
+}
+
+// shareOutUnit 一次发布：115 分享一条链接一次；自己贴的离线链接（一集一条 ed2k 很常见）同一部、前后脚提交的合成一次，
+// 两站都允许一条分享里放多条离线链接（换行分隔）。一部剧拆成几十条分享发上去，站上就是几十条只有一集的资源
+type shareOutUnit struct {
+	Links []model.DownloadLink
+	V     shareOutVerdict // Records 是所有链接的记录合起来
+}
+
+type shareOutCand struct {
+	Link model.DownloadLink
+	V    shareOutVerdict
+}
+
+// shareOutOfflineUnits 离线链接怎么合（纯函数）：按提交时间连成串，相邻两条隔不到 shareOutBatchGap 算同一批；
+// 一批里有还在等整理的、或最后一条提交还不到 shareOutBatchGap（可能还在接着贴），整批先不发——
+// 先认出来的那几集单独发了，后面的集就只能另起一条。批内按「链接类型 + 认出的那一部」分组，
+// 判成不发的各自成一个（记跳过）。settled = 手动重试：不等，还在等的那几条不带
+func shareOutOfflineUnits(cands []shareOutCand, now time.Time, settled bool) []shareOutUnit {
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].Link.CreatedAt.Before(cands[j].Link.CreatedAt) })
+	var units []shareOutUnit
+	for i := 0; i < len(cands); {
+		j := i
+		for j+1 < len(cands) && cands[j+1].Link.CreatedAt.Sub(cands[j].Link.CreatedAt) <= shareOutBatchGap {
+			j++
+		}
+		batch := cands[i : j+1]
+		i = j + 1
+		if !settled {
+			wait := now.Sub(batch[len(batch)-1].Link.CreatedAt) < shareOutBatchGap
+			for _, c := range batch {
+				wait = wait || c.V.Wait
 			}
-			ref, points, err := pub(pl, cfg.site(site))
-			var skip *errShareOutSkip
-			switch {
-			case err == nil:
-				row.Status, row.Message, row.Ref, row.Points = shareOutStatusDone, "", truncateStr(ref, 64), points
-			case errors.As(err, &skip):
-				row.Status, row.Message = shareOutStatusSkipped, skip.why
-			default:
-				row.Status, row.Message = shareOutStatusFailed, err.Error()
-				row.RetryAt = now.Add(shareOutRetryGap)
+			if wait {
+				continue
 			}
 		}
-		row.Message = truncateStr(row.Message, 255)
-		if err := h.DB.Save(&row).Error; err != nil {
-			log.Printf("[分享出去] ○ 记账失败: %v", err)
+		groups := map[string]int{}
+		for _, c := range batch {
+			if c.V.Wait {
+				continue
+			}
+			if c.V.Skip != "" {
+				units = append(units, shareOutUnit{Links: []model.DownloadLink{c.Link}, V: c.V})
+				continue
+			}
+			key := c.Link.Kind + "|" + c.V.MediaType + ":" + strconv.Itoa(c.V.TmdbID)
+			if k, ok := groups[key]; ok && len(units[k].Links) < shareOutBatchMax {
+				units[k].Links = append(units[k].Links, c.Link)
+				units[k].V.Records = append(units[k].V.Records, c.V.Records...)
+				continue
+			}
+			groups[key] = len(units)
+			v := c.V
+			v.Records = append([]model.OrganizeRecord(nil), c.V.Records...)
+			units = append(units, shareOutUnit{Links: []model.DownloadLink{c.Link}, V: v})
+		}
+	}
+	return units
+}
+
+// shareOutSend 处理一次发布。sites 为空 = 每条链接按自己的待办（shareOutTodo），手动重试时指定那一个站。
+// 记账仍是一条链接一站一行：查重、界面列表都按链接走，合在一起发的几行结果相同
+func (h *Handler) shareOutSend(u shareOutUnit, sites []string, have map[uint]map[string]model.ShareOut, now time.Time) {
+	cfg := loadShareOutCfg()
+	todo := map[uint][]string{}
+	for _, l := range u.Links {
+		if sites != nil {
+			todo[l.ID] = sites
+		} else {
+			todo[l.ID] = shareOutTodo(l, have[l.ID], now)
+		}
+	}
+	for _, site := range shareOutSites {
+		rows := map[uint]*model.ShareOut{}
+		var send []model.DownloadLink
+		for _, l := range u.Links {
+			if !containsStr(todo[l.ID], site) {
+				continue
+			}
+			row := have[l.ID][site]
+			row.LinkID, row.Site = l.ID, site
+			row.ShareCode = firstNonEmpty(l.Hash, extractShareCode(l.URL))
+			row.TmdbID, row.MediaType = u.V.TmdbID, u.V.MediaType
+			row.Attempts++
+			switch {
+			case u.V.Skip != "":
+				row.Status, row.Message = shareOutStatusSkipped, u.V.Skip
+			case h.shareOutFromSite(row.ShareCode):
+				row.Status, row.Message = shareOutStatusSkipped, "这条链接是从 RE0 / 癫影拿到的，两站都不收重复链接"
+			case h.shareOutSentBefore(site, row.ShareCode, l.ID):
+				row.Status, row.Message = shareOutStatusSkipped, "这条链接之前已经发过"
+			default:
+				send = append(send, l)
+			}
+			rows[l.ID] = &row
+		}
+		if len(rows) == 0 {
+			continue
 		}
 		label := shareOutSiteLabel(site)
-		switch row.Status {
-		case shareOutStatusDone:
-			extra := ""
-			if row.Points > 0 {
-				extra = fmt.Sprintf("，奖励 %d 积分", row.Points)
+		if len(send) > 0 {
+			pl := shareOutPayloadOfLinks(send, u.V)
+			status, msg, ref, points := "", "", "", 0
+			var retryAt time.Time
+			if pub := shareOutPublishers[site]; pub == nil {
+				status, msg = shareOutStatusSkipped, "不认识的站点"
+			} else {
+				r, p, err := pub(pl, cfg.site(site))
+				var skip *errShareOutSkip
+				switch {
+				case err == nil:
+					status, ref, points = shareOutStatusDone, truncateStr(r, 64), p
+				case errors.As(err, &skip):
+					status, msg = shareOutStatusSkipped, skip.why
+				default:
+					status, msg, retryAt = shareOutStatusFailed, err.Error(), now.Add(shareOutRetryGap)
+				}
 			}
-			log.Printf("[分享出去] ✓ 「%s」已分享到 %s%s", pl.ShareName, label, extra)
-		case shareOutStatusSkipped:
-			log.Printf("[分享出去] ○ 链接 #%d 不分享到 %s：%s", link.ID, label, row.Message)
-		default:
-			log.Printf("[分享出去] ✗ 链接 #%d 分享到 %s 失败（第 %d 次）：%s", link.ID, label, row.Attempts, row.Message)
+			for i, l := range send {
+				row := rows[l.ID]
+				row.Status, row.Message, row.Ref, row.RetryAt = status, msg, ref, retryAt
+				// 奖励积分只记在第一行：几行加起来才是真得到的
+				row.Points = 0
+				if i == 0 {
+					row.Points = points
+				}
+			}
+			what := "「" + pl.ShareName + "」"
+			if len(send) > 1 {
+				what += fmt.Sprintf("（%d 条链接合成一条）", len(send))
+			}
+			switch status {
+			case shareOutStatusDone:
+				extra := ""
+				if points > 0 {
+					extra = fmt.Sprintf("，奖励 %d 积分", points)
+				}
+				log.Printf("[分享出去] ✓ %s已分享到 %s%s", what, label, extra)
+			case shareOutStatusFailed:
+				log.Printf("[分享出去] ✗ %s分享到 %s 失败（第 %d 次）：%s", what, label, rows[send[0].ID].Attempts, msg)
+			}
+		}
+		for _, l := range u.Links {
+			row := rows[l.ID]
+			if row == nil {
+				continue
+			}
+			row.Message = truncateStr(row.Message, 255)
+			if err := h.DB.Save(row).Error; err != nil {
+				log.Printf("[分享出去] ○ 记账失败: %v", err)
+			}
+			if row.Status == shareOutStatusSkipped {
+				log.Printf("[分享出去] ○ 链接 #%d 不分享到 %s：%s", l.ID, label, row.Message)
+			}
 		}
 	}
 }

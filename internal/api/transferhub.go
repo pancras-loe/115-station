@@ -982,7 +982,12 @@ func (h *Handler) submitResource(req resSubmitReq, submitter string) (resSubmitR
 			// 之前提交过的（115 报任务已存在）跳过、接着提交别的 —— 原来第一条撞上就整批返回，后面几集一条没提交
 			return h.submitOfflineBatch(append([]string{rl.URL}, rl.More...), target, label), nil
 		}
-		if status, msg := h.offlineSubmitCore(rl.URL, target, label, true); status != http.StatusOK {
+		submit := h.offlineSubmitCore
+		if req.Source == "" {
+			// 直接贴的链接才可能分享出去，同上面的分享转存
+			submit = h.offlineSubmitManual
+		}
+		if status, msg := submit(rl.URL, target, label, true); status != http.StatusOK {
 			if rl.Unlocked {
 				// 积分已经花了：把链接交回去，用户还能自己提交离线
 				return resSubmitResult{Message: "已解锁，但提交离线失败：" + msg, OpenURL: rl.URL}, nil
