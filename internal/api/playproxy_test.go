@@ -226,6 +226,16 @@ func setPlaybackCfgForTest(t *testing.T, c playbackCfg) {
 	playbackCfgCache.cfg, playbackCfgCache.at = &c, time.Now().Add(time.Hour)
 	playbackCfgCache.Unlock()
 	t.Cleanup(forgetPlaybackCfg)
+	// 「Emby 服务器自己来拉一律 302」的地址表缓存一分钟：前面的测试把假 Emby 配在 127.0.0.1 上，
+	// 测试请求也来自 127.0.0.1，不清掉就全被当成服务器自己来拉、走了 302（只在某些测试顺序下出现）
+	proxyExempt.mu.Lock()
+	proxyExempt.ips, proxyExempt.at = map[string]bool{}, time.Now().Add(time.Hour)
+	proxyExempt.mu.Unlock()
+	t.Cleanup(func() {
+		proxyExempt.mu.Lock()
+		proxyExempt.ips = nil
+		proxyExempt.mu.Unlock()
+	})
 }
 
 func (p *proxyFixture) get(t *testing.T, method, rng string) (*http.Response, []byte) {
