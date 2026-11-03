@@ -273,14 +273,24 @@ async function save() {
         </FieldRow>
         <FieldRow
           label="离线配额"
+          wide
           tip="每个订阅每轮最多一个离线任务。「剩余低于」是提交前查一次 115 的剩余配额，留给你手动离线用。两项填 0 都是不限 / 不查。"
         >
-          <div class="unit wrap">
-            <span>每月最多</span>
-            <HNumberInput v-model="cfg.offline_monthly" :min="0" aria-label="每月最多任务数" />
-            <span>个，115 剩余低于</span>
-            <HNumberInput v-model="cfg.offline_reserve" :min="0" aria-label="配额保留次数" />
-            <span>次就停</span>
+          <div class="offline-quota">
+            <div class="quota-item">
+              <span>每月最多</span>
+              <div class="unit">
+                <HNumberInput v-model="cfg.offline_monthly" :min="0" aria-label="每月最多任务数" />
+                <span>个</span>
+              </div>
+            </div>
+            <div class="quota-item">
+              <span>115 剩余低于</span>
+              <div class="unit">
+                <HNumberInput v-model="cfg.offline_reserve" :min="0" aria-label="配额保留次数" />
+                <span>次就停</span>
+              </div>
+            </div>
           </div>
         </FieldRow>
       </template>
@@ -351,11 +361,22 @@ async function save() {
 .unit > .number-field {
   width: 120px;
 }
-.unit.wrap {
+.offline-quota {
+  display: flex;
   flex-wrap: wrap;
+  gap: 12px 24px;
+  font-size: 13px;
+  color: var(--muted);
 }
-.unit.wrap > .number-field {
-  width: 100px;
+.quota-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* 两侧按钮各占 40px，给数字留足空间；窄屏按整项换行，不压缩输入框。 */
+.offline-quota .number-field {
+  flex: none;
+  width: 160px;
 }
 .sub {
   display: flex;
