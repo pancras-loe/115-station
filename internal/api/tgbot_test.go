@@ -59,6 +59,40 @@ func TestTGCommandsExcludeRemovedOperations(t *testing.T) {
 	}
 }
 
+// 从频道转发来的磁力消息（2026-11-06 现场，蜜柑计划）：带封面图，文字在 caption 里，
+// 磁力夹在一长段说明中间、tr= 写在 xt= 前面。
+func TestTGForwardedMagnet(t *testing.T) {
+	const magnet = "magnet:?tr=http%3A%2F%2Ft.nyaatracker.com%2Fannounce&xt=urn:btih:90e9cad8559ced10caa856ee1e604b156e91cc03"
+	caption := "[黒ネズミたち] 黑色五叶草 Season 2 / Black Clover 2nd Season - 175 (ABEMA 1920x1080 AVC AAC MKV)\n\n" +
+		"📺 番组： #黑色五叶草_第二季\n👤 发布组：#Kirara_Fantasia\n📅 发布时间： 2026-11-05 11:01:00\n📦 大小：716.0 MB\n" +
+		"🔑 Hash： 90E9CAD8559CED10CAA856EE1E604B156E91CC03\n\n🧲 磁力链接：\n" + magnet + "\n🔗 Mikan 详情页 · 📥 种子下载"
+	var u tgUpdate
+	raw, _ := json.Marshal(map[string]any{"update_id": 1, "message": map[string]any{
+		"message_id": 7, "chat": map[string]any{"id": 42, "type": "private"}, "photo": []any{}, "caption": caption,
+	}})
+	if err := json.Unmarshal(raw, &u); err != nil {
+		t.Fatal(err)
+	}
+	if cmd, arg := tgCommand(u.Message.body()); cmd != "download" || arg != magnet {
+		t.Fatalf("转发消息解析成 %q %q", cmd, arg)
+	}
+	// 同一个 hash 写了两遍（大小写不同）只算一条；结尾的中文标点不算进链接
+	if got := embeddedLinks("A " + magnet + "。\nB " + strings.ToUpper(magnet)); len(got) != 1 || got[0] != magnet {
+		t.Fatalf("去重得到 %v", got)
+	}
+	ed2k := "ed2k://|file|Black Clover 175.mkv|750780416|0123456789ABCDEF0123456789ABCDEF|/"
+	if cmd, arg := tgCommand("ed2k 链接：\n" + ed2k + "\n来自某频道"); cmd != "download" || arg != ed2k {
+		t.Fatalf("ed2k 解析成 %q %q", cmd, arg)
+	}
+	if cmd, arg := tgCommand("第一集 " + magnet + "\n第二集 magnet:?xt=urn:btih:aaaabbbbccccdddd"); cmd != "manylinks" || arg != "2" {
+		t.Fatalf("几条链接解析成 %q %q", cmd, arg)
+	}
+	// 只有详情页这类 http 链接的长消息不当成下载
+	if cmd, _ := tgCommand("看看这部 片名不错 https://mikanani.me/Home/Episode/xxx"); cmd == "download" {
+		t.Fatal("不该把夹在话里的 http 链接当下载")
+	}
+}
+
 func TestTGReplySplitsWithoutChangingTarget(t *testing.T) {
 	var texts []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

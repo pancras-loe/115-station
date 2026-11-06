@@ -101,7 +101,18 @@ type tgMessage struct {
 	From tgUser `json:"from"`
 	Chat tgChat `json:"chat"`
 	Text string `json:"text"`
+	// 带图片 / 文件的消息（从频道转发来的常带封面图）文字在 caption 里，text 是空的
+	Caption string `json:"caption"`
 }
+
+// body 是这条消息的文字：普通消息取 text，带图的取 caption。
+func (m *tgMessage) body() string {
+	if m.Text != "" {
+		return m.Text
+	}
+	return m.Caption
+}
+
 type tgCallback struct {
 	ID      string     `json:"id"`
 	From    tgUser     `json:"from"`

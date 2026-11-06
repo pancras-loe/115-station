@@ -81,6 +81,13 @@ func tgCommand(text string) (string, string) {
 	if classifyLink(text) != "" {
 		return "download", text
 	}
+	// 转发来的长消息里夹着磁力 / ed2k：只有一条时直接提交，几条时不替用户挑
+	switch links := embeddedLinks(text); {
+	case len(links) == 1:
+		return "download", links[0]
+	case len(links) > 1:
+		return "manylinks", fmt.Sprint(len(links))
+	}
 	if act, ok := botFlowAct(text); ok {
 		return "flow", act
 	}
@@ -107,7 +114,7 @@ func (b *tgConversation) handle(u tgUpdate) {
 	if m == nil || m.Chat.Type != "private" || from.Bot || from.ID <= 0 || from.ID != m.Chat.ID {
 		return
 	}
-	cmd, args := tgCommand(m.Text)
+	cmd, args := tgCommand(m.body())
 	// 身份查询只回当前请求者的 ID，允许尚未填写 Chat ID 时完成配置。
 	if u.Callback == nil && (cmd == "id" || cmd == "help") {
 		if cmd == "id" {
@@ -206,7 +213,7 @@ func (b *tgConversation) handle(u tgUpdate) {
 		b.send(strings.Join(lines, "\n"), buttons)
 	case "sharepick":
 		// 发过 115 分享链接、按「每次问」等着选：转存 / STRM（sharestrmapi.go）
-		lower := strings.ToLower(strings.TrimSpace(m.Text))
+		lower := strings.ToLower(strings.TrimSpace(m.body()))
 		if !b.h.shareBotPick(fmt.Sprintf("tg:%d:%d", b.chat, b.user), lower, b.replyForCurrentChat()) {
 			b.reply("未识别的指令，发送 /help 查看帮助。")
 		}
@@ -219,6 +226,8 @@ func (b *tgConversation) handle(u tgUpdate) {
 		// 只允许明确列出的业务进入公共路由，中文别名同样不能绕进补全或建库。
 		reply := b.replyForCurrentChat()
 		b.h.handleBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), text, reply)
+	case "manylinks":
+		b.reply("这条消息里有 " + args + " 条磁力 / ed2k 链接，不知道要哪条：请把要下载的那条单独发过来。")
 	default:
 		b.reply("未识别的指令，发送 /help 查看帮助。")
 	}

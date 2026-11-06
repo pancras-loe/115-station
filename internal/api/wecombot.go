@@ -226,6 +226,14 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 		h.wecomHandleLink(user, strings.TrimSpace(text), reply)
 		return
 	}
+	// 转发来的长消息里夹着磁力 / ed2k（与 TG 的 tgCommand 同口径）
+	if links := embeddedLinks(text); len(links) == 1 {
+		h.wecomHandleLink(user, links[0], reply)
+		return
+	} else if len(links) > 1 {
+		reply(fmt.Sprintf("这条消息里有 %d 条磁力 / ed2k 链接，不知道要哪条：请把要下载的那条单独发过来。", len(links)))
+		return
+	}
 	// 刚发过 115 分享链接、按「每次问」等着回「转存」或「STRM」（sharestrmapi.go）
 	if h.shareBotPick(user, lower, reply) {
 		return

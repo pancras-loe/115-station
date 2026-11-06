@@ -245,6 +245,44 @@ func classifyLink(raw string) string {
 	}
 }
 
+var (
+	embedMagnetRe = regexp.MustCompile(`(?i)magnet:\?[^\s"'<>]+`)
+	embedEd2kRe   = regexp.MustCompile(`(?i)ed2k://\|file\|[^|\r\n]+\|\d+\|[0-9a-f]{32}\|(?:[^|\s]*\|)*/?`)
+	embedBtihRe   = regexp.MustCompile(`(?i)xt=urn:btih:([0-9a-z]+)`)
+)
+
+// embeddedLinks 从一段话里摘出磁力 / ed2k 链接，同一个 hash 只算一条。
+// 用在机器人上：从别的频道转发过来的消息（番组名、发布组、大小、Hash……中间夹着一条磁力），
+// 整条文字交给 classifyLink 认不出来。只摘磁力与 ed2k：这类消息里的 http 链接多半是详情页，
+// 摘出来会被当成离线下载提交。磁力的 tr= 可能写在 xt= 前面，别要求 magnet:?xt= 开头。
+func embeddedLinks(text string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(link, key string) {
+		key = strings.ToLower(key)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, link)
+	}
+	for _, m := range embedMagnetRe.FindAllString(text, -1) {
+		m = strings.TrimRight(m, ".,;:!?)]}，。；：！？）」』】")
+		key := m
+		if h := embedBtihRe.FindStringSubmatch(m); h != nil {
+			key = h[1]
+		} else if !strings.Contains(strings.ToLower(m), "xt=") {
+			continue // 没有 xt 的不是能下载的磁力
+		}
+		add(m, key)
+	}
+	for _, m := range embedEd2kRe.FindAllString(text, -1) {
+		parts := strings.Split(m, "|")
+		add(m, parts[4]) // ed2k://|file|名字|大小|hash|
+	}
+	return out
+}
+
 // triggerOrganizeAndSync 转存后自动「整理+增量同步」→ 入任务队列（后台优先级）。
 //
 // 此前在这里等 90 秒拿锁，等不到就放弃这一次，只能指望守望者 5 分钟后再来 ——
