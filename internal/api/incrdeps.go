@@ -195,7 +195,30 @@ func (d *realIncrDeps) dirGone(fileID string) string {
 	}
 	abs, _ := lookupDirAbsAnyAge(fileID)
 	forgetDirSubtree(fileID)
+	if abs == "" {
+		abs = selfGoneAbs(fileID, d.absPath)
+	}
 	return abs
+}
+
+// selfGoneAbs 本站自己删的目录：缓存在删的时候已经清掉了，从 selfdirs.go 的备忘里认。
+// 只有父目录 + 名字时按父目录解析一次（多半是转存文件夹，解析结果会进缓存）
+func selfGoneAbs(fileID string, absPath func(cid string) string) string {
+	known, parent, name, ok := selfDirWhere(fileID)
+	if !ok {
+		return ""
+	}
+	if known != "" {
+		return known
+	}
+	if parent == "" || name == "" || absPath == nil {
+		return ""
+	}
+	p := absPath(parent)
+	if p == "" {
+		return ""
+	}
+	return strings.TrimSuffix(p, "/") + "/" + name
 }
 
 func (d *realIncrDeps) setting(key string) string {

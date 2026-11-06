@@ -962,6 +962,7 @@ func (o *pan115Ops) mkdir(parent, name string) (string, error) {
 		o.markCreated(cid)
 		if o.acct == acctMain {
 			rememberDirAt(parent, name, cid) // 别的账号不写路径缓存（按路径查时不分账号，account115.go）
+			noteSelfMkdir(parent, name, cid) // 父目录不在缓存里时上一行记不上，删掉它时靠这条认（selfdirs.go）
 		}
 	}
 	return cid, err
@@ -1112,6 +1113,10 @@ func (o *pan115Ops) deleteFiles(fids []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if o.acct == acctMain {
+		// 清缓存之前抄一份位置：删除事件几秒后才回来，那时缓存里已经查不到了（selfdirs.go）
+		noteSelfDelete(fids)
 	}
 	for _, fid := range fids {
 		forgetDirSubtree(fid) // 目录没了，缓存里的路径也不能留
