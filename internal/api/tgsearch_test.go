@@ -68,3 +68,24 @@ func TestTgFilterDedup(t *testing.T) {
 		t.Errorf("关键词过滤+去重后应剩 1 条，实际 %d: %+v", len(got), got)
 	}
 }
+
+// t.me 搜索结果把关键词包在 <mark> 里，ed2k 文件名带片名时不能因此被截断（真页面节选）
+func TestTgParseHighlightedEd2k(t *testing.T) {
+	page := `<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="Ms20260601/954">` +
+		`<div class="tgme_widget_message_text js-message_text">✅少爷:请您检阅<br/>🎬 影视：<mark class="highlight">再婚皇后</mark><br/>` +
+		`<blockquote>ed2k://|file|<mark class="highlight">再婚皇后</mark>(2026)(tmdbid=279246).S01E01.WEB-DL.2160p.HDR.H265.DDP.24帧.mkv|5123846359|ae85d9d70f048467e7ac13e15140024a|/</blockquote></div>` +
+		`<time datetime="2026-11-03T14:43:00+00:00"></time></div></div>`
+	items := tgParseChannel(page, "Ms20260601", "再婚皇后")
+	if len(items) != 1 || len(items[0].Links) != 1 {
+		t.Fatalf("应解析出 1 条带 ed2k 的消息: %+v", items)
+	}
+	want := "ed2k://|file|再婚皇后(2026)(tmdbid=279246).S01E01.WEB-DL.2160p.HDR.H265.DDP.24帧.mkv|5123846359|ae85d9d70f048467e7ac13e15140024a|/"
+	if items[0].Links[0].URL != want || items[0].Links[0].Type != "ed2k" {
+		t.Errorf("ed2k 链接被截断: %q", items[0].Links[0].URL)
+	}
+	// 消息第一行是客套话，标题要换成 ed2k 里的文件名，否则相关性过滤会把它丢掉
+	res := tgMessageResources(items[0], map[string]bool{})
+	if len(res) != 1 || !strings.HasPrefix(res[0].Title, "再婚皇后(2026)") || res[0].Size != "4.8 GB" {
+		t.Errorf("资源标题 / 大小应取自 ed2k 文件名: %+v", res)
+	}
+}

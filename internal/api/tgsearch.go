@@ -79,6 +79,10 @@ var (
 	tgBrSplit     = regexp.MustCompile(`<br\s*/?>`)
 	tgStripTag    = regexp.MustCompile(`<[^>]+>`)
 	tgWsRe        = regexp.MustCompile(`[ \t]+`)
+	// 频道网页搜索把命中的关键词包成 <mark class="highlight">片名</mark>。
+	// 文件名里带片名的 ed2k / 磁力（dn=）链接会被这对标签截成两半、正则认不出，
+	// 整条消息因「没有链接」被丢掉（2026-11-09 现场：Ms20260601 搜「再婚皇后」9 条全丢）
+	tgMarkRe = regexp.MustCompile(`</?mark\b[^>]*>`)
 )
 
 // TgSearchSearch GET /tgsearch/search?keyword=xxx
@@ -166,6 +170,7 @@ func tgParseChannel(pageHTML, channel, keyword string) []tgItem {
 
 // tgParseMessage 解析单条消息卡片
 func tgParseMessage(seg, channel string) *tgItem {
+	seg = tgMarkRe.ReplaceAllString(seg, "")
 	inner, ok := tgExtractMessageText(seg)
 	if !ok {
 		return nil

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -190,6 +191,16 @@ func tgMessageResources(it tgItem, seen map[string]bool) []ResourceItem {
 			Source: "tg", Title: title, URL: link, Size: size, Tags: preset,
 			Time: it.Date, TimeUnix: resParseTime(it.Date),
 		}
+		// ed2k / 带 dn 的磁力自带文件名：片名、季集、画质都在里面，比消息第一行可靠。
+		// 有的频道第一行是「✅ 少爷:请您检阅」这种客套话，拿它当标题会被相关性过滤全丢掉；
+		// 一条消息挂好几集时也只有文件名分得清哪条是哪集
+		if name, n := tgLinkFile(link); name != "" {
+			ri.Title = name
+			ri.Tags = resTagsOf(name + " " + strings.Join(it.Tags, " "))
+			if n > 0 {
+				ri.Size = humanSize(n)
+			}
+		}
 		ri.Kind, ri.Action, ri.Pan = resKindOf(link, "")
 		if ri.Kind == "share115" {
 			ri.Code = it.Pass
@@ -225,4 +236,27 @@ func (h *Handler) TgSearchSaveConfig(c *gin.Context) {
 	h.saveTgSearchCfg(cfg)
 	log.Printf("[影视转存] ✓ TG 频道清单已保存（%d 个）", len(list))
 	c.JSON(http.StatusOK, gin.H{"message": "已保存", "channels": cfg.Channels})
+}
+
+// tgLinkFile 从链接里读文件名与字节数：ed2k://|file|名字|大小|hash|/，磁力的 dn=。
+// 读不出返回空串（115 分享、没写 dn 的磁力）
+func tgLinkFile(link string) (string, int64) {
+	if strings.HasPrefix(strings.ToLower(link), "ed2k://") {
+		parts := strings.Split(link, "|")
+		if len(parts) < 4 {
+			return "", 0
+		}
+		name := parts[2]
+		if u, err := url.PathUnescape(name); err == nil {
+			name = u
+		}
+		n, _ := strconv.ParseInt(parts[3], 10, 64)
+		return strings.TrimSpace(name), n
+	}
+	if strings.HasPrefix(strings.ToLower(link), "magnet:") {
+		if u, err := url.Parse(link); err == nil {
+			return strings.TrimSpace(u.Query().Get("dn")), 0
+		}
+	}
+	return "", 0
 }
