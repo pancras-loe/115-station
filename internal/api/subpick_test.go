@@ -2,6 +2,7 @@ package api
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +104,28 @@ func TestPlanSubCandidates(t *testing.T) {
 	ctx.Include = splitKeywords("全集")
 	if cands, _ = planSubCandidates(items, ctx); len(cands) != 1 {
 		t.Fatalf("包含词过滤后应只剩 1 条: %d", len(cands))
+	}
+	ctx.Include = nil
+
+	// 不进候选的每一条都要有个说法，汇总日志靠它（原来这几种一声不吭）
+	ctx.Skipped, ctx.Dropped = map[string]int{}, map[string]int{}
+	cands, _ = planSubCandidates(items, ctx)
+	wantDrop := map[string]int{
+		"写明的集数里没有缺的": 1, "命中排除词": 1, "标题不相关": 1, "以前试过（没用上）": 1,
+		"其他网盘": 1, "离线、看不出含缺的集": 1,
+	}
+	if !reflect.DeepEqual(ctx.Dropped, wantDrop) || len(ctx.Skipped) != 0 {
+		t.Fatalf("Dropped = %v Skipped = %v, want %v", ctx.Dropped, ctx.Skipped, wantDrop)
+	}
+	if n := len(cands) + 6; n != len(items) {
+		t.Fatalf("候选 %d + 丢弃 6 应等于 %d 条", len(cands), len(items))
+	}
+	got1 := subPickSummary(len(items), len(cands), map[string]int{"单集磁力": 2}, ctx.Dropped)
+	if !strings.Contains(got1, "搜到 11 条，候选 5 条；不用的：") || !strings.Contains(got1, "单集磁力 2") || !strings.Contains(got1, "命中排除词 1") {
+		t.Fatalf("汇总 = %q", got1)
+	}
+	if got := subPickSummary(3, 3, nil, nil); got != "搜到 3 条，候选 3 条" {
+		t.Fatalf("没丢弃时 = %q", got)
 	}
 }
 

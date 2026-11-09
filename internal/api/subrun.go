@@ -659,10 +659,12 @@ func (r *subRunner) searchAndSubmit(sub *model.Subscription, ev subEval, item *s
 		Cond:    subCondOf(r.cfg, sub.Cond), Identity: identity,
 		Re0Max: r.cfg.Re0UnlockMax, Re0Left: r.re0Left, DianMax: r.cfg.DianUnlockMax, DianLeft: r.dianLeft,
 		OfflineMode: r.cfg.offlineModeOf(sub), OfflineWait: time.Duration(r.cfg.OfflineWaitHours) * time.Hour,
-		MissingAir: ev.MissingAir, Skipped: map[string]int{}, Prio: r.priorityOf(sub),
+		MissingAir: ev.MissingAir, Skipped: map[string]int{}, Dropped: map[string]int{}, Prio: r.priorityOf(sub),
 	}
 	pctx.Re0Preview = r.re0PreviewFn(sub, missing)
 	cands, over := planSubCandidates(items, pctx)
+	// 挑候选这一步的筛选原来不写日志：搜到十几条、之后一行都没有，看不出为什么没转存
+	log.Printf("[订阅] ○ 《%s》缺 %d 集，%s", sub.Title, len(ev.Missing), subPickSummary(len(items), len(cands), pctx.Skipped, pctx.Dropped))
 	r.recordOverLimit(sub, over, tried)
 	// 先列排在前面的几条分享，按文件实际能补几集重排（subpreview.go）
 	cands, ok := r.previewShares(sub, cands, missing)

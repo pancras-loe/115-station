@@ -8,6 +8,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -191,6 +192,10 @@ type subPickCtx struct {
 	MissingAir  map[epKey]time.Time
 	// Skipped 因资源条件 / 离线策略跳过的条数，按原因计（传了才记），任务结果里说清为什么没用
 	Skipped map[string]int
+	// Dropped 其余不进候选的（试过、不相关、排除词、范围不含缺集……），按原因计（传了才记）。
+	// 只进日志、不进「上一轮结果」：这些是预期中的筛选，但不记的话日志里只看得到「搜到 17 条」，
+	// 之后一行都没有，看不出为什么没转存（2026-11-07 城市的边缘现场）
+	Dropped map[string]int
 }
 
 // paidCap 这个来源的单条自动解锁上限与今天还能花多少（RE0 / 癫影各算各的）
@@ -224,6 +229,12 @@ func (c subPickCtx) onlyFresh() bool {
 func (c subPickCtx) skip(reason string) {
 	if c.Skipped != nil {
 		c.Skipped[reason]++
+	}
+}
+
+func (c subPickCtx) drop(reason string) {
+	if c.Dropped != nil {
+		c.Dropped[reason]++
 	}
 }
 
@@ -270,7 +281,15 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		}
 	}
 	for _, it := range items {
-		if !it.Relevant || it.Action == "open" || it.Kind == "pan" {
+		switch {
+		case it.Kind == "pan":
+			c.drop("其他网盘")
+			continue
+		case it.Action == "open":
+			c.drop("只能打开网页")
+			continue
+		case !it.Relevant:
+			c.drop("标题不相关")
 			continue
 		}
 		// 癫影剧集的离线分享解锁出来常是一批 ed2k（一集一条）：一条资源就是十几个离线任务，
@@ -283,21 +302,26 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 		}
 		hash := subResHash(it)
 		if hash == "" {
+			c.drop("没有链接")
 			continue
 		}
 		if t, ok := c.Tried[hash]; ok && t.Status != subAttemptPaid {
 			if t.RetryAt == nil || t.RetryAt.After(c.Now) {
+				c.drop("以前试过（" + subAttemptStatusText(t.Status) + "）")
 				continue
 			}
 		}
 		if it.SubmittedAt > 0 && c.Now.Sub(time.Unix(it.SubmittedAt, 0)) < subRecentSubmit {
+			c.drop("6 小时内手动提交过")
 			continue
 		}
 		lower := strings.ToLower(it.Title)
 		if containsAnyKeyword(lower, c.Exclude) {
+			c.drop("命中排除词")
 			continue
 		}
 		if len(c.Include) > 0 && !containsAnyKeyword(lower, c.Include) {
+			c.drop("没命中包含词")
 			continue
 		}
 		// 同名的另一部：标题看不出是订阅这一部的不要（凡人修仙传 2020 动画 vs 2025 真人版）。
@@ -336,7 +360,8 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				}
 			}
 			if cand.Cov.known() && cand.Covers == 0 {
-				continue // 写明了范围，缺的不在里面
+				c.drop("写明的集数里没有缺的") // 写明了范围，缺的不在里面
+				continue
 			}
 			for _, k := range c.Missing {
 				if cand.Cov.covers(k) && epKeyLess(cand.Reach, k) {
@@ -373,12 +398,14 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 				cand.Covers = ripe
 			}
 			if cand.Covers == 0 {
+				c.drop("离线、看不出含缺的集")
 				continue
 			}
 		}
 		if it.Action == "unlock" {
 			if it.Points == nil && !it.Owned {
-				continue // 不知道要花多少，没法核上限
+				c.drop("要解锁、不知道几积分") // 不知道要花多少，没法核上限
+				continue
 			}
 			if !it.Owned && *it.Points > 0 {
 				cand.Paid = *it.Points
@@ -430,6 +457,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 					// 预览不可用（没开放 / 这个网盘不支持 / 出错）：退回按标题判
 				}
 				if cand.Covers == 0 {
+					c.drop("要花积分、看不出含缺的集")
 					continue
 				}
 				if verdict == condUnknown {
@@ -437,6 +465,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 					continue
 				}
 				if over {
+					c.drop("积分超过自动解锁上限")
 					overLimit = append(overLimit, cand)
 					continue
 				}
@@ -446,6 +475,41 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 	}
 	sortSubCandidates(cands, c.Prio)
 	return cands, overLimit
+}
+
+// subAttemptStatusText 汇总日志里「以前试过（没用上）」的括号
+func subAttemptStatusText(st string) string {
+	switch st {
+	case subAttemptInflight:
+		return "在路上"
+	case subAttemptIngested:
+		return "已入库"
+	case subAttemptPartial:
+		return "部分入库"
+	case subAttemptRejected:
+		return "内容不对"
+	case subAttemptFailed:
+		return "失败"
+	case subAttemptUseless:
+		return "没用上"
+	}
+	return st
+}
+
+// subPickSummary 汇总日志那一行：「搜到 17 条，候选 0 条；跳过：以前试过（没用上） 5、单集磁力 6」
+func subPickSummary(total, cands int, skipped, dropped map[string]int) string {
+	s := fmt.Sprintf("搜到 %d 条，候选 %d 条", total, cands)
+	all := map[string]int{}
+	for k, v := range skipped {
+		all[k] += v
+	}
+	for k, v := range dropped {
+		all[k] += v
+	}
+	if len(all) > 0 {
+		s += "；不用的：" + countsText(all)
+	}
+	return s
 }
 
 func containsAnyKeyword(lower string, kws []string) bool {
