@@ -616,9 +616,25 @@ func resParseTime(s string) int64 {
 	return 0
 }
 
-// allNames 比对用的全部片名：标题、原名、TMDB 别名与译名
+// allNames 比对用的全部片名：标题、原名、TMDB 别名与译名（结尾的「(2011)」去掉，同 resTrimTitleYear）
 func (q resQuery) allNames() []string {
-	return append([]string{q.Title, q.OrigTitle}, q.names...)
+	out := []string{resTrimTitleYear(q.Title), resTrimTitleYear(q.OrigTitle)}
+	for _, n := range q.names {
+		out = append(out, resTrimTitleYear(n))
+	}
+	return out
+}
+
+var reResTitleYear = regexp.MustCompile(`\s*[(（]\s*(?:19|20)\d{2}\s*[)）]\s*$`)
+
+// resTrimTitleYear 去掉片名结尾括号里的年份：TMDB 上有的条目名字自带年份（「毛骗 第二季 (2011)」，tv/259602），
+// 拿它当关键词搜资源站搜不到，比相关性时「毛骗第二季2011」也不被「毛骗 第二季[全14集]…2011」包含，
+// 观影找到的三条全判成不相关（2026-11-09 现场）。只去结尾的、去完不能是空的
+func resTrimTitleYear(s string) string {
+	if t := reResTitleYear.ReplaceAllString(s, ""); strings.TrimSpace(t) != "" {
+		return t
+	}
+	return s
 }
 
 // resNameUsable 归一化后的片名够不够长，能不能拿来做「包含」判断。
@@ -819,6 +835,7 @@ func resSortDefault(items []ResourceItem) {
 
 // resQueryFor 补上 TMDB 别名与译名（30 分钟缓存，见 detailOf）。取不到不影响搜索，只是相关性判定少几个名字
 func resQueryFor(q resQuery) resQuery {
+	q.Title, q.OrigTitle = resTrimTitleYear(q.Title), resTrimTitleYear(q.OrigTitle)
 	if q.TmdbID == 0 || (q.Type != "movie" && q.Type != "tv") {
 		return q
 	}

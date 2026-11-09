@@ -19,6 +19,7 @@ func TestResRelevant(t *testing.T) {
 	threeBody := resQuery{TmdbID: 108545, Type: "tv", Title: "三体", OrigTitle: "3 Body Problem", Year: "2024",
 		names: []string{"三體"}}
 	up := resQuery{TmdbID: 14160, Type: "movie", Title: "Up", OrigTitle: "Up", Year: "2009"}
+	maoPian := resQuery{TmdbID: 259602, Type: "tv", Title: "毛骗 第二季 (2011)", OrigTitle: "毛骗 第二季 (2011)", Year: "2011"}
 	cases := []struct {
 		q     resQuery
 		title string
@@ -36,11 +37,35 @@ func TestResRelevant(t *testing.T) {
 		{threeBody, "流浪地球2 4K", false},
 		{up, "Upgrade.2018.1080p", true},           // 片名太短无从判断，交给人挑
 		{resQuery{Title: "随便什么"}, "完全无关的标题", true}, // 跳过 TMDB：不比对
+		// TMDB 名字自带年份（tv/259602）：去掉结尾的「(2011)」再比，观影那几条原来全判不相关
+		{maoPian, "毛骗 第二季[全14集][国语音轨+中文字幕].Moral.Peanuts.2011.1080p.WEB-DL.x265.AC3-BitsTV", true},
+		{maoPian, "毛骗第二季.14集全.2011.优酷网剧超清", true},
+		{maoPian, "毛骗 第一季 2010", false},
 	}
 	for _, c := range cases {
 		if got := resRelevant(c.q, c.title); got != c.want {
 			t.Errorf("resRelevant(%s, %q) = %v, want %v", c.q.Title, c.title, got, c.want)
 		}
+	}
+}
+
+func TestResTrimTitleYear(t *testing.T) {
+	cases := map[string]string{
+		"毛骗 第二季 (2011)":   "毛骗 第二季",
+		"毛骗 第二季（2011）":    "毛骗 第二季",
+		"2012":            "2012",            // 片名就是年份：不动
+		"(2011)":          "(2011)",          // 去完是空的：不动
+		"银翼杀手2049":        "银翼杀手2049",        // 不在括号里：不动
+		"Dune (Part Two)": "Dune (Part Two)", // 括号里不是年份：不动
+	}
+	for in, want := range cases {
+		if got := resTrimTitleYear(in); got != want {
+			t.Errorf("resTrimTitleYear(%q) = %q, want %q", in, got, want)
+		}
+	}
+	q := resQueryFor(resQuery{Title: "毛骗 第二季 (2011)", OrigTitle: "Moral Peanuts (2011)"})
+	if q.Title != "毛骗 第二季" || q.OrigTitle != "Moral Peanuts" {
+		t.Fatalf("resQueryFor 没去掉年份：%q / %q", q.Title, q.OrigTitle)
 	}
 }
 
