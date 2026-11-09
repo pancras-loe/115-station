@@ -55,11 +55,15 @@ var (
 	reCovEpRangeAll = regexp.MustCompile(`(\d{1,4})\s*[-~～]{1,2}\s*(\d{1,4})\s*(?:全集|合集)`)
 	// 「174最新全集」「184集已更新」：全集只到这一集。2026-10-24 现场：只认「全集」当成包含所有集，
 	// 缺 190 多集时把 1-174 的合集当成能补，花积分解锁了。前面不许挨着字母数字（S01全集 不算）
-	reCovEpUpTo  = regexp.MustCompile(`(?:^|[^\dA-Za-z])(\d{1,4})\s*集?\s*(?:最新|已更新|已更|全集|合集)`)
-	reCovEpTo    = regexp.MustCompile(`(?:更新至|更至|更新到|连载至|更新)\s*第?\s*(\d{1,4})\s*集`)
-	reCovEpAll   = regexp.MustCompile(`全\s*(\d{1,4})\s*集`)
-	reCovEpOne   = regexp.MustCompile(`(?i)S\d{1,2}\s*EP?(\d{1,4})(?:[^\d\-~]|$)|第\s*(\d{1,4})\s*集`)
-	reCovOngoing = regexp.MustCompile(`连载|更新中|更新至|更至|持续更新|更新到|未完结`)
+	reCovEpUpTo = regexp.MustCompile(`(?:^|[^\dA-Za-z])(\d{1,4})\s*集?\s*(?:最新|已更新|已更|全集|合集)`)
+	reCovEpTo   = regexp.MustCompile(`(?:更新至|更至|更新到|连载至|更新)\s*第?\s*(\d{1,4})\s*集`)
+	reCovEpAll  = regexp.MustCompile(`全\s*(\d{1,4})\s*集`)
+	// 「24集全」「共24集」：同「全24集」。原来认不出，按「看不出含缺的集」丢掉
+	// （2026-11-09 现场：观影「[镇魂街][2017][24集全]」「毛骗第二季.14集全」）。
+	// 排在范围之后：「第13-24集全」按 13-24 算，不是 1-24
+	reCovEpAllTail = regexp.MustCompile(`(?:^|[^\d])(\d{1,4})\s*集\s*全|共\s*(\d{1,4})\s*集`)
+	reCovEpOne     = regexp.MustCompile(`(?i)S\d{1,2}\s*EP?(\d{1,4})(?:[^\d\-~]|$)|第\s*(\d{1,4})\s*集`)
+	reCovOngoing   = regexp.MustCompile(`连载|更新中|更新至|更至|持续更新|更新到|未完结`)
 )
 
 // resCoverageOf 标题 → 估计范围。季用 resSeasonOf 同一套（S01 / S01-S03 / 第一季 / 全集）
@@ -92,6 +96,9 @@ func resCoverageOf(title string) resCoverage {
 	case reCovEpRangeAll.MatchString(title):
 		m := reCovEpRangeAll.FindStringSubmatch(title)
 		c.EpLo, c.EpHi = atoi(m[1]), atoi(m[2])
+	case reCovEpAllTail.MatchString(title):
+		m := reCovEpAllTail.FindStringSubmatch(title)
+		c.EpLo, c.EpHi, c.All = 1, atoi(firstNonEmpty(m[1], m[2])), true
 	case covEpUpTo(title) > 0:
 		c.EpLo, c.EpHi = 1, covEpUpTo(title)
 	case reCovEpOne.MatchString(title):

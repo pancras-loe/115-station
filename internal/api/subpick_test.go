@@ -28,6 +28,11 @@ func TestResCoverageOf(t *testing.T) {
 		{"1集-184集合集 2K", resCoverage{EpLo: 1, EpHi: 184, All: true}},
 		{"184集已更新，凡人修仙传:1--184全集，不缺集，已刮销 4K", resCoverage{EpLo: 1, EpHi: 184, All: true}},
 		{"三体 2023 全集", resCoverage{All: true}},
+		// 2026-11-09 现场：「24集全」「14集全」认不出集数，观影的整季磁力被当成「看不出含缺的集」丢掉
+		{"[镇魂街][2017][24集全][国语中字][WEB-MP4][720P]", resCoverage{EpLo: 1, EpHi: 24, All: true}},
+		{"毛骗第二季.14集全.2011.优酷网剧超清", resCoverage{SeasonLo: 2, SeasonHi: 2, EpLo: 1, EpHi: 14, All: true}},
+		{"三体 共30集 4K", resCoverage{EpLo: 1, EpHi: 30, All: true}},
+		{"三体 第13-24集全", resCoverage{EpLo: 13, EpHi: 24}},
 	}
 	for _, c := range cases {
 		if got := resCoverageOf(c.title); got != c.want {
