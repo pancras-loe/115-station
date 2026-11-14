@@ -49,7 +49,7 @@ async function saveBase() {
 async function saveToken() {
   const v = token.value.trim()
   try {
-    await resourcesApi.mkSaveConfig({ token: v })
+    await resourcesApi.mkSaveConfig({ access_token: v })
     token.value = ''
     message.success(v ? 'token 已保存' : 'token 已清除')
     await load()

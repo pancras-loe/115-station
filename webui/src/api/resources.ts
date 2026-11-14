@@ -84,7 +84,8 @@ export const gyLogout = () => http.post('/guanying/logout')
 // ============ 不太灵影视 ============
 export const mkConfig = () =>
   http.get<{ base_url?: string; username?: string; has_token?: boolean; token_at?: string }>('/mukaku/config')
-export const mkSaveConfig = (body: { base_url?: string; token?: string }) => http.post('/mukaku/config', body)
+// 字段名与后端 MukakuSaveConfig 一致：原来写成 token，后端不认、悄悄没存
+export const mkSaveConfig = (body: { base_url?: string; access_token?: string }) => http.post('/mukaku/config', body)
 export const mkCaptcha = () => http.get<{ img: string; key: string }>('/mukaku/captcha')
 export const mkLogin = (body: { username: string; password: string; code: string; key: string }) =>
   http.post('/mukaku/login', body, { timeoutMs: 60_000 })

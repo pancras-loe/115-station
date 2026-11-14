@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,49 @@ func mukakuAPI(cfg *mukakuCfg, method, path string, params url.Values, body any)
 
 // mukakuHTTPDo 普通 HTTP 请求；落在 WAF 验证页返回 errMukakuWAF
 func mukakuHTTPDo(cfg *mukakuCfg, method, full string, reqBody []byte) (int, []byte, error) {
+	// 2026-11-14 起 GoEdge 还会先回一页「JS 写 Cookie 再刷新」（ge_js_validator_N），
+	// 照它写进 Cookie 罐再发一次就放行（实测普通请求即可，不用开浏览器）；最多照做两次
+	for try := 0; ; try++ {
+		status, raw, err := mukakuHTTPOnce(cfg, method, full, reqBody)
+		if err != nil || try >= 2 {
+			return status, raw, err
+		}
+		cs := mukakuJSCookies(string(raw))
+		if len(cs) == 0 {
+			return status, raw, nil
+		}
+		u, perr := url.Parse(full)
+		if perr != nil {
+			return status, raw, nil
+		}
+		mukakuHTTP.Jar.SetCookies(&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}, cs)
+		log.Printf("[不太灵影视] ○ 站点要求 JS 验证 Cookie（%s），写入后重试", cs[0].Name)
+	}
+}
+
+// mukakuJSCookieRe GoEdge JS 验证页里的 document.cookie = "…"
+var mukakuJSCookieRe = regexp.MustCompile(`document\.cookie\s*=\s*["']([^"']+)["']`)
+
+// mukakuJSCookies 认 GoEdge 的 JS Cookie 验证页（只在页面不是 JSON 且带 ge_js_validator 时认），返回要写的 Cookie
+func mukakuJSCookies(s string) []*http.Cookie {
+	if !strings.Contains(s, "ge_js_validator") || strings.HasPrefix(strings.TrimSpace(s), "{") {
+		return nil
+	}
+	var out []*http.Cookie
+	for _, m := range mukakuJSCookieRe.FindAllStringSubmatch(s, -1) {
+		if c, err := http.ParseSetCookie(m[1]); err == nil && c.Name != "" {
+			// 写进罐里时按请求的站点算域；max-age 照抄会让罐按自己的时钟算过期，没问题
+			c.Domain = ""
+			if c.Path == "" {
+				c.Path = "/"
+			}
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func mukakuHTTPOnce(cfg *mukakuCfg, method, full string, reqBody []byte) (int, []byte, error) {
 	var rd io.Reader
 	if reqBody != nil {
 		rd = bytes.NewReader(reqBody)
@@ -230,7 +274,7 @@ func (h *Handler) MukakuSaveConfig(c *gin.Context) {
 		cfg.BaseURL = newBase
 	}
 	if req.AccessToken != nil {
-		cfg.AccessToken = strings.TrimSpace(*req.AccessToken)
+		cfg.AccessToken = mukakuCleanToken(*req.AccessToken)
 		cfg.TokenAt = time.Now().Format("2006-01-02 15:04")
 	}
 	if req.Username != nil {
@@ -245,6 +289,16 @@ func (h *Handler) MukakuSaveConfig(c *gin.Context) {
 	}
 	log.Printf("[不太灵影视] ✓ 配置已保存（token %v）", cfg.AccessToken != "")
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+}
+
+// mukakuCleanToken 从 localStorage 复制出来的值常带一对引号（JSON 字符串），也有人连 Bearer 前缀一起贴
+func mukakuCleanToken(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, `"'`)
+	if len(s) > 7 && strings.EqualFold(s[:7], "Bearer ") {
+		s = strings.TrimSpace(s[7:])
+	}
+	return s
 }
 
 // MukakuCaptcha GET /mukaku/captcha → {key, img}（img 为 data:image base64）
