@@ -23,6 +23,10 @@ func botSubFixture(t *testing.T) *Handler {
 				"seasons":[{"season_number":0,"episode_count":2},{"season_number":1,"episode_count":8},{"season_number":2,"episode_count":8}]}`)
 		case "/3/movie/1":
 			fmt.Fprint(w, `{"id":1,"title":"片名","release_date":"2024-03-01"}`)
+		case "/3/search/multi":
+			fmt.Fprint(w, `{"results":[{"id":1,"media_type":"movie","title":"片名","release_date":"2024-03-01"}]}`)
+		case "/3/search/tv":
+			fmt.Fprint(w, `{"results":[]}`)
 		default:
 			http.Error(w, `{"status_code":34}`, http.StatusNotFound)
 		}
@@ -54,6 +58,27 @@ func TestBotSubFindSingleHit(t *testing.T) {
 	}
 	if v = h.botSubFind("bs1", "600", botIO{}); !strings.Contains(v.text(), "已经订阅过了") || !strings.Contains(v.text(), "✏ 改范围") || !strings.Contains(v.text(), "第 2 季 · 补缺集") {
 		t.Fatalf("重复订阅应直接给改范围: %q", v.text())
+	}
+}
+
+// 按片名搜只出来一部也不能直接订：「订阅 全民英雄」搜出的唯一一部是《全民小英雄》
+func TestBotSubFindSingleNameAsks(t *testing.T) {
+	h := botSubFixture(t)
+	v := h.botSubFind("bs30", "片", botIO{})
+	if strings.Contains(v.text(), "已订阅") || !strings.Contains(v.text(), "片名") {
+		t.Fatalf("应先列出来让用户选: %q", v.text())
+	}
+	var n int64
+	model.DB.Model(&model.Subscription{}).Count(&n)
+	if n != 0 {
+		t.Fatalf("没选就订上了 %d 条", n)
+	}
+	if f := botFlowGet("bs30"); f == nil || f.stage != "media" {
+		t.Fatalf("应停在选片: %+v", f)
+	}
+	v, _ = h.botAct("bs30", "1", "", botIO{})
+	if !strings.Contains(v.text(), "已订阅《片名》") {
+		t.Fatalf("选了第 1 部应订上: %q", v.text())
 	}
 }
 
