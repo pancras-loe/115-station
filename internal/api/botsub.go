@@ -6,7 +6,8 @@ package api
 //   - /sub 片名：TMDB 选片（只有一部直接订），选定即按默认值订阅 —— 默认值与网页订阅弹窗相同：
 //     补缺集；剧集还在播、而且不止一季时只订最新一季（全剧往往要补几百集，多半不是想要的）；
 //   - 找资源的资源列表里多一个「🔔 订阅这部」（s），搜到一半想改成订阅不用重来；
-//   - /subs：列出订阅，选一个看进度，能立即搜索、暂停 / 恢复、取消订阅（要再点一次确认）。
+//   - /subs：列出订阅，选一个看进度，能立即搜索、暂停 / 恢复、改范围、取消订阅（要再点一次确认）；
+//   - 改范围（全剧 / 换一季 / 只追新集）见 botsubscope.go：剧集订完会话不关，直接给改范围那屏。
 // 新建一律走 createSubscription，与网页同一条路。
 
 import (
@@ -29,7 +30,8 @@ const (
 
 // botSubFind /sub 片名
 func (h *Handler) botSubFind(key, keyword string, io botIO) botView {
-	f := &botFlow{token: botNewToken(), keyword: keyword, mode: botModeSub, at: time.Now()}
+	keyword, want := botSplitScopeWant(keyword)
+	f := &botFlow{token: botNewToken(), keyword: keyword, mode: botModeSub, subWant: want, at: time.Now()}
 	botFlowPut(key, f)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -44,8 +46,7 @@ func (h *Handler) botSubFind(key, keyword string, io botIO) botView {
 		botFlowDrop(key, f)
 		return botNote("TMDB 没有找到「" + keyword + "」。可以换个片名，或直接发 TMDB ID。")
 	case len(movies) == 1:
-		botFlowDrop(key, f)
-		return botNote(h.botSubscribe(movies[0])...)
+		return h.botSubscribeOpen(key, f, movies[0])
 	}
 	f.movies, f.owned = movies, botOwned(h.DB, movies)
 	f.stage, f.page = "media", 0
@@ -72,25 +73,89 @@ func subDefaultForm(tc *TmdbClient, id int, kind string) subForm {
 	return f
 }
 
-// botSubscribe 订阅一部，返回给人看的几行
-func (h *Handler) botSubscribe(hit wecomTmdbHit) []string {
+// botSubOutcome 订阅一部的结果
+type botSubOutcome struct {
+	lines     []string
+	sub       model.Subscription
+	ok        bool // sub 有效：刚订上，或者早就订过（exists）
+	exists    bool
+	defaulted bool // 剧集还在播，按默认只订了最新一季
+}
+
+// botSubscribeOne 订阅一部；want 是片名后面写的范围（零值按默认）
+func (h *Handler) botSubscribeOne(hit wecomTmdbHit, want botScopeWant) botSubOutcome {
 	if hit.ID <= 0 || (hit.Type != "movie" && hit.Type != "tv") {
-		return []string{"订阅要先在 TMDB 上定下是哪一部（按关键词搜的结果不能订阅）。"}
+		return botSubOutcome{lines: []string{"订阅要先在 TMDB 上定下是哪一部（按关键词搜的结果不能订阅）。"}}
 	}
-	tc, _ := loadTmdbClient()
-	sub, _, err := h.createSubscription(subDefaultForm(tc, hit.ID, hit.Type), "bot")
 	name := "《" + hit.Title + "》"
+	tc, _ := loadTmdbClient()
+	form := subDefaultForm(tc, hit.ID, hit.Type)
+	defaulted := form.Scope == subScopeSeason
+	var extra []string
+	if want.set() {
+		switch {
+		case hit.Type != "tv":
+			extra = append(extra, "电影没有季，片名后面的范围不用写。")
+		case want.All:
+			form.Scope, form.Season, defaulted = subScopeAll, 0, false
+		default:
+			var f botFlow
+			botLoadSubSeasons(&f, hit.ID)
+			if f.seasons != nil && !botHasSeason(f.seasons, want.Season) {
+				return botSubOutcome{lines: []string{fmt.Sprintf("✗ %s TMDB 上没有第 %d 季（%s），没有订阅。", name, want.Season, botSeasonSpan(f.seasons))}}
+			}
+			form.Scope, form.Season, defaulted = subScopeSeason, want.Season, false
+		}
+	}
+	sub, _, err := h.createSubscription(form, "bot")
 	switch {
 	case errors.Is(err, errSubExists):
-		return []string{"🔔 " + name + "已经订阅过了：" + botSubProgress(&sub), "发送 /subs 查看或修改。"}
+		return botSubOutcome{lines: []string{"🔔 " + name + "已经订阅过了：" + botSubScopeText(&sub) + "，" + botSubProgress(&sub)}, sub: sub, ok: true, exists: true}
 	case err != nil:
-		return []string{"✗ 订阅" + name + "失败：" + err.Error()}
+		return botSubOutcome{lines: []string{"✗ 订阅" + name + "失败：" + err.Error()}}
 	}
 	lines := []string{fmt.Sprintf("🔔 已订阅%s（%s）", name, botSubScopeText(&sub)), "正在检查缺什么，找到资源会自动转存入库，提交时会通知。"}
-	if sub.MediaType == "tv" && sub.Scope == subScopeSeason {
-		lines = append(lines, "剧集还在播，默认只订最新一季；要订全剧或改范围，到网页「发现与订阅 → 订阅」里修改。")
+	return botSubOutcome{lines: append(lines, extra...), sub: sub, ok: true, defaulted: defaulted}
+}
+
+// botSubscribe 订阅一部，返回给人看的几行（批量订阅、找资源列表里的「订阅这部」用：那里不接着改范围，只说怎么改）
+func (h *Handler) botSubscribe(hit wecomTmdbHit, want botScopeWant) []string {
+	out := h.botSubscribeOne(hit, want)
+	switch {
+	case out.exists:
+		return append(out.lines, "发送 /subs 查看或修改。")
+	case out.defaulted:
+		return append(out.lines, "剧集还在播，默认只订最新一季；要订全剧或换一季，发 /subs 选这部点「改范围」。")
 	}
-	return lines
+	return out.lines
+}
+
+// botSubscribeOpen 订阅一部并接着给改范围的入口（/sub 只选了一部时）。
+// 剧集的会话不关，转成 /subs 会话停在这个订阅上：按默认缩小了范围、或者早就订过的，直接给改范围那屏；
+// 其余只给一个「改范围」按钮。电影与失败的照旧一条消息结束
+func (h *Handler) botSubscribeOpen(key string, f *botFlow, hit wecomTmdbHit) botView {
+	out := h.botSubscribeOne(hit, f.subWant)
+	if !out.ok || out.sub.MediaType != "tv" {
+		botFlowDrop(key, f)
+		if out.exists {
+			out.lines = append(out.lines, "发送 /subs 查看或修改。")
+		}
+		return botNote(out.lines...)
+	}
+	f.mode, f.subs, f.subSel, f.page, f.movies, f.confirmDel = botModeSubs, []model.Subscription{out.sub}, 0, 0, nil, false
+	f.lead = out.lines
+	switch {
+	case out.defaulted:
+		f.lead = append(f.lead, "剧集还在播，默认只订最新一季；要订全剧或换一季，点下面。")
+	case out.exists:
+		f.lead = append(f.lead, "要改范围点下面。")
+	default:
+		f.stage = "created"
+		return f.render()
+	}
+	f.stage = "scope"
+	botLoadSubSeasons(f, out.sub.TmdbID)
+	return f.render()
 }
 
 // botPicksMax 一条消息里最多认几个序号（选片列表本来就不超过 20 部）
@@ -147,12 +212,12 @@ func botParsePicks(text string) []int {
 }
 
 // botSubscribeMany 一次订几部（序号从 1 起）：每部一行结果，共同的说明只写一遍
-func (h *Handler) botSubscribeMany(movies []wecomTmdbHit, picks []int) []string {
+func (h *Handler) botSubscribeMany(movies []wecomTmdbHit, picks []int, want botScopeWant) []string {
 	lines := []string{fmt.Sprintf("批量订阅 %d 部：", len(picks))}
 	var notes []string
 	seen := map[string]bool{}
 	for _, n := range picks {
-		res := h.botSubscribe(movies[n-1])
+		res := h.botSubscribe(movies[n-1], want)
 		if len(res) == 0 {
 			continue
 		}
@@ -240,6 +305,13 @@ func (h *Handler) botSubsAct(key string, f *botFlow, act string, io botIO) botVi
 	switch act {
 	case "q":
 		botFlowDrop(key, f)
+		if (f.stage == "scope" || f.stage == "created") && f.subSel < len(f.subs) {
+			// TG 会把这一屏原地换成关闭语：订阅结果别跟着没了，留一句现在订的是什么
+			var cur model.Subscription
+			if h.DB.First(&cur, f.subs[f.subSel].ID).Error == nil {
+				return botNote("🔔 《"+cur.Title+"》："+botSubScopeText(&cur)+"。", "以后要改，发 /subs 选这部点「改范围」。")
+			}
+		}
 		return botNote("已关闭。")
 	case "n", "p":
 		if f.stage != "subs" {
@@ -261,12 +333,24 @@ func (h *Handler) botSubsAct(key string, f *botFlow, act string, io botIO) botVi
 		if f.stage == "subs" {
 			return botSay("已经在列表里了。")
 		}
+		if f.stage == "scope" || f.stage == "created" {
+			// 改范围那屏退回这个订阅的详情（订阅详情里再 b 才回列表）
+			f.stage, f.lead = "sub", nil
+			var cur model.Subscription
+			if h.DB.First(&cur, f.subs[f.subSel].ID).Error == nil {
+				f.subs[f.subSel] = cur
+				return f.render()
+			}
+		}
 		h.botSubsLoad(f)
 		f.stage, f.subSel = "subs", 0
 		return f.render()
 	}
 
 	if f.stage == "subs" {
+		if strings.HasPrefix(act, "s") || act == "e" || act == "fn" || act == "fm" {
+			return botSay("先选一个订阅（回复序号），再改范围。")
+		}
 		n, err := strconv.Atoi(act)
 		if err != nil || n < 1 || n > len(f.subs) {
 			return botSay(fmt.Sprintf("请选择 1-%d。", len(f.subs)))
@@ -280,12 +364,26 @@ func (h *Handler) botSubsAct(key string, f *botFlow, act string, io botIO) botVi
 	var sub model.Subscription
 	if h.DB.First(&sub, cur.ID).Error != nil {
 		h.botSubsLoad(f)
-		f.stage = "subs"
+		f.stage, f.lead = "subs", nil
 		v := f.render()
 		v.Lines = append([]string{"这个订阅已经被删掉了。", ""}, v.Lines...)
 		return v
 	}
+	// 改范围那屏里直接回季号也算选那一季
+	if f.stage == "scope" && regexpPureDigits.MatchString(act) {
+		act = "s" + act
+	}
 	switch act {
+	case "e":
+		if sub.MediaType != "tv" {
+			return botSay("电影没有范围可改。")
+		}
+		f.subs[f.subSel] = sub
+		f.stage, f.lead, f.confirmDel = "scope", nil, false
+		botLoadSubSeasons(f, sub.TmdbID)
+		return f.render()
+	case "sa", "fn", "fm", "sp":
+		return h.botSubSetScope(f, &sub, act)
 	case "a":
 		if _, err := enqueueSubscribeJob(h, []uint{sub.ID}, true, sub.Title, "bot"); err != nil {
 			return botSay("✗ 入队失败：" + err.Error())
@@ -324,11 +422,20 @@ func (h *Handler) botSubsAct(key string, f *botFlow, act string, io botIO) botVi
 		f.stage, f.subSel, f.page = "subs", 0, 0
 		return f.render()
 	}
+	if strings.HasPrefix(act, "s") {
+		return h.botSubSetScope(f, &sub, act)
+	}
 	return botSay("看不懂这个操作。")
 }
 
 // renderSubs /subs 会话的两屏：列表、单个订阅
 func (f *botFlow) renderSubs() botView {
+	switch f.stage {
+	case "scope":
+		return f.renderScope()
+	case "created":
+		return f.renderCreated()
+	}
 	v := botView{Token: f.token}
 	if f.stage == "sub" {
 		s := &f.subs[f.subSel]
@@ -353,14 +460,21 @@ func (f *botFlow) renderSubs() botView {
 		}
 		del := botBtn{Text: "🗑 取消订阅", Act: "x"}
 		hint := "回复 a 立即搜索；z 暂停 / 恢复；x 取消订阅；b 返回列表；q 退出"
+		if s.MediaType == "tv" {
+			hint = "回复 a 立即搜索；e 改范围；z 暂停 / 恢复；x 取消订阅；b 返回列表；q 退出"
+		}
 		if f.confirmDel {
 			v.Lines = append(v.Lines, "", "确定取消订阅？只删订阅和它的记账，已经转存、入库的不受影响。")
 			del = botBtn{Text: "⚠ 确认取消订阅", Act: "xx"}
 			hint = "回复 xx 确认取消订阅；b 返回列表"
 		}
+		row2 := []botBtn{del}
+		if s.MediaType == "tv" {
+			row2 = []botBtn{{Text: "✏ 改范围", Act: "e"}, del}
+		}
 		v.Buttons = [][]botBtn{
 			{{Text: "🔍 立即搜索", Act: "a"}, pause},
-			{del},
+			row2,
 			{{Text: "↩ 返回列表", Act: "b"}, {Text: "✕ 关闭", Act: "q"}},
 		}
 		v.Hint = "（" + hint + "，10 分钟内有效）"

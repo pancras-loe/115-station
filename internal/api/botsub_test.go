@@ -44,12 +44,149 @@ func TestBotSubFindSingleHit(t *testing.T) {
 	if sub.TmdbID != 600 || sub.Scope != subScopeSeason || sub.Season != 2 || sub.Follow != subFollowMissing {
 		t.Fatalf("订阅默认值不对: %+v", sub)
 	}
-	if botFlowGet("bs1") != nil {
-		t.Fatal("订阅完会话应关掉")
+	// 剧集按默认缩小了范围：会话不关，直接给改范围那屏
+	f := botFlowGet("bs1")
+	if f == nil || f.mode != botModeSubs || f.stage != "scope" {
+		t.Fatalf("订阅完应停在改范围: %+v", f)
 	}
-	if v = h.botSubFind("bs1", "600", botIO{}); !strings.Contains(v.text(), "已经订阅过了") {
-		t.Fatalf("重复订阅: %q", v.text())
+	if !strings.Contains(v.text(), "默认只订最新一季") || !strings.Contains(v.text(), "第 1 季 8 集 · 第 2 季 8 集") {
+		t.Fatalf("改范围那屏: %q", v.text())
 	}
+	if v = h.botSubFind("bs1", "600", botIO{}); !strings.Contains(v.text(), "已经订阅过了") || !strings.Contains(v.text(), "✏ 改范围") || !strings.Contains(v.text(), "第 2 季 · 补缺集") {
+		t.Fatalf("重复订阅应直接给改范围: %q", v.text())
+	}
+}
+
+// 订阅完在改范围那屏点：全剧 → 特别篇 → 换一季 → 追新；只改范围，网页设过的别的字段不动
+func TestBotSubScopeEdit(t *testing.T) {
+	h := botSubFixture(t)
+	h.botSubFind("bs20", "600", botIO{})
+	var sub model.Subscription
+	model.DB.First(&sub)
+	model.DB.Model(&sub).Updates(map[string]any{"include": "中字", "state": subStateDone})
+
+	act := func(a string) botView {
+		v, ok := h.botAct("bs20", a, "", botIO{})
+		if !ok {
+			t.Fatalf("操作 %s 没被会话接住", a)
+		}
+		return v
+	}
+	if v := act("sa"); !strings.Contains(v.text(), "已改为「全剧 · 补缺集」，全剧 2 季共 16 集") || v.Buttons[0][0].Text != "✓ 📚 全剧" {
+		t.Fatalf("改全剧: %q %+v", v.text(), v.Buttons)
+	}
+	model.DB.First(&sub, sub.ID)
+	if sub.Scope != subScopeAll || sub.Season != 0 || sub.Include != "中字" || sub.State != subStateActive || sub.NextCheckAt == nil {
+		t.Fatalf("全剧应保存、完成状态作废、别的字段不动: %+v", sub)
+	}
+	if v := act("sa"); !v.Toast || !strings.Contains(v.text(), "已经是") {
+		t.Fatalf("没变化应提示: %q", v.text())
+	}
+	act("sp")
+	if model.DB.First(&sub, sub.ID); !sub.Specials {
+		t.Fatal("应含特别篇")
+	}
+	if v := act("s5"); !strings.Contains(v.text(), "没有第 5 季") {
+		t.Fatalf("不存在的季: %q", v.text())
+	}
+	act("1") // 改范围那屏直接回季号
+	if model.DB.First(&sub, sub.ID); sub.Scope != subScopeSeason || sub.Season != 1 || sub.Specials {
+		t.Fatalf("应改成第 1 季、特别篇清掉: %+v", sub)
+	}
+	act("fn")
+	if model.DB.First(&sub, sub.ID); sub.Follow != subFollowNew || sub.FollowFrom == nil {
+		t.Fatalf("应只追新集: %+v", sub)
+	}
+	if v := act("b"); !strings.Contains(v.text(), "第 1 季 · 只追新集") || !strings.Contains(v.Hint, "e 改范围") {
+		t.Fatalf("返回订阅详情: %q", v.text())
+	}
+	if v := act("e"); !strings.Contains(v.text(), "✏ 改范围") {
+		t.Fatalf("详情里 e 进改范围: %q", v.text())
+	}
+	if v := act("q"); !strings.Contains(v.text(), "第 1 季 · 只追新集") || botFlowGet("bs20") != nil {
+		t.Fatalf("完成应留一句现在的范围并关会话: %q", v.text())
+	}
+}
+
+// 暂停的订阅改范围：保存，但不排检查
+func TestBotSubScopePaused(t *testing.T) {
+	h := botSubFixture(t)
+	model.DB.Create(&model.Subscription{TmdbID: 600, MediaType: "tv", Title: "剧", Scope: subScopeSeason, Season: 2, Follow: subFollowMissing, State: subStatePaused})
+	h.botSubsList("bs21")
+	h.botAct("bs21", "1", "", botIO{})
+	a, ok := botFlowAct("全剧")
+	if !ok || a != "sa" {
+		t.Fatalf("全剧 → sa: %q", a)
+	}
+	v, _ := h.botAct("bs21", a, "", botIO{})
+	var sub model.Subscription
+	model.DB.First(&sub)
+	if sub.Scope != subScopeAll || sub.State != subStatePaused || sub.NextCheckAt != nil || !strings.Contains(v.text(), "恢复后才会检查") {
+		t.Fatalf("暂停的: %+v %q", sub, v.text())
+	}
+}
+
+// 电影订完照旧一条消息结束，没有改范围
+func TestBotSubMovieNoScope(t *testing.T) {
+	h := botSubFixture(t)
+	v := h.botSubFind("bs22", "1", botIO{})
+	if !strings.Contains(v.text(), "已订阅《片名》") || len(v.Buttons) != 0 || botFlowGet("bs22") != nil {
+		t.Fatalf("电影: %q", v.text())
+	}
+	h.botSubsList("bs22")
+	h.botAct("bs22", "1", "", botIO{})
+	if v, _ := h.botAct("bs22", "e", "", botIO{}); !strings.Contains(v.text(), "电影没有范围") {
+		t.Fatalf("电影改范围: %q", v.text())
+	}
+}
+
+// 片名后面直接写范围
+func TestBotSubScopeSuffix(t *testing.T) {
+	for in, want := range map[string]struct {
+		kw string
+		w  botScopeWant
+	}{
+		"一拳超人 全剧":     {"一拳超人", botScopeWant{All: true}},
+		"一拳超人 第2季":    {"一拳超人", botScopeWant{Season: 2}},
+		"一拳超人  第 二 季": {"一拳超人", botScopeWant{Season: 2}},
+		"一拳超人 S3":     {"一拳超人", botScopeWant{Season: 3}},
+		"一拳超人全剧":      {"一拳超人全剧", botScopeWant{}},
+		"第2季":         {"第2季", botScopeWant{}},
+		"Friends":     {"Friends", botScopeWant{}},
+	} {
+		kw, w := botSplitScopeWant(in)
+		if kw != want.kw || w != want.w {
+			t.Errorf("%q → %q %+v，想要 %q %+v", in, kw, w, want.kw, want.w)
+		}
+	}
+	for in, want := range map[string]string{"第2季": "s2", "第十二季": "s12", "季 3": "s3", "s4": "s4", "追新": "fn", "补缺集": "fm", "特别篇": "sp", "改范围": "e"} {
+		if a, ok := botFlowAct(in); !ok || a != want {
+			t.Errorf("%q → %q，想要 %q", in, a, want)
+		}
+	}
+
+	h := botSubFixture(t)
+	v := h.botSubFind("bs23", "600 全剧", botIO{})
+	var sub model.Subscription
+	model.DB.First(&sub)
+	if sub.Scope != subScopeAll || f0(botFlowGet("bs23")) != "created" || len(v.Buttons) == 0 || v.Buttons[0][0].Act != "e" {
+		t.Fatalf("写了全剧: %+v %q", sub, v.text())
+	}
+	model.DB.Where("1 = 1").Delete(&model.Subscription{})
+	if v = h.botSubFind("bs24", "600 第9季", botIO{}); !strings.Contains(v.text(), "没有第 9 季") {
+		t.Fatalf("不存在的季不订: %q", v.text())
+	}
+	var n int64
+	if model.DB.Model(&model.Subscription{}).Count(&n); n != 0 {
+		t.Fatalf("不该订上: %d", n)
+	}
+}
+
+func f0(f *botFlow) string {
+	if f == nil {
+		return ""
+	}
+	return f.stage
 }
 
 // 找资源的列表里点「订阅这部」：列表不动，另发一条结果

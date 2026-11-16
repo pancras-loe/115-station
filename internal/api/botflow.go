@@ -132,6 +132,13 @@ type botFlow struct {
 	subs       []model.Subscription
 	subSel     int
 	confirmDel bool
+	// 改范围（botsubscope.go）：subWant 订阅时片名后面写的范围；lead 改范围那屏上方的几行（订阅结果 / 刚改成什么）；
+	// seasons 是 seasonsFor 这部剧的季列表（nil = 没读到），specialEps 第 0 季集数
+	subWant    botScopeWant
+	lead       []string
+	seasons    []botSeason
+	seasonsFor int
+	specialEps int
 }
 
 var botFlows = struct {
@@ -207,6 +214,10 @@ func botFlowAct(text string) (string, bool) {
 	}
 	if len(t) <= 3 && regexpPureDigits.MatchString(t) {
 		return t, true
+	}
+	// 订阅改范围：全剧 / 第2季 / 追新 / 补缺 / 特别篇 / 改范围
+	if a, ok := botScopeAct(t); ok {
+		return a, true
 	}
 	// 几个序号（「1,3,5」「1 3」「2-4」）：/sub 选片时一次订几部，统一成「1,3,5」
 	if ns := botParsePicks(t); len(ns) > 1 {
@@ -304,7 +315,7 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 		if f.stage != "resource" || f.media.ID == 0 {
 			return botSay("选定影片后才能订阅（按关键词搜的结果不能订阅）。"), true
 		}
-		return botSay(h.botSubscribe(f.media)...), true
+		return botSay(h.botSubscribe(f.media, botScopeWant{})...), true
 	case "q":
 		botFlowDrop(key, f)
 		return botNote("已关闭。已提交的任务继续执行。"), true
@@ -364,7 +375,7 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 			}
 		}
 		botFlowDrop(key, f)
-		return botNote(h.botSubscribeMany(f.movies, ns)...), true
+		return botNote(h.botSubscribeMany(f.movies, ns, f.subWant)...), true
 	}
 	n, err := strconv.Atoi(act)
 	if err != nil {
@@ -376,8 +387,7 @@ func (h *Handler) botAct(key, act, token string, io botIO) (botView, bool) {
 			return botSay(fmt.Sprintf("请选择 1-%d。", len(f.movies))), true
 		}
 		if f.mode == botModeSub {
-			botFlowDrop(key, f)
-			return botNote(h.botSubscribe(f.movies[n-1])...), true
+			return h.botSubscribeOpen(key, f, f.movies[n-1]), true
 		}
 		return h.botLoad(f, f.movies[n-1], false, io, ""), true
 	case "resource":

@@ -49,39 +49,9 @@ type subForm struct {
 
 // applySubForm 校验表单并写进订阅；范围变了返回 true（要立刻重新检查）
 func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, error) {
-	before := fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow)
-	if sub.MediaType == "movie" {
-		sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow = "", 0, 0, 0, false, ""
-	} else {
-		switch f.Scope {
-		case "", subScopeAll:
-			sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeAll, 0, 0, 0
-		case subScopeSeason:
-			if f.Season < 0 {
-				return false, errors.New("季号不对")
-			}
-			sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeSeason, f.Season, 0, 0
-		case subScopeRange:
-			if f.Season < 0 || f.EpStart <= 0 || (f.EpEnd > 0 && f.EpEnd < f.EpStart) {
-				return false, errors.New("集段不对：起始集号要 ≥ 1，结束集号为空或不小于起始")
-			}
-			sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeRange, f.Season, f.EpStart, f.EpEnd
-		default:
-			return false, errors.New("范围只能是 全剧 / 某一季 / 集段")
-		}
-		sub.Specials = f.Specials && sub.Scope == subScopeAll
-		switch f.Follow {
-		case "", subFollowMissing:
-			sub.Follow, sub.FollowFrom = subFollowMissing, nil
-		case subFollowNew:
-			if sub.Follow != subFollowNew || sub.FollowFrom == nil {
-				t := now
-				sub.FollowFrom = &t
-			}
-			sub.Follow = subFollowNew
-		default:
-			return false, errors.New("追剧模式只能是 补缺集 / 只追新集")
-		}
+	before := subScopeSig(sub)
+	if err := applySubScope(sub, f, now); err != nil {
+		return false, err
 	}
 	srcs := make([]string, 0, len(f.Sources))
 	for _, k := range f.Sources {
@@ -151,7 +121,62 @@ func applySubForm(sub *model.Subscription, f subForm, now time.Time) (bool, erro
 		sub.Priority = string(b)
 	}
 	// 打开洗版也算变了：已完成的订阅要回到追更中、马上查一轮
-	return washOn || before != fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow), nil
+	return washOn || before != subScopeSig(sub), nil
+}
+
+// subScopeSig 范围与追剧模式的指纹：变了就要马上重新检查
+func subScopeSig(sub *model.Subscription) string {
+	return fmt.Sprint(sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow)
+}
+
+// applySubScope 只改范围（全剧 / 某一季 / 集段、特别篇）与追剧模式，其余字段不碰。
+// 网页表单与机器人改范围（botsub.go）共用，校验口径一致
+func applySubScope(sub *model.Subscription, f subForm, now time.Time) error {
+	if sub.MediaType == "movie" {
+		sub.Scope, sub.Season, sub.EpStart, sub.EpEnd, sub.Specials, sub.Follow = "", 0, 0, 0, false, ""
+		return nil
+	}
+	switch f.Scope {
+	case "", subScopeAll:
+		sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeAll, 0, 0, 0
+	case subScopeSeason:
+		if f.Season < 0 {
+			return errors.New("季号不对")
+		}
+		sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeSeason, f.Season, 0, 0
+	case subScopeRange:
+		if f.Season < 0 || f.EpStart <= 0 || (f.EpEnd > 0 && f.EpEnd < f.EpStart) {
+			return errors.New("集段不对：起始集号要 ≥ 1，结束集号为空或不小于起始")
+		}
+		sub.Scope, sub.Season, sub.EpStart, sub.EpEnd = subScopeRange, f.Season, f.EpStart, f.EpEnd
+	default:
+		return errors.New("范围只能是 全剧 / 某一季 / 集段")
+	}
+	sub.Specials = f.Specials && sub.Scope == subScopeAll
+	switch f.Follow {
+	case "", subFollowMissing:
+		sub.Follow, sub.FollowFrom = subFollowMissing, nil
+	case subFollowNew:
+		if sub.Follow != subFollowNew || sub.FollowFrom == nil {
+			t := now
+			sub.FollowFrom = &t
+		}
+		sub.Follow = subFollowNew
+	default:
+		return errors.New("追剧模式只能是 补缺集 / 只追新集")
+	}
+	return nil
+}
+
+// markSubRecheck 范围变了 / 恢复追更之后：完成状态作废，排到马上检查（暂停的不动，恢复后才查）
+func markSubRecheck(sub *model.Subscription, now time.Time) {
+	if sub.State == subStatePaused {
+		return
+	}
+	if sub.State == subStateDone {
+		sub.State, sub.DoneAt = subStateActive, nil
+	}
+	sub.NextCheckAt = &now
 }
 
 // subDTO 列表与详情里的订阅
@@ -335,12 +360,9 @@ func (h *Handler) UpdateSubscription(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "状态只能是 追更 / 暂停"})
 		return
 	}
-	if changed && sub.State != subStatePaused {
+	if changed {
 		// 范围变了 / 恢复追更：完成状态作废，下一分钟调度器就会来查
-		if sub.State == subStateDone {
-			sub.State, sub.DoneAt = subStateActive, nil
-		}
-		sub.NextCheckAt = &now
+		markSubRecheck(&sub, now)
 	}
 	if err := h.DB.Save(&sub).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败：" + err.Error()})

@@ -258,7 +258,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"多份 — 同一集有几份文件、改名会重名时选择保留哪份（多份 <编号> <选择>）",
 			"洗版 — 手动转存的不如库里的、停下来问的：洗版 <编号> 是（强制洗版）/ 否（不洗版）",
 			"订阅 <片名> — 订阅：定时找缺的集，转存后自动入库（找资源的列表里回复 s 订阅这部）",
-			"我的订阅 — 看进度；选一个后 a 立即搜索，z 暂停 / 恢复，x 取消订阅",
+			"我的订阅 — 看进度；选一个后 a 立即搜索，e 改范围（全剧 / 第2季 / 追新），z 暂停 / 恢复，x 取消订阅",
 			"PT签到 — 立即给 PT 站签到一轮，跑完回复汇总",
 			"检查更新 — 看有没有新版本；有的话回「更新」下载新程序并重启（有任务在跑会先问一句）",
 		)
@@ -355,7 +355,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			kw = strings.TrimSpace(text[4:])
 		}
 		if kw == "" {
-			reply("用法：订阅 <片名>，例如：订阅 三体；发「我的订阅」查看已有的订阅")
+			reply("用法：订阅 <片名>，例如：订阅 三体；片名后加「全剧」「第2季」直接定范围；发「我的订阅」查看已有的订阅")
 			return
 		}
 		wecomShow(h.botSubFind("bot:"+user, kw, wecomFlowIO(reply)), reply)
