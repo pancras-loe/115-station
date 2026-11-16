@@ -137,8 +137,8 @@ type subCand struct {
 	// Stale 发布时间早于缺集里最早那集的播出日：不可能有缺的集（「持续更新」的分享内容会变，所以只排后、不丢）
 	Stale bool
 	Paid  int // 要花的积分（RE0 / 癫影，看 Item.Source；0 = 不花）
-	// Top 标题达标：命中洗版策略第 1 条规则（subpriority.go）。达标的排最前，都不达标先补集数
-	Top bool
+	// Tier 标题命中洗版策略的第几条（subpriority.go 的 rank，0 最好，没命中排最后）。排序先比它、再比补几集
+	Tier int
 	// Exact RE0 文件预览核实过、这条资源能补上的集（电影是一个零值）；nil = 没预览过，覆盖按标题估计
 	Exact []epKey
 }
@@ -355,7 +355,7 @@ func planSubCandidates(items []ResourceItem, c subPickCtx) (cands []subCand, ove
 			c.skip("磁力" + why)
 			continue
 		}
-		cand := subCand{Item: it, Hash: hash, Top: c.Prio.top(it.Title)}
+		cand := subCand{Item: it, Hash: hash, Tier: c.Prio.rank(it.Title)}
 		cand.Stale = !movie && !earliestAir.IsZero() && it.TimeUnix > 0 && time.Unix(it.TimeUnix, 0).Before(earliestAir)
 		if movie {
 			cand.Covers = 1
@@ -528,17 +528,19 @@ func containsAnyKeyword(lower string, kws []string) bool {
 	return false
 }
 
-// sortSubCandidates 达标的在前（命中洗版策略第 1 条）→ 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
+// sortSubCandidates 命中规则靠前的在前（命中洗版策略第几条）→ 能补的集多的在前 → 缺集播出之后才发布的在前（追新集时旧资源不可能有新集）→
 // 115 分享在离线前（能按集挑、秒转）→ 不花积分的在前 → 补到的集更接近最新已播出的在前 → 集数多的在前 →
 // 画质好的在前（prio.compare，和整理时洗版同一套）→ 新的在前。
-// 达标放最前是维护者定的（2026-10-22）：有达标的就要达标的；都不达标时第一关打平，就是先补集数、再看画质。
-// 一轮里先试的先占集，后面的只补还缺的，所以达标的单集分享排在不达标的合集前面，合集只补剩下的集。
+// 先比命中第几条是维护者定的（2026-11-16，取代 10-22 的「只有命中第 1 条的排最前、其余先补集数」）：
+// 用户写了 5 条 1080p 在前、4 条 2160p 在后，第 1 条又是 1080p WEBRip，原来 1080p WEB-DL 和 4K 算同一档，
+// 36 集的 4K 整季包靠集数排到最前。一轮里先试的先占集，后面的只补还缺的，所以规则靠前的单集分享先补，
+// 靠后的合集只补剩下的集（代价是一部剧可能由几个分享拼起来）。
 // 别整体改成按时间倒序：一轮按集数限额、先提交的先占集，补老集时会让新发的低画质资源抢在高画质合集前面
 func sortSubCandidates(cs []subCand, prio subPriority) {
 	sort.SliceStable(cs, func(i, j int) bool {
 		a, b := cs[i], cs[j]
-		if a.Top != b.Top {
-			return a.Top
+		if a.Tier != b.Tier {
+			return a.Tier < b.Tier
 		}
 		if a.Covers != b.Covers {
 			return a.Covers > b.Covers

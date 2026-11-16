@@ -12,6 +12,7 @@ package api
 //   - custom 自定义：订阅设置或订阅自己写的一组规则（写法同洗版规则）
 //
 // 「达标」= 命中第 1 条规则（维护者定的：最好的画面设置要求）。没有规则就没有达标一说。
+// 候选排序先比命中第几条（rank），再比能补几集（2026-11-16 起，原来只把达标的提到最前）。
 // Limit「只要命中前 N 条」把排序变成过滤，原来资源条件的「要 2160p」迁过来就是一条规则 + 前 1 条。
 // 过滤按三态判（condField 同口径）：标题没写的分享照样去列文件、到文件一级再判，否则「剧名 全集」这种整季分享全被误杀
 
@@ -118,9 +119,16 @@ func subPriorityOf(mediaType string) subPriority {
 	return subPriority{}
 }
 
-// top 达标：命中第 1 条规则
-func (p subPriority) top(name string) bool {
-	return len(p.Rules) > 0 && washTier(name, p.Rules) == 0
+// rank 资源标题命中第几条规则（0 最好），一条都没命中排在所有规则之后；没有规则一律 0（不分档）。
+// 订阅候选排序先比它（sortSubCandidates）
+func (p subPriority) rank(name string) int {
+	if len(p.Rules) == 0 {
+		return 0
+	}
+	if t := washTier(name, p.Rules); t >= 0 {
+		return t
+	}
+	return len(p.Rules)
 }
 
 // compare >0 a 更好，<0 b 更好，0 分不出。只有名字（资源标题），体积两项不看

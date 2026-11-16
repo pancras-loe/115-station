@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -33,8 +34,9 @@ func TestRuleMatchToken(t *testing.T) {
 
 func TestSubPriority(t *testing.T) {
 	p := subPriority{Rules: []washRule{{ResourcePix: "2160p", ResourceEffect: "DV"}, {ResourcePix: "2160p,1080p"}}}
-	if !p.top("剧.S01E01.2160p.WEB-DL.DV.H265.mkv") || p.top("剧.S01E01.2160p.WEB-DL.H265.mkv") {
-		t.Fatal("达标 = 命中第 1 条")
+	if p.rank("剧.S01E01.2160p.WEB-DL.DV.H265.mkv") != 0 || p.rank("剧.S01E01.2160p.WEB-DL.H265.mkv") != 1 ||
+		p.rank("剧.S01E01.720p.WEB-DL.mkv") != 2 {
+		t.Fatal("rank = 命中第几条，没命中排最后")
 	}
 	// 同命中第 2 条：再按默认画质比，2160p 赢
 	if p.compare("剧.S01E01.2160p.WEB-DL.mkv", "剧.S01E01.1080p.WEB-DL.mkv") <= 0 {
@@ -42,15 +44,15 @@ func TestSubPriority(t *testing.T) {
 	}
 	// 没有规则：只按默认画质，也没有达标一说
 	basic := subPriority{}
-	if basic.top("剧.2160p.REMUX.DV.H265.mkv") {
-		t.Fatal("没有规则不该达标")
+	if basic.rank("剧.2160p.REMUX.DV.H265.mkv") != basic.rank("剧.480p.mkv") {
+		t.Fatal("没有规则不分档")
 	}
 	if basic.compare("剧.1080p.BluRay.mkv", "剧.1080p.WEB-DL.mkv") <= 0 {
 		t.Fatal("基础：BluRay 应好过 WEB-DL")
 	}
 }
 
-// 都不达标：先补集数、再看画质；有达标的排最前
+// 先比命中第几条规则，同一条再补集数、再看画质
 func TestSortSubCandidatesTop(t *testing.T) {
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.Local)
 	sub := &model.Subscription{ID: 1, MediaType: "tv"}
@@ -69,8 +71,40 @@ func TestSortSubCandidatesTop(t *testing.T) {
 	for _, c := range cands {
 		got = append(got, c.Item.URL[len("https://115.com/s/"):])
 	}
-	// c 达标排第一；b 补两集；a / d 都补一集、同命中第 2 条，按片源 BluRay > WEB-DL
+	// c 命中第 1 条排第一；b 补两集；a / d 都补一集、同命中第 2 条，按片源 BluRay > WEB-DL
 	if want := []string{"c", "b", "d", "a"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("顺序 %v, want %v", got, want)
+	}
+}
+
+// 2026-11-16 用户现场：前 5 条是 1080p（第 1 条 WEBRip）、后面是 2160p，订阅却挑了 36 集的 4K 整季包。
+// 1080p WEB-DL 没命中第 1 条，原来和 4K 算同一档、按集数输给整季包；现在命中靠前的规则先试
+func TestSortSubCandidatesTierBeforeCovers(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.Local)
+	sub := &model.Subscription{ID: 1, MediaType: "tv"}
+	share := func(title, code string) ResourceItem {
+		return ResourceItem{Source: "pansou", Kind: "share115", Action: "transfer", Title: title, URL: "https://115.com/s/" + code, Relevant: true}
+	}
+	items := []ResourceItem{
+		share("棋魂 S01E01-E36 2160p HDR WEB-DL", "uhd"),
+		share("棋魂 S01E01-E10 1080p WEB-DL", "fhd"),
+		share("棋魂 S01E01-E36 720p WEB-DL", "hd"),
+	}
+	prio := subPriority{Rules: []washRule{
+		{ResourcePix: "1080p", ResourceType: "WEBRip", ResourceEffect: "!DV"},
+		{ResourcePix: "1080p", ResourceType: "WEB-DL", ResourceEffect: "!DV"},
+		{ResourcePix: "2160p", ResourceType: "WEB-DL", ResourceEffect: "!DV"},
+	}}
+	var missing []string
+	for e := 1; e <= 36; e++ {
+		missing = append(missing, fmt.Sprintf("S01E%02d", e))
+	}
+	cands, _ := planSubCandidates(items, subPickCtx{Sub: sub, Missing: epKeys(missing...), Now: now, Re0Left: -1, Prio: prio})
+	var got []string
+	for _, c := range cands {
+		got = append(got, c.Item.URL[len("https://115.com/s/"):])
+	}
+	if want := []string{"fhd", "uhd", "hd"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("顺序 %v, want %v", got, want)
 	}
 }
