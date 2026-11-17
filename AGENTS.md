@@ -588,6 +588,11 @@ git tag v26.10.9 && git push origin v26.10.9
       rod 那串默认参数（关站点隔离、NetworkServiceInProcess 等）也删掉了，别加 `--disable-gpu`。
       验证框在封闭 Shadow DOM 里，Playwright 的 `get_by_role` 都看不见（官方包装层自己也过不了这一步），要按无障碍树找、按坐标点；
       开着站点隔离时它是独立 target，只能 `TargetAttachToTarget` + `PageFromSession` 发裸鼠标事件（`PageFromTarget` 对 iframe 报错）。
+    - **时区 / 语言 / WebRTC 跟出口对齐**（`cloakgeo.go`，2026-11-17，官方包装层 `geoip=True` 同款）：启动浏览器前经同一条线路读站点自己的 `/cdn-cgi/trace` 拿出口 IP 与国家
+      （Clash 按域名分流，问第三方「我的 IP」走的可能是另一个节点），再按 IP 查时区，设 `--fingerprint-timezone` / `--lang` / `--fingerprint-locale`，走代理时再设 `--fingerprint-webrtc-ip`；查不到退回容器 TZ、不设语言。
+      现场：勾了「通过代理访问」后验证框点了三次都判不通过，时区一直是容器的 Asia/Shanghai、出口在代理节点那边。
+      验证框里显示的字（转圈 / 失败带错误码）每 5 秒从无障碍树读一次，变了写日志「验证框显示：…」，失败的报错里也带最后一次，**排查先看这一行**：分得清是没点上还是 Cloudflare 判了不通过。
+      本机冒烟测试 `re0cf_live_test.go`（build tag `re0cflive`，`RE0CF_BROWSER` 指向 CloakBrowser Windows 版的 chrome.exe，`RE0CF_PROXY` 走代理），走的是生产的 `re0StartBrowser` + `re0Goto`。
     - 站点没登录时是页面加载完才在前端跳 `/login`，判断登录态要等（`re0AwaitAuth`），别一打开就下结论。
     - 每次失败把截图与 HTML 存到 `DATA_DIR/cloakbrowser/debug`（留最近 20 个文件），排查先看这里。
       `CLOAKBROWSER_BINARY_PATH` 可以指定现成的浏览器（同官方包装层），调试用，不下载。

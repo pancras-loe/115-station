@@ -130,10 +130,7 @@ func re0StartBrowser() (*rod.Browser, error) {
 		"disable-default-apps", "disable-hang-monitor", "disable-prompt-on-repost", "disable-sync"} {
 		l.Delete(flags.Flag(f))
 	}
-	if tz := os.Getenv("TZ"); tz != "" {
-		l.Set("fingerprint-timezone", tz)
-	}
-	proxyNote := "直连"
+	proxyNote, proxyFull := "直连", ""
 	if cfg.UseProxy {
 		if pu := getProxyURL(); pu != "" {
 			if u, err := url.Parse(pu); err == nil && u.Host != "" {
@@ -141,11 +138,31 @@ func re0StartBrowser() (*rod.Browser, error) {
 					log.Printf("[RE0浏览器] ⚠ 代理带账号密码，Chromium 的 --proxy-server 不支持，去掉账号部分照用（不通的话请换不带认证的代理）")
 				}
 				l.Proxy(u.Scheme + "://" + u.Host)
-				proxyNote = "代理 " + u.Scheme + "://" + u.Host
+				proxyNote, proxyFull = "代理 "+u.Scheme+"://"+u.Host, pu
 			}
 		} else {
 			log.Printf("[RE0浏览器] ○ 勾了「通过代理访问」但系统配置里没填代理，按直连")
 		}
+	}
+	// 时区 / 语言 / WebRTC 跟出口对齐（cloakgeo.go）：走代理时出口和容器所在地对不上，Cloudflare 据此判机器人。
+	// 浏览器癫影、不太灵也在用，代理开关只有 RE0 这一个，出口也按 RE0 的线路认
+	re0Step("查出口 IP")
+	geo, gerr := cloakResolveGeo(cfg.BaseURL, proxyFull)
+	gargs := cloakGeoArgs(geo, proxyFull != "", os.Getenv("TZ"))
+	for k, v := range gargs {
+		l.Set(flags.Flag(k), v)
+	}
+	desc := fmt.Sprintf("浏览器时区 %s、语言 %s", firstNonEmpty(gargs["fingerprint-timezone"], "不设"), firstNonEmpty(gargs["lang"], "不设"))
+	if gargs["fingerprint-webrtc-ip"] != "" {
+		desc += "、WebRTC 报出口 IP"
+	}
+	if gerr != nil {
+		log.Printf("[RE0浏览器] ○ 出口所在地没查全（%v），%s", gerr, desc)
+	} else {
+		log.Printf("[RE0浏览器]   出口 %s（时区由 %s 查得）→ %s", geo, geo.Via, desc)
+	}
+	if geo.IP != "" {
+		proxyNote += "，出口 " + geo.String()
 	}
 	start := time.Now()
 	re0Step("启动浏览器")
@@ -552,6 +569,7 @@ func re0WaitCloudflare(p *rod.Page) error {
 	deadline := start.Add(90 * time.Second)
 	detected, clicks, sawFrame, reloaded := false, 0, false, false
 	var nextClick time.Time
+	var shown string // 验证框里最后显示的字：点了之后是转圈、成功还是失败（带错误码），失败时写进日志与报错
 	for time.Now().Before(deadline) {
 		res, err := p.Eval(re0ChallengeJS)
 		if err != nil {
@@ -572,8 +590,13 @@ func re0WaitCloudflare(p *rod.Page) error {
 			log.Printf("[RE0网页] ○ 遇到 Cloudflare 验证（%s），等它自动通过或点验证框，最长 90 秒", re0URL(p))
 			re0Step("过 Cloudflare 验证（最长 90 秒）")
 		}
-		if clicks < 3 && time.Now().After(nextClick) {
-			if re0ClickCFCheckbox(p) {
+		if time.Now().After(nextClick) {
+			state, clicked := re0CFWidget(p, clicks < 3)
+			if state != "" && state != shown {
+				shown = state
+				log.Printf("[RE0网页]   验证框显示：%s", state)
+			}
+			if clicked {
 				clicks++
 				log.Printf("[RE0网页]   已点 Cloudflare 验证框（第 %d 次）", clicks)
 				re0Step("过 Cloudflare 验证：已点验证框（第 %d 次），等结果", clicks)
@@ -600,16 +623,25 @@ func re0WaitCloudflare(p *rod.Page) error {
 		return fmt.Errorf("Cloudflare 验证框 90 秒内没加载出来（%s）：容器到 challenges.cloudflare.com 不通，或 Cloudflare 不给这个出口 IP 出验证框，试试 RE0 设置里的「通过代理访问」或换个出口", re0URL(p))
 	}
 	if detected {
-		return fmt.Errorf("Cloudflare 验证 90 秒内没通过（%s，点了 %d 次验证框），可能是出口 IP 被 Cloudflare 判成高风险，试试换个代理 / 出口", re0URL(p), clicks)
+		last := ""
+		if shown != "" {
+			last = "，验证框最后显示「" + shown + "」"
+		}
+		return fmt.Errorf("Cloudflare 验证 90 秒内没通过（%s，点了 %d 次验证框%s），可能是出口 IP 被 Cloudflare 判成高风险，试试换个代理 / 出口", re0URL(p), clicks, last)
 	}
 	return fmt.Errorf("页面一直在跳转，读不出来（%s）", re0URL(p))
 }
 
-// re0ClickCFCheckbox 验证框在 challenges.cloudflare.com 的 iframe 里、还套着封闭的 Shadow DOM，
-// 选择器选不到：按无障碍树找 checkbox 再用坐标点（插件 _click_cf_checkbox 同思路）。
+// re0CFWidget 读 Cloudflare 验证框里现在显示的字，click 时有没勾上的复选框就顺手点一下。
+// 验证框在 challenges.cloudflare.com 的 iframe 里、还套着封闭的 Shadow DOM，选择器选不到：
+// 按无障碍树找 checkbox 再用坐标点（插件 _click_cf_checkbox 同思路），显示的字也从无障碍树读。
 // 开着站点隔离时这个 iframe 是独立进程（OOPIF），要附到它自己的 target 上找、在它自己的视口坐标里点；
-// 同进程时（关了隔离）直接在主页面按 FrameID 找
-func re0ClickCFCheckbox(p *rod.Page) bool {
+// 同进程时（关了隔离）直接在主页面按 FrameID 找。
+//
+// 读字是为了分清「点没点上」和「Cloudflare 判了不通过」：2026-11-17 现场点了三次都没过，日志里只看得出
+// 验证框换了几个，看不到 Cloudflare 显示的是「Verifying…」卡住还是「Verification failed」带错误码
+func re0CFWidget(p *rod.Page, click bool) (state string, clicked bool) {
+	var texts []string
 	// 独立进程的 iframe
 	if tg, err := (proto.TargetGetTargets{}).Call(p.Browser()); err == nil {
 		for _, ti := range tg.TargetInfos {
@@ -622,18 +654,21 @@ func re0ClickCFCheckbox(p *rod.Page) bool {
 				continue
 			}
 			fp := p.Browser().PageFromSession(att.SessionID)
-			x, y, ok := re0CFCheckboxAt(fp, "")
-			clicked := ok && re0HumanClick(fp, x, y) == nil
-			_ = proto.TargetDetachFromTarget{SessionID: att.SessionID}.Call(p.Browser())
-			if clicked {
-				return true
+			if ax, err := (proto.AccessibilityGetFullAXTree{}).Call(fp); err == nil {
+				texts = append(texts, re0AXTexts(ax.Nodes)...)
+				if click && !clicked {
+					if x, y, ok := re0CFCheckboxIn(fp, ax.Nodes); ok && re0HumanClick(fp, x, y) == nil {
+						clicked = true
+					}
+				}
 			}
+			_ = proto.TargetDetachFromTarget{SessionID: att.SessionID}.Call(p.Browser())
 		}
 	}
 	// 同进程的 iframe
 	tree, err := proto.PageGetFrameTree{}.Call(p)
 	if err != nil {
-		return false
+		return re0CFStateText(texts), clicked
 	}
 	var frames []*proto.PageFrame
 	var walk func(t *proto.PageFrameTree)
@@ -650,11 +685,53 @@ func re0ClickCFCheckbox(p *rod.Page) bool {
 	}
 	walk(tree.FrameTree)
 	for _, f := range frames {
-		if x, y, ok := re0CFCheckboxAt(p, f.ID); ok && re0HumanClick(p, x, y) == nil {
-			return true
+		ax, err := proto.AccessibilityGetFullAXTree{FrameID: f.ID}.Call(p)
+		if err != nil {
+			continue
+		}
+		texts = append(texts, re0AXTexts(ax.Nodes)...)
+		if click && !clicked {
+			if x, y, ok := re0CFCheckboxIn(p, ax.Nodes); ok && re0HumanClick(p, x, y) == nil {
+				clicked = true
+			}
 		}
 	}
-	return false
+	return re0CFStateText(texts), clicked
+}
+
+// re0AXTexts 无障碍树里看得见的文字（StaticText 的名字）
+func re0AXTexts(nodes []*proto.AccessibilityAXNode) []string {
+	var out []string
+	for _, n := range nodes {
+		if n.Ignored || n.Role == nil || n.Name == nil || n.Role.Value.Str() != "StaticText" {
+			continue
+		}
+		if s := strings.Join(strings.Fields(n.Name.Value.Str()), " "); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// re0CFStateText 验证框的字去重、去掉每个框都有的落款（Cloudflare / Privacy / Help …），拼成一行
+func re0CFStateText(texts []string) string {
+	seen := map[string]bool{}
+	var keep []string
+	for _, t := range texts {
+		switch strings.ToLower(strings.Trim(t, " •·|")) {
+		case "", "cloudflare", "privacy", "help", "terms", "•":
+			continue
+		}
+		if !seen[t] {
+			seen[t] = true
+			keep = append(keep, t)
+		}
+	}
+	s := strings.Join(keep, " / ")
+	if r := []rune(s); len(r) > 160 {
+		s = string(r[:160]) + "…"
+	}
+	return s
 }
 
 // re0CFFramePresent 页面上有没有 Cloudflare 验证框的 iframe（独立进程的看 target，同进程的看 frame 树）
@@ -693,13 +770,9 @@ func re0IsCFURL(raw string) bool {
 	return err == nil && u.Hostname() == "challenges.cloudflare.com"
 }
 
-// re0CFCheckboxAt 在 p（或 p 里的 frameID）的无障碍树里找没勾上的 checkbox，返回点击坐标（框内随机偏一点）
-func re0CFCheckboxAt(p *rod.Page, frameID proto.PageFrameID) (float64, float64, bool) {
-	ax, err := proto.AccessibilityGetFullAXTree{FrameID: frameID}.Call(p)
-	if err != nil {
-		return 0, 0, false
-	}
-	for _, n := range ax.Nodes {
+// re0CFCheckboxIn 在无障碍树（从 p 这个会话读来的）里找没勾上的 checkbox，返回点击坐标（框内随机偏一点）
+func re0CFCheckboxIn(p *rod.Page, nodes []*proto.AccessibilityAXNode) (float64, float64, bool) {
+	for _, n := range nodes {
 		if n.Ignored || n.Role == nil || n.Role.Value.Str() != "checkbox" || n.BackendDOMNodeID == 0 {
 			continue
 		}
