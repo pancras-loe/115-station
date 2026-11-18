@@ -136,7 +136,13 @@ func jobParamsSummary(p jobParams) []string {
 		out = append(out, t)
 	}
 	if s := p.Sync; s != nil {
-		if s.Cid != "" {
+		if len(s.Libraries) > 0 {
+			names := make([]string, 0, len(s.Libraries))
+			for _, lib := range s.Libraries {
+				names = append(names, lib.Name)
+			}
+			out = append(out, "媒体库 "+strings.Join(names, "、"))
+		} else if s.Cid != "" {
 			out = append(out, "网盘目录 cid "+s.Cid)
 		}
 		if s.LocalPath != "" {

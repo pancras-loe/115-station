@@ -1,6 +1,7 @@
 import { http } from './client'
 import type { QueuedReply } from './tasks'
 import type { LibScrape } from './organize'
+import type { FullLastScan } from './sync'
 
 /**
  * 移出配置的媒体库的本地残留（后端 libleft.go）：台账第一段既不是配置中的库名、也不是分类目录。
@@ -94,6 +95,8 @@ export interface LibSyncStat {
   assets: number
   orphans: number
   complete: boolean
+  /** 上一次完整扫描用的后缀，后续失败时仍保留 */
+  last_scan?: FullLastScan
 }
 
 export type LibMode = 'organize' | 'self'

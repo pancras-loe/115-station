@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -162,6 +161,7 @@ type fullParams struct {
 	ImageExt  []string
 	DataExt   []string
 	Mode      string // normal(默认) / fast
+	Libraries []fullLibraryRef
 	// AcctOnly 只同步附加账号的库（acctlibs.go 的定时补同步、新加库后的首次同步）：不碰主号的库，也不标主号的事件窗口
 	AcctOnly bool
 }
@@ -190,17 +190,36 @@ type fullConfigErr struct{ err error }
 func (e fullConfigErr) Error() string { return e.err.Error() }
 
 // RunFullSync 全量同步 HTTP 入口
-// POST /sync/full  body: {"cid":"...","local_path":"...","video_ext":["mp4"],"image_ext":["jpg"],"data_ext":["ass"]}
+// POST /sync/full 支持用 library_ids 选择已配置的库；省略时按旧参数运行。
 func (h *Handler) RunFullSync(c *gin.Context) {
 	var req struct {
-		Cid       string   `json:"cid"`
-		LocalPath string   `json:"local_path"`
-		VideoExt  []string `json:"video_ext"`
-		ImageExt  []string `json:"image_ext"`
-		DataExt   []string `json:"data_ext"`
-		Mode      string   `json:"mode"` // fast(界面默认) / normal
+		Cid        string          `json:"cid"`
+		LocalPath  string          `json:"local_path"`
+		VideoExt   []string        `json:"video_ext"`
+		ImageExt   []string        `json:"image_ext"`
+		DataExt    []string        `json:"data_ext"`
+		Mode       string          `json:"mode"` // fast(界面默认) / normal
+		LibraryIDs json.RawMessage `json:"library_ids"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.Cid == "" {
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "全量同步参数错误"})
+		return
+	}
+	dedupeKey := "full"
+	var libraries []fullLibraryRef
+	if req.LibraryIDs != nil {
+		var ids []uint
+		if err := json.Unmarshal(req.LibraryIDs, &ids); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库 ID 列表无效"})
+			return
+		}
+		var err error
+		libraries, dedupeKey, err = selectFullLibraries(loadLibraries(), ids)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	} else if req.Cid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误：请填写 115 媒体库 cid"})
 		return
 	}
@@ -209,11 +228,15 @@ func (h *Handler) RunFullSync(c *gin.Context) {
 	if req.Mode == "fast" {
 		title = "全量同步（快速模式）"
 	}
+	if len(libraries) > 0 {
+		title += fmt.Sprintf(" · %d 个媒体库", len(libraries))
+	}
 	// 进任务队列：此前在请求里等 20 秒拿锁再同步跑完，全量动辄几十分钟，页面只能一直转
-	job, err := enqueueJob(h.DB, jobSpec{Kind: "full", Title: title, DedupeKey: "full",
+	job, err := enqueueJob(h.DB, jobSpec{Kind: "full", Title: title, DedupeKey: dedupeKey,
 		Source: "web", Priority: jobPriorityManual, Params: jobParams{Sync: &syncJobParams{
 			Cid: req.Cid, LocalPath: req.LocalPath,
 			VideoExt: req.VideoExt, ImageExt: req.ImageExt, DataExt: req.DataExt, Mode: req.Mode,
+			Libraries: libraries,
 		}}})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -239,12 +262,6 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	// 读取 STRM 直链配置
 	domain, format, keepExt, skipExist := h.getStrmConfig()
 
-	// 构造统一操作通道（OpenAPI 优先，Cookie 回退）
-	ops, err := h.newPan115Ops()
-	if err != nil {
-		return nil, fullConfigErr{err}
-	}
-
 	// 过滤器：视频组生成 strm；附属组 = 图片后缀 ∪ 数据后缀 ∪ .nfo（始终包含）
 	filter := &syncFilter{
 		videoExts: buildExtSet(p.VideoExt),
@@ -252,12 +269,17 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	}
 	filter.assetExts[".nfo"] = true
 
-	// 多个媒体库逐个同步（libroots.go）：p.Cid 是这次指定的主库，其余库取自配置；
-	// 附加账号的库排在最后（acctlibs.go），各用各账号的通道。
-	// 一个库失败不拦别的库；有库失败时不标记事件窗口（见下），那个库的变化留给增量补
-	// 库清单：媒体库表（libstore.go）。表还空（迁移前）时退回老配置：这次的主库 + full.extra_libs + acct_libs
+	// 多个媒体库逐个同步，各用各账号的通道，一个库失败不拦别的库。
+	// 手动点名时只取入队保存的库。其他入口按媒体库表走，表还空时退回老配置。
+	scoped := p.Libraries != nil
+	libs := loadLibraries()
 	var targets []fullTarget
-	if libs := loadLibraries(); len(libs) > 0 {
+	if scoped {
+		for i := range p.Libraries {
+			l := &p.Libraries[i]
+			targets = append(targets, fullTarget{acct: l.Account, cid: l.Cid, local: l.Local, selected: l})
+		}
+	} else if len(libs) > 0 {
 		for _, l := range libs {
 			if l.Account == acctMain && !p.AcctOnly {
 				targets = append(targets, fullTarget{cid: l.Cid, local: l.Local})
@@ -284,12 +306,46 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 			mainLibs++
 		}
 	}
-	cookie, _ := h.get115Cookie()
+	if len(targets) == 0 {
+		return nil, fullConfigErr{fmt.Errorf("未配置 115 媒体库目录")}
+	}
+	var ops *pan115Ops
+	if !scoped && !p.AcctOnly {
+		var err error
+		ops, err = h.newPan115Ops()
+		if err != nil {
+			return nil, fullConfigErr{err}
+		}
+	}
+	var cookie string
+	var eventCursor *lifeCursor
+	if mainLibs > 0 {
+		cookie, _ = h.get115Cookie()
+		// 先记下扫描前的事件边界，扫描期间新来的事件留给增量。
+		mayCoverMain := true
+		if scoped {
+			selected := make(map[uint]fullLibraryRef, len(p.Libraries))
+			for _, l := range p.Libraries {
+				selected[l.ID] = l
+			}
+			mayCoverMain, _ = fullScopeCoverage(libs, selected)
+		}
+		if mayCoverMain && cookie != "" {
+			cursor, err := h.fullSyncEventCursor(cookie)
+			if err != nil {
+				log.Printf("[同步] ○ 读取生活事件边界失败，留给增量处理: %v", err)
+			} else {
+				eventCursor = &cursor
+			}
+		}
+	}
 	var videos, assets int
 	var st applyStats
 	modeUsed, complete := p.Mode, true
 	orphanTotal := 0
 	var failed []string
+	var refreshPaths []string
+	covered := make(map[uint]fullLibraryRef, len(p.Libraries))
 	seenName := map[string]string{}
 	// 每个库这次的结果，结束时（含提前返回）写给媒体库卡片看（libsyncstat.go）
 	stats := map[string]libSyncStat{}
@@ -302,26 +358,47 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 			SetTaskProgress(fmt.Sprintf("媒体库 %d/%d", i+1, len(targets)))
 		}
 		libStart := time.Now()
+		if t.selected != nil {
+			l, ok := libraryByID(t.selected.ID)
+			if !ok || !t.selected.matches(l) {
+				failed = append(failed, t.selected.Name+"：媒体库已删除或目录已变更，请重新选择")
+				continue
+			}
+		}
 		libOps, libCookie := ops, cookie
-		if t.acct != acctMain {
+		if libOps == nil || t.acct != acctMain {
 			o, err := h.opsFor(t.acct)
 			if err != nil {
-				log.Printf("[同步] ✗ 附加账号的库「%s」同步失败: %v", t.local, err)
-				failed = append(failed, fmt.Sprintf("%s：%v", t.local, err))
+				name := t.displayName("")
+				log.Printf("[同步] ✗ 媒体库「%s」同步失败: %v", name, err)
+				failed = append(failed, fmt.Sprintf("%s：%v", name, err))
 				stats[libSyncStatKey(t)] = libSyncStatOf(fullLibResult{}, err, libStart)
 				continue
 			}
 			libOps, libCookie = o, o.cookie
 		}
 		r, err := h.fullSyncLib(libOps, libCookie, p, t, len(targets) > 1, filter, seenName, domain, format, keepExt, skipExist)
-		stats[libSyncStatKey(t)] = libSyncStatOf(r, err, libStart)
+		stat := libSyncStatOf(r, err, libStart)
+		if stat.OK && stat.Complete {
+			stat.LastScan = &fullLastScan{At: stat.At, VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt}
+		}
+		stats[libSyncStatKey(t)] = stat
 		if err != nil {
-			if len(targets) == 1 {
+			if len(targets) == 1 && !scoped {
 				return nil, err
 			}
-			log.Printf("[同步] ✗ 媒体库 %s 同步失败，继续同步其他库: %v", firstNonEmpty(r.name, "cid="+t.cid), err)
-			failed = append(failed, fmt.Sprintf("%s：%v", firstNonEmpty(r.name, "cid="+t.cid), err))
+			name := t.displayName(r.name)
+			log.Printf("[同步] ✗ 媒体库 %s 同步失败: %v", name, err)
+			failed = append(failed, fmt.Sprintf("%s：%v", name, err))
 			continue
+		}
+		if t.selected != nil {
+			if r.complete && r.st.StrmFailed == 0 && r.st.AssetsFailed == 0 {
+				covered[t.selected.ID] = *t.selected
+			}
+			if r.st.StrmCreated+r.st.AssetsDownloaded > 0 {
+				refreshPaths = append(refreshPaths, filepath.Join(p.LocalPath, filepath.FromSlash(r.name)))
+			}
 		}
 		videos += r.videos
 		assets += r.assets
@@ -337,9 +414,6 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 		complete = complete && r.complete
 		orphanTotal += r.orphans
 	}
-	if len(targets) == 0 {
-		return nil, fullConfigErr{fmt.Errorf("未配置 115 媒体库目录")}
-	}
 	if len(failed) == len(targets) {
 		return nil, fmt.Errorf("%d 个媒体库全部同步失败：%s", len(failed), strings.Join(failed, "；"))
 	}
@@ -349,30 +423,31 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 
 	totalNew := st.StrmCreated + st.AssetsDownloaded
 	if totalNew > 0 {
-		// 全量传的是媒体库根，会把根下面每个库都整库扫一遍（万级库很贵），
-		// 所以做成开关且默认关 —— p115strmhelper、qmediasync 的同类开关同样默认关
+		// 全部库的后台任务仍按媒体库根刷新；手动选库时用实际落盘的库目录。
 		if h.fullRefreshEmbyEnabled() {
-			h.notifyEmbyRefresh(p.LocalPath)
+			if scoped {
+				notifyEmbyPaths(refreshPaths, embyRefreshAdded)
+			} else {
+				h.notifyEmbyRefresh(p.LocalPath)
+			}
 		} else {
 			log.Printf("[同步] ○ 未通知 Emby 刷新：「全量后刷新 Emby」开关没开（整库扫描很贵，默认关；" +
 				"需要就到 Strm 管理 → 全量同步 打开）")
 		}
 	}
-	// 全量已覆盖一切：把事件窗口内的生活事件标记为已处理，
-	// 之后的增量同步只处理此后发生的新事件。
-	// 有库没同步成功时不标：那个库窗口内的变化还得靠增量补上
-	if mainLibs == 0 {
-		// 只同步了附加账号的库：主号的生活事件一条都没覆盖到，不能标
-	} else if len(failed) > 0 {
-		log.Printf("[同步] ○ 有 %d 个媒体库没同步成功，生活事件窗口不标记为已覆盖（留给增量处理）", len(failed))
-	} else if cookieOnly, err := h.get115Cookie(); err == nil {
-		if n, err := h.markEventsCoveredByFullSync(cookieOnly); err != nil {
+	mainCovered := mainLibs > 0 && len(failed) == 0 && complete && st.StrmFailed == 0 && st.AssetsFailed == 0
+	attachedCovered := len(targets) > mainLibs
+	if scoped {
+		mainCovered, attachedCovered = fullScopeCoverage(loadLibraries(), covered)
+	}
+	if mainCovered && eventCursor != nil {
+		if n, err := h.markEventsCoveredByFullSync(*eventCursor, fullStart); err != nil {
 			log.Printf("[同步] 标记生活事件已覆盖失败: %v", err)
 		} else if n > 0 {
 			log.Printf("[同步] 生活事件窗口已标记为已覆盖: %d 条（增量同步只处理此后新事件）", n)
 		}
 	}
-	if len(targets) > mainLibs {
+	if attachedCovered {
 		h.markAcctLibsSynced(time.Now()) // 附加账号的库刚同步过：定时补同步从现在算起
 	}
 	SetTaskProgress("")
@@ -398,11 +473,19 @@ func (h *Handler) executeFullSync(p fullParams) (*fullSummary, error) {
 	}, nil
 }
 
-// fullTarget 全量要同步的一个库：主号的库只有 cid；附加账号的库带账号与本地名（acctlibs.go）
+// fullTarget 全量要同步的一个库；点名同步时带上入队保存的库身份。
 type fullTarget struct {
-	acct  uint
-	cid   string
-	local string
+	acct     uint
+	cid      string
+	local    string
+	selected *fullLibraryRef
+}
+
+func (t fullTarget) displayName(name string) string {
+	if t.selected != nil {
+		return t.selected.Name
+	}
+	return firstNonEmpty(name, t.local, "cid="+t.cid)
 }
 
 // fullLibResult 一个媒体库的全量结果
@@ -816,17 +899,8 @@ func (h *Handler) fullRefreshEmbyEnabled() bool {
 	return json.Unmarshal([]byte(h.getSettingValue("full")), &cfg) == nil && cfg.RefreshEmby
 }
 
-// markEventsCoveredByFullSync 全量同步完成后调用：整库扫描已经覆盖了一切，
-// 事件窗口里的东西不用增量再处理一遍。
-//
-// 改造前是把最近 1000 条事件逐条插成 applied（千次独立写事务 + 34 次请求）。
-// 有了游标之后只剩两件事：把还没消费的事件标掉，再把游标推到最新那条
-func (h *Handler) markEventsCoveredByFullSync(cookie string) (int, error) {
-	now := time.Now()
-	res := h.DB.Model(&model.SyncEvent{}).Where("status = ?", "pending").
-		Updates(map[string]interface{}{"status": "applied", "applied_at": now})
-	covered := int(res.RowsAffected)
-
+// fullSyncEventCursor 取开跑前的主号事件边界，整库扫描完成后才保存。
+func (h *Handler) fullSyncEventCursor(cookie string) (lifeCursor, error) {
 	f := &lifeFetcher{
 		cookie: cookie,
 		load:   h.getSettingValue,
@@ -837,14 +911,26 @@ func (h *Handler) markEventsCoveredByFullSync(cookie string) (int, error) {
 		},
 	}
 	evs, _, err := f.page(1, 0)
-	if err != nil {
-		return covered, err
+	if err != nil || len(evs) == 0 {
+		return lifeCursor{}, err
 	}
-	if len(evs) > 0 && evs[0].ID != "" && h.Config != nil {
-		ts, _ := strconv.ParseInt(strings.TrimSpace(evs[0].Time), 10, 64)
-		h.Config.SaveSetting("incr-cursor", encodeLifeCursor(lifeCursor{FromID: evs[0].ID, FromTime: ts}))
+	return lifeCursor{FromID: evs[0].ID, FromTime: parseUnixStr(evs[0].Time)}, nil
+}
+
+// markEventsCoveredByFullSync 只标记扫描前的主号事件，其他账号和扫描中发生的事件仍由增量消费。
+func (h *Handler) markEventsCoveredByFullSync(cursor lifeCursor, start time.Time) (int, error) {
+	res := h.DB.Model(&model.SyncEvent{}).
+		Where("account = ? AND status = ? AND event_time > 0 AND event_time < ?", acctMain, "pending", start.Unix()).
+		Updates(map[string]interface{}{"status": "applied", "applied_at": time.Now()})
+	covered := int(res.RowsAffected)
+	if res.Error != nil || cursor.FromID == "" || h.Config == nil {
+		return covered, res.Error
 	}
-	return covered, nil
+	old := parseLifeCursor(h.getSettingValue("incr-cursor"))
+	if cursor.FromTime < old.FromTime || (old.FromID != "" && !eventIDNewer(cursor.FromID, old.FromID)) {
+		return covered, nil
+	}
+	return covered, h.Config.SaveSetting("incr-cursor", encodeLifeCursor(cursor))
 }
 
 // rename115 重命名网盘文件（单个；批量场景用 rename115Batch）

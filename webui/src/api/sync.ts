@@ -39,7 +39,7 @@ export interface FullSyncConfig {
   mode: FullSyncMode
   /** 失效 STRM 检测：全量同步后标出「本地还在、网盘已删」的条目，只打标不删 */
   detect_orphans: boolean
-  /** 全量同步结束后通知 Emby 刷新。全量传的是媒体库根 = 根下每个库整库扫一遍，很贵，默认关 */
+  /** 全量同步有新文件时通知 Emby 刷新，默认关 */
   refresh_emby: boolean
   /** 定时全量开关。只在 detect_orphans 打开时生效，后端同样按此判定 */
   cron_enabled: boolean
@@ -62,7 +62,8 @@ export interface DeepDeleteConfig {
 }
 
 /** 全量同步 → 入任务队列立即返回；结果（新增 STRM、失效 STRM 数、是否降级）在任务结束时由队列带回 */
-export const runFull = (body: SyncExtConfig) => http.post<QueuedReply>('/sync/full', body)
+export const runFull = (body: Omit<SyncExtConfig, 'cid'> & ({ cid: string } | { library_ids: number[] })) =>
+  http.post<QueuedReply>('/sync/full', body)
 
 /** 接管已有 STRM：预演报告的一个桶（后端 adopt.go 的 adoptBucket） */
 export type AdoptBucketKey =

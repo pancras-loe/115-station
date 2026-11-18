@@ -1,6 +1,7 @@
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { configApi, libraryApi, syncApi } from '@/api'
 import type { FullLastScan, FullSyncConfig, FullSyncMode } from '@/api/sync'
+import type { MediaLib } from '@/api/library'
 import type { FullSetting } from './fullSetting'
 import { useQueueStore } from '@/stores/queue'
 import { toastError, useFeedback } from '@/composables/useFeedback'
@@ -19,10 +20,9 @@ import { UNSAVED_NOTE, confirmUnsaved } from '@/composables/confirmUnsaved'
 export interface FullRunPlan {
   cfg: FullSyncConfig
   mode: FullSyncMode
-  libs: { name: string; path: string; account: string }[]
-  /** 上一次全量用的后缀；从没跑过为 null */
-  last: FullLastScan | null
-  resolve: (ok: boolean) => void
+  libs: MediaLib[] | null
+  legacyScan: FullLastScan | null
+  resolve: (ids: number[] | null) => void
 }
 
 export function useStrmRuns(full: FullSetting) {
@@ -53,8 +53,8 @@ export function useStrmRuns(full: FullSetting) {
 
   const runningFull = ref(false)
   const runningIncr = ref(false)
-  /** 队列里已有同类手动任务（排队或执行中）：再点也只是合并成同一个任务 */
-  const busyFull = computed(() => runningFull.value || !!queue.activeManualOf('full'))
+  // 不同范围的全量可以分别排队，页面只防止同时开两个确认流程。
+  const busyFull = ref(false)
   const busyIncr = computed(() => runningIncr.value || !!queue.activeManualOf('incr'))
 
   /**
@@ -69,51 +69,43 @@ export function useStrmRuns(full: FullSetting) {
       // 保存成功后 dirty 归零，界面值即已保存值；仍然脏 = 用户选了「直接开始」
       if (full.dirty.value) src = full.saved.value
     }
-    const cid = src.cid.trim()
-    if (!cid || cid === '0') {
-      message.error('请先到「账号与媒体库 → 媒体库」配置并保存 115 媒体库目录')
-      return null
-    }
     return src
   }
 
   async function runFull() {
-    const src = await effectiveConfig()
-    if (!src) return
-    if (!src.video_ext.length) {
-      message.warning('请至少保留一个视频文件后缀')
-      return
-    }
-    // 全量要扫整个媒体库、请求量大，无论从哪儿点、配置脏不脏，开跑前都要用户点头一次；
-    // 确认框里把这次的扫描范围写全（库、后缀、失效检测），读不到库清单 / 上次后缀也照常弹，只是少几行
-    const mode: FullSyncMode = fastAvailable.value ? src.mode : 'normal'
-    const [libs, last] = await Promise.all([
-      libraryApi
-        .getMediaLibs()
-        .then((d) => d.libs.map((l) => ({ name: l.name, path: l.path, account: l.account ? l.account_name : '' })))
-        .catch(() => []),
-      configApi
-        .getSetting<FullLastScan>('full_last_scan', { at: 0, video_ext: [], image_ext: [], data_ext: [] })
-        .then((v) => (v.at ? v : null))
-        .catch(() => null),
-    ])
-    const ok = await new Promise<boolean>((resolve) => {
-      fullPlan.value = {
-        cfg: src,
-        mode,
-        libs,
-        last,
-        resolve: (v) => {
-          fullPlan.value = null
-          resolve(v)
-        },
-      }
-    })
-    if (!ok) return
-    runningFull.value = true
+    if (busyFull.value) return
+    busyFull.value = true
     try {
+      const src = await effectiveConfig()
+      if (!src) return
+      if (!src.video_ext.length) {
+        message.warning('请至少保留一个视频文件后缀')
+        return
+      }
+      const mode: FullSyncMode = fastAvailable.value ? src.mode : 'normal'
+      const [libs, legacyScan] = await Promise.all([
+        libraryApi.getMediaLibs().then((d) => d.libs).catch(() => null),
+        configApi
+          .getSetting<FullLastScan>('full_last_scan', { at: 0, video_ext: [], image_ext: [], data_ext: [] })
+          .then((v) => (v.at ? v : null))
+          .catch(() => null),
+      ])
+      const libraryIds = await new Promise<number[] | null>((resolve) => {
+        fullPlan.value = {
+          cfg: src,
+          mode,
+          libs,
+          legacyScan,
+          resolve: (ids) => {
+            fullPlan.value = null
+            resolve(ids)
+          },
+        }
+      })
+      if (!libraryIds?.length) return
+      runningFull.value = true
       const d = await syncApi.runFull({
-        cid: src.cid.trim(),
+        library_ids: libraryIds,
         local_path: src.local_path,
         video_ext: src.video_ext,
         image_ext: src.image_ext,
@@ -126,16 +118,22 @@ export function useStrmRuns(full: FullSetting) {
       toastError(e, '提交全量同步失败')
     } finally {
       runningFull.value = false
+      busyFull.value = false
     }
   }
 
   async function runIncr() {
     const src = await effectiveConfig()
     if (!src) return
+    const cid = src.cid.trim()
+    if (!cid || cid === '0') {
+      message.error('请先到「账号与媒体库 → 媒体库」配置并保存 115 媒体库目录')
+      return
+    }
     runningIncr.value = true
     try {
       const d = await syncApi.runIncremental({
-        cid: src.cid.trim(),
+        cid,
         local_path: src.local_path,
         video_ext: src.video_ext,
         image_ext: src.image_ext,

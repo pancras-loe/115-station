@@ -111,7 +111,7 @@ func execOrganizeJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 
 func execFullJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	p := decodeJobParams(job).Sync
-	if p == nil || (p.Cid == "" && !p.AcctOnly) {
+	if p == nil || (p.Cid == "" && !p.AcctOnly && p.Libraries == nil) {
 		return jobOutcome{}, errors.New("任务参数错误：缺少 115 媒体库 cid")
 	}
 	if p.AcctOnly && len(loadAcctLibs()) == 0 {
@@ -121,6 +121,7 @@ func execFullJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {
 	sum, err := h.executeFullSync(fullParams{
 		Cid: p.Cid, LocalPath: p.LocalPath,
 		VideoExt: p.VideoExt, ImageExt: p.ImageExt, DataExt: p.DataExt, Mode: p.Mode, AcctOnly: p.AcctOnly,
+		Libraries: p.Libraries,
 	})
 	if err != nil {
 		return jobOutcome{}, err

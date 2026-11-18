@@ -20,17 +20,18 @@ const libSyncStatsKey = "lib_sync_stats"
 
 // libSyncStat 一个库上一次全量的结果
 type libSyncStat struct {
-	At       int64  `json:"at"`              // 结束时间（unix 秒）
-	OK       bool   `json:"ok"`              // 这个库同步成功了没有
-	Error    string `json:"error,omitempty"` // 失败原因
-	Mode     string `json:"mode,omitempty"`  // fast / normal（实际用的）
-	Seconds  int    `json:"seconds"`         // 这个库用时
-	Videos   int    `json:"videos"`          // 网盘上的视频
-	Created  int    `json:"created"`         // 新写的 STRM
-	Failed   int    `json:"failed"`          // STRM 写失败
-	Assets   int    `json:"assets"`          // 新下载的附属文件
-	Orphans  int    `json:"orphans"`         // 失效 STRM 待清理（开了检测才有）
-	Complete bool   `json:"complete"`        // 清单完整
+	At       int64         `json:"at"`                  // 结束时间（unix 秒）
+	OK       bool          `json:"ok"`                  // 这个库同步成功了没有
+	Error    string        `json:"error,omitempty"`     // 失败原因
+	Mode     string        `json:"mode,omitempty"`      // fast / normal（实际用的）
+	Seconds  int           `json:"seconds"`             // 这个库用时
+	Videos   int           `json:"videos"`              // 网盘上的视频
+	Created  int           `json:"created"`             // 新写的 STRM
+	Failed   int           `json:"failed"`              // STRM 写失败
+	Assets   int           `json:"assets"`              // 新下载的附属文件
+	Orphans  int           `json:"orphans"`             // 失效 STRM 待清理（开了检测才有）
+	Complete bool          `json:"complete"`            // 清单完整
+	LastScan *fullLastScan `json:"last_scan,omitempty"` // 失败或清单不完整时保留上一次的扫描范围
 }
 
 func parseLibSyncStats(raw string) map[string]libSyncStat {
@@ -56,11 +57,20 @@ func (h *Handler) saveLibSyncStats(got map[string]libSyncStat) {
 	}
 	all := parseLibSyncStats(h.getSettingValue(libSyncStatsKey))
 	for k, v := range got {
+		if v.LastScan == nil {
+			v.LastScan = all[k].LastScan
+		}
 		all[k] = v
 	}
 	keep := map[string]bool{}
-	for _, k := range allLibKeys(h.getSettingValue("full"), h.getSettingValue(acctLibsKey)) {
-		keep[k] = true
+	if libs := loadLibraries(); len(libs) > 0 {
+		for _, l := range libs {
+			keep[libKeyOf(l)] = true
+		}
+	} else {
+		for _, k := range allLibKeys(h.getSettingValue("full"), h.getSettingValue(acctLibsKey)) {
+			keep[k] = true
+		}
 	}
 	for k := range all {
 		if !keep[k] {
@@ -97,9 +107,9 @@ type fullLastScan struct {
 	DataExt  []string `json:"data_ext"`
 }
 
-// saveFullLastScan 至少一个库同步成功才记；只同步附加账号的那种补同步不算（用的是同一套后缀，但不代表用户点过）
+// saveFullLastScan 保留旧任务的全局后缀记录，供还没有逐库记录的老数据参考。
 func (h *Handler) saveFullLastScan(p fullParams, stats map[string]libSyncStat) {
-	if h.Config == nil || p.AcctOnly {
+	if h.Config == nil || p.AcctOnly || p.Libraries != nil {
 		return
 	}
 	ok := false

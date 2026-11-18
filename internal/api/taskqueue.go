@@ -106,12 +106,13 @@ type jobParams struct {
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）
 type syncJobParams struct {
-	Cid       string   `json:"cid"`
-	LocalPath string   `json:"local_path"`
-	VideoExt  []string `json:"video_ext"`
-	ImageExt  []string `json:"image_ext"`
-	DataExt   []string `json:"data_ext"`
-	Mode      string   `json:"mode,omitempty"`
+	Libraries []fullLibraryRef `json:"libraries,omitempty"`
+	Cid       string           `json:"cid"`
+	LocalPath string           `json:"local_path"`
+	VideoExt  []string         `json:"video_ext"`
+	ImageExt  []string         `json:"image_ext"`
+	DataExt   []string         `json:"data_ext"`
+	Mode      string           `json:"mode,omitempty"`
 	// AcctOnly 全量只同步附加账号的库（acctlibs.go）
 	AcctOnly bool `json:"acct_only,omitempty"`
 }

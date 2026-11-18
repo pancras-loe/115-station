@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { TriangleAlert } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
+import HCheckbox from '@/components/hero/HCheckbox.vue'
 import HModal from '@/components/hero/HModal.vue'
 import type { FullRunPlan } from '@/pages/strm/useStrmRuns'
 
@@ -16,9 +17,22 @@ const props = defineProps<{ plan: FullRunPlan | null }>()
 const show = computed({
   get: () => !!props.plan,
   set: (v) => {
-    if (!v) props.plan?.resolve(false)
+    if (!v) props.plan?.resolve(null)
   },
 })
+
+const selectedIds = ref<number[]>([])
+const libs = computed(() => props.plan?.libs ?? [])
+const selectedLibs = computed(() => libs.value.filter((lib) => selectedIds.value.includes(lib.id)))
+watch(
+  () => props.plan,
+  () => { selectedIds.value = libs.value.map((lib) => lib.id) },
+)
+
+function toggleLib(id: number, checked: boolean) {
+  if (checked) selectedIds.value = [...selectedIds.value, id]
+  else selectedIds.value = selectedIds.value.filter((selected) => selected !== id)
+}
 
 /** 后缀统一成不带点、小写再比，配置里两种写法都有 */
 const norm = (e: string) => e.trim().replace(/^\./, '').toLowerCase()
@@ -31,19 +45,27 @@ function dropped(now: string[], before?: string[]) {
 const groups = computed(() => {
   const p = props.plan
   if (!p) return []
-  return [
-    { key: 'video', label: '视频（生成 STRM）', exts: p.cfg.video_ext, gone: dropped(p.cfg.video_ext, p.last?.video_ext) },
-    { key: 'image', label: '图片（下载到本地）', exts: p.cfg.image_ext, gone: dropped(p.cfg.image_ext, p.last?.image_ext) },
-    {
-      key: 'data',
-      label: '数据（下载到本地，.nfo 始终包含）',
-      exts: p.cfg.data_ext,
-      gone: dropped(p.cfg.data_ext, p.last?.data_ext),
-    },
-  ]
+  const fields = [
+    { key: 'video_ext', label: '视频（生成 STRM）' },
+    { key: 'image_ext', label: '图片（下载到本地）' },
+    { key: 'data_ext', label: '数据（下载到本地，.nfo 始终包含）' },
+  ] as const
+  return fields.map(({ key, label }) => {
+    const exts = p.cfg[key]
+    const gone = new Map<string, string[]>()
+    for (const lib of selectedLibs.value) {
+      const previous = lib.last_sync?.last_scan ?? (lib.last_sync ? p.legacyScan : null)
+      const missing = dropped(exts, previous?.[key]).sort().join(' ')
+      if (!missing) continue
+      const names = gone.get(missing) ?? []
+      names.push(lib.name)
+      gone.set(missing, names)
+    }
+    return { key, label, exts, gone: [...gone] }
+  })
 })
 const anyGone = computed(() => groups.value.some((g) => g.gone.length))
-const firstRun = computed(() => !!props.plan && !props.plan.last)
+const firstRun = computed(() => selectedLibs.value.some((lib) => !lib.last_sync))
 </script>
 
 <template>
@@ -57,13 +79,25 @@ const firstRun = computed(() => !!props.plan && !props.plan.last)
         }}
       </p>
 
-      <section v-if="plan.libs.length" class="block">
-        <h4>扫哪些库（{{ plan.libs.length }} 个）</h4>
+      <HAlert v-if="plan.libs === null" status="warning">媒体库列表加载失败，请关闭窗口后重试。</HAlert>
+      <HAlert v-else-if="!libs.length" status="default">请先到「账号与媒体库 → 媒体库」添加媒体库。</HAlert>
+      <section v-else class="block">
+        <div class="lib-toolbar">
+          <h4>选择媒体库（已选 {{ selectedLibs.length }} / {{ libs.length }}）</h4>
+          <div class="lib-actions">
+            <HButton variant="tertiary" size="sm" :disabled="selectedLibs.length === libs.length" @click="selectedIds = libs.map((l) => l.id)">全选</HButton>
+            <HButton variant="tertiary" size="sm" :disabled="!selectedLibs.length" @click="selectedIds = []">清空</HButton>
+          </div>
+        </div>
         <ul class="libs">
-          <li v-for="l in plan.libs" :key="`${l.account}|${l.path}`">
-            <b>{{ l.name }}</b>
-            <span class="mono">{{ l.path }}</span>
-            <span v-if="l.account" class="dim">{{ l.account }}</span>
+          <li v-for="l in libs" :key="l.id">
+            <HCheckbox :checked="selectedIds.includes(l.id)" @update:checked="toggleLib(l.id, $event)">
+              <span class="lib-label">
+                <b>{{ l.name }}</b>
+                <span class="mono">{{ l.path || `cid ${l.cid}` }}</span>
+                <span class="dim">{{ l.account_name }}</span>
+              </span>
+            </HCheckbox>
           </li>
         </ul>
       </section>
@@ -75,8 +109,8 @@ const firstRun = computed(() => !!props.plan && !props.plan.last)
             <dt>{{ g.label }}</dt>
             <dd>
               <span class="mono">{{ g.exts.length ? g.exts.join(' ') : '无' }}</span>
-              <span v-if="g.gone.length" class="gone">
-                <TriangleAlert :size="13" />比上次全量少了 {{ g.gone.join(' ') }}
+              <span v-for="[exts, names] in g.gone" :key="exts" class="gone">
+                <TriangleAlert :size="13" />少了 {{ exts }}（{{ names.join('、') }}）
               </span>
             </dd>
           </template>
@@ -88,28 +122,30 @@ const firstRun = computed(() => !!props.plan && !props.plan.last)
         <ul class="after">
           <li>
             失效 STRM 检测：<b>{{ plan.cfg.detect_orphans ? '开' : '关' }}</b>
-            <span class="dim">{{ plan.cfg.detect_orphans ? '（只标记网盘上已删的，不删本地，清理要你确认）' : '' }}</span>
+            <span v-if="plan.cfg.detect_orphans" class="dim">（只检查所选库，清理需手动确认）</span>
           </li>
           <li>
             结束后刷新 Emby：<b>{{ plan.cfg.refresh_emby ? '开' : '关' }}</b>
-            <span v-if="plan.cfg.refresh_emby" class="dim">（整个媒体库根重扫，万级库很慢）</span>
+            <span v-if="plan.cfg.refresh_emby" class="dim">（按有新文件的库通知，共用一个 Emby 库时可能重扫共享库）</span>
           </li>
         </ul>
       </section>
 
       <HAlert v-if="anyGone && plan.cfg.detect_orphans" status="warning" class="note">
-        后缀比上次全量少了：原先按这些后缀同步过的文件，这次会被标成失效 STRM。不是有意缩减的话，先取消，到「扫描范围」里加回来。
+        所选库中，按上面移除的后缀同步过的文件可能被标成失效 STRM。可以取消并到「扫描范围」恢复这些后缀。
       </HAlert>
       <HAlert v-else-if="anyGone" status="default" class="note">
-        后缀比上次全量少了：这次不再处理这些文件，已经生成的本地文件不受影响。
+        本次扫描排除所列后缀，已有本地文件会保留。
       </HAlert>
       <HAlert v-if="firstRun" status="default" class="note">
-        第一次全量：网盘上符合这些后缀的文件会全部生成 STRM 或下载到本地。范围不对的话先取消，到全量同步页签的「扫描范围」里改好再来。
+        首次同步的库会为符合后缀条件的视频生成 STRM，并下载符合条件的附属文件。
       </HAlert>
     </div>
     <template #footer>
-      <HButton variant="tertiary" @click="plan?.resolve(false)">取消</HButton>
-      <HButton variant="primary" @click="plan?.resolve(true)">开始</HButton>
+      <HButton variant="tertiary" @click="plan?.resolve(null)">取消</HButton>
+      <HButton variant="primary" :disabled="!selectedLibs.length" @click="plan?.resolve(selectedLibs.map((l) => l.id))">
+        同步所选 {{ selectedLibs.length }} 个库
+      </HButton>
     </template>
   </HModal>
 </template>
@@ -141,7 +177,21 @@ const firstRun = computed(() => !!props.plan && !props.plan.last)
   background: var(--surface-secondary);
   line-height: 1.9;
 }
-.libs li {
+.lib-toolbar,
+.lib-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lib-toolbar h4 {
+  margin-bottom: 0;
+}
+.libs {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.lib-label {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -182,6 +232,9 @@ const firstRun = computed(() => !!props.plan && !props.plan.last)
   gap: 4px;
   font-size: 12px;
   color: var(--warning-soft-foreground);
+}
+.gone svg {
+  flex-shrink: 0;
 }
 .note {
   margin: 0;

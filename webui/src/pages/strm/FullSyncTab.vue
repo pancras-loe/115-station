@@ -432,7 +432,7 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
 
           <FieldRow
             label="全量后刷新 Emby"
-            tip="全量同步结束时通知 Emby 扫描入库。全量给出的范围是整个媒体库根，等于把根下面每个媒体库都整库扫一遍，万级库很慢，所以默认关着。增量同步不受这个开关影响——它只刷本轮真正变动的那个目录，删除条目也靠它通知。"
+            tip="全量同步有新文件时通知 Emby 扫描入库。手动同步按有新文件的库通知，定时全量按媒体库根通知。多个库共用一个 Emby 库时可能重扫共享库。增量同步按本轮变动的目录通知。"
           >
             <HSwitch v-model="cfg.refresh_emby" aria-label="全量后刷新 Emby" />
           </FieldRow>
