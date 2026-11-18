@@ -3,7 +3,7 @@ package api
 // ==================== 机器人订阅：/sub 片名、/subs，以及找资源列表里的「订阅这部」 ====================
 //
 // 走找资源同一套会话（botflow.go 的 botFlow / botView），TG 按钮与企微文字指令都不用另写：
-//   - /sub 片名：TMDB 选片（按片名搜只有一部也要点一下，直接发 TMDB 编号才直接订），选定即按默认值订阅 —— 默认值与网页订阅弹窗相同：
+//   - /sub 片名：TMDB 选片（只有一部也要确认，按片名和按 TMDB 编号查询都一样），选定即按默认值订阅 —— 默认值与网页订阅弹窗相同：
 //     补缺集；剧集还在播、而且不止一季时只订最新一季（全剧往往要补几百集，多半不是想要的）；
 //   - 找资源的资源列表里多一个「🔔 订阅这部」（s），搜到一半想改成订阅不用重来；
 //   - /subs：列出订阅，选一个看进度，能立即搜索、暂停 / 恢复、改范围、取消订阅（要再点一次确认）；
@@ -45,10 +45,6 @@ func (h *Handler) botSubFind(key, keyword string, io botIO) botView {
 	case len(movies) == 0:
 		botFlowDrop(key, f)
 		return botNote("TMDB 没有找到「" + keyword + "」。可以换个片名，或直接发 TMDB ID。")
-	case len(movies) == 1 && regexpPureDigits.MatchString(keyword):
-		// 直接发 TMDB 编号就是在点名这一部，不用再问；按片名搜出来只有一部也要用户点一下：
-		// 2026-11-16 现场「订阅 全民英雄」搜出的唯一一部是《全民小英雄》，直接订上了
-		return h.botSubscribeOpen(key, f, movies[0])
 	}
 	f.movies, f.owned = movies, botOwned(h.DB, movies)
 	f.stage, f.page = "media", 0

@@ -37,11 +37,21 @@ func botSubFixture(t *testing.T) *Handler {
 	return &Handler{DB: model.DB}
 }
 
+func botSubPickFirst(t *testing.T, h *Handler, key, keyword string) botView {
+	t.Helper()
+	h.botSubFind(key, keyword, botIO{})
+	v, ok := h.botAct(key, "1", "", botIO{})
+	if !ok {
+		t.Fatalf("没有可选的订阅候选: %q", keyword)
+	}
+	return v
+}
+
 func TestBotSubFindSingleHit(t *testing.T) {
 	h := botSubFixture(t)
-	v := h.botSubFind("bs1", "600", botIO{})
+	v := botSubPickFirst(t, h, "bs1", "600")
 	if !strings.Contains(v.text(), "已订阅《剧》") || !strings.Contains(v.text(), "第 2 季") {
-		t.Fatalf("应直接订阅最新一季: %q", v.text())
+		t.Fatalf("确认后应订阅最新一季: %q", v.text())
 	}
 	var sub model.Subscription
 	model.DB.First(&sub)
@@ -56,36 +66,70 @@ func TestBotSubFindSingleHit(t *testing.T) {
 	if !strings.Contains(v.text(), "默认只订最新一季") || !strings.Contains(v.text(), "第 1 季 8 集 · 第 2 季 8 集") {
 		t.Fatalf("改范围那屏: %q", v.text())
 	}
-	if v = h.botSubFind("bs1", "600", botIO{}); !strings.Contains(v.text(), "已经订阅过了") || !strings.Contains(v.text(), "✏ 改范围") || !strings.Contains(v.text(), "第 2 季 · 补缺集") {
+	if v = botSubPickFirst(t, h, "bs1", "600"); !strings.Contains(v.text(), "已经订阅过了") || !strings.Contains(v.text(), "✏ 改范围") || !strings.Contains(v.text(), "第 2 季 · 补缺集") {
 		t.Fatalf("重复订阅应直接给改范围: %q", v.text())
 	}
 }
 
-// 按片名搜只出来一部也不能直接订：「订阅 全民英雄」搜出的唯一一部是《全民小英雄》
-func TestBotSubFindSingleNameAsks(t *testing.T) {
-	h := botSubFixture(t)
-	v := h.botSubFind("bs30", "片", botIO{})
-	if strings.Contains(v.text(), "已订阅") || !strings.Contains(v.text(), "片名") {
-		t.Fatalf("应先列出来让用户选: %q", v.text())
-	}
-	var n int64
-	model.DB.Model(&model.Subscription{}).Count(&n)
-	if n != 0 {
-		t.Fatalf("没选就订上了 %d 条", n)
-	}
-	if f := botFlowGet("bs30"); f == nil || f.stage != "media" {
-		t.Fatalf("应停在选片: %+v", f)
-	}
-	v, _ = h.botAct("bs30", "1", "", botIO{})
-	if !strings.Contains(v.text(), "已订阅《片名》") {
-		t.Fatalf("选了第 1 部应订上: %q", v.text())
+// 片名或纯数字只查到一部时，先把候选给用户核对。
+func TestBotSubFindSingleMovieAsks(t *testing.T) {
+	for _, tc := range []struct {
+		name, keyword, act string
+		useToken           bool
+	}{
+		{name: "WeCom", keyword: "片", act: "1"},
+		{name: "Telegram", keyword: "1", act: "1", useToken: true},
+		{name: "Close", keyword: "片", act: "q"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := botSubFixture(t)
+			key := t.Name()
+			checkPending := func() {
+				t.Helper()
+				for _, table := range []any{&model.Subscription{}, &model.TaskJob{}} {
+					var n int64
+					if err := h.DB.Model(table).Count(&n).Error; err != nil || n != 0 {
+						t.Fatalf("确认前 %T 应为空，得到 %d 条: %v", table, n, err)
+					}
+				}
+			}
+
+			v := h.botSubFind(key, tc.keyword, botIO{})
+			if !strings.Contains(v.text(), "片名（2024） 电影") || !strings.Contains(v.Hint, "回复 1 确认订阅") {
+				t.Fatalf("应显示候选和确认提示: %q %q", v.text(), v.Hint)
+			}
+			if len(v.Buttons) == 0 || len(v.Buttons[0]) != 1 || v.Buttons[0][0] != (botBtn{Text: "确认订阅", Act: "1"}) {
+				t.Fatalf("应显示确认订阅按钮: %+v", v.Buttons)
+			}
+			checkPending()
+
+			token := ""
+			if tc.useToken {
+				token = v.Token
+				if token == "" {
+					t.Fatal("确认按钮应绑定会话")
+				}
+			}
+			v, ok := h.botAct(key, tc.act, token, botIO{})
+			if !ok || botFlowGet(key) != nil {
+				t.Fatalf("操作后应结束会话: %q", v.text())
+			}
+			if tc.act == "q" {
+				checkPending()
+				return
+			}
+			var sub model.Subscription
+			if err := h.DB.First(&sub).Error; err != nil || sub.TmdbID != 1 || !strings.Contains(v.text(), "已订阅《片名》") {
+				t.Fatalf("确认后应订阅候选: %+v %q %v", sub, v.text(), err)
+			}
+		})
 	}
 }
 
 // 订阅完在改范围那屏点：全剧 → 特别篇 → 换一季 → 追新；只改范围，网页设过的别的字段不动
 func TestBotSubScopeEdit(t *testing.T) {
 	h := botSubFixture(t)
-	h.botSubFind("bs20", "600", botIO{})
+	botSubPickFirst(t, h, "bs20", "600")
 	var sub model.Subscription
 	model.DB.First(&sub)
 	model.DB.Model(&sub).Updates(map[string]any{"include": "中字", "state": subStateDone})
@@ -154,7 +198,7 @@ func TestBotSubScopePaused(t *testing.T) {
 // 电影订完照旧一条消息结束，没有改范围
 func TestBotSubMovieNoScope(t *testing.T) {
 	h := botSubFixture(t)
-	v := h.botSubFind("bs22", "1", botIO{})
+	v := botSubPickFirst(t, h, "bs22", "1")
 	if !strings.Contains(v.text(), "已订阅《片名》") || len(v.Buttons) != 0 || botFlowGet("bs22") != nil {
 		t.Fatalf("电影: %q", v.text())
 	}
@@ -191,14 +235,14 @@ func TestBotSubScopeSuffix(t *testing.T) {
 	}
 
 	h := botSubFixture(t)
-	v := h.botSubFind("bs23", "600 全剧", botIO{})
+	v := botSubPickFirst(t, h, "bs23", "600 全剧")
 	var sub model.Subscription
 	model.DB.First(&sub)
 	if sub.Scope != subScopeAll || f0(botFlowGet("bs23")) != "created" || len(v.Buttons) == 0 || v.Buttons[0][0].Act != "e" {
 		t.Fatalf("写了全剧: %+v %q", sub, v.text())
 	}
 	model.DB.Where("1 = 1").Delete(&model.Subscription{})
-	if v = h.botSubFind("bs24", "600 第9季", botIO{}); !strings.Contains(v.text(), "没有第 9 季") {
+	if v = botSubPickFirst(t, h, "bs24", "600 第9季"); !strings.Contains(v.text(), "没有第 9 季") {
 		t.Fatalf("不存在的季不订: %q", v.text())
 	}
 	var n int64

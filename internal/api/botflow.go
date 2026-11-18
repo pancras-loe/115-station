@@ -555,8 +555,12 @@ func (f *botFlow) render() botView {
 	}
 
 	if f.stage == "media" {
+		singleSub := f.mode == botModeSub && len(f.movies) == 1
 		verb := "选一部："
-		if f.mode == botModeSub {
+		switch {
+		case singleSub:
+			verb = "请确认要订阅的影片："
+		case f.mode == botModeSub:
 			verb = "选一部订阅："
 		}
 		v.Lines = append(v.Lines, fmt.Sprintf("🔍 「%s」TMDB 找到 %d 部%s，%s", f.keyword, len(f.movies), pageNote, verb))
@@ -578,7 +582,12 @@ func (f *botFlow) render() botView {
 				line += " ✓已入库"
 			}
 			v.Lines = append(v.Lines, line)
-			nums = append(nums, botBtn{Text: strconv.Itoa(i + 1), Act: strconv.Itoa(i + 1)})
+			num := strconv.Itoa(i + 1)
+			button := botBtn{Text: num, Act: num}
+			if singleSub {
+				button.Text = "确认订阅"
+			}
+			nums = append(nums, button)
 
 			a := NewsArticle{Title: fmt.Sprintf("%d. %s (%s)", i+1, m.Title, m.Year), Desc: botTypeName(m.Type) + voteSuffix(m.Vote),
 				Link: fmt.Sprintf("https://www.themoviedb.org/%s/%d", m.Type, m.ID)}
@@ -590,9 +599,12 @@ func (f *botFlow) render() botView {
 			}
 			v.Cards = append(v.Cards, a)
 		}
-		if f.mode == botModeSub {
+		switch {
+		case singleSub:
+			hint = append(hint, "回复 1 确认订阅")
+		case f.mode == botModeSub:
 			hint = append(hint, fmt.Sprintf("回复 1-%d 订阅，订几部用逗号隔开（如 1,3,5）", len(f.movies)))
-		} else {
+		default:
 			hint = append(hint, fmt.Sprintf("回复 1-%d 选片", len(f.movies)))
 		}
 	} else {
