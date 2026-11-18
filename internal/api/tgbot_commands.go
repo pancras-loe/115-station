@@ -30,7 +30,7 @@ const tgHelp = "115-Station 私聊机器人\n\n" +
 	"/gy 片名：只搜观影\n/wp 片名：只搜网盘\n" +
 	"/sub 片名：订阅，定时找缺的集，转存后自动入库（找资源的结果里也能点「订阅这部」）；片名后加「全剧」「第2季」直接定范围，订完也能点按钮改\n" +
 	"/subs 我的订阅：看进度、立即搜索、改范围、暂停、取消\n" +
-	"/download 链接：离线下载或 115 转存（也可直接发链接和提取码）；开了「分享 STRM」时 115 分享也能不转存、直接生成 STRM（按设置直接做或先问，回「转存」或 /strm）\n" +
+	"/download 链接：离线下载或 115 转存。也可直接发送多条 115 分享、磁力或 ed2k 链接，建议每行一条，提取码跟在对应链接后；开了「分享 STRM」时按设置处理 115 分享（询问时回「转存」或 /strm）\n" +
 	"/status 状态\n/organize 整理\n/sync 增量同步\n/cancel 关闭当前搜索\n/id 查看聊天 ID\n" +
 	"/dup 同一集有几份文件、改名会重名时选择保留哪份（通知里的按钮也能选）\n" +
 	"/wash 手动转存的不如库里的、停下来问的：强制洗版还是不洗版（通知里的按钮也能选）\n" +
@@ -78,15 +78,8 @@ func tgCommand(text string) (string, string) {
 			return p.command, strings.TrimSpace(strings.TrimPrefix(text, p.prefix))
 		}
 	}
-	if classifyLink(text) != "" {
+	if len(botDownloadLinks(text)) > 0 {
 		return "download", text
-	}
-	// 转发来的长消息里夹着磁力 / ed2k：只有一条时直接提交，几条时不替用户挑
-	switch links := embeddedLinks(text); {
-	case len(links) == 1:
-		return "download", links[0]
-	case len(links) > 1:
-		return "manylinks", fmt.Sprint(len(links))
 	}
 	if act, ok := botFlowAct(text); ok {
 		return "flow", act
@@ -217,17 +210,17 @@ func (b *tgConversation) handle(u tgUpdate) {
 		if !b.h.shareBotPick(fmt.Sprintf("tg:%d:%d", b.chat, b.user), lower, b.replyForCurrentChat()) {
 			b.reply("未识别的指令，发送 /help 查看帮助。")
 		}
-	case "status", "download", "organize", "sync":
-		if cmd == "download" && args == "" {
+	case "download":
+		if args == "" {
 			b.reply("请在命令后填写链接。")
 			return
 		}
-		text := map[string]string{"status": "状态", "download": "下载 " + args, "organize": "整理", "sync": "同步"}[cmd]
+		b.h.botHandleDownload(fmt.Sprintf("tg:%d:%d", b.chat, b.user), args, b.replyForCurrentChat())
+	case "status", "organize", "sync":
+		text := map[string]string{"status": "状态", "organize": "整理", "sync": "同步"}[cmd]
 		// 只允许明确列出的业务进入公共路由，中文别名同样不能绕进补全或建库。
 		reply := b.replyForCurrentChat()
 		b.h.handleBotCommand(fmt.Sprintf("tg:%d:%d", b.chat, b.user), text, reply)
-	case "manylinks":
-		b.reply("这条消息里有 " + args + " 条磁力 / ed2k 链接，不知道要哪条：请把要下载的那条单独发过来。")
 	default:
 		b.reply("未识别的指令，发送 /help 查看帮助。")
 	}

@@ -351,20 +351,20 @@ func (h *Handler) shareSourceParam(c *gin.Context) (model.ShareSource, bool) {
 
 // ---- 机器人 ----
 
-// shareBotPending 「每次问」时记着用户刚发的分享链接，等他回「转存」或「STRM」（内存里，10 分钟）
+// shareBotPending 「每次问」时记着用户刚发的这批分享，等他回「转存」或「STRM」（内存里，10 分钟）
 var shareBotPending = struct {
 	sync.Mutex
 	m map[string]shareBotAsk
 }{m: map[string]shareBotAsk{}}
 
 type shareBotAsk struct {
-	link string
-	at   time.Time
+	links []botDownloadLink
+	at    time.Time
 }
 
 const shareBotAskTTL = 10 * time.Minute
 
-func shareBotRemember(user, link string) {
+func shareBotRemember(user string, links []botDownloadLink) {
 	shareBotPending.Lock()
 	defer shareBotPending.Unlock()
 	for k, v := range shareBotPending.m {
@@ -372,18 +372,18 @@ func shareBotRemember(user, link string) {
 			delete(shareBotPending.m, k)
 		}
 	}
-	shareBotPending.m[user] = shareBotAsk{link: link, at: time.Now()}
+	shareBotPending.m[user] = shareBotAsk{links: links, at: time.Now()}
 }
 
-func shareBotTake(user string) string {
+func shareBotTake(user string) []botDownloadLink {
 	shareBotPending.Lock()
 	defer shareBotPending.Unlock()
 	v, ok := shareBotPending.m[user]
 	delete(shareBotPending.m, user)
 	if !ok || time.Since(v.at) > shareBotAskTTL {
-		return ""
+		return nil
 	}
-	return v.link
+	return v.links
 }
 
 // shareBotPick 用户回了「转存」或「STRM」：认不出返回 false，交给别的指令
@@ -393,55 +393,33 @@ func (h *Handler) shareBotPick(user, lower string, reply func(lines ...string)) 
 	if !isStrm && t != "转存" {
 		return false
 	}
-	link := shareBotTake(user)
-	if link == "" {
+	links := shareBotTake(user)
+	if len(links) == 0 {
 		reply("没有等着处理的 115 分享链接，先把链接发过来。")
 		return true
 	}
+	action := "transfer"
 	if isStrm {
-		h.botShareStrm(link, reply)
-	} else {
-		h.botShareTransfer(link, reply)
+		action = "strm"
 	}
+	h.botRunDownloads(links, action, reply)
 	return true
 }
 
-// botShareLink 机器人收到 115 分享链接：按「贴链接时默认怎么处理」分流
-func (h *Handler) botShareLink(user, link string, reply func(lines ...string)) {
-	switch loadShareStrmCfg().linkAction() {
-	case "strm":
-		h.botShareStrm(link, reply)
-	case "ask":
-		shareBotRemember(user, link)
-		reply("这条 115 分享要怎么处理？",
-			"回复「转存」— 转存进网盘，整理入库",
-			"回复「STRM」— 不转存，直接生成 STRM 播放（不占网盘空间，分享失效后就播不了）")
-	default:
-		h.botShareTransfer(link, reply)
+func (h *Handler) botShareTransfer(link botDownloadLink) string {
+	msg, ok, fail, err := h.shareReceiveManual(link.url, link.code, "", "机器人", true)
+	if err != nil {
+		return "✗ 转存失败: " + err.Error()
 	}
-}
-
-// botShareTransfer 转存（原来机器人贴分享链接的做法）
-func (h *Handler) botShareTransfer(link string, reply func(lines ...string)) {
-	shareURL, code := splitShareLink(link)
-	reply("⏳ 开始转存 115 分享…", truncateStr(shareURL, 70))
-	go func() {
-		msg, ok, fail, err := h.shareReceiveManual(shareURL, code, "", "机器人", true)
-		if err != nil {
-			reply("✗ 转存失败: " + err.Error())
-			return
-		}
-		if ok == 0 && fail == 0 {
-			reply("分享为空，未转存任何内容")
-			return
-		}
-		reply("✓ " + msg + "（整理入库已自动触发）")
-	}()
+	if ok == 0 && fail == 0 {
+		return "分享为空，未转存任何内容"
+	}
+	return "✓ " + msg + "（整理入库已自动触发）"
 }
 
 // botShareStrm 生成分享 STRM，跑完回结果
-func (h *Handler) botShareStrm(link string, reply func(lines ...string)) {
-	src, job, err := h.addShareStrm(link, "", "机器人")
+func (h *Handler) botShareStrm(link botDownloadLink, reply func(lines ...string)) {
+	src, job, err := h.addShareStrm(link.url, link.code, "机器人")
 	if err != nil {
 		reply("✗ " + err.Error())
 		return

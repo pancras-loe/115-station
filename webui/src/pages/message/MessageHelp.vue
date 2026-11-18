@@ -81,7 +81,7 @@ const origin = location.origin
         <table class="tb">
           <thead><tr><th>发什么</th><th>做什么</th></tr></thead>
           <tbody>
-            <tr><td>直接发链接</td><td>磁力 / ed2k / HTTP 提交 115 离线下载；115 分享链接（连同提取码一起发）转存后自动整理入库；阿里云盘分享走秒传</td></tr>
+            <tr><td>直接发链接</td><td>磁力 / ed2k / HTTP 提交 115 离线下载；115 分享按设置转存或生成 STRM；阿里云盘分享走秒传。115 分享 / 磁力 / ed2k 可批量发，每条分享后附上自己的提取码</td></tr>
             <tr><td><code>搜索 片名</code></td><td>找资源：观影 / 盘搜 / TG 频道 / 不太灵 / RE0 一起搜，选好影片后回复序号转存或离线；可以连续挑几条</td></tr>
             <tr><td><code>观影 片名</code> / <code>网盘 片名</code></td><td>只搜一个来源</td></tr>
             <tr><td>资源列表里</td><td><code>0</code> 自动择优、<code>n</code> / <code>p</code> 翻页、<code>b</code> 重新选片、<code>r</code> 重搜、<code>s</code> 订阅这部、<code>q</code> 退出；RE0 要花积分的会先问，回 <code>y</code> 确认、<code>c</code> 取消</td></tr>
@@ -155,7 +155,7 @@ const origin = location.origin
             <tr><td><code>/gy 片名</code> / <code>/wp 片名</code></td><td>只搜观影 / 只搜网盘</td></tr>
             <tr><td><code>/sub 片名</code></td><td>订阅（找资源的结果里也能点「订阅这部」）</td></tr>
             <tr><td><code>/subs</code></td><td>我的订阅：看进度、立即搜索、暂停、取消</td></tr>
-            <tr><td><code>/download 链接</code></td><td>离线下载或 115 转存；也可以直接把链接和提取码发过来</td></tr>
+            <tr><td><code>/download 链接</code></td><td>批量提交 115 分享、磁力或 ed2k，也可直接发送链接和提取码</td></tr>
             <tr><td><code>/organize</code> / <code>/sync</code></td><td>手动触发整理 / 增量同步</td></tr>
             <tr><td><code>/status</code></td><td>运行状态</td></tr>
             <tr><td><code>/dup</code> / <code>/wash</code></td><td>同集多份选哪份 / 洗版待确认（通知里的按钮也能选）</td></tr>

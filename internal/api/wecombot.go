@@ -217,21 +217,21 @@ func (h *Handler) wecomHandleCommand(user, text string) {
 
 // handleBotCommand 注入回复出口，避免私聊指令结果广播到其他通知渠道。
 func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
+	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
 	lower := strings.ToLower(text)
-	// 直接发链接（无需"下载"前缀）：磁力/ed2k/http/115分享 一键触发
-	if classifyLink(strings.TrimSpace(text)) != "" {
-		h.wecomHandleLink(user, strings.TrimSpace(text), reply)
+	switch {
+	case strings.HasPrefix(text, "下载"):
+		h.botHandleDownload(user, strings.TrimPrefix(text, "下载"), reply)
+		return
+	case strings.HasPrefix(lower, "dl "):
+		h.botHandleDownload(user, text[3:], reply)
 		return
 	}
-	// 转发来的长消息里夹着磁力 / ed2k（与 TG 的 tgCommand 同口径）
-	if links := embeddedLinks(text); len(links) == 1 {
-		h.wecomHandleLink(user, links[0], reply)
-		return
-	} else if len(links) > 1 {
-		reply(fmt.Sprintf("这条消息里有 %d 条磁力 / ed2k 链接，不知道要哪条：请把要下载的那条单独发过来。", len(links)))
+	if links := botDownloadLinks(text); len(links) > 0 {
+		h.botDownload(user, links, reply)
 		return
 	}
 	// 刚发过 115 分享链接、按「每次问」等着回「转存」或「STRM」（sharestrmapi.go）
@@ -249,7 +249,7 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	case lower == "帮助" || lower == "help" || lower == "?":
 		reply(
 			"可用指令：",
-			"直接发链接 — 磁力/ed2k/HTTP 提交离线下载；115 分享链接（连同提取码一起发）转存并整理入库，开了「分享 STRM」时也可以不转存、直接生成 STRM（按设置直接做或先问，回「转存」/「STRM」）",
+			"直接发链接 — 同一条消息可发多条 115 分享、磁力或 ed2k，建议每行一条，提取码跟在对应链接后。磁力 / ed2k / HTTP 提交离线，115 分享按设置转存或生成 STRM（询问时回「转存」或「STRM」）",
 			"状态 — 任务状态 + 转存目录 + 离线任务",
 			"搜索 <片名> — 找资源：观影 / 盘搜 / TG 频道 / 不太灵 / RE0 一起搜，TMDB 选片后回序号转存或离线（可连续挑多条；RE0 要花积分的会先问，回 y 确认、c 取消）",
 			"观影 <片名> / 网盘 <片名> — 只搜观影 / 只搜网盘",
@@ -262,17 +262,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 			"PT签到 — 立即给 PT 站签到一轮，跑完回复汇总",
 			"检查更新 — 看有没有新版本；有的话回「更新」下载新程序并重启（有任务在跑会先问一句）",
 		)
-
-	case strings.HasPrefix(text, "下载"), strings.HasPrefix(lower, "dl "):
-		link := strings.TrimSpace(strings.TrimPrefix(text, "下载"))
-		if strings.HasPrefix(lower, "dl ") {
-			link = strings.TrimSpace(text[3:])
-		}
-		if classifyLink(link) == "" {
-			reply("✗ 无法识别链接类型，支持：磁力 / ed2k / HTTP / 115分享")
-			return
-		}
-		h.wecomHandleLink(user, link, reply)
 
 	case lower == "状态" || lower == "status":
 		running, name, since, progress := TaskStatus()
@@ -409,25 +398,6 @@ func (h *Handler) handleBotCommand(user, text string, reply func(...string)) {
 	default:
 		reply("未识别的指令。发送「帮助」查看可用指令。")
 	}
-}
-
-// wecomHandleLink 企微 / TG 消息里的下载链接分流：
-// 115 分享链接 → 转存（自动整理）或生成分享 STRM（按「贴链接时默认怎么处理」，sharestrmapi.go）；
-// 磁力/ed2k/http → 115 离线下载
-func (h *Handler) wecomHandleLink(user, link string, reply func(lines ...string)) {
-	if isAliShareLink(link) {
-		h.botAli2115(link, reply)
-		return
-	}
-	if classifyLink(link) == "share" {
-		h.botShareLink(user, link, reply)
-		return
-	}
-	if err := h.submitOfflineLink(link, "机器人"); err != nil {
-		reply("✗ 提交失败: " + err.Error())
-		return
-	}
-	reply("✓ 已提交离线下载", "下载完成后自动整理入库并通知。")
 }
 
 var (

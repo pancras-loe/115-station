@@ -73,18 +73,22 @@ func TestTGForwardedMagnet(t *testing.T) {
 	if err := json.Unmarshal(raw, &u); err != nil {
 		t.Fatal(err)
 	}
-	if cmd, arg := tgCommand(u.Message.body()); cmd != "download" || arg != magnet {
+	if cmd, arg := tgCommand(u.Message.body()); cmd != "download" || arg != caption {
 		t.Fatalf("转发消息解析成 %q %q", cmd, arg)
 	}
+	if got := botDownloadLinks(caption); len(got) != 1 || got[0].url != magnet {
+		t.Fatalf("转发消息的链接解析成 %v", got)
+	}
 	// 同一个 hash 写了两遍（大小写不同）只算一条；结尾的中文标点不算进链接
-	if got := embeddedLinks("A " + magnet + "。\nB " + strings.ToUpper(magnet)); len(got) != 1 || got[0] != magnet {
+	if got := botDownloadLinks("A " + magnet + "。\nB " + strings.ToUpper(magnet)); len(got) != 1 || got[0].url != magnet {
 		t.Fatalf("去重得到 %v", got)
 	}
 	ed2k := "ed2k://|file|Black Clover 175.mkv|750780416|0123456789ABCDEF0123456789ABCDEF|/"
-	if cmd, arg := tgCommand("ed2k 链接：\n" + ed2k + "\n来自某频道"); cmd != "download" || arg != ed2k {
-		t.Fatalf("ed2k 解析成 %q %q", cmd, arg)
+	if got := botDownloadLinks("ed2k 链接：\n" + ed2k + "\n来自某频道"); len(got) != 1 || got[0].url != ed2k {
+		t.Fatalf("ed2k 解析成 %v", got)
 	}
-	if cmd, arg := tgCommand("第一集 " + magnet + "\n第二集 magnet:?xt=urn:btih:aaaabbbbccccdddd"); cmd != "manylinks" || arg != "2" {
+	batch := "第一集 " + magnet + "\n第二集 " + ed2k
+	if cmd, arg := tgCommand(batch); cmd != "download" || arg != batch {
 		t.Fatalf("几条链接解析成 %q %q", cmd, arg)
 	}
 	// 只有详情页这类 http 链接的长消息不当成下载

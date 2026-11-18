@@ -768,7 +768,7 @@ func (h *Handler) Ali2115TestAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "可以用：" + firstNonEmpty(ac.nick, src.Name)})
 }
 
-// botAli2115 机器人里贴的阿里云盘分享（企微与 TG 都走 wecomHandleLink）：入秒传队列，跑完回一句结果
+// botAli2115 机器人里贴的阿里云盘分享（企微与 TG 共用）：入秒传队列，跑完回一句结果
 func (h *Handler) botAli2115(text string, reply func(lines ...string)) {
 	job, err := h.submitAli2115(text, "", "", "机器人")
 	if err != nil {
