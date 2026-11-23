@@ -24,6 +24,8 @@ export interface TaskJobSubProgress {
 export interface QueuedReply {
   message: string
   job_id: number
+  /** 一次入了几个任务时（媒体库里批量重新整理）全部的 id，job_id 是第一个 */
+  job_ids?: number[]
   position: number
   eta_sec: number
 }

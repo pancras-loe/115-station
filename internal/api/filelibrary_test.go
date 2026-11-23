@@ -149,3 +149,51 @@ func TestCleanupMovedTitle(t *testing.T) {
 		t.Fatalf("整理记录更新不符: %+v", recs)
 	}
 }
+
+// 媒体库里勾几部片目：一部一份任务参数；指定 TMDB 条目只许一部；有一项不是片目整次拒绝
+func TestPlanLibRedoBatch(t *testing.T) {
+	titles := map[string]bool{"a": true, "b": true}
+	isTitle := func(it fileJobItem) bool { return titles[it.ID] }
+	req := fileJobRequest{fileJobParams: fileJobParams{
+		Cid: "cat", Chain: []browseCrumb{{Cid: "cat", Name: "国产"}}, Target: "redundant",
+		Items: []fileJobItem{{ID: "a", Name: "星际探索 (2019)", IsDir: true}, {ID: "b", Name: "黑衣人 (2019)", IsDir: true}},
+	}}
+	plans, err := planLibRedoBatch(req, isTitle)
+	if err != nil || len(plans) != 2 {
+		t.Fatalf("两部片目应拆成两份: %v %+v", err, plans)
+	}
+	for i, p := range plans {
+		if len(p.Items) != 1 || p.Items[0].ID != req.Items[i].ID || p.Cid != "cat" || p.Target != "" || len(p.Chain) != 1 {
+			t.Fatalf("第 %d 份参数不对: %+v", i, p)
+		}
+	}
+	if req.Items[0].ID != "a" || len(req.Items) != 2 {
+		t.Fatal("不该改动请求本身")
+	}
+
+	pick := req
+	pick.TmdbID, pick.MediaType = 1, "movie"
+	if _, err := planLibRedoBatch(pick, isTitle); err == nil {
+		t.Fatal("多部片目共用一个指定编号应拒绝")
+	}
+	pick.Items = pick.Items[:1]
+	if plans, err := planLibRedoBatch(pick, isTitle); err != nil || len(plans) != 1 {
+		t.Fatalf("一部片目可以指定编号: %v", err)
+	}
+
+	bad := req
+	bad.Items = append([]fileJobItem{}, req.Items...)
+	bad.Items = append(bad.Items, fileJobItem{ID: "s1", Name: "Season 01", IsDir: true})
+	if _, err := planLibRedoBatch(bad, isTitle); err == nil {
+		t.Fatal("夹着不是片目的条目应整次拒绝")
+	}
+
+	many := req
+	many.Items = make([]fileJobItem, libRedoMax+1)
+	for i := range many.Items {
+		many.Items[i] = fileJobItem{ID: "a", Name: "x"}
+	}
+	if _, err := planLibRedoBatch(many, isTitle); err == nil {
+		t.Fatal("超过上限应拒绝")
+	}
+}

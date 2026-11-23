@@ -93,37 +93,86 @@ func libTitleOf(chain []browseCrumb, roles map[string]string, layout libCategory
 
 // ---- 媒体库内整理 ----
 
-// enqueueLibRedo 媒体库里的片目目录「整理」→ 入队（OrganizeFiles 按位置分派过来）
-func (h *Handler) enqueueLibRedo(c *gin.Context, req fileJobRequest, roles map[string]string) {
-	if len(req.Items) != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库里的片目一次只能整理一部"})
-		return
+// libRedoMax 媒体库里一次最多勾几部片目重新整理（一部一个任务，与整理记录批量提交同上限）
+const libRedoMax = jobMaxBatch
+
+// planLibRedoBatch 纯函数：把一次勾选拆成每部片目各自的任务参数。
+// 一部一个任务（不合成一个大任务）：每部单独识别、单独成败，任务中心里能逐部看结果、逐部重试，
+// 识别不出的那一部不拖累别的；同一部重复提交靠去重键 libtitle:<cid> 合并。
+// 指定 TMDB 条目只能一部：几部片目共用一个编号就是把它们并成同一部（2026-11-23 起才允许多选）。
+func planLibRedoBatch(req fileJobRequest, isTitle func(fileJobItem) bool) ([]fileJobParams, error) {
+	if len(req.Items) > 1 && req.TmdbID > 0 {
+		return nil, errors.New("指定 TMDB 条目一次只能整理一部；多部片目请用「自动识别」")
 	}
-	it := req.Items[0]
-	if _, _, ok := libTitleOf(req.Chain, roles, loadLibCategoryLayout(), it); !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "媒体库里只有分类目录下的片目目录能整理"})
+	if len(req.Items) > libRedoMax {
+		return nil, fmt.Errorf("媒体库里一次最多重新整理 %d 部", libRedoMax)
+	}
+	out := make([]fileJobParams, 0, len(req.Items))
+	for _, it := range req.Items {
+		if !isTitle(it) {
+			return nil, fmt.Errorf("「%s」不是分类目录下的片目目录：媒体库里只有片目能整理", it.Name)
+		}
+		fp := req.fileJobParams
+		fp.Target = ""
+		fp.Items = []fileJobItem{it}
+		out = append(out, fp)
+	}
+	return out, nil
+}
+
+// enqueueLibRedo 媒体库里的片目目录「整理」→ 每部入一个队（OrganizeFiles 按位置分派过来）
+func (h *Handler) enqueueLibRedo(c *gin.Context, req fileJobRequest, roles map[string]string) {
+	layout := loadLibCategoryLayout()
+	plans, err := planLibRedoBatch(req, func(it fileJobItem) bool {
+		_, _, ok := libTitleOf(req.Chain, roles, layout, it)
+		return ok
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	if _, err := loadTmdbClient(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	title := "重新整理《" + shortTitle(it.Name) + "》"
-	if req.TmdbID > 0 {
-		title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
+	jobs := make([]model.TaskJob, 0, len(plans))
+	for i := range plans {
+		fp := plans[i]
+		it := fp.Items[0]
+		title := "重新整理《" + shortTitle(it.Name) + "》"
+		if req.TmdbID > 0 {
+			title += " → " + pickLabel(pickReq{TmdbID: req.TmdbID, MediaType: req.MediaType, Label: req.Label})
+		}
+		job, err := enqueueJob(h.DB, jobSpec{
+			Kind: "libredo", Title: title, DedupeKey: "libtitle:" + it.ID,
+			Source: "web", Priority: jobPriorityManual,
+			Params: jobParams{TmdbID: req.TmdbID, MediaType: req.MediaType, Files: &fp},
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		jobs = append(jobs, job)
 	}
-	fp := req.fileJobParams
-	fp.Target = ""
-	job, err := enqueueJob(h.DB, jobSpec{
-		Kind: "libredo", Title: title, DedupeKey: "libtitle:" + it.ID,
-		Source: "web", Priority: jobPriorityManual,
-		Params: jobParams{TmdbID: req.TmdbID, MediaType: req.MediaType, Files: &fp},
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if len(jobs) == 1 {
+		h.queuedReply(c, jobs[0], "整理")
 		return
 	}
-	h.queuedReply(c, job, "整理")
+	// 预计耗时取这批里排得最靠后的那个（同整理记录的批量提交）
+	queued := queuedJobs(h.DB)
+	var eta time.Duration
+	ids := make([]uint, 0, len(jobs))
+	for _, j := range jobs {
+		ids = append(ids, j.ID)
+		if _, e := queuePosition(queued, j.ID); e > eta {
+			eta = e
+		}
+	}
+	msg := fmt.Sprintf("已把 %d 部片目的重新整理加入任务队列", len(jobs))
+	if eta >= time.Minute {
+		msg += fmt.Sprintf("，预计约 %d 分钟跑完", int(eta.Round(time.Minute).Minutes()))
+	}
+	c.JSON(http.StatusAccepted, gin.H{"message": msg, "job_id": ids[0], "job_ids": ids, "eta_sec": int(eta.Seconds())})
 }
 
 func execLibRedoJob(h *Handler, job *model.TaskJob) (jobOutcome, error) {

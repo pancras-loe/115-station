@@ -73,6 +73,8 @@ const ROLE_TONE: Record<WorkspaceRole, 'success' | 'accent' | 'warning' | 'defau
 const MOVE_MAX = 50
 /** 批量整理一次最多几项（与后端 fileJobMaxItems 一致） */
 const ORGANIZE_MAX = 200
+/** 媒体库里一次最多重新整理几部片目（与后端 libRedoMax 一致，一部一个任务） */
+const LIB_REDO_MAX = 100
 
 const TRAIL_KEY = 'files.trail'
 function loadTrail(): Crumb[] {
@@ -275,11 +277,16 @@ const batchEpisode = computed(() => {
   }
 })
 
-/** 批量整理按钮：媒体库里的重新整理一次只能一部，勾了多部就不给这个按钮 */
+/** 批量整理按钮：媒体库里是重新整理片目，勾几部入几个任务（多部时只能自动识别，见 OrganizeDialog） */
 const batchOrganize = computed(() => {
   const n = toOrganize.value.length
   if (!n) return null
-  if (inLibrary.value) return n === 1 && selectedItems.value.length === 1 ? { label: '重新整理', block: '' } : null
+  if (inLibrary.value) {
+    return {
+      label: n === 1 ? '重新整理' : `重新整理 ${n} 部`,
+      block: n > LIB_REDO_MAX ? `一次最多重新整理 ${LIB_REDO_MAX} 部` : '',
+    }
+  }
   return {
     label: n === selectedItems.value.length ? '整理' : `整理 ${n} 项`,
     block: n > ORGANIZE_MAX ? `一次最多整理 ${ORGANIZE_MAX} 项` : '',
@@ -301,7 +308,6 @@ const batchNote = computed(() => {
   const notes: string[] = []
   const block = batchOrganize.value?.block || batchMove.value?.block || batchEpisode.value?.block
   if (block) notes.push(block)
-  if (inLibrary.value && toOrganize.value.length > 1) notes.push('重新整理一次只能一部')
   if (!inLibrary.value && batchOrganize.value && toOrganize.value.length < total) {
     notes.push(`整理跳过 ${total - toOrganize.value.length} 个非视频文件`)
   }

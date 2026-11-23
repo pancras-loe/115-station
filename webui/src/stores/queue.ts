@@ -98,9 +98,9 @@ export const useQueueStore = defineStore('queue', () => {
     }
   }
 
-  /** 刚提交了任务：记下 id 并立刻刷新一次，进入快轮询 */
-  async function submitted(jobId?: number) {
-    if (jobId) tracked.add(jobId)
+  /** 刚提交了任务：记下 id（一次入了几个任务时传全部）并立刻刷新一次，进入快轮询 */
+  async function submitted(jobId?: number | number[]) {
+    for (const id of Array.isArray(jobId) ? jobId : [jobId]) if (id) tracked.add(id)
     await poll()
     schedule()
   }

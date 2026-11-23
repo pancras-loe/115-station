@@ -18,6 +18,7 @@ import { useQueueStore } from '@/stores/queue'
  *
  * library=true 是媒体库里的片目目录：后端走「重新整理」（在库内改名 / 换目录，清掉旧的 STRM 与元数据），
  * 自动识别按目录名里的 TMDB 编号，结果与现状一致时只重建 STRM 与元数据、不动网盘。
+ * 媒体库里勾了几部时一部一个任务，只能自动识别：几部片目共用一个指定条目就是把它们并成一部（后端同样拒收）。
  */
 const props = defineProps<{ body: FileJobBody | null; library?: boolean }>()
 const show = defineModel<boolean>('show', { required: true })
@@ -32,6 +33,8 @@ const manualConfirm = ref(false)
 
 const count = computed(() => props.body?.items.length ?? 0)
 const firstName = computed(() => props.body?.items[0]?.name ?? '')
+/** 媒体库里的多部片目：不给「指定 TMDB 条目」 */
+const libBatch = computed(() => !!props.library && count.value > 1)
 
 watch(show, async (v) => {
   if (!v) return
@@ -57,7 +60,7 @@ async function submit() {
       ...(pick ? { tmdb_id: pick.id, media_type: pick.media_type, label: `${pick.title} (${pick.year ?? ''})` } : {}),
     })
     message.success(d.message || '整理已加入任务队列')
-    await queue.submitted(d.job_id)
+    await queue.submitted(d.job_ids?.length ? d.job_ids : d.job_id)
     show.value = false
   } catch (e) {
     toastError(e, '提交失败')
@@ -72,10 +75,10 @@ async function submit() {
     <div class="body">
       <p class="src">
         所选：<b>{{ firstName }}</b>
-        <span v-if="count > 1"> 等 {{ count }} 项</span>
+        <span v-if="count > 1"> 等 {{ count }} {{ library ? '部' : '项' }}</span>
       </p>
 
-      <FieldRow label="识别方式">
+      <FieldRow v-if="!libBatch" label="识别方式">
         <HSegmented
           v-model="mode"
           :options="[
@@ -85,6 +88,9 @@ async function submit() {
         />
       </FieldRow>
       <template v-if="mode === 'auto'">
+        <p v-if="libBatch" class="note">
+          一部一个任务，各自识别、各自出结果；识别不出的那部在任务中心里报失败，再单独点它「重新整理」指定 TMDB 条目。
+        </p>
         <p v-if="library" class="note">
           按目录名里的 TMDB 编号取条目，没有编号的按片名识别。结果和现在一致时只按当前配置重建 STRM 与元数据，
           网盘里一个文件都不动；改过重命名模板或分类规则的，会在库内改名、换目录。
