@@ -34,6 +34,8 @@ export interface FileItem {
   block?: string
   /** 能移动、不能整理的原因 */
   organize_block?: string
+  /** 媒体库里的目录：能「同步 STRM」（只遍历这一个目录，dirsync.go）；和 block 无关 */
+  sync?: boolean
   /** 本页发起、还没跑完的任务里有它 */
   busy?: 'organize' | 'move'
   /** 那个任务的 id：排队中 / 执行中按任务队列的实时状态显示 */
@@ -49,6 +51,8 @@ export interface FileList {
   roots: Record<string, WorkspaceRole>
   /** 工作区根目录：cid → 网盘绝对路径（解析不出的不在表里）。用来给它的祖先目录标「含 xx」 */
   root_paths?: Record<string, string>
+  /** 当前目录本身能「同步 STRM」（工具栏按钮） */
+  sync_here?: boolean
 }
 
 export interface Crumb {
@@ -73,6 +77,10 @@ export interface FileJobBody {
   media_type?: 'movie' | 'tv'
   label?: string
 }
+
+/** 只同步一个目录的 STRM：chain 是这个目录自己的面包屑（末元素是它） */
+export const syncStrm = (body: { cid: string; name: string; chain: Crumb[] }) =>
+  http.post<QueuedReply>('/files/115/sync-strm', body)
 
 export const organize = (body: FileJobBody) => http.post<QueuedReply>('/files/organize', body)
 

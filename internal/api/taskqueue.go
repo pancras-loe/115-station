@@ -102,6 +102,8 @@ type jobParams struct {
 	RebasePairs []strmRebasePair `json:"rebase_pairs,omitempty"`
 	// CatMove 分类方案改过之后按新方案搬移网盘上的片目（catmove.go）
 	CatMove *catMoveJobParams `json:"cat_move,omitempty"`
+	// DirSync 只同步一个目录的 STRM（网盘文件页，dirsync.go）
+	DirSync *dirSyncJobParams `json:"dir_sync,omitempty"`
 }
 
 // syncJobParams 全量 / 增量同步的请求参数（与 /sync/full、/sync/incremental 的请求体同构）

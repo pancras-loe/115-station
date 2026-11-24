@@ -67,6 +67,8 @@ type fileRowActions struct {
 	// Block 这一行什么都不能做的原因；OrganizeBlock 能移动但不能整理的原因
 	Block         string `json:"block,omitempty"`
 	OrganizeBlock string `json:"organize_block,omitempty"`
+	// Sync 媒体库里的目录：能「同步 STRM」只遍历这一个目录（dirsync.go）。和整理 / 移动无关，Block 的行也可能有
+	Sync bool `json:"sync,omitempty"`
 }
 
 // fileListLimit 单个目录最多列多少项。每页 1000 多条、每页一次节流，
@@ -189,11 +191,15 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 		out := withRoles(items, roles)
 		for i := range out {
 			out[i].fileRowActions = rowActionsOf(chain, roles, layout, out[i])
+			out[i].Sync = chain != nil && out[i].IsDir && dirSyncAllowed(chain, roles, out[i])
 			if b, ok := busy[out[i].ID]; ok {
 				out[i].Busy, out[i].BusyJob = b.kind, b.job
 			}
 		}
-		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": out, "truncated": truncated, "roots": roles, "root_paths": rootPaths})
+		// sync_here 当前目录本身能不能「同步 STRM」（工具栏按钮）
+		_, why := dirSyncBlock(chain, roles)
+		c.JSON(http.StatusOK, gin.H{"cid": cid, "data": out, "truncated": truncated, "roots": roles, "root_paths": rootPaths,
+			"sync_here": chain != nil && why == ""})
 	}
 	if c.Query("refresh") != "1" {
 		fileListMu.Lock()
@@ -225,6 +231,14 @@ func (h *Handler) ListFiles115(c *gin.Context) {
 	fileListCache[cid] = fileListCacheEntry{items: items, truncated: truncated, expires: time.Now().Add(fileListCacheTTL)}
 	fileListMu.Unlock()
 	reply(items, truncated)
+}
+
+// dirSyncAllowed 目录里的一行（子目录）能不能按目录同步 STRM
+func dirSyncAllowed(chain []browseCrumb, roles map[string]string, e fileEntry) bool {
+	sub := make([]browseCrumb, 0, len(chain)+1)
+	sub = append(append(sub, chain...), browseCrumb{Cid: e.ID, Name: e.Name})
+	_, why := dirSyncBlock(sub, roles)
+	return why == ""
 }
 
 // browseChainHint 前端带来的面包屑（JSON）。末元素必须是当前目录，对不上返回 nil（按位置未知处理）

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import { ArrowRight, BookOpen, FolderInput, FolderTree, HardDrive, Play } from '@lucide/vue'
+import { ArrowRight, BookOpen, FolderInput, FolderSync, FolderTree, HardDrive, Play } from '@lucide/vue'
 import HAlert from '@/components/hero/HAlert.vue'
 import HButton from '@/components/hero/HButton.vue'
 import HChip from '@/components/hero/HChip.vue'
@@ -246,6 +246,10 @@ const MODE_OPTIONS: { label: string; value: FullSyncMode }[] = [
            2026-10-25 起在扩展功能「STRM 迁移」里，这里只留跳转 -->
       <RouterLink :to="{ name: 'plugins', query: { open: 'strm-migrate', tab: 'adopt' } }" class="loc-help">
         <FolderInput :size="14" />接管已有 STRM
+      </RouterLink>
+      <!-- 只扫一个目录（dirsync.go）：入口在网盘文件页目录的「⋯」里，这里只指路 -->
+      <RouterLink :to="{ name: 'files' }" class="loc-help" title="到网盘文件页，在媒体库里的目录「⋯」里点「同步 STRM」">
+        <FolderSync :size="14" />只同步一个目录
       </RouterLink>
     </div>
 

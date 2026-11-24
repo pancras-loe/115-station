@@ -10,6 +10,7 @@ import {
   Folder,
   FolderInput,
   FolderOutput,
+  FolderSync,
   History,
   ListOrdered,
   House,
@@ -33,6 +34,7 @@ import EpisodeDialog from '@/components/files/EpisodeDialog.vue'
 import { filesApi } from '@/api'
 import type { Crumb, FileItem, FileJobBody, WorkspaceRole } from '@/api/files'
 import { useQueueStore } from '@/stores/queue'
+import { toastError, useFeedback } from '@/composables/useFeedback'
 
 /**
  * 网盘文件：逐级浏览 115 网盘，对条目「整理 / 移动」（都进任务队列）。
@@ -43,12 +45,14 @@ import { useQueueStore } from '@/stores/queue'
  * 媒体库里只有片目目录能动：整理 = 重新整理（一次一部），移动 = 移出媒体库；另有跳到本地详情 / 整理记录。
  * 剧集片目里的视频另能「指定季集」（识别错了个别集时用，可多选同一目录里的几集）。
  * 刮削在海报墙（LocalFilesPage）。
+ * 媒体库里的目录另能「同步 STRM」：只遍历这一个目录（115 上改了文件夹名、增量没跟上时用，全量太慢）。
  *
  * 115 只有 cid 没有父目录概念，面包屑就是一路点进来的栈；列目录与提交都带上它，
  * 后端优先用 Cookie 通道查真实祖先链，查不到（OpenAPI 独立模式）才用它定位。
  * 面包屑存 sessionStorage：切到别的页再回来还在原目录（只是本标签页的便利，丢了就回根目录）。
  */
 const queue = useQueueStore()
+const { message, dialog } = useFeedback()
 const router = useRouter()
 
 const ROLE_TEXT: Record<WorkspaceRole, string> = {
@@ -99,6 +103,8 @@ const items = ref<FileItem[]>([])
 const roots = ref<Record<string, WorkspaceRole>>({})
 const rootPaths = ref<Record<string, string>>({})
 const truncated = ref(false)
+/** 当前目录本身能不能「同步 STRM」（后端按面包屑算） */
+const syncHere = ref(false)
 const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
@@ -119,6 +125,7 @@ async function load(refresh = false) {
     roots.value = d.roots ?? {}
     rootPaths.value = d.root_paths ?? {}
     truncated.value = !!d.truncated
+    syncHere.value = !!d.sync_here
     // 刷新后变得不能处理的（被挪走、配置改了）不留在勾选里
     const ok = new Set(items.value.filter(actionable).map((it) => it.id))
     selected.value = new Set([...selected.value].filter((id) => ok.has(id)))
@@ -190,9 +197,11 @@ function quickOf(it: FileItem) {
 }
 
 function menuOf(it: FileItem): MenuOption[] {
+  const sync: MenuOption[] = it.sync ? [{ key: 'sync', label: '同步 STRM', icon: FolderSync }] : []
   if (it.title) {
     return [
       { key: 'organize', label: '重新整理', icon: Wand2 },
+      ...sync,
       { key: 'local', label: '本地详情', icon: LibraryBig },
       { key: 'records', label: '整理记录', icon: History },
       { key: 'move', label: '移出媒体库…', icon: FolderOutput, danger: true },
@@ -208,7 +217,7 @@ function menuOf(it: FileItem): MenuOption[] {
   const out: MenuOption[] = []
   if (it.organize) out.push({ key: 'organize', label: '整理', icon: Wand2 })
   if (it.move) out.push({ key: 'move', label: '移动到…', icon: FolderInput })
-  return out
+  return [...out, ...sync]
 }
 
 /** 行上的「排队整理 / 移动中」：任务状态跟着队列实时走，任务结束就不显示（列表随后会刷新） */
@@ -354,9 +363,34 @@ function onRowAction(it: FileItem, key: string, e?: MouseEvent) {
   if (key === 'organize') openOrganize([it])
   else if (key === 'move') openMove([it])
   else if (key === 'episode') openEpisode([it])
+  else if (key === 'sync') void syncDir([...trail.value, { cid: it.id, name: it.name }])
   else if (key === 'local' && it.title_key) void router.push({ name: 'local', query: { title: it.title_key } })
   else if (key === 'records' && it.title_rel) {
     void router.push({ name: 'tasks', query: { tab: 'records', target_dir: it.title_rel } })
+  }
+}
+
+/** 只同步一个目录的 STRM（进任务队列）。chain 是这个目录自己的面包屑 */
+async function syncDir(chain: Crumb[]) {
+  const target = chain[chain.length - 1]
+  if (!target) return
+  const ok = await dialog.confirm({
+    title: `同步「${target.name}」的 STRM`,
+    content:
+      '只遍历 115 上的这一个目录（不是全量），补写缺的 STRM 和附属文件。' +
+      '在 115 上改过名、挪过位置的文件按文件认得出：本地目录跟着搬过去，旧位置清掉，不会多出一份。' +
+      '网盘上已经没有的，开着「失效 STRM 检测」时标成失效，到「Strm 管理」确认后再删。不改网盘上的任何东西。',
+    actions: [
+      { label: '取消', value: false, variant: 'tertiary' },
+      { label: '开始同步', value: true, variant: 'primary' },
+    ],
+  })
+  if (!ok) return
+  try {
+    const r = await filesApi.syncStrm({ cid: target.cid, name: target.name, chain })
+    message.success(r.message)
+  } catch (e) {
+    toastError(e)
   }
 }
 
@@ -435,6 +469,15 @@ onMounted(() => load())
         </nav>
 
         <HSearchField v-model="keyword" class="filter" placeholder="筛选当前目录" />
+        <HButton
+          v-if="syncHere"
+          variant="tertiary"
+          size="sm"
+          title="只遍历这个目录，补写 STRM、跟上 115 上的改名"
+          @click="syncDir(trail)"
+        >
+          <FolderSync :size="15" />同步 STRM
+        </HButton>
         <HButton variant="ghost" size="sm" icon-only :loading="loading" aria-label="刷新" title="刷新（跳过缓存）" @click="load(true)">
           <RefreshCw :size="15" />
         </HButton>
@@ -446,6 +489,7 @@ onMounted(() => load())
         <span>
           媒体库里只有分类目录下的<b>片目目录</b>能操作：重新整理（按当前模板与分类规则重新规整）、移出媒体库，
           或跳到它的本地详情与整理记录；剧集片目里个别集认错了季集，勾上那几个视频「指定季集」。
+          在 115 上改了文件夹名、本地没跟上时，在目录的「⋯」里点「同步 STRM」，只扫这一个目录。
           刮削到「<RouterLink :to="{ name: 'local' }">海报墙</RouterLink>」。
         </span>
       </p>

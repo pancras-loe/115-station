@@ -35,6 +35,7 @@ export const JOB_KIND: Record<string, string> = {
   adopt: '接管已有 STRM',
   strmrebase: '改写 STRM 地址',
   catmove: '按分类方案搬移',
+  dirsync: '同步目录 STRM',
   incr: '增量同步',
   background: '后台任务',
 }

@@ -350,6 +350,7 @@ func SetupRoutes(r *gin.RouterGroup, db *gorm.DB, cfg *config.Config) {
 
 		// 网盘文件页：浏览 115 目录，对勾选的条目刮削 / 整理（都入任务队列）
 		protected.GET("/files/115", h.ListFiles115)
+		protected.POST("/files/115/sync-strm", h.SyncDirStrm) // 只同步这个目录的 STRM（dirsync.go）
 		// 海报墙：本地媒体库的片目卡片 + 刮削（入任务队列，locallib.go / localscrape.go）
 		protected.GET("/local/titles", h.ListLocalTitles)
 		protected.POST("/local/scrape", h.ScrapeLocalTitles)
