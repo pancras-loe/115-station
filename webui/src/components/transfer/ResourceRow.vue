@@ -83,6 +83,17 @@ const actionLabel = computed(() => {
       </div>
       <div v-if="state?.text" class="res-state" :class="state.tone">{{ state.text }}</div>
     </div>
+    <a
+      v-if="item.page && item.action !== 'open'"
+      class="res-page"
+      :href="item.page"
+      target="_blank"
+      rel="noopener noreferrer"
+      :title="item.source === 're0' && !item.url ? '在 RE0 资源页看文件列表（不花积分）' : '在浏览器里打开分享，看看里面有什么'"
+    >
+      <ExternalLink :size="13" />
+      查看
+    </a>
     <HButton
       v-if="strm && item.kind === 'share115' && item.action !== 'open'"
       class="res-act"
@@ -189,12 +200,26 @@ const actionLabel = computed(() => {
 .res-act {
   flex: none;
 }
+.res-page {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.res-page:hover {
+  color: var(--accent);
+}
 @media (max-width: 720px) {
   .res {
     flex-direction: column;
     align-items: stretch;
   }
-  .res-act {
+  .res-act,
+  .res-page {
     align-self: flex-end;
   }
 }

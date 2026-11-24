@@ -48,6 +48,8 @@ export interface ResourceItem {
   code?: string
   /** 观影详情页路径 / RE0 slug：服务端提交时再换成真链接 */
   ref?: string
+  /** 提交前能在浏览器里看内容的页面：115 分享页（带提取码）/ RE0 资源页；磁力、ed2k 没有 */
+  page?: string
   size?: string
   size_bytes?: number
   seeds?: number

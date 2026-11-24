@@ -81,6 +81,9 @@ type ResourceItem struct {
 	URL    string `json:"url,omitempty"`  // 直接可用的链接；观影按关键词搜到的种子要先去详情页取磁力、RE0 要先解锁，这两种为空
 	Code   string `json:"code,omitempty"` // 提取码
 	Ref    string `json:"ref,omitempty"`  // 需要服务端再换一次的引用：观影种子详情页路径（只有跳过 TMDB 时）/ RE0 slug
+	// Page 能在浏览器里打开、提交前先看看里面有什么的页面（resPageURL）：
+	// 115 分享页（带上提取码）、RE0 的资源页（解锁前就列文件）；磁力 / ed2k 没有页面，为空
+	Page string `json:"page,omitempty"`
 
 	Size      string `json:"size,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
@@ -725,7 +728,12 @@ func washStrategyForType(mediaType string) *washStrategy {
 // resNormalize 统一补齐标签、相关性、洗版排名，并过滤掉进不了 115 的资源
 func resNormalize(q resQuery, items []ResourceItem) []ResourceItem {
 	out := items[:0]
+	re0Base := ""
 	for _, it := range items {
+		if it.Source == "re0" && re0Base == "" {
+			re0Base = re0NormalizeBase(loadRe0Cfg().BaseURL)
+		}
+		it.Page = resPageURL(it, re0Base)
 		// 其他网盘（百度 / 迅雷 / UC …）只能打开原链接手动处理，本站转存不了，
 		// 维护者要求不列（2026-10-14）；RE0 上非 115 的资源解锁了也一样没用
 		if it.Kind == "pan" || removedCloudResource(it.Pan, it.URL) {
@@ -747,6 +755,26 @@ func resNormalize(q resQuery, items []ResourceItem) []ResourceItem {
 		out = append(out, it)
 	}
 	return out
+}
+
+// resPageURL 这条资源在浏览器里能打开看内容的页面，没有就空。
+// 115 分享：链接里没带提取码时补成 ?password=，打开就直接列文件；
+// RE0 没解锁的 115 资源：站上的资源页解锁前就显示文件列表（re0webpreview.go 读的是同一份），
+// 只认 slug 形态的 Ref，与 shareOutSiteURL 同一个地址。磁力 / ed2k 没有可看的页面
+func resPageURL(it ResourceItem, re0Base string) string {
+	if it.Kind != "share115" {
+		return ""
+	}
+	if is115ShareLink(it.URL) {
+		if it.Code != "" && !reSharePass.MatchString(it.URL) {
+			return "https://115cdn.com/s/" + extractShareCode(it.URL) + "?password=" + url.QueryEscape(it.Code)
+		}
+		return it.URL
+	}
+	if it.Source == "re0" && re0Base != "" && re0SlugLike.MatchString(it.Ref) {
+		return re0Base + "/resource/115/" + it.Ref
+	}
+	return ""
 }
 
 // resMarkSubmitted 来源链接台账里有的，标上提交时间（只查库，不请求 115）
